@@ -36,14 +36,10 @@ from ....parallel.manager import CCLManager
 from ....utils.conv3d import ConvDims, conv_pad_height, conv_pad_in_channels
 from ....utils.tensor import typed_tensor_2dshard
 
-# Real 4x8 (32-device) shapes need a 32-chip mesh; skip on the 8-chip BH-LB so the coverage gap is
-# visible in the report rather than silently dropped. 4x8mock shapes run here (they use a 2x4 mesh).
+# Real 4x8 (32-device) shapes need a 32-chip mesh
 _SKIP_4X8 = pytest.mark.skip(reason="real 4x8 (32-device) shape — needs a 32-chip mesh, not 8-chip BH-LB")
 
-# 4x8mock runs 4x8 per-device conv sizes on this 2x4 box. The 2x4 config keys miss the 4x8-tuned
-# blockings (config is keyed by mesh) and fall back ~16x slower, so restore the real 4x8 blockings —
-# the conv is the part the overlap scheme acts on, so this is a faithful proxy (NP topology still 2x4).
-# Keyed by (C_in, C_out, H, W) of the 4x8mock shape.
+# 4x8mock runs 4x8 per-device conv sizes on this 2x4 box
 _MOCK_4X8_BLK = {
     (512, 512, 34, 60): (64, 256, 1, 4, 8),  # ltx_s1_res 4x8 per-dev 17x15
     (512, 512, 68, 120): (64, 256, 1, 8, 4),  # ltx_s2_res 4x8 per-dev 34x30
@@ -125,9 +121,7 @@ def _build_model(
     model.load_torch_state_dict(state)
 
     if isinstance(model, WanCausalConv3d):
-        # 4x8mock blocking restore; then optional dev sweep overrides (CONV3D_BLOCKING_SWEEP_RUNBOOK):
-        #   NP_S4_BLK / NP_S4OUT_BLK pin a per-shape blocking on BOTH models; NP_BLK pins a fused-only
-        #   blocking so the standalone baseline in the same run keeps its tuned entry.
+        # 4x8mock blocking restore
         if (C_in, C_out, H, W) in _MOCK_4X8_BLK:
             _set_blk(model, *_MOCK_4X8_BLK[(C_in, C_out, H, W)])
         if (blk := _env_blk("NP_S4_BLK")) and (C_in, C_out, T) == (128, 128, 147):
@@ -146,8 +140,7 @@ def _build_model(
         if os.environ.get("NP_HALO_LAST"):
             model.conv_config.halo_last = True
 
-    # Standalone conv3d always runs on the FULL grid — the real deployed comparison against the fused op,
-    # which reserves column-0 for the NP fabric (conv on ~102 of 110 cores). No grid reduction here.
+    # Standalone conv3d always runs on the FULL grid — the real deployed comparison against the fused op
     return model, h_factor, w_factor, parallel_config
 
 
@@ -210,20 +203,7 @@ _PERF_PARAMS = [
 ]
 
 
-# =====================================================================================================
-# Trace-mode per-op bench (ported from cglagovich/fused_rms_norm test_bench/_trace_and_time/_print_table).
-# Trace replay strips per-op host dispatch, so the replay wall IS the op's device latency. Standalone
-# (full-grid NP + conv3d, two ops) is captured as one trace, fused (one NpConv3d op) as another; we
-# report fused vs standalone wall + speedup per shape. Blocking-verified (NP_BENCH_BLOCKING=1 matches the
-# default), so the numbers are the true single-dispatch device latency, no cross-iter overlap.
-#
-# SCOPE: this is the WAN op in ISOLATION. It answers "is the fused OP faster than the standalone NP+conv
-# OP for this shape, run alone" — accurate for kernel-change validation. It does NOT predict the LTX VAE
-# decode: that uses a different model (LTXVideoDecoder) and the per-layer cost differs in-context. For
-# the e2e routing decision use the whole-decode trace (prof_vae_ltx.py::test_prof_vae_ltx_trace), which
-# is the production-representative metric. The fused op is trace-safe (every progress/neighbor/barrier
-# sem self-resets on-device, no host reset) so it replays cleanly.
-# =====================================================================================================
+# ===================================================================================================== Trace-mode
 _BENCH_ITERS = 30
 _PINGPONG = 2  # distinct resource sets alternated across replays (absorbs cross-device fabric skew)
 
@@ -249,9 +229,7 @@ def _trace_and_time(mesh_device, run_ops, *, num_iters):
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         trace_ids.append(tid)
     ttnn.synchronize_device(mesh_device)
-    # NP_BENCH_BLOCKING=1 serializes each replay (host waits per iter) to rule out any cross-iter
-    # trace-boundary overlap — the unambiguous single-dispatch latency. Default non-blocking (queue all,
-    # one final sync) measures the back-to-back replay wall.
+    # NP_BENCH_BLOCKING=1 serializes each replay (host waits per iter) to rule out any cross-iter trace-boundary
     blocking = os.environ.get("NP_BENCH_BLOCKING") == "1"
     t0 = time.perf_counter()
     for i in range(num_iters):
@@ -341,8 +319,7 @@ def test_bench(mesh_device, device_params, shape_set):
                     ttnn.bfloat16,
                     use_fused=use_fused,
                 )
-                # _PINGPONG run_ops: each call advances the CCLManager's per-call ping-pong (h/w neighbor
-                # sems + halo buffer), so the traces bake distinct banks and round-robin replay absorbs skew.
+                # _PINGPONG run_ops: each call advances the CCLManager's per-call ping-pong
                 run_ops = []
                 for _ in range(_PINGPONG):
                     x, lh = _build_input(mesh_device, B, C_in, T, H, W, h_axis, w_axis)

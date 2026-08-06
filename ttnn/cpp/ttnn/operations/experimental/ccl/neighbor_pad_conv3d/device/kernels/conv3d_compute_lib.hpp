@@ -2,13 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Matmul/bias compute primitives for the conv3d compute kernel (conv3d_compute.cpp).
-//
-// These are the fork's matmul_blocks / add_bias_inplace / add_block_inplace.  Upstream conv3d inlines
-// equivalents in its compute.cpp and has since added DEST-batched variants; this fork keeps the simple
-// per-tile forms because they pair with the kernel's manual fp32 cross-core reduce (see the compute
-// kernel header for why the fork is not re-based).  Keep the matmul subblock math aligned with upstream
-// when it changes; the bias/reduce forms are intentionally fork-local.
+// Matmul/bias compute primitives for the conv3d compute kernel (conv3d_compute.cpp)
 
 #pragma once
 
@@ -41,10 +35,7 @@ inline void matmul_blocks(
     const uint32_t subblock_w,
     const bool transpose,
     const uint32_t in1_base_tile = 0) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
+    // precondition: in0_cb has M*K produced precondition: in1_cb has K*N produced postcondition: in0_cb is full
     matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
@@ -86,10 +77,7 @@ inline void matmul_blocks(
 
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace(uint32_t in0_cb, uint32_t in1_cb) {
-    // Precondition: in0_cb has rows*cols produced
-    // Precondition: in1_cb has rows produced
-    // Postcondition: in0_cb has rows*cols produced
-    // Postcondition: in1_cb has rows produced
+    // Precondition: in0_cb has rows*cols produced Precondition: in1_cb has rows produced Postcondition: in0_cb has
 
     constexpr uint32_t num_tiles = rows * cols;
     constexpr uint32_t dst_tiles = 1;
@@ -115,10 +103,7 @@ void add_bias_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 
 template <uint32_t num_tiles>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
-    // Precondition: in0_cb has num_tiles produced
-    // Precondition: in1_cb has num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
+    // Precondition: in0_cb has num_tiles produced Precondition: in1_cb has num_tiles produced Postcondition: in0_cb
 
     constexpr uint32_t dst_tiles = 1;
 

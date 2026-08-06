@@ -2,22 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Conv3d compute kernel for the fused NP op.  This is INTENTIONALLY the legacy fork of upstream
-// conv3d's compute (ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp), not a
-// re-base.  It carries NO NP-specific control flow — the halo overlap lives entirely in the reader's
-// phase loop + the NP gate; compute just consumes cb_vol2col in whatever order the reader produces it.
-// It diverges from upstream conv3d compute on two axes (both required by the fused cross-core
-// reduction path on these shapes):
-//   1. Manual per-tile fp32 reduction (copy_tile + add_tiles loop, use_fp32_partials branch below)
-//      instead of upstream's DEST-batched reduce_fullblock_inplace_math.  This is FASTER, not just
-//      fp32-accurate: swapping in upstream's reduce_fullblock_inplace_math regresses s4_res halo_last
-//      device-FW ~1.5-3% (measured; not L1-recoverable).  Do NOT replace with the upstream reduce.
-//   2. NO streaming output.  Upstream streams single-tile C_out rows through bias/untilize to overlap
-//      the writer; that path is gated on C_in_num_blocks==1 && C_out_block<=32, which ALL these
-//      shapes fail (they split C_in for the cross-core reduce + use C_out_block 128/256).  The
-//      reduction-gated full-block untilize is structurally incompatible with per-subblock streaming.
-// Everything else (fused tilize+matmul subblock loop, matmul_blocks, add_bias_inplace) should track
-// upstream conv3d's compute semantics; keep the matmul/tilize structure aligned when upstream changes.
+// Conv3d compute kernel for the fused NP op
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/conv3d_compute_lib.hpp"
 
 void kernel_main() {
@@ -60,8 +45,7 @@ void kernel_main() {
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
 
-    // Matmul maps in0->SrcB and in1->SrcA, so startup must program the source state reversed;
-    // MMIO writes make this unsafe anywhere but before the first compute call.
+    // Matmul maps in0->SrcB and in1->SrcA, so startup must program the source state reversed
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
     matmul_init(cb_vol2col_tiled, cb_weight_tiled);
 
@@ -85,9 +69,7 @@ void kernel_main() {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
             // Process only assigned C_out blocks
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
-                // Bias must be ready before the first spatial block's reduction.
-                // Weight wait is deferred to right before matmul so the first
-                // tilize overlaps with BRISC's DRAM weight read.
+                // Bias must be ready before the first spatial block's reduction
                 if constexpr (use_bias) {
                     if (is_reducer) {
                         cb_wait_front(cb_bias_tiled, matmul_N_t);
@@ -98,9 +80,7 @@ void kernel_main() {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                            // Fused tilize+matmul: tilize subblock_h rows, then
-                            // matmul the batch. Repeat matmul_M_t/subblock_h times.
-                            // Saves (M_t - subblock_h) * K_t tiles of L1 vs full M_t*K_t.
+                            // Fused tilize+matmul: tilize subblock_h rows, then matmul the batch
                             {
                                 uint32_t patches_left = num_patches;
                                 for (uint32_t m_start = 0; m_start < matmul_M_t; m_start += subblock_h) {
@@ -154,8 +134,7 @@ void kernel_main() {
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
 
                             if (!is_reducer) {
-                                // not reducer implies that we are a worker and there are multiple workers in this
-                                // reduction group
+                                // not reducer implies that we are a worker and there are multiple workers
 
                                 // Signal to writer that we have partial results
                                 cb_reserve_back(cb_reduction_tiled, output_tiles);
@@ -180,9 +159,7 @@ void kernel_main() {
                                     if constexpr (use_fp32_partials) {
                                         for (uint32_t t = 0; t < output_tiles; t++) {
                                             tile_regs_acquire();
-                                            // Re-init before each op: copy_tile and add_tiles
-                                            // share the MATH unit config, so each needs its own
-                                            // init per tile iteration.
+                                            // Re-init before each op: copy_tile and add_tiles share the MATH unit
                                             copy_tile_init(cb_matmul_interm_tiled);
                                             copy_tile(cb_matmul_interm_tiled, 0, 0);
                                             add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);

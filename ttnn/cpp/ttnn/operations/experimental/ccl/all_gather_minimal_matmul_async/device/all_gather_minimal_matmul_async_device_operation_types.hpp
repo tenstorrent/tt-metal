@@ -34,8 +34,7 @@ struct AllGatherMinimalMatmulAsyncParams {
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
     int32_t dim = -1;    // Dimension to split along (default -1)
 
-    // Per-chunk output widths along `dim`, in ELEMENTS; empty => uniform N/chunks. When set, must
-    // have `chunks` entries summing to N, each a multiple of TILE_WIDTH. Part of the cache key.
+    // Per-chunk output widths along `dim`, in ELEMENTS
     std::vector<uint32_t> chunk_sizes;
 
     // FSDP fusion: when set, the weight tensor is sharded along its K dim across

@@ -146,8 +146,7 @@ def _run_one_seed(
         )
         # WanConv2d has no use_fused parameter — it always uses standalone path
         torch_state = torch_model.state_dict()
-        # WanConv2d._prepare_torch_state does unsqueeze(2) expecting a 4D Conv2d weight.
-        # Our torch ref is nn.Conv3d(kernel=(1,3,3)) which gives 5D weight — squeeze the T dim.
+        # WanConv2d._prepare_torch_state does unsqueeze(2) expecting a 4D Conv2d weight
         if "weight" in torch_state and torch_state["weight"].ndim == 5:
             torch_state["weight"] = torch_state["weight"].squeeze(2)
     else:
@@ -173,9 +172,7 @@ def _run_one_seed(
 
     assert tt_model._needs_halo, "Fused path not enabled — test shapes must require spatial halo exchange."
 
-    # Hybrid dispatch may have disabled fused for small-T shapes in production, but the
-    # correctness test must exercise the fused kernel for ALL shapes to catch regressions.
-    # Bypass the threshold here.
+    # Hybrid dispatch may have disabled fused for small-T shapes in production
     if not is_spatial_only and not tt_model._use_fused:
         tt_model._use_fused = True
 
@@ -185,9 +182,7 @@ def _run_one_seed(
     if os.environ.get("NP_HALO_LAST"):
         tt_model.conv_config.halo_last = True
 
-    # Explicit scheme pin (takes priority over env). The reduced-T correctness shapes do not match
-    # the production routing keys, so without this CI would only ever exercise the default scheme;
-    # pinning lets a no-env run PCC-gate halo_last AND force_spatial directly.
+    # Explicit scheme pin (takes priority over env)
     if scheme == "halo_last":
         tt_model.conv_config.halo_last = True
         tt_model.conv_config.force_spatial_parallel = False
@@ -195,9 +190,7 @@ def _run_one_seed(
         tt_model.conv_config.force_spatial_parallel = True
         tt_model.conv_config.halo_last = False
 
-    # NP_BLK="Cin,Cout,T,H,W": override blocking to validate the fine-block s4 sweep configs against
-    # the PyTorch reference (the perf test only checks device time, not PCC). halo_last is position-
-    # independent so PCC must hold at any blocking; this catches matmul-subblock / vol2col regressions.
+    # NP_BLK="Cin,Cout,T,H,W": override blocking to validate the fine-block s4 sweep configs against the PyTorch
     _blk = os.environ.get("NP_BLK")
     if _blk and isinstance(tt_model, WanCausalConv3d):
         ci, co, t, h, w = (int(x) for x in _blk.split(","))
@@ -404,9 +397,7 @@ def _diagnose_pcc_failure(torch_ref, tt_out, h_factor, w_factor, pad_h=1, pad_w=
         )
 
 
-# The 4x8 (32-device) entries cannot run on an 8-chip BH-LB. They are marked with an explicit skip
-# so the coverage gap is visible in the CI report rather than silently dropped by the mesh_device
-# fixture's generic "requested more devices than available" skip.
+# The 4x8 (32-device) entries cannot run on an 8-chip BH-LB
 _SKIP_4X8 = pytest.mark.skip(reason="4x8 (32-device) shape — needs a 32-chip mesh, not available on 8-chip BH-LB")
 
 
@@ -431,28 +422,20 @@ _SKIP_4X8 = pytest.mark.skip(reason="4x8 (32-device) shape — needs a 32-chip m
         pytest.param(
             1, 192, 96, 81, 736, 1280, (1, 3, 3), (0, 1, 1), (4, 8), 0, 1, 2, id="up2_spatial_4x8", marks=_SKIP_4X8
         ),
-        # --- BH 2x4 480p WanCausalConv3d (3,3,3) shapes (requires 8-device 2x4 mesh) ---
-        # mid_block resnet: C_in=384, C_in_block=96 → 4 C_in blocks, H_out_block=32 (exact table)
+        # --- BH 2x4 480p WanCausalConv3d (3,3,3) shapes (requires 8-device 2x4 mesh) --- mid_block resnet: C_in=384
         pytest.param(1, 384, 384, 7, 60, 104, 3, 1, (2, 4), 0, 1, 1, id="mid_res_2x4_480p"),
         # up1_res (stage1): C_in=384, T_res=16
         pytest.param(1, 384, 384, 14, 120, 208, 3, 1, (2, 4), 0, 1, 1, id="up1_res_2x4_480p"),
         # up1_res num_links=2: production target; nl2 is where the H/W T-frame partition bites.
         pytest.param(1, 384, 384, 14, 120, 208, 3, 1, (2, 4), 0, 1, 2, id="up1_res_2x4_nl2"),
-        # ltx s4_out (128->48, asymmetric channels). Reduced T keeps the CPU torch ref fast;
-        # force_spatial/halo_last are position-independent so PCC holds at any T/blocking.
+        # ltx s4_out (128->48, asymmetric channels)
         pytest.param(1, 128, 48, 21, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s4_out_2x4"),
-        # ltx s4_res (128->128, per-dev 136x120 = full 272x480): the largest 2x4 halo_last shape (was
-        # log-only in the perf test). Small T keeps the large-spatial CPU torch ref tractable;
-        # halo_last is position-independent so PCC holds at any T.
+        # ltx s4_res (128->128, per-dev 136x120 = full 272x480): the largest 2x4 halo_last shape
         pytest.param(1, 128, 128, 7, 272, 480, 3, 1, (2, 4), 0, 1, 2, id="ltx_s4_res_2x4"),
-        # This test forces the fused path, so it covers only FUSED-DEPLOYED shapes (conv.py routes the
-        # rest — conv_in, s0/s1/s2 res, upsamplers — to standalone; the fused kernel is not built for
-        # them and throws at small T). s4_res/s4_out above + s3_res/s3_chg here = all 2x4 fused shapes.
-        # --- LTX 2x4 halo_last-deployed (small T; PCC is position-/T-independent) ---
+        # This test forces the fused path, so it covers only FUSED-DEPLOYED shapes
         pytest.param(1, 256, 256, 7, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s3_res_2x4"),  # per-dev 68x60
         pytest.param(1, 256, 512, 7, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s3_chg_2x4"),  # per-dev 68x60
-        # --- LTX 4x8 fused-deployed (real (4,8) mesh; halo_last s1_up/s2_res/s3_res/s3_chg + force_spatial
-        #     s4_res). Per-device sizes match the 4x8 deployment. Skipped on the 8-chip BH-LB. ---
+        # --- LTX 4x8 fused-deployed
         pytest.param(1, 512, 4096, 7, 68, 120, 3, 1, (4, 8), 0, 1, 2, id="ltx_s1_up_4x8", marks=_SKIP_4X8),
         pytest.param(1, 512, 512, 7, 136, 240, 3, 1, (4, 8), 0, 1, 2, id="ltx_s2_res_4x8", marks=_SKIP_4X8),
         pytest.param(1, 256, 256, 7, 136, 240, 3, 1, (4, 8), 0, 1, 2, id="ltx_s3_res_4x8", marks=_SKIP_4X8),
@@ -618,9 +601,7 @@ def test_fused_production_shapes(
         _diagnose_pcc_failure(torch_ref, tt_out, h_factor, w_factor, pad_h=pad_h, pad_w=pad_w)
         raise
 
-    # Product-never-regresses gate: the fused op must match the two-dispatch standalone NP+conv3d to
-    # >= 0.999 (mirrors the LTX fused-vs-standalone gate). bf16 accumulation-order rounding keeps this
-    # below an exact 1.0, but any structural seam/staleness regression drops it well past 0.999.
+    # Product-never-regresses gate: the fused op must match the two-dispatch standalone NP+conv3d to >= 0.999
     if fused_vs_standalone_pcc is not None:
         assert fused_vs_standalone_pcc >= 0.999, (
             f"FUSED vs STANDALONE mismatch! PCC = {fused_vs_standalone_pcc * 100:.6f} % < 99.9%. "
@@ -630,12 +611,7 @@ def test_fused_production_shapes(
     logger.info("PASSED")
 
 
-# ---------------------------------------------------------------------------
-# Program-hash distinctness across schemes
-# halo_last / force_spatial select structurally different programs for the same base blocking;
-# compute_program_hash folds those flags in, so dispatching the same shape under different schemes
-# must allocate distinct program-cache entries (and re-dispatching the same scheme must NOT).
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Program-hash distinctness across
 @pytest.mark.parametrize(
     "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
@@ -742,19 +718,11 @@ def test_fused_scheme_program_hash_distinct(
     logger.info("PASSED: scheme flags produce distinct, stable program-cache entries")
 
 
-# ---------------------------------------------------------------------------
-# Per-scheme PCC gate (no env vars)
-# The reduced-T correctness shapes do not match the production routing keys in
-# get_conv3d_config, so without an explicit pin a no-env CI run only ever exercises the
-# default scheme — leaving halo_last and force_spatial (the real production schemes)
-# unverified. This test pins each scheme directly so both are PCC-gated by default.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Per-scheme PCC gate
 @pytest.mark.parametrize(
     "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
-        # ltx s4_res (128->128): production-routed to halo_last. ltx s4_out (128->48): routed to
-        # force_spatial. Reduced T/spatial keeps the CPU torch ref fast; both schemes are
-        # position-independent so PCC holds at any T/blocking.
+        # ltx s4_res (128->128): production-routed to halo_last
         pytest.param(1, 128, 128, 14, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s4_res_2x4"),
         pytest.param(1, 128, 48, 14, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s4_out_2x4"),
     ],
@@ -821,13 +789,7 @@ def test_fused_scheme_pcc(
     logger.info(f"PASSED scheme={scheme}")
 
 
-# ---------------------------------------------------------------------------
-# Repeat-invocation PCC gate (program-cache hit + ping-pong halo-buffer RTA refresh)
-# Dispatching the SAME fused layer >= 2 times exercises the program-cache-hit path where
-# override_runtime_arguments must re-supply the per-call semaphore addresses and swap the
-# ping-pong halo buffer. An unrefreshed RTA regression would leave the second call reading a
-# stale semaphore/buffer — caught by asserting PCC on every call.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Repeat-invocation PCC gate
 @pytest.mark.parametrize(
     "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
@@ -939,16 +901,11 @@ def test_fused_repeat_invocation(
     logger.info(f"PASSED repeat-invocation ({n_calls} calls)")
 
 
-# ---------------------------------------------------------------------------
-# All-ones input seam test
-# Reproduces the exact bug condition: all-ones input exposes fused vs standalone
-# boundary divergence that random input masks (PCC averages it out).
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- All-ones input seam test Reproduces
 @pytest.mark.parametrize(
     "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
-        # --- 2x4 num_links=2: the seam detector for BH-LB.
-        # nl2 is where the per-link T-frame partition can leave a corner stale (Attempt 1's bug). ---
+        # --- 2x4 num_links=2: the seam detector for BH-LB
         (1, 384, 384, 7, 60, 104, 3, 1, (2, 4), 0, 1, 2),
     ],
     ids=["mid_res_2x4_nl2_ones"],
@@ -1008,9 +965,7 @@ def test_fused_ones_input_seam(
             f"=== ONES INPUT — FUSED vs STANDALONE: Global={fvs_global_pcc*100:.4f}%  "
             f"Boundary={fvs_bnd_pcc*100:.4f}%  max_diff_bnd={max_diff_bnd:.6g} ==="
         )
-        # Halo staleness reads uninitialized DRAM → an order-of-magnitude diff (~the value itself).
-        # A correct fused op still differs from the two-dispatch standalone by bf16 accumulation-order
-        # rounding (~1 ULP), so the bar is a few bf16 ULP relative to the output magnitude, not exact 0.
+        # Halo staleness reads uninitialized DRAM → an order-of-magnitude diff (~the value itself)
         out_mag = max(1.0, standalone_out.abs().max().item())
         seam_tol = 4.0 * out_mag / 128.0  # 4 bf16 ULP (mantissa 2^-7); staleness is far larger
         if max_diff_bnd > seam_tol:

@@ -229,10 +229,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
         im6_t = Wt_next_block_up;
-        // TILE-input fused streams cb_in (the reader's `a`) one block at a time, so a double buffer
-        // suffices. RM-input fused tilizes the WHOLE row into cb_in (tilize_all_blocks_to_cb) before the
-        // pre-add consumes any of it, so cb_in must hold the full row — otherwise the tilize fills the
-        // double buffer and deadlocks (no consumer runs until tilize returns). Wt>block_size only.
+        // TILE-input fused streams cb_in (the reader's `a`) one block at a time, so a double buffer suffices
         if (!input_is_row_major) {
             in0_t = 2 * block_size;
         }
@@ -355,12 +352,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
 
-    // Optional second output: the pre-add sum (input + residual). Lets a resnet block fuse its
-    // terminal `add(residual, h)` into the next block's norm. Only the small-kernel, non-welford,
-    // RMSNorm, fused-pre-add, interleaved path emits it (validate guards the rest); the compute kernel
-    // tees cb_x to a bf16 cb_x_out and the output writer drains it alongside cb_out (one DM RISC, no
-    // sibling writer). RM input is supported: the sum is teed in TILE (the chain residual stays TILE),
-    // only the normed output is untilized — so no per-block layout conversions are forced on the caller.
+    // Optional second output: the pre-add sum (input + residual)
     const bool output_residual_sum =
         operation_attributes.output_residual_sum && fuse_pre_add && rms_norm && !use_welford && !large_tensor_needed;
     TT_FATAL(
@@ -407,8 +399,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
     }
     if (output_residual_sum) {
-        // Second TensorAccessor for the (always-TILE) pre-add sum output, drained by the same writer.
-        // Appended last so each writer reads it at its own offset (after elem_size for the RM writer).
+        // Second TensorAccessor for the (always-TILE) pre-add sum output, drained by the same writer
         tt::tt_metal::TensorAccessorArgs(tensor_args.residual_output_tensor.value().buffer())
             .append_to(writer_compile_time_args);
     }
@@ -645,8 +636,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             writer_args.push_back(H_logical);  // arg[4]
         }
         if (output_residual_sum) {
-            // The single writer also drains cb_x_out (TILE) to the 2nd output. arg[4] non-RM, arg[5] RM
-            // (after H_logical). The sum is always tiled, so tile_offset indexes it on both paths.
+            // The single writer also drains cb_x_out (TILE) to the 2nd output
             writer_args.push_back(x_out_dram_addr);
         }
         writer_runtime_args.emplace_back(core, std::move(writer_args));
@@ -743,9 +733,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(
         make_cb_descriptor(out0_t * out_single_tile_size, tt::CBIndex::c_16, out_data_format, out_single_tile_size));
 
-    // CB 17: optional pre-add sum output (output_residual_sum). Full-row depth so the compute kernel's
-    // pre-add loop fills the whole row without back-pressure; the output writer drains it after cb_out
-    // (which the norm only produces post-reduction).
+    // CB 17: optional pre-add sum output (output_residual_sum)
     if (output_residual_sum) {
         program_descriptor.cbs.push_back(make_cb_descriptor(
             Wt_next_block_up * x_out_single_tile_size, tt::CBIndex::c_17, x_out_data_format, x_out_single_tile_size));

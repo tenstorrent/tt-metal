@@ -109,8 +109,7 @@ void bind_neighbor_pad_conv3d(nb::module_& mod) {
 void bind_np_conv3d_config(nb::module_& mod) {
     using ttnn::experimental::prim::NpConv3dConfig;
 
-    // Subclass of Conv3dConfig (already registered by bind_conv3d) so a config built/set in Python
-    // works wherever a Conv3dConfig is accepted; these fields are read only by the fused op.
+    // Subclass of Conv3dConfig (already registered by bind_conv3d) so a config built/set in Python works wherever
     auto py_np_config = nb::class_<NpConv3dConfig, ttnn::experimental::prim::Conv3dConfig>(
                             mod,
                             "NpConv3dConfig",

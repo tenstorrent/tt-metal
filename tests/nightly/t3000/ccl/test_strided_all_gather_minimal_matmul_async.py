@@ -15,10 +15,7 @@ from tracy import signpost
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_extra=0):
-    # 2 out-ready semaphores (one per direction), plus num_extra aggregator per-worker
-    # semaphores for the writer-signals-matmul path. The aggregator per-worker sems are
-    # incremented over the fabric by writer workers on the receiving device, so they must be
-    # GlobalSemaphores (mesh-consistent reserved address) just like the out-ready sems.
+    # 2 out-ready semaphores (one per direction), plus num_extra aggregator per-worker semaphores
     ccl_semaphore_handles = [
         ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2 + num_extra)
     ]
@@ -97,10 +94,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     )
 
     # create global semaphore handles
-    # For the writer-signals-matmul path, the aggregator needs 2 directions x (num_links x
-    # num_workers_per_link) per-worker semaphores appended after the 2 out-ready sems. These are
-    # created unconditionally (unused/harmless when the path is off) so the address layout the
-    # device op reads is stable.
+    # For the writer-signals-matmul path, the aggregator needs 2 directions x
     num_agg_sems = 2 * num_links * (num_workers_per_link or 0)
     ccl_semaphore_handles = [
         create_global_semaphores(mesh_device, num_devices, all_cores, 0, num_extra=num_agg_sems)
@@ -179,9 +173,7 @@ def run_strided_all_gather_minimal_matmul_impl(
         bias_tensor_mesh_list.append(bias_tensor_mesh)
 
         if use_ternary:
-            # addcmul: out = ternary_a + scalar * matmul_out * ternary_b.
-            # ternary_a is output-shaped [1, 1, M, N], sharded like the matmul output (M on other_dim, N like
-            # the weight); ternary_b is [1, 1, 1, N] and broadcasts over M (replicated like bias).
+            # addcmul: out = ternary_a + scalar * matmul_out * ternary_b
             ternary_a_input = torch.randn((1, 1, M, N), dtype=torch_dtype)
             ternary_b_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
             ternary_a_tensor_mesh = ttnn.from_torch(
@@ -380,8 +372,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 logger.info(f"{output}, iteration {i}")
                 assert eq, f"iter {i} AG FAILED ag: {output}"
 
-            # Matmul output is a list of chunk tensors (one for chunks=1). Each chunk is the matching
-            # N-slice of the full golden output.
+            # Matmul output is a list of chunk tensors (one for chunks=1)
             tt_mm_out_tensors = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
             torch_mm_chunks = torch.chunk(torch_mm_out_tensor, len(tt_mm_out_tensors), dim=-1)

@@ -2,20 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Conv3d writer kernel for the fused NP op.  This is the legacy fork of upstream conv3d's writer
-// (ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp), deliberately NOT re-based.
-// CT-arg indices 0..21 match upstream's writer layout EXACTLY (incl. the skipped idx 18 =
-// out_row_size_bytes, unused in both); upstream then uses 22+ for weight-share/mcast/streaming, where
-// this fork substitutes its own: [22] cb_zero_tiled, [23] halo_last.  It diverges from upstream on:
-//   1. NO weight share.  Upstream mcasts/chains weights from one sender; the NP fusion removed the
-//      mcast, so every reducer/worker reads its own weight block on BRISC here (the inline weight-block
-//      loop below).  Do NOT pull upstream's weight_share into this writer.
-//   2. NO streaming output.  Output is written per full block after the cross-core reduce + untilize
-//      (single trailing barrier); the writes are already async, and upstream's streaming path is gated
-//      off on these shapes (see conv3d_compute.cpp header).
-// The ONLY NP-specific control flow is the halo_last two-phase block walk ([23] + is_edge below): it
-// must replay the reader's interior-then-boundary block order so result tiles map to the right output
-// pages.  The worker/reducer reduction handshake is shared with upstream and must stay byte-faithful.
+// Conv3d writer kernel for the fused NP op
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -45,8 +32,7 @@ void kernel_main() {
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
     constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(22);
-    // halo_last: walk blocks in the reader's two-phase order (interior pass, then boundary pass) so
-    // the result tiles arriving in the CB map to the correct output pages computed below.
+    // halo_last: walk blocks in the reader's two-phase order
     constexpr bool halo_last = get_compile_time_arg_val(23) == 1;
 
     uint32_t argidx = 0;
@@ -154,8 +140,7 @@ void kernel_main() {
                     }
                 }
 
-                // Write output for assigned ranges. halo_last: pass 0 = interior blocks, pass 1 =
-                // boundary blocks, matching the reader so result tiles map to the right output pages.
+                // Write output for assigned ranges
                 for (uint32_t phase = 0; phase < (halo_last ? 2u : 1u); phase++) {
                     for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                         const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);

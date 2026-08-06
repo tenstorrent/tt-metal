@@ -23,8 +23,7 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
-    // When set (interleaved + FUSE_PRE_ADD only), also write the pre-add sum (input + residual) to
-    // residual_output_tensor — lets a resnet block fuse its terminal add into the next block's norm.
+    // When set (interleaved + FUSE_PRE_ADD only), also write the pre-add sum
     bool output_residual_sum = false;
 };
 

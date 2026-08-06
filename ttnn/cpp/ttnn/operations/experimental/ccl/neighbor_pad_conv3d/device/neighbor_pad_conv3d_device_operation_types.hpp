@@ -11,48 +11,21 @@
 
 namespace ttnn::experimental::prim {
 
-// Conv3dConfig plus the controls read only by the fused NeighborPad+Conv3d op (its program factory,
-// device op, and Python router). Subclassing keeps every conv3d blocking field and lets a config
-// build/route exactly like a Conv3dConfig, while these extra fields stay out of the shared upstream
-// struct. attribute_values() below is sliced to the base Conv3dConfig fields so this config hashes
-// identically to a standalone Conv3dConfig; the two scheme flags that select a structurally different
-// program (halo_last, force_spatial_parallel) are folded into the program hash by
-// NpConv3dDeviceOperation::compute_program_hash instead, keeping the scheme out of the base struct's
-// hash while still distinguishing cached programs per scheme. The remaining fields are per-call
-// runtime addresses the Python wrapper allocates each dispatch; they are not part of any hash. Every
-// other fused parameter (the per-T progress batch size, the region-progress link stride, the halo
-// buffer geometry, and the always-on halo-buffer mode) is derived in the program factory from the
-// base blocking fields, the op's NP topology, and the input tensor shape — so it is not stored here.
+// Conv3dConfig plus the controls read only by the fused NeighborPad+Conv3d op
 struct NpConv3dConfig : Conv3dConfig {
     using Conv3dConfig::Conv3dConfig;  // inherit the base constructor so Python builds it identically
 
-    // Per-call runtime addresses, allocated and reset by the Python wrapper each dispatch (not hashed).
-    // region_progress_sem_addr: per-(region,link) progress GlobalSemaphore L1 addrs, indexed
-    //   [region*num_links + link] with region {H-top=0, H-bot=1, W-left=2, W-right=3}. Count =
-    //   4 regions × num_links: 8 on BH-LB (num_links=2), up to 4*MAX_PAD2_NUM_LINKS=16 on 4x8. The link
-    //   stride is the op's np_num_links (the factory derives it). One producer per (region,link) → each
-    //   sem is monotonic in that link's T-batches; a conv3d edge tile maps the batch it needs to the
-    //   owning link and polls only that sem — race-free without cross-link order.
-    // h_halo_buffer_addr: compact halo buffer in DRAM, layout [H_top | H_bot | W_left | W_right].
+    // Per-call runtime addresses, allocated and reset by the Python wrapper each dispatch (not hashed)
     std::array<uint32_t, 16> region_progress_sem_addr = {};
     uint32_t h_halo_buffer_addr = 0;
 
-    // Pin t_out_parallel=1 and fill the grid with H/W (then C) parallelism so every core walks the
-    // full t-range. The reader's per-t-block halo wait then ramps, and interior (h,w) tiles touch no
-    // device edge and need no halo — overlapping NP under conv3d compute. Falls back to temporal fill
-    // when the spatial dims cannot fill the grid.
+    // Pin t_out_parallel=1 and fill the grid with H/W (then C) parallelism so every core walks the full t-range
     bool force_spatial_parallel = false;
 
-    // halo_last: bulk-core two-phase. The conv runs on the full output across all conv cores, but each
-    // core processes its blocks in two passes — interior blocks first (no halo, overlapping NP), then
-    // boundary blocks after the NP gate. Hides NP under the interior without reserving cores or paying
-    // a per-pixel reuse penalty (boundary blocks are full H×W blocks). Uses the same progress-semaphore
-    // gate as the temporal-overlap path.
+    // halo_last: bulk-core two-phase
     bool halo_last = false;
 
-    // Hash only the base conv3d blocking fields — identical to Conv3dConfig. The two scheme flags above
-    // are folded into the program hash by NpConv3dDeviceOperation::compute_program_hash (see struct
-    // note), not here, so this config stays hash-compatible with standalone conv3d.
+    // Hash only the base conv3d blocking fields — identical to Conv3dConfig
     static constexpr auto attribute_names = Conv3dConfig::attribute_names;
     auto attribute_values() const { return Conv3dConfig::attribute_values(); }
 };

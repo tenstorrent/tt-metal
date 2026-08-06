@@ -84,16 +84,12 @@ void NpConv3dDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.np_padding_h > 0, "NpConv3d: np_padding_h must be > 0 (H-halo must be needed for fused op).");
 
-    // The fused op only implements the 2D (H+W) padding path: the deployed VAE always pads both H and
-    // W (3x3x3 convs on a 2x4/4x8 mesh), so np_pad_dim2 is always set. The H-only (1D) path was dead
-    // and untested, so fail loud instead of silently taking a removed branch.
+    // The fused op only implements the 2D (H+W) padding path: the deployed VAE always pads both H and W
     TT_FATAL(
         args.np_pad_dim2.has_value(),
         "NpConv3d: fused neighbor_pad_conv3d requires 2D padding (H+W); np_pad_dim2 must be set.");
 
-    // The fused op never fuses T-front padding: the reader's per-T-block halo gate computes
-    // last_t_in = (...) - padding_t as a uint32_t, so any padding[0] > 0 underflows for the first
-    // T-blocks. The T (causal) front pad is applied by the caller before this op, not here.
+    // The fused op never fuses T-front padding: the reader's per-T-block halo gate computes last_t_in = (...)
     TT_FATAL(
         args.padding[0] == 0,
         "NpConv3d: padding[0] (T-front padding) must be 0 for the fused op; apply T padding before the op. got {}",
@@ -171,8 +167,7 @@ TensorSpec NpConv3dDeviceOperation::compute_output_specs(
     uint32_t C_out = args.output_channels;
     uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
-    // Inflate effective padding with halo buffer contributions so output dims are correct. The fused
-    // op always uses the halo buffer, and its H/W halo padding equals the op's NP padding per side.
+    // Inflate effective padding with halo buffer contributions so output dims are correct
     std::array<uint32_t, 3> effective_padding = args.padding;
     effective_padding[1] += args.np_padding_h;
     effective_padding[2] += args.np_padding_w;
@@ -203,12 +198,7 @@ ttsl::hash::hash_t NpConv3dDeviceOperation::compute_program_hash(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
 
-    // NpConv3dConfig::attribute_values() is sliced to the base Conv3dConfig fields (so the config
-    // stays hash-compatible with standalone conv3d), but halo_last / force_spatial_parallel select
-    // structurally different programs for the same base blocking. Hash them explicitly here so a
-    // cached program is never reused across schemes. The per-T progress batch size is derived from
-    // T_out_block (already in the base hash) and the halo-buffer mode is constant, so neither needs
-    // a separate hash term.
+    // NpConv3dConfig::attribute_values() is sliced to the base Conv3dConfig fields
     const auto& cfg = args.conv_config;
     operation::Hash hash = operation::hash_operation<NpConv3dDeviceOperation>(
         args,

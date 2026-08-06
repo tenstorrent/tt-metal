@@ -243,8 +243,7 @@ void kernel_main() {
     constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
     constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
 
-    // Matmul maps in0->SrcB and in1->SrcA, so startup must program the source state reversed;
-    // MMIO writes make this unsafe anywhere but before the first compute call.
+    // Matmul maps in0->SrcB and in1->SrcA, so startup must program the source state reversed
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
     matmul_init(cb_vol2col_tiled, cb_weight_tiled);
     MATH((llk_math_reconfig_remap(true)));

@@ -22,11 +22,9 @@ from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async impo
 _CHUNK_CASES = [
     # Uniform, as a control: the variable-width code path must reproduce the legacy behaviour.
     pytest.param(3072, [1024, 1024, 1024], id="uniform_3x1024"),
-    # The motivating shape: fused QKV + per-head gate. The gate chunk is a single tile wide, which
-    # is the degenerate stride (row stride 1) and the case a shared width would corrupt worst.
+    # The motivating shape: fused QKV + per-head gate
     pytest.param(3104, [1024, 1024, 1024, 32], id="qkv_plus_gate"),
-    # Asymmetric widths whose boundaries do NOT fall on tidy multiples, so the prefix-sum scan is
-    # exercised where chunk boundaries land mid N-block rather than at block edges.
+    # Asymmetric widths whose boundaries do NOT fall on tidy multiples
     pytest.param(3104, [512, 1536, 1024, 32], id="asymmetric"),
     # Two chunks, wildly unbalanced -- smallest legal chunk against a large one.
     pytest.param(2080, [2048, 32], id="lopsided_2chunk"),

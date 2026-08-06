@@ -41,9 +41,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-// ============================================================================
-// create_mesh_workload — iterate over mesh coords and call create_at()
-// ============================================================================
+// ============================================================================ create_mesh_workload
 NpConv3dMeshWorkloadFactory::cached_mesh_workload_t NpConv3dMeshWorkloadFactory::create_mesh_workload(
     const NpConv3dParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -70,10 +68,7 @@ NpConv3dMeshWorkloadFactory::cached_mesh_workload_t NpConv3dMeshWorkloadFactory:
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
 }
 
-// ============================================================================
-// create_at — the heart of the fusion: NP fabric kernels + conv3d kernels in
-//             one program, sharing a progress semaphore for pipelining.
-// ============================================================================
+// ============================================================================ create_at
 NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::create_at(
     const NpConv3dParams& op,
     const ttnn::MeshCoordinate& mesh_coordinate,
@@ -83,9 +78,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     Program program{};
 
-    // =========================================================================
-    // PART 1: NP FABRIC KERNELS (fabric_only H-dim path, dim=1 for BTHWC)
-    // =========================================================================
+    // ========================================================================= PART 1: NP FABRIC KERNELS
 
     // Use MeshCoordinates to find forward and backward devices along H axis
     uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
@@ -125,19 +118,11 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     bool is_first_device = !backward_coord.has_value();
     bool is_last_device = !forward_coord.has_value();
     bool is_padding_zeros = op.padding_mode == "zeros";
-    // The fused op is always 2D (H+W padding) — validate() enforces np_pad_dim2.has_value(). The
-    // H-only (1D) path is removed; is_2d is kept as a named constant for readability where the W-phase
-    // setup is gated.
+    // The fused op is always 2D (H+W padding) — validate() enforces np_pad_dim2.has_value()
     TT_FATAL(op.np_pad_dim2.has_value(), "NpConv3d: fused op requires 2D padding (H+W).");
     const bool is_2d = true;
 
-    // Per-shape gates for the two NP-fabric reorders, passed as compile-time args (reader/writer stay in
-    // lockstep). Both win when the op is NP-bound — low conv compute-intensity (C_in*C_out = per-position
-    // matmul K*N) leaves the NP fabric exposed. H corner-first (H writer) wins whenever NP is exposed.
-    // The W global two-pass (defer all H-dependent corner reads past H's finish) additionally needs a
-    // small per-device tile, else it delays the conv's W-edge and regresses the larger-tile NP-leaning
-    // shapes. Thresholds from the BH 4x8/2x4 device sweep; replace with a calibrated conv-vs-NP cost
-    // estimate when one exists.
+    // Per-shape gates for the two NP-fabric reorders, passed as compile-time args (reader/writer stay in lockstep)
     const uint32_t gate_c_in = input_tensor_shape[input_tensor_shape.size() - 1];
     const uint32_t gate_c_out = op.output_channels;
     const uint32_t gate_spatial = input_halo_dim_size * num_sticks_per_halo_dim;  // H_dev * W_dev
@@ -145,10 +130,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     const uint32_t use_corner_first = np_bound_channels ? 1u : 0u;
     const uint32_t use_w_two_pass = (np_bound_channels && gate_spatial <= 8192u) ? 1u : 0u;
 
-    // For the compact halo buffer, H-section rows are exactly W_dev wide.
-    // W-padding is handled in a separate W-section, so no extra columns in H rows.
-    // (The standalone NP factory widens rows to W+pad for padded-tensor output,
-    //  but the compact buffer layout keeps H and W sections independent.)
+    // For the compact halo buffer, H-section rows are exactly W_dev wide
     uint32_t output_num_sticks_per_halo_dim = num_sticks_per_halo_dim;
     uint32_t writer_stick_start_id = 0;
     uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
@@ -157,13 +139,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     uint32_t num_links = static_cast<uint32_t>(op.np_num_links);
     uint32_t pad2_num_links = static_cast<uint32_t>(op.np_pad2_num_links);
 
-    // Per-T progress batch size: the fused op always pipelines per T-out block, so it equals the base
-    // blocking's T_out_block (the Python wrapper used to copy it into a dedicated field).
+    // Per-T progress batch size: the fused op always pipelines per T-out block
     const uint32_t progress_t_batch_size = op.conv_config.T_out_block;
-    // Link stride of the region-progress sem table. The Python wrapper allocates 4*np_num_links sems
-    // and lays them out [region*np_num_links + link], so the table stride is the op's NP num_links —
-    // the un-clamped param, independent of the fabric-core clamp applied to the local num_links below
-    // (which is only the active-link loop bound, not the table layout).
+    // Link stride of the region-progress sem table
     const uint32_t region_progress_num_links = static_cast<uint32_t>(op.np_num_links);
 
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;
@@ -188,9 +166,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         pad2_num_links,
         MAX_PAD2_NUM_LINKS);
 
-    // H fabric cores occupy column 0, rows [0, num_h_fabric_cores). W fabric cores
-    // follow in the same column. This gives conv3d a clean rectangular grid
-    // (cols [1, grid.x)) instead of the L-shape produced by a first-row layout.
+    // H fabric cores occupy column 0, rows [0, num_h_fabric_cores)
     CoreCoord np_core_grid(1, num_h_fabric_cores);
     auto
         [num_np_cores,
@@ -200,8 +176,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
          np_dims_per_core_group_1,
          np_dims_per_core_group_2] = split_work_to_cores(np_core_grid, outer_dim_size * 2);
 
-    // Inc B: batch-align H partition so each (direction, link) owns whole T-batches (per-(HT/HB,link)
-    // sems need it). Link l owns frames [l*h_dims_per_link, min((l+1)*h_dims_per_link, outer_dim_size)).
+    // Inc B: batch-align H partition so each (direction, link) owns whole T-batches
     const uint32_t h_pb = progress_t_batch_size;
     const uint32_t h_total_batches = (h_pb > 0) ? ((outer_dim_size + h_pb - 1) / h_pb) : 0;
     const uint32_t h_batches_per_link = (h_total_batches > 0) ? ((h_total_batches + num_links - 1) / num_links) : 0;
@@ -219,12 +194,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, np_worker_core_ranges, cb_sender_config);
 
-    // Dedicated H-send CB: the H-reader batches a full halo row (num_sticks_per_halo_dim sticks) per
-    // cb_reserve so the row reads coalesce into one barrier (the per-stick path was latency-bound,
-    // ~18k read+barrier pairs). Sized exactly 2 rows so a row reserve never wraps mid-batch (double
-    // buffered: reader fills row N+1 while the H-writer drains row N per stick). Kept separate from
-    // the sender CB because the per-stick recv/is_first pushes there would desync the row ring.
-    // H cores only; W keeps the per-stick c_in0 path.
+    // Dedicated H-send CB: the H-reader batches a full halo row
     uint32_t hsend_cb_index = tt::CB::c_in2;
     uint32_t hsend_cb_num_pages = 2 * num_sticks_per_halo_dim;
     CircularBufferConfig cb_hsend_config =
@@ -232,12 +202,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             .set_page_size(hsend_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, np_worker_core_ranges, cb_hsend_config);
 
-    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here.
-    // Corners-only optimization: only W-boundary sticks (pad2_left + pad2_right per row) go
-    // to L1; non-corner sticks go directly to neighbor DRAM via fabric.
-    // Buffer must hold ALL outer_dims' corner sticks (no per-outer_dim reuse) because the
-    // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
-    // copying outer_dim N.
+    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here
     uint32_t recv_cb_index = tt::CB::c_in1;
     uint32_t corner_sticks_per_row = std::min(op.np_pad2_left + op.np_pad2_right, num_sticks_per_halo_dim);
     if (is_2d) {
@@ -295,8 +260,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         uint32_t h_total = input_halo_dim_size + 2 * op.np_padding_h;
         w_outer_dim_size = outer_dim_size * h_total;
 
-        // W-section base offsets in the compact halo buffer:
-        // Layout: [H-top | H-bot | W-left | W-right]
+        // W-section base offsets in the compact halo buffer: Layout: [H-top | H-bot | W-left | W-right]
         uint32_t h_section_sticks = outer_dim_size * 2 * op.np_padding_h * num_sticks_per_halo_dim;
         w_section_wleft_base = h_section_sticks;
         w_section_wright_base = w_section_wleft_base + outer_dim_size * op.np_pad2_left * h_total;
@@ -319,12 +283,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     uint32_t num_directions = 2;
 
-    // -------------------------------------------------------------------------
-    // PART 2: PROGRESS SEMAPHORE — allocated in this program on conv3d cores
-    // -------------------------------------------------------------------------
-    // We need the conv3d core range to place the progress semaphore and know
-    // the reader NOC coordinates for the H writer CRTA. We compute it by
-    // subtracting the NP fabric core range from the full grid.
+    // ------------------------------------------------------------------------- PART 2: PROGRESS SEMAPHORE
     CoreRangeSet np_fabric_cores = np_worker_core_ranges;
     if (is_2d) {
         np_fabric_cores = np_fabric_cores.merge(w_fabric_core_range);
@@ -338,8 +297,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         conv3d_core_range = full_grid.subtract(np_fabric_cores);
     }
 
-    // Collect conv3d reader core NOC coords (the NP writers signal each reader's per-(region,link)
-    // progress sem at these coords after each T-batch).
+    // Collect conv3d reader core NOC coords
     std::vector<std::pair<uint32_t, uint32_t>> reader_noc_coords;
     if (progress_t_batch_size > 0) {
         for (const auto& core : corerange_to_cores(conv3d_core_range, std::nullopt, true)) {
@@ -348,9 +306,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         }
     }
 
-    // -------------------------------------------------------------------------
-    // NP H-fabric reader kernel
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------------- NP H-fabric reader kernel
     auto h_reader_kernel_config = ReaderDataMovementConfig{};
     h_reader_kernel_config.compile_args = {
         sender_cb_index,   // cb_output_id
@@ -371,9 +327,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         h_reader_kernel_id,
         {input_buffer->address(), halo_buffer->address(), op.h_neighbor_semaphore.address()});
 
-    // -------------------------------------------------------------------------
-    // NP H-fabric writer kernel
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------------- NP H-fabric writer kernel
     auto h_writer_kernel_config = WriterDataMovementConfig{};
     h_writer_kernel_config.compile_args = {
         sender_cb_index,   // cb_output_id
@@ -527,8 +481,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             }
             if (progress_t_batch_size > 0) {
                 writer_rt_args.push_back(link_t_offset);
-                // Inc B: this (direction,link)'s H-region sem (H-top=region 0 dir 0, H-bot=region 1 dir 1),
-                // signalled per-batch from handle_incoming_writes.
+                // Inc B: this (direction,link)'s H-region sem (H-top=region 0 dir 0, H-bot=region 1 dir 1)
                 const uint32_t h_region_idx = direction * region_progress_num_links + link;
                 writer_rt_args.push_back(conv_config.region_progress_sem_addr[h_region_idx]);
             }
@@ -539,9 +492,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         writer_link_offset_start_id += (link_dims_to_read * output_num_sticks_per_halo_dim);
     }
 
-    // -------------------------------------------------------------------------
-    // W fabric kernels for 2D padding (Phase 2)
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------------- W fabric kernels for 2D padding
     KernelHandle w_reader_kernel_id = 0;
     KernelHandle w_writer_kernel_id = 0;
     if (is_2d) {
@@ -559,8 +510,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             w_num_targets_backward,
             mesh_device);
 
-        // W reader kernel — fused-owned copy: always fabric-only, always per-batch
-        // progress-sem signalling.
+        // W reader kernel — fused-owned copy: always fabric-only, always per-batch progress-sem signalling
         auto w_reader_kernel_config = ReaderDataMovementConfig{};
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
@@ -586,12 +536,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                     w_reader_crta.push_back(x);
                     w_reader_crta.push_back(y);
                 }
-                // H-region sems (all H-links) + params, for the per-batch corner H-gate that
-                // replaces the upfront barrier. Layout after coords: HT[0..3], HB[0..3], h_bpl,
-                // num_h_links, h_total_batches. Slots >= num_links are 0 (unused).
-                // A no-H-neighbor side is a zero-pad boundary with no producer (the sender-direction
-                // H-writer skips handle_incoming_writes), so its sem never increments — pass addr 0 so
-                // the W-reader's hsem==0 skip applies. Mirrors the consumer's have_htop/have_hbot.
+                // H-region sems (all H-links) + params, for the per-batch corner H-gate that replaces the upfront
                 const uint32_t rstride = region_progress_num_links;
                 const bool have_htop = !is_first_device;
                 const bool have_hbot = !is_last_device;
@@ -619,9 +564,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         w_writer_kernel_config.compile_args.push_back(0);            // handle_incoming_writes
         w_writer_kernel_config.compile_args.push_back(1);            // is_w_fabric_writer
         w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
-        // progress_t_batch_size: W-writer doesn't per-batch-signal in 2D (gated by
-        // num_phase2_signal_targets > 0 at runtime), but the CT arg must be present to
-        // match np_writer.cpp's arg layout.
+        // progress_t_batch_size: W-writer doesn't per-batch-signal in 2D
         w_writer_kernel_config.compile_args.push_back(progress_t_batch_size);
         w_writer_kernel_config.compile_args.push_back(sender_cb_index);  // send_cb_id: W keeps the c_in0 per-stick path
         w_writer_kernel_config.compile_args.push_back(use_w_two_pass);   // global two-pass gate (lockstep w/ reader)
@@ -643,10 +586,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
              input_halo_dim_size,
              static_cast<uint32_t>(op.np_padding_h)});  // [4],[5]: W-writer per-batch two-pass reorder dims
 
-        // Per-core W fabric runtime args.
-        // When pipelining (progress_t_batch_size>0), align each link to whole T-batches so the
-        // per-(region,link) progress sem counts batches 1:1 and the conv3d reader can map a batch to
-        // its owning link by integer division (no per-link boundary table).
+        // Per-core W fabric runtime args
         const uint32_t w_h_total = input_halo_dim_size + 2 * op.np_padding_h;
         const uint32_t w_sticks_per_batch = progress_t_batch_size * w_h_total;
         const uint32_t total_w_batches =
@@ -690,16 +630,12 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 w_reader_rt_args.push_back(op.np_padding_h);
                 // h_halo_hbot_base
                 w_reader_rt_args.push_back(outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim);
-                // Per-batch region progress sem for this (W-direction, link): W-left=region 2,
-                // W-right=region 3. Table stride is region_progress_num_links (= num_links), so the
-                // count is 4*num_links (8 on 2x4). conv3d W-edge tiles for this link's batches poll it.
+                // Per-batch region progress sem for this (W-direction, link): W-left=region 2, W-right=region 3
                 const uint32_t w_region_idx = (2u + w_direction) * region_progress_num_links + w_link;
                 w_reader_rt_args.push_back(conv_config.region_progress_sem_addr[w_region_idx]);
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
-                // W writer runtime args — addresses the W-section of the compact buffer.
-                // Direction 0 (forward): writes W-left on receiver.
-                // Direction 1 (backward): writes W-right on receiver.
+                // W writer runtime args — addresses the W-section of the compact buffer
                 uint32_t w_pad = w_direction ? op.np_pad2_right : op.np_pad2_left;
                 uint32_t w_base = w_direction ? w_section_wright_base : w_section_wleft_base;
                 std::vector<uint32_t> w_writer_rt_args = {
@@ -771,9 +707,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         }
     }
 
-    // =========================================================================
-    // PART 3: CONV3D KERNELS (halo buffer always enabled, per-T pipelining at T_out_block granularity)
-    // =========================================================================
+    // ========================================================================= PART 3: CONV3D KERNELS
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
@@ -792,18 +726,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     uint32_t W_in = input_tensor_shape_logical[3];
     uint32_t C_in = input_tensor_shape_logical[4];
 
-    // Compact halo-buffer geometry — derived from the input shape and the op's NP padding (the conv3d
-    // reader indexes the buffer with these). H/W halo padding equals the per-side NP padding; the
-    // outer dim is B*T (outer_dim_size, computed above); the buffered H spans the per-device H plus
-    // both H halo sides; W rows are W_dev wide.
+    // Compact halo-buffer geometry — derived from the input shape and the op's NP padding
     const uint32_t h_halo_padding_h = op.np_padding_h;
     const uint32_t h_halo_padding_w = op.np_padding_w;
     const uint32_t h_halo_outer_dim_size = outer_dim_size;
     const uint32_t h_halo_H = H_in + 2 * h_halo_padding_h;
     const uint32_t h_halo_W = W_in;
 
-    // Inflate effective padding with halo buffer H/W contributions.
-    // The fused op always uses the halo buffer path.
+    // Inflate effective padding with halo buffer H/W contributions
     std::array<uint32_t, 3> effective_padding = op.padding;
     effective_padding[1] += h_halo_padding_h;
     effective_padding[2] += h_halo_padding_w;
@@ -906,9 +836,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
-    // --- Upstream conv3d gather tuning (re-based from #43541 / #44418) ---
-    // DRAM-read staging: when DRAM pages are read-aligned but the split C-in slice is not,
-    // stage small reads through an aligned scratch CB so every read is alignment-safe.
+    // --- Upstream conv3d gather tuning (re-based from #43541 / #44418) --- DRAM-read staging: when DRAM pages
     const uint32_t device_num_dram_banks = static_cast<uint32_t>(input_tensor.device()->num_dram_channels());
     TT_FATAL(device_num_dram_banks > 0, "Device must report at least one DRAM channel");
     const bool input_is_dram_interleaved =
@@ -959,8 +887,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     const uint32_t kH = op.kernel_size[1];
     const uint32_t kW = op.kernel_size[2];
 
-    // Coalesced bank-major gather candidate: DRAM interleaved, single C-in block, row-aligned,
-    // and enough W columns that each DRAM bank gets multiple pages to amortize the L1 reorder.
+    // Coalesced bank-major gather candidate: DRAM interleaved, single C-in block, row-aligned
     const uint32_t W_shard_full_for_coalesce = (conv_config.W_out_block - 1) * op.stride[2] + kW;
     const uint32_t coalesced_min_w_shard = 2 * device_num_dram_banks;
     const bool coalesced_shard_reads_candidate = input_is_dram_interleaved && C_in_num_blocks == 1 &&
@@ -1014,15 +941,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         }
     }
 
-    // Trid-ring depth classifier for the NP fused gather.  The upstream conv3d intensity gate
-    // (bytes/matmul-tile >= 128) classifies the NP production shapes as compute-bound and disables
-    // the ring, but ablation shows the fused conv is gather-bound on every halo_last shape (skipping
-    // the vol2col gather drops device FW 24-39%).  The discriminator that actually predicts a win is
-    // the per-row inner-gather burst (T_shard * W_shard): a moderate burst (~18) is latency-bound and
-    // the depth-8 ring hides the per-read latency (s1/s2/s3_res: -3 to -4% FW), while a large burst
-    // (>= kNpGatherBurstCap) is already NOC-bandwidth-saturated so the ring's drain barriers only add
-    // overhead (s0/s4_res: neutral-to-worse).  Scratch-backed reader modes issue larger/serialized
-    // reads, so the ring is allowed only outside them.
+    // Trid-ring depth classifier for the NP fused gather
     const uint32_t reader_T_shard = (conv_config.T_out_block - 1) * op.stride[0] + kT;
     const uint32_t reader_W_shard = (conv_config.W_out_block - 1) * op.stride[2] + kW;
     const uint32_t inner_gather_burst = reader_T_shard * reader_W_shard;
@@ -1081,14 +1000,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         cb_dram_read_scratch_id,
         (uint32_t)enable_dram_read_staging,
         dram_read_alignment};
-    // Per-T-batch pipelining CT arg (index 42).  The reader's RT input_progress_signal_count = the
-    // number of receiving W directions (2 on a W-middle device, 1 on an edge), which is how many times
-    // each global T-batch is signalled — once per receiving direction, by the link core that owns
-    // that batch's rows.  It is INDEPENDENT of pad2_num_links: the per-direction link cores split
-    // the T-batches by row, so adding links does not add signals per batch.  Scaling by
-    // pad2_num_links over-counts and deadlocks the conv3d reader's last t-block for num_links>1
-    // (it waits for a threshold the W-readers never reach).  An edge value (no direction count)
-    // would under-count on a middle device and release the reader before both halos land (W seam).
+    // Per-T-batch pipelining CT arg (index 42)
     const uint32_t num_signaling_w_dirs = (is_first_w_device ? 0u : 1u) + (is_last_w_device ? 0u : 1u);
     const uint32_t progress_signal_count = num_signaling_w_dirs;
     reader_compile_time_args.push_back(progress_t_batch_size);            // [42]
@@ -1208,10 +1120,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     uint32_t t_out_parallel_factor, h_out_parallel_factor, w_out_parallel_factor;
     if (conv_config.force_spatial_parallel) {
-        // Every core owns the full t-range (t_out_per_core == T_out_blocks), so the reader's
-        // per-t-block halo wait ramps and interior (h,w) tiles skip halo. Split the budget across
-        // H and W to fill the grid: greedily maxing H leaves a non-divisible remainder for W
-        // (51/34=1 on s4 → 68/102 cores), so pick the (h,w) that wastes the fewest cores.
+        // Every core owns the full t-range (t_out_per_core == T_out_blocks)
         t_out_parallel_factor = 1u;
         uint32_t best_h = 1u, best_w = 1u, best_fill = 0u;
         for (uint32_t h = std::min(H_out_blocks, remaining_parallel); h >= 1u; --h) {
@@ -1275,9 +1184,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     auto conv3d_cores = corerange_to_cores(core_grid, conv3d_num_cores, true);
     auto* device = input_tensor.device();
 
-    // W-region progress params for the conv3d reader (2D pipelined path): a W-edge tile maps the
-    // batch it needs to the owning link via integer division by reader_w_batches_per_link, then polls
-    // that (W-left/W-right, link) sem. Mirrors the batch-aligned W partition above.
+    // W-region progress params for the conv3d reader (2D pipelined path): a W-edge tile maps the batch it needs
     const uint32_t reader_w_h_total = input_halo_dim_size + 2 * op.np_padding_h;
     const uint32_t reader_w_sticks_per_batch = progress_t_batch_size * reader_w_h_total;
     const uint32_t reader_total_w_batches =
@@ -1341,25 +1248,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             }
         }
 
-        // Reader args[0..10] match conv3d_program_factory.cpp layout exactly; [11..] are fused-only:
-        //   [0]  input_addr
-        //   [1]  c_in_block_start
-        //   [2]  c_in_block_end
-        //   [3]  c_out_block_start
-        //   [4]  c_out_block_end
-        //   [5]  t_out_start
-        //   [6]  t_out_end
-        //   [7]  h_out_start
-        //   [8]  h_out_end
-        //   [9]  w_out_start
-        //   [10] w_out_end
-        //   [11] input_progress_signal_count (per-batch count = num receiving W directions)
-        //   [12] h_halo_buffer_addr
-        //   [13] h_halo_outer_dim_size
-        //   [14] h_halo_H
-        //   [15] h_halo_W
-        //   [16] h_halo_padding_h
-        //   [17] h_halo_padding_w
+        // Reader args[0..10] match conv3d_program_factory.cpp layout exactly
         reader_args_per_core[core_id] = {
             input_addr,
             c_in_block_start,
@@ -1372,9 +1261,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             h_out_end,
             w_out_start,
             w_out_end,
-            // [11]: input_progress_signal_count — number of W-readers signalling this
-            //   conv3d reader per batch; scales with the device's real W-neighbor count
-            //   (see progress_signal_count above), not the edge-only num_w_fabric_cores/2.
+            // [11]: input_progress_signal_count — number of W-readers signalling this conv3d reader per batch
             progress_signal_count,
             // [12]: halo buffer DRAM address
             halo_buffer_addr,
@@ -1384,11 +1271,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             h_halo_padding_h,
             h_halo_padding_w,
         };
-        // [18] pad2_num_links, [19] w_batches_per_link, [20..23] W-left sems, [24..27] W-right sems.
-        // A W side with no real neighbor (mesh edge) has zero-pad halo and NO producer (the W-reader
-        // for that direction is the sender, gated off from signalling), so pass addr 0 and the
-        // consumer skips it — else it would wait a sem that never increments and deadlock. WL is
-        // produced unless is_first_w_device (no left neighbor); WR unless is_last_w_device.
+        // [18] pad2_num_links, [19] w_batches_per_link, [20..23] W-left sems, [24..27] W-right sems
         const bool have_wleft = !is_first_w_device;
         const bool have_wright = !is_last_w_device;
         const uint32_t region_stride = region_progress_num_links;  // = num_links; table stride
@@ -1405,9 +1288,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 valid ? conv_config.region_progress_sem_addr[3 * region_stride + l] : 0u);
         }
         reader_args_per_core[core_id].push_back(reader_total_w_batches);  // [28] W threshold cap
-        // [29..39]: H-region sems (all H-links) + params for H-edge tiles. HT produced unless
-        // is_first_device (no top neighbor); HB unless is_last_device. [29..32] HT, [33..36] HB,
-        // [37] h_bpl, [38] num_h_links, [39] h_total_batches.
+        // [29..39]: H-region sems (all H-links) + params for H-edge tiles
         const bool have_htop = !is_first_device;
         const bool have_hbot = !is_last_device;
         for (uint32_t l = 0; l < 4u; l++) {
@@ -1504,9 +1385,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             .conv3d_compute_kernel_id = conv3d_compute_kernels_id}};
 }
 
-// ============================================================================
-// override_runtime_arguments — update addresses for NP kernels + conv3d kernels
-// ============================================================================
+// ============================================================================ override_runtime_arguments
 void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const NpConv3dParams& op,
@@ -1525,16 +1404,13 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
 
-        // --- NP H-fabric reader CRTA ---
-        // CRTA[0] = input_addr, CRTA[1] = halo_buffer_addr, CRTA[2] = h_sem_addr
+        // --- NP H-fabric reader CRTA --- CRTA[0] = input_addr, CRTA[1] = halo_buffer_addr, CRTA[2] = h_sem_addr
         auto& hr = GetCommonRuntimeArgs(program, shared_vars.np_artifacts.h_reader_kernel_id);
         hr[0] = input_addr;
         hr[1] = halo_buffer_addr;
         hr[2] = h_sem_addr;
 
-        // --- NP H-fabric writer CRTA ---
-        // CRTA[0] = input_addr, CRTA[1] = halo_buffer_addr, CRTA[2] = h_sem_addr,
-        // CRTA[3] = barrier_sem_addr, CRTA[4] = num_reader_cores (static), CRTA[5+] = NOC coords (static)
+        // --- NP H-fabric writer CRTA --- CRTA[0] = input_addr, CRTA[1] = halo_buffer_addr, CRTA[2] = h_sem_addr
         auto& hw = GetCommonRuntimeArgs(program, shared_vars.np_artifacts.h_writer_kernel_id);
         hw[0] = input_addr;
         hw[1] = halo_buffer_addr;
@@ -1550,11 +1426,7 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
             wr[2] = w_sem_addr;
             // wr[3+] = num_reader_cores and NOC coords — static, set once in create_at()
 
-            // Per-core RTA[10] of the W-reader holds input_buffer->address() (set in
-            // create_at from the first dispatch's input). On subsequent dispatches the
-            // input tensor may be at a different DRAM address, so refresh RTA[10] here
-            // or the W-reader will pull halo sticks from a stale/garbage DRAM region
-            // and fabric-write garbage into the neighbor's halo buffer.
+            // Per-core RTA[10] of the W-reader holds input_buffer->address()
             auto& w_reader_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.w_reader_kernel_id);
             for (const auto& core_range : shared_vars.np_artifacts.fabric_core_range.ranges()) {
                 for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -1584,9 +1456,7 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
             auto& writer_args = writer_args_by_core[core.x][core.y];
 
             reader_args[0] = input_addr;
-            // args[12] = halo buffer DRAM address — changes per call (ping-pong buffer). args[13..17]
-            // are the halo geometry, which is derived from the (hash-pinned) input shape in create_at
-            // and is constant for a cached program, so it is not refreshed here.
+            // args[12] = halo buffer DRAM address — changes per call (ping-pong buffer)
             reader_args[12] = halo_buffer_addr;
 
             writer_args[0] = output_addr;

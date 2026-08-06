@@ -15,8 +15,7 @@
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 
-// Must match write_chunk / the aggregator: the CB producer (read_chunk) splits each chunk into this
-// many row-bands so its tile order matches the consumer (write_chunk). Default 1 = whole-chunk.
+// Must match write_chunk / the aggregator: the CB producer (read_chunk) splits each chunk into this many row-bands
 #ifndef IN0_SUB_CHUNKS
 #define IN0_SUB_CHUNKS 1
 #endif
@@ -103,9 +102,7 @@ void kernel_main() {
         writes_expected = slices_expected - 1;
     }
 
-    // Mirror the writer's split-forwarding: on an even ring the diametric slice arrives in halves
-    // from both links. Direction 1 receives one extra slice (the second half) and relays one extra
-    // (its inbound +1-hop slice's second half). Gated to the reader-signaled path; see writer.
+    // Mirror the writer's split-forwarding: on an even ring the diametric slice arrives in halves from both links
     bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         slices_expected++;
@@ -173,8 +170,7 @@ void kernel_main() {
 
                 input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; chunk_idx++) {
-                    // For a split diametric slice each link delivers only its half, so wait on only
-                    // that half's semaphores (direction 0 = first half, direction 1 = second).
+                    // For a split diametric slice each link delivers only its half
                     bool receive_this_chunk =
                         !is_split_received_slice ||
                         (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
@@ -188,8 +184,7 @@ void kernel_main() {
                         uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                             input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
-                        // A split-forwarded slice is received whole but relayed in halves; read only
-                        // the half this link relays so the writer pops a matching CB count.
+                        // A split-forwarded slice is received whole but relayed in halves
                         bool relay_this_chunk =
                             !is_split_forwarded_slice ||
                             (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));

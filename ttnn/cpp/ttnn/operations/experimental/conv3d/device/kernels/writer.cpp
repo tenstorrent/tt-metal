@@ -63,8 +63,7 @@ void kernel_main() {
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
     constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
-    // Padded-output mode: write the compact [H_out,W_out] result into the interior of a spatially
-    // padded [H_out+2*output_pad_h, W_out+2*output_pad_w] buffer. 0 == compact (page index unchanged).
+    // Padded-output mode: write the compact [H_out,W_out] result into the interior of a spatially padded
     constexpr uint32_t output_pad_h = get_compile_time_arg_val(26);
     constexpr uint32_t output_pad_w = get_compile_time_arg_val(27);
 

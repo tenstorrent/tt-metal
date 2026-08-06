@@ -10,9 +10,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Kernel handles + core set for the NP fabric kernels the fused program factory builds
-// inline. Retained in the cached program so override_runtime_arguments can refresh their
-// per-dispatch runtime args.
+// Kernel handles + core set for the NP fabric kernels the fused program factory builds inline
 struct NpFabricOnlyArtifacts {
     tt::tt_metal::KernelHandle h_reader_kernel_id = 0;
     tt::tt_metal::KernelHandle h_writer_kernel_id = 0;

@@ -31,9 +31,7 @@ struct NpConv3dDeviceOperation {
 
 namespace ttnn::prim {
 
-// Primitive entry point: runs fused NeighborPad (fabric-only H-halo) + Conv3d in a single program.
-// halo_buffer must be a pre-allocated compact DRAM buffer sized for
-//   2 * outer_dim_size * np_padding_h * W sticks (+ W-halo section when np_padding_w > 0).
+// Primitive entry point: runs fused NeighborPad (fabric-only H-halo) + Conv3d in a single program
 Tensor neighbor_pad_conv3d(
     const Tensor& input,
     const Tensor& weight,

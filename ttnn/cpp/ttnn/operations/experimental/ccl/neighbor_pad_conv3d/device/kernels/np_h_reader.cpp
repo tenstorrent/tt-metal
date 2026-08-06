@@ -18,16 +18,11 @@ constexpr uint32_t ct_after_src = src_ct_args.next_compile_time_args_offset();
 // L1 intermediate config
 constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
-// Dedicated send CB for the batched H-halo send (separate ring from cb_output_id so the
-// per-stick recv/is_first pushes don't desync the row reserves).
+// Dedicated send CB for the batched H-halo send
 constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_src + 2);
 
 void kernel_main() {
-    ///////////////////////////////////////////////////
-    // ARGS
-    ///////////////////////////////////////////////////
-    // Common runtime args (uniform across all cores, updated between dispatches). Index 1 (output addr)
-    // is part of the shared CRTA layout but unused by this reader.
+    // ///////////////////////////////////////////////// ARGS /////////////////////////////////////////////////
     const address_t input_tensor_address = get_common_arg_val<address_t>(0);
     const size_t h_neighbor_sem = get_common_arg_val<uint32_t>(2);
 
@@ -90,11 +85,7 @@ void kernel_main() {
         }
 
         if (!is_last_chip) {
-            // Read the "end" of each slice into the dedicated send CB. Batch the whole row: one
-            // cb_reserve + one barrier for all num_sticks_to_read sticks instead of per stick. The
-            // per-stick path issued ~18k read+barrier pairs and was latency-bound; coalescing the
-            // row makes it bandwidth-bound. send_cb_id holds exactly 2 rows so a row reserve never
-            // wraps mid-batch, and the paired writer drains it one stick at a time.
+            // Read the "end" of each slice into the dedicated send CB
             for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                 uint32_t src_stick_id = 0;
                 if (direction) {
@@ -118,9 +109,7 @@ void kernel_main() {
 
         outer_dim_offset += (num_sticks_per_halo_dim * input_halo_dim_size);
 
-        // Per-batch H-commit: pull this od's incoming H-halo from the L1 recv buffer into the CB as
-        // soon as its sender link delivers it (per-core cumulative count, 1 inc/outer_dim), so the
-        // paired writer commits + signals HT/HB this batch rather than after the whole send pass.
+        // Per-batch H-commit: pull this od's incoming H-halo from the L1 recv buffer into the CB as soon
         if constexpr (use_l1_intermediate) {
             if (!is_first_chip) {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim + 1);
@@ -139,8 +128,7 @@ void kernel_main() {
         }
     }
 
-    // Drain the per-core fabric-arrival sem. 2D recvs were interleaved above; 1D wrote straight to
-    // DRAM so just wait for all outer_dims here, then reset.
+    // Drain the per-core fabric-arrival sem
     if (!is_first_chip) {
         if constexpr (use_l1_intermediate) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);

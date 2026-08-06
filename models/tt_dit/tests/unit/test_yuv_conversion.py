@@ -16,8 +16,7 @@ import torch
 
 import ttnn
 
-# BT.601 coefficients for input ∈ [-1, 1] → uint8 [0, 255].
-# These must match the values in yuv_conversion.hpp::yuv_bt601_coefficients().
+# BT.601 coefficients for input ∈ [-1, 1] → uint8 [0, 255]
 _Y_COEFF = (32.74, 64.28, 12.48, 125.5)
 _CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
 _CR_COEFF = (56.00, -46.89, -9.11, 128.0)
@@ -63,9 +62,7 @@ def _make_device() -> ttnn.Device:
     return ttnn.open_device(device_id=0)
 
 
-# ---------------------------------------------------------------------------
-# Parametrize over shard shapes that match real 4×8 mesh per-device tensors
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Parametrize over shard shapes
 @pytest.mark.parametrize(
     "H, W, T",
     [

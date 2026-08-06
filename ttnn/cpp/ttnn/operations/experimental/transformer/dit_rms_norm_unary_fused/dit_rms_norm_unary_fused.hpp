@@ -29,10 +29,7 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation = std::nullopt);
 
-// Same as dit_rms_norm_unary_fused but also returns the pre-add sum (input + residual). Lets a resnet
-// block fuse its terminal add into the next block's norm: the next norm consumes (h, residual) and
-// emits both the normed result and the materialized sum the skip connection needs. residual_input_tensor
-// is required. Returns {normed, sum}.
+// Same as dit_rms_norm_unary_fused but also returns the pre-add sum (input + residual)
 std::tuple<ttnn::Tensor, ttnn::Tensor> dit_rms_norm_unary_fused_residual_sum(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& residual_input_tensor,

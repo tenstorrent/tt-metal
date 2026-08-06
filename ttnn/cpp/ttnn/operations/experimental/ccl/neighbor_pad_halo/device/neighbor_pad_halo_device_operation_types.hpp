@@ -12,11 +12,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Standalone halo-only neighbor-pad: the fabric H+W halo exchange from the fused
-// neighbor_pad_conv3d op with the conv3d stage removed. It writes ONLY the compact halo
-// buffer [H-top | H-bot | W-left | W-right]; there is no interior copy and no conv. All
-// conv params (weights, blocking, kernel/stride/dilation, output channels) are gone —
-// this op is pure fabric transport, benchmarked toward DRAM + fabric bandwidth.
+// Standalone halo-only neighbor-pad: the fabric H+W halo exchange from the fused neighbor_pad_conv3d op
 struct NpHaloParams {
     // NP topology: H-fabric and W-fabric halo exchange
     uint32_t np_padding_h;     // H padding per side (1 for k333)
@@ -35,17 +31,11 @@ struct NpHaloParams {
     size_t np_pad2_num_links = 2;
     tt::tt_metal::MemoryConfig np_output_mem_config;
     std::string padding_mode;
-    // Padded-input mode (opt-in, default 0 = contiguous input). When >0 the input tensor is a padded
-    // [.., H+2*input_pad_h, W+2*input_pad_w, C] buffer and the readers exchange the halo of its INTERIOR
-    // (offset by input_pad_h/w, row stride = padded W, frame stride = padded H*W). Lets the copy-free
-    // decode feed conv3d's padded-output buffer straight into the exchange with no interior repack.
+    // Padded-input mode (opt-in, default 0 = contiguous input)
     uint32_t input_pad_h = 0;
     uint32_t input_pad_w = 0;
 
-    // Padded-output (fused) mode (opt-in, default false): additionally scatter the exchanged compact halo
-    // + interior (from input) into a padded [.., H+2pH, W+2pW, C] output (tensor_args.padded_output),
-    // folding halo_scatter into this op. Interior copy overlaps the fabric exchange; border waits on an
-    // exchange-done sem. border_only: interior already present in padded_output, only the border is written.
+    // Padded-output (fused) mode (opt-in, default false): additionally scatter the exchanged compact halo + interior
     bool output_padded = false;
     bool border_only = false;
 
@@ -123,8 +113,7 @@ struct NpHaloParams {
 struct NpHaloInputs {
     Tensor input_tensor;
     Tensor halo_buffer;  // compact halo buffer in DRAM (pre-allocated); the op's output in compact mode
-    // Padded-output (fused) mode: the padded buffer the fused scatter writes and the op returns. In this
-    // mode halo_buffer is an internal compact staging buffer. std::nullopt in compact mode.
+    // Padded-output (fused) mode: the padded buffer the fused scatter writes and the op returns
     std::optional<Tensor> padded_output;
 };
 

@@ -89,14 +89,7 @@ FORCE_INLINE void offset_clamp_pack(uint32_t cb_in, uint32_t cb_off, uint32_t cb
     cb_pop_front(cb_in, 1);
 }
 
-// SFPU typecast: bf16 → uint8 on a row-major page (32x32 elements).
-// copy_tile/pack_tile are element-wise inverses, so row-major layout is preserved.
-// Reconfigures unpack/pack via init_sfpu; the next tilize with
-// UnpackAndPackReconfigure restores bf16 state.
-//
-// On Blackhole, pack_untilize_dest_init enables DEST remap (remap_addrs + swizzle_32b)
-// which is NOT cleared by pack_untilize_uninit. The FPU (copy_tile, pack_tile) honours
-// the remap but the SFPU does not, so we must disable it before running the SFPU.
+// SFPU typecast: bf16 → uint8 on a row-major page (32x32 elements)
 FORCE_INLINE void typecast_and_pack(uint32_t cb_bf16, uint32_t cb_u8) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reconfig_remap(false)));

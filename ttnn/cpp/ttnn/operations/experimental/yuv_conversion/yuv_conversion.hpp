@@ -11,15 +11,7 @@
 
 namespace ttnn::experimental {
 
-// Convert a CHWT bfloat16 tensor (C=3, RGB, values in [-1,1]) to YUV 4:2:0 uint8.
-//
-// Returns (Y, U, V) as row-major uint8 tensors:
-//   Y: shape (1, H, W, T)     — full resolution luma
-//   U: shape (1, H/2, W/2, T) — Cb chroma (4:2:0 subsampled)
-//   V: shape (1, H/2, W/2, T) — Cr chroma (4:2:0 subsampled)
-//
-// coefficients: caller-supplied 3×4 matrix mapping RGB ∈ [-1,1] → YUV ∈ [0,255].
-//               The default (BT.601) is available as yuv_bt601_coefficients().
+// Convert a CHWT bfloat16 tensor (C=3, RGB, values in [-1,1]) to YUV 4:2:0 uint8
 std::tuple<Tensor, Tensor, Tensor> yuv_conversion(
     const Tensor& input,
     const prim::YUVCoefficients& coefficients,

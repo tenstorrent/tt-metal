@@ -450,9 +450,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-# yuv_conversion is bound via a raw nb::module_::def (not ttnn::register_operation), so it
-# lands only in the C++ _ttnn.operations.experimental module and misses the auto-surfacing that
-# register_operation gives siblings like padded_slice. Re-export it onto the python facade here.
+# yuv_conversion is bound via a raw nb::module_::def (not ttnn::register_operation)
 if "ttnn.experimental" in sys.modules:
     _exp_mod = sys.modules["ttnn.experimental"]
     for _yuv_name in ("yuv_conversion", "YUVCoefficients", "yuv_bt601_coefficients", "yuv_bt709_coefficients"):

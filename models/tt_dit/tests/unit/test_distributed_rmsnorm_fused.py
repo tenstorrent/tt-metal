@@ -148,8 +148,7 @@ def _ltx_rows(kind: str, tp: int, stage: int = 0) -> int:
     if kind == "audio":  # audio N_local (stage-independent)
         return 64 if tp == 2 else 32
     if kind == "text":  # text-cross K/V: prompt length L, replicated across SP (kv_replicated=True),
-        # so it's L rows/device (NOT SP-divided). Matches the LTX transformer test's PROMPT_LEN=32
-        # -> 1 tile -> 2 cores in-model (was 1024, which ran at 34 cores and did not match the model).
+        # so it's L rows/device (NOT SP-divided)
         return 32
     if kind == "audio_full":  # A->V K: audio ctx SP-gathered to full
         return 256
@@ -513,10 +512,7 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
 # a 1x8 LINE submesh).
 _DP_GAL = {**line_params, "trace_region_size": 131072}
 _DP_GAL_RING = {**ring_params, "trace_region_size": 131072}
-# Ring device_params with an enlarged fabric-router payload (8192-B = 64 128-B sticks/packet,
-# 4096-B = 32 sticks/packet), matching ring_bh_4x8sp1tp0_8k / _4k in the LTX transformer test
-# (models/tt_dit/tests/models/ltx/test_transformer_ltx.py). Used to profile the fused distributed
-# RMSNorm AG path in isolation at the LTX stage_2 payloads.
+# Ring device_params with an enlarged fabric-router payload
 _DP_GAL_RING_8K = {**ring_params_8k, "trace_region_size": 131072}
 _DP_GAL_RING_4K = {**ring_params_4k, "trace_region_size": 131072}
 
@@ -543,11 +539,7 @@ _CORR_PARAMS = [
     # FLUX: TP=4 ring (4-axis) and TP=8 ring (full-mesh 8-axis); each runs PHN False+True.
     ((4, 8), _DP_GAL_RING, FLUX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
     ((4, 8), _DP_GAL_RING, FLUX, 8, ttnn.Topology.Ring, GALAXY_LINKS, 1, True),
-    # LTX TP=4 ring on the 4-axis at the production BH 4x8 fabric payloads (8192-B / 4096-B router
-    # config; see ring_bh_4x8sp1tp0_8k / _4k in test_transformer_ltx.py). Same shape set as
-    # ltx_tp4_ring, but exercises the stage_2 AG-path norms at the 8k/4k payload under profile:
-    # video block/self-attn (dim=4096, N=4864/device) and the a2v videoQ norm (audio dim=2048,
-    # N=4864/device). Filter with CORR_ONLY=tp4_v_block_s2,tp4_a2v_videoQ_s2 to isolate them.
+    # LTX TP=4 ring on the 4-axis at the production BH 4x8 fabric payloads
     ((4, 8), _DP_GAL_RING_8K, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
     ((4, 8), _DP_GAL_RING_4K, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
 ]
@@ -620,10 +612,7 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             ndiff, maxdelta, worst_oi = 0, 0.0, None
             _det_reps = int(_os.getenv("CORR_DET_REPEATS", "9"))  # extra fused runs after out0
             if _os.getenv("CORR_WARM_EAGER") == "1":
-                # Warm-eager timing: fire the reps back-to-back ON-DEVICE (no per-rep _gather/
-                # to_torch readback) so the fabric stays hot across launches (mirrors trace replay /
-                # in-model), THEN a single sync and gather afterward for the determinism diff.
-                # Without this the per-rep readback idles the fabric ~90ms -> every rep is fabric-cold.
+                # Warm-eager timing: fire the reps back-to-back ON-DEVICE
                 def _fused_dev(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):
                     s = _sems[k % _PINGPONG]
                     p = _make_pob(_inp, submesh, _cfg, links, tp_axis) if fresh_pob else _pobs[k % _PINGPONG]

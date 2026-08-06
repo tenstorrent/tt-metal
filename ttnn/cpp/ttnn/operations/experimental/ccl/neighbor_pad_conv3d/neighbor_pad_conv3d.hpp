@@ -17,45 +17,7 @@
 
 namespace ttnn::experimental {
 
-// Fused NeighborPad (fabric-only H-halo) + Conv3d in a single device program.
-//
-// The operation:
-//   1. Launches fabric NP writer/reader kernels on boundary cores to exchange halo rows
-//      into `halo_buffer` (compact DRAM, pre-allocated by the caller).
-//   2. Launches Conv3d compute/reader/writer kernels concurrently; boundary T-slices
-//      synchronise via the halo buffer rather than waiting for a fully-padded tensor.
-//
-// Args:
-//   input        : unpadded input tensor [B, T, H, W, C] row-major bfloat16/float32
-//   weight       : prepared conv3d weights [kD*kH*kW*C_in, C_out] tiled
-//   bias         : optional bias [1, C_out] tiled
-//   halo_buffer  : pre-allocated compact DRAM halo buffer (see NP design docs)
-//   np_padding_h : halo rows per side in the H dimension (typically 1 for k=3)
-//   np_padding_w : halo columns per side in the W dimension (0 if not needed)
-//   np_cluster_axis : mesh axis for H-parallel devices
-//   np_num_links    : number of fabric links for NP
-//   np_topology     : fabric topology (Linear or Ring)
-//   h_neighbor_semaphore : GlobalSemaphore for H-neighbor handshake
-//   barrier_semaphore    : GlobalSemaphore for NP barrier
-//   w_neighbor_semaphore : GlobalSemaphore for W-neighbor handshake
-//   np_pad_dim2          : optional secondary padding dimension index
-//   np_pad2_left/right   : padding amounts for secondary dimension
-//   np_pad2_cluster_axis : cluster axis for secondary dimension
-//   np_pad2_num_links    : links for secondary dimension
-//   conv_config          : NpConv3dConfig (a Conv3dConfig subclass; the fused-only flags are read
-//                          only here) — blocking, grid, dtype, halo flags
-//   output_channels      : number of output feature channels
-//   kernel_size          : [kD, kH, kW]
-//   stride               : [sD, sH, sW] (default {1,1,1})
-//   padding              : [pD, pH, pW] excluding halo (default {0,0,0})
-//   dilation             : [dD, dH, dW] (default {1,1,1})
-//   padding_mode         : "zeros" or "replicate"
-//   groups               : depthwise-group count (default 1)
-//   dtype                : output dtype
-//   compute_kernel_config: optional device compute config
-//   memory_config        : optional output memory config
-//
-// Returns: output tensor [B, T_out, H_out, W_out, C_out]
+// Fused NeighborPad (fabric-only H-halo) + Conv3d in a single device program
 ttnn::Tensor neighbor_pad_conv3d(
     const ttnn::Tensor& input,
     const ttnn::Tensor& weight,

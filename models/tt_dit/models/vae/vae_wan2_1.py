@@ -49,14 +49,7 @@ if TYPE_CHECKING:
 
 CACHE_T = 2
 
-# Hybrid-dispatch threshold: below this input-T, the fused neighbor_pad+conv3d op
-# degrades to serial NP+Conv3d + sync overhead (Tracy-confirmed: when conv3d's
-# t_out_parallel ≥ T_out, each core handles 1 t_out block, so the progress-sem
-# wait covers the entire NP transfer and pipelining can't amortize it).
-# Above the threshold, each conv3d core handles multiple t_out blocks and
-# pipelining starts to hide NP behind compute.
-# Measured crossover on 2x2 blackhole: T=14 still regresses by ~1.16x, T=28
-# slightly wins (~0.98x). 20 is a conservative cutoff.
+# Hybrid-dispatch threshold: below this input-T, the fused neighbor_pad+conv3d op degrades to serial NP+Conv3d + sync
 MIN_T_FOR_FUSED = 20
 
 
@@ -364,12 +357,10 @@ class WanCausalConv3d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
-        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining can hide NP behind conv3d compute
         self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
         if self._use_fused:
-            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS
-            # entry; applied here so standalone conv3d keeps the shared table.
+            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS entry
             apply_fused_blocking_override(
                 self.conv_config,
                 self.in_channels,
@@ -457,8 +448,7 @@ class WanCausalConv3d(Module):
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
-        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on,
-        # OR when using the fused op (neighbor_pad_conv3d does not fuse the T-front pad).
+        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback
         fuse_t_front_pad = t_front_padding > 0 and h_pad_needed and not self._use_fused
         if t_front_padding > 0 and not fuse_t_front_pad:
             B, T, H, W, C = x_BTHWC.shape
@@ -854,12 +844,10 @@ class WanConv2d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
-        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining can hide NP behind conv3d compute
         self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
         if self._use_fused:
-            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS
-            # entry; applied here so standalone conv3d keeps the shared table.
+            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS entry
             apply_fused_blocking_override(
                 self.conv_config,
                 self.in_channels,

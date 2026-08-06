@@ -76,8 +76,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     constexpr uint32_t cb_out_rm = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_bf16 = tt::CBIndex::c_17;
 
-    // --- Circular buffers ----------------------------------------------------
-    // Row-major channel input CBs (reader → compute): 4 pages for UV corners
+    // --- Circular buffers ---------------------------------------------------- Row-major channel input CBs
     for (uint32_t id : {cb_R_rm, cb_G_rm, cb_B_rm}) {
         auto cfg = CircularBufferConfig(4 * bf16_rm_page, {{id, bf16_fmt}}).set_page_size(id, bf16_rm_page);
         CreateCircularBuffer(program, all_cores, cfg);
@@ -138,13 +137,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     TensorAccessorArgs(*u_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*v_buf).append_to(writer_ct_args);
 
-    // Compute compile-time args don't depend on per-core work; num_y_tiles and
-    // num_uv_tiles are set per-core below via a helper, but since all cores in
-    // group 1 share the same value (and group 2 likewise), we create two compute
-    // kernels for the two groups, or pass them as runtime args.
-    // For simplicity, we use compile-time args for the CB indices and tile counts
-    // that are the same across all cores.  The tile counts differ per group, so
-    // we use two compute kernels (one per group).
+    // Compute compile-time args don't depend on per-core work
 
     auto make_compute_ct = [&](uint32_t y_count, uint32_t uv_count) {
         uint32_t y_batches = (y_count + 31) / 32;
@@ -196,10 +189,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
-    // Compute kernel(s) — one per core group with different tile counts.
-    // fp32_dest_acc_en is required for the SFPU bf16→uint8 typecast: the SFPU
-    // stores its result as raw INT32 in DEST, and the packer must read full
-    // 32-bit values (not 19-bit Half) to interpret them correctly.
+    // Compute kernel(s) — one per core group with different tile counts
     KernelHandle compute_id_g1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
@@ -235,10 +225,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         uint32_t uv_start = group_idx * W2;
         uint32_t uv_count = num_groups * W2;
 
-        // Reader runtime args: src_addr, Y coeffs (bf16 packed), Cb coeffs (pre-scaled),
-        // Cr coeffs (pre-scaled), y_start, y_count, uv_start, uv_count.
-        // For UV, the weight coefficients are pre-multiplied by 0.25 so the compute
-        // kernel can skip the separate average step: sum * (wr * 0.25) = avg * wr.
+        // Reader runtime args: src_addr, Y coeffs (bf16 packed), Cb coeffs (pre-scaled), Cr coeffs (pre-scaled)
         SetRuntimeArgs(
             program,
             reader_id,

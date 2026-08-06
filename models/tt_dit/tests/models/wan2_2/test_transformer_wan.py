@@ -287,8 +287,7 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    # Timing: warmup + N iterations. Single call by default (correctness mode);
-    # set WAN_BLOCK_BENCH_ITERS=<N> to time N iters after 2 warmup iters.
+    # Timing: warmup + N iterations
     bench_iters = int(os.environ.get("WAN_BLOCK_BENCH_ITERS", "0"))
     if bench_iters > 0:
         import time as _time

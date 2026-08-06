@@ -62,9 +62,7 @@ ttnn::Tensor conv3d(
     const std::optional<ttnn::Tensor>& pad_offset_tensor,
     uint32_t output_pad_h,
     uint32_t output_pad_w) {
-    // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block.
-    // C_in_block must satisfy: kernel_vol * C_in_block ≡ 0 (mod TILE_WIDTH) for weight tile
-    // alignment, and C_in_block % l1_alignment == 0 for L1 alignment.
+    // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block
     uint32_t kernel_vol = kernel_size_[0] * kernel_size_[1] * kernel_size_[2];
     uint32_t tile_align_factor = tt::constants::TILE_WIDTH / std::gcd(kernel_vol, (uint32_t)tt::constants::TILE_WIDTH);
     uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();

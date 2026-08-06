@@ -55,11 +55,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (b.has_value()) {
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
-        // Padded shapes must match. This also (correctly) rejects ROW_MAJOR input + residual when the
-        // row dim isn't tile-aligned: the on-device TILIZE_IN tilizes the input as a flat stick stream,
-        // which does NOT match the host-tiled residual's per-slice tile padding, so the pre-add would
-        // misalign. (RM input + residual with a tile-aligned row dim has matching padded shapes and is
-        // fine; TILE input + residual is always fine.)
+        // Padded shapes must match
         TT_FATAL(
             a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
             "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
@@ -73,16 +69,13 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_residual_sum) {
-        // Only the interleaved (non-sharded, non-distributed) TILE RMSNorm path emits the pre-add sum.
-        // The sharded/welford/distributed factories never see this flag (guarded here), so their
-        // output machinery is untouched.
+        // Only the interleaved (non-sharded, non-distributed) TILE RMSNorm path emits the pre-add sum
         TT_FATAL(b.has_value(), "output_residual_sum requires a residual_input_tensor (the sum is input + residual)");
         TT_FATAL(!a.is_sharded(), "output_residual_sum is only supported on the interleaved (non-sharded) path");
         TT_FATAL(
             operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
             "output_residual_sum is not supported for distributed layernorm");
-        // Input may be TILE or ROW_MAJOR (RM is tilized internally); the residual b is required TILE
-        // (enforced above), and the sum output is always emitted TILE to match it.
+        // Input may be TILE or ROW_MAJOR (RM is tilized internally)
         const auto& xo = tensor_args.residual_output_tensor;
         TT_FATAL(xo.has_value(), "output_residual_sum set but residual_output_tensor (preallocated) was not provided");
         TT_FATAL(

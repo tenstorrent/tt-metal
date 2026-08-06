@@ -2,13 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Vol2col data-movement primitives for the fused NP conv3d reader (conv3d_reader_vol2col.cpp).
-//
-// The interior (non-halo) gather + vol2col primitives here are kept in lock-step with the upstream
-// conv3d reader (ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp):
-// trid-ring pipelining, coalesced bank-major DRAM bursts, and DRAM-read staging.  gather_rows_halo
-// is the neighbor-pad addition — boundary blocks read the cross-device halo buffer instead of
-// clamp/zero padding — ported to the same experimental::CB / Noc abstractions.
+// Vol2col data-movement primitives for the fused NP conv3d reader (conv3d_reader_vol2col.cpp)
 
 #pragma once
 
@@ -18,9 +12,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
-// Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
-// Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
-// padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
+// Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero
 template <uint32_t padded_page_bytes, typename Dst>
 FORCE_INLINE void pre_zero_pages(Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
     static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
@@ -80,8 +72,7 @@ FORCE_INLINE void read_input_row(
     uint32_t size_bytes) {
     if constexpr (Reader::DSpec::tensor_shape_static) {
         if constexpr ((reader.dspec().rank() > 1) && (reader.dspec().tensor_shape()[1] > 1)) {
-            // Width/block sharded RowMajor tensors may split a logical row across multiple pages.
-            // Height-sharded inputs keep a single page per row and should use the direct path below.
+            // Width/block sharded RowMajor tensors may split a logical row across multiple pages
             constexpr uint32_t width_in_pages = reader.dspec().tensor_shape()[1];
             const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
             const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
@@ -120,9 +111,7 @@ FORCE_INLINE void read_input_row_staged_from_dram(
     static_assert((dram_read_alignment & (dram_read_alignment - 1)) == 0);
     constexpr uint32_t alignment_mask = dram_read_alignment - 1;
 
-    // The factory enables this helper only when DRAM pages are aligned but the split
-    // C-in slice is smaller than the DRAM read alignment.  Always stage through an
-    // aligned scratch window so every read follows the same alignment-safe path.
+    // The factory enables this helper only when DRAM pages are aligned but the split C-in slice is smaller
     const uint64_t src_noc_addr = reader.get_noc_addr(page_idx, c_in_offset_bytes, noc.get_noc_id());
     const uint32_t src_align_offset = static_cast<uint32_t>(src_noc_addr) & alignment_mask;
     const uint64_t aligned_src_noc_addr = src_noc_addr - src_align_offset;
@@ -137,9 +126,7 @@ FORCE_INLINE void read_input_row_staged_from_dram(
     // Scratch must be populated before it is used as the source for the local L1 copy.
     noc.async_read_barrier();
 
-    // The scratch CB is a single staging page reused by each call.  After issuing the
-    // local copy, drain it before returning so the next staged read cannot overwrite
-    // scratch while it is still the source for an in-flight L1->L1 read.
+    // The scratch CB is a single staging page reused by each call
     UnicastEndpoint self_ep;
     noc.async_read(
         self_ep,
@@ -169,8 +156,7 @@ FORCE_INLINE void read_input_row_maybe_staged(
     }
 }
 
-// Manages chunked CB writes: reserves TILE_HEIGHT pages, tracks patches written,
-// pushes when full, and flushes remaining at the end of a block.
+// Manages chunked CB writes: reserves TILE_HEIGHT pages, tracks patches written, pushes when full
 template <uint32_t cb_id, uint32_t padded_page_bytes, uint32_t patch_pad_bytes>
 struct ChunkWriter {
     static constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
@@ -194,8 +180,7 @@ struct ChunkWriter {
         }
     }
 
-    // Call after writing one patch to write_offset.
-    // Returns true when a chunk was pushed and a new one reserved — caller must restore NOC packet state.
+    // Call after writing one patch to write_offset
     bool advance() {
         if constexpr (patch_pad_bytes > 0) {
             write_offset += patch_pad_bytes;
@@ -258,9 +243,7 @@ struct CoalescedRowLayout {
     }
 };
 
-// Copy one (t, h) row of patches from the L1 shard into the vol2col CB.
-// Iterates over w positions in [w_block, w_block_end), extracting kT×kH×kW patches
-// via one_packet NOC reads.  Calls chunk.advance() after each patch.
+// Copy one (t, h) row of patches from the L1 shard into the vol2col CB
 template <
     uint32_t kT,
     uint32_t kH,
@@ -301,9 +284,7 @@ void vol2col_shard_to_cb(
     }
 }
 
-// Shift retained columns to the start of each shard row for sliding-window W reuse.
-// With stride_w, adjacent w_blocks overlap by max(0, kW - stride_w) columns, not kW-1.
-// After the shift, only (W_shard_cur - overlap) new columns need to be gathered from DRAM.
+// Shift retained columns to the start of each shard row for sliding-window W reuse
 template <
     uint32_t C_in_block_bytes,
     uint32_t H_shard_max_W_shard_max,
@@ -331,23 +312,7 @@ void shift_retained_w_columns(
     noc.async_read_barrier();
 }
 
-// Gather rows from DRAM into the L1 shard buffer.
-// When check_padding=false, all positions are known to be in-bounds — skip per-position
-// boundary checks and clamp/zeroPad logic (~3-6 RISC-V cycles saved per position).
-//
-// Trid pipeline: each issued read is tagged with `trid = (issued % N_TRIDS) + 1`.  Once
-// `issued >= N_TRIDS`, issuing read `i` first blocks on trid `((i - N_TRIDS) % N_TRIDS) + 1`
-// to free that slot.  After the loop, drain by barriering on each in-flight trid.  This
-// bounds NoC outstanding reads to N_TRIDS via per-trid waits so later reads continue while
-// earlier ones drain, instead of a single trailing barrier that would serialize the drain.
-//
-// Per-call fast path: when this gather call has fewer than `kGatherFastPathReadCutoff`
-// reads it issues untagged + a single trailing barrier, since at that count the ring
-// overhead would dominate.  Note this is independent from the host gate:
-// the host decides whether N_TRIDS is non-zero for the whole shape; this decides whether
-// any individual call (e.g. a small slice along the h boundary) skips the ring locally.
-// trid is reset to 0 before returning so callers using untagged reads see clean cmd_buf
-// state.
+// Gather rows from DRAM into the L1 shard buffer
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -378,12 +343,7 @@ void gather_rows_to_shard(
     int32_t w_shard_start,
     uint32_t w_col_start,
     uint32_t w_count) {
-    // N_TRIDS == 0 is a compile-time sentinel: the host-side classifier disabled the trid
-    // ring for this shape (compute-bound or scratch-backed reader mode — see
-    // conv3d_program_factory.cpp).  In that case all ring code is constexpr-elided and the
-    // function reduces to issue-all + single trailing barrier.  When non-zero, N_TRIDS is
-    // always one of the conv3d_gather_tuning depths; the upper bound matches the underlying
-    // NoC trid-id range.
+    // N_TRIDS == 0 is a compile-time sentinel: the host-side classifier disabled the trid ring for this shape
     static_assert(
         N_TRIDS == 0 || N_TRIDS == conv3d_gather_tuning::kGatherTridDepthLow ||
         N_TRIDS == conv3d_gather_tuning::kGatherTridDepthHigh);
@@ -395,8 +355,7 @@ void gather_rows_to_shard(
             return (i % N_TRIDS) + 1;
         }
     };
-    // Per-call fast path: if this call won't fill at least two ring cycles, the
-    // post-loop drain of N_TRIDS barriers is wasted.  Floor at 2 * N_TRIDS reads.
+    // Per-call fast path: if this call won't fill at least two ring cycles
     constexpr uint32_t kGatherFastPathReadCutoff = 2 * N_TRIDS;
     const uint32_t total_reads_estimate = T_shard_cur * (h_end - h_start) * w_count;
     [[maybe_unused]] const bool use_ring = (N_TRIDS != 0) && (total_reads_estimate >= kGatherFastPathReadCutoff);
@@ -415,10 +374,7 @@ void gather_rows_to_shard(
                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
             for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
                 const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
-                // Trid ring: free this slot if it's been used N_TRIDS reads ago, then tag the
-                // upcoming read with this iteration's trid.  Both N_TRIDS==0 (host-disabled)
-                // and use_ring=false (small-burst fallback) bypass; the constexpr branch keeps
-                // the disabled binary clean.
+                // Trid ring: free this slot if it's been used N_TRIDS reads ago
                 if constexpr (N_TRIDS != 0) {
                     if (use_ring) {
                         if (issued >= N_TRIDS) {
@@ -489,15 +445,12 @@ void gather_rows_to_shard(
     }
     if constexpr (N_TRIDS != 0) {
         if (use_ring) {
-            // Drain the in-flight trids in issue order.  After the loop, the most recently
-            // issued read used trid_for(issued-1), and the oldest still in flight used
-            // trid_for(issued - to_drain).
+            // Drain the in-flight trids in issue order
             const uint32_t to_drain = issued < N_TRIDS ? issued : N_TRIDS;
             for (uint32_t k = 0; k < to_drain; k++) {
                 experimental::async_read_barrier_with_trid(noc, trid_for(issued - to_drain + k));
             }
-            // Restore untagged state so vol2col / pre_zero / shift reads (which use trid 0)
-            // don't get accounted against a stale per-trid counter.
+            // Restore untagged state so vol2col / pre_zero / shift reads
             experimental::set_read_trid(noc, 0);
         } else {
             // Small-burst fallback: ring code never set a trid this call, so no reset needed.
@@ -509,10 +462,7 @@ void gather_rows_to_shard(
     }
 }
 
-// Coalesced shard gather reads each logical row into scratch in bank-major chunks, then
-// deinterleaves scratch back into the natural shard layout with local L1->L1 copies.  The
-// extra L1 traffic is intentional: perf sweeps showed the win comes from replacing
-// many small DRAM reads with larger per-bank bursts and then paying a local reorder pass.
+// Coalesced shard gather reads each logical row into scratch in bank-major chunks
 template <
     uint32_t C_in_block_bytes,
     uint32_t H_shard_max_W_shard_max,
@@ -610,8 +560,7 @@ void gather_rows_to_shard_coalesced(
     }
 }
 
-// Dispatch to coalesced, in-bounds, or padded gather from one call site shape. This keeps the
-// first-W incremental gather and the later H-incremental gather wired identically.
+// Dispatch to coalesced, in-bounds, or padded gather from one call site shape
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -677,10 +626,7 @@ void gather_rows_to_shard_selected(
         }
     }
 
-    // check_padding is a template arg on gather_rows_to_shard (compile-time elision of the
-    // padding bounds-check + clamp/zero-pad branch in the hot inner loop), so it must be
-    // dispatched as a constant. Generic lambda + bool-constant lifts the runtime
-    // `all_in_bounds` to a compile-time value once and shares the call site.
+    // check_padding is a template arg on gather_rows_to_shard
     const auto do_gather = [&](auto check_padding_v) {
         gather_rows_to_shard<
             C_in_block_bytes,
@@ -718,11 +664,7 @@ void gather_rows_to_shard_selected(
     }
 }
 
-// Halo-aware gather: for H/W-boundary positions, read the cross-device NP halo buffer instead of
-// zero-padding.  T-padding is still zero-filled (no temporal neighbor exchange).  Interior positions
-// read the original unpadded input.  This is the neighbor-pad fusion delta; it shares the
-// experimental::CB / Noc abstractions with the interior gather above.  No trid ring here: boundary
-// blocks are a small fraction of the work and mix halo/zero/interior reads per position.
+// Halo-aware gather: for H/W-boundary positions, read the cross-device NP halo buffer instead of zero-padding
 template <
     uint32_t C_in_block_bytes,
     uint32_t H_shard_max_W_shard_max,
@@ -776,10 +718,7 @@ void gather_rows_halo(
                 if (t_outside) {
                     zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                 } else if (w_outside && h_halo_padding_w > 0) {
-                    // W boundary (including corners): read from W halo buffer.
-                    // W-halo stores h_total = H_dev + 2*ph positions per (t, pad_col).
-                    // h_padded = padding_h + h_in maps all positions (interior + H-boundary)
-                    // to the correct W-halo index.  Unsigned wrap handles negative h_in.
+                    // W boundary (including corners): read from W halo buffer
                     const uint32_t t_global = batch_idx * T_in + static_cast<uint32_t>(t_clamped);
                     const uint32_t h_padded = h_halo_padding_h + static_cast<uint32_t>(h_in);
                     uint32_t halo_page;

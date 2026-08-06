@@ -6,8 +6,6 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/np_halo_block.hpp"
 
 // Halo-aware gather dispatch: in-bounds blocks take the optimized interior gather
-// (coalesced / trid-ring / DRAM-staged), boundary blocks read the NP halo buffer.
-// Lives at file scope so the enclosing-scope constexpr template params are passed explicitly.
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -164,8 +162,7 @@ void kernel_main() {
     // Padding bytes to append after each patch row to reach tile-aligned CB page width
     constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
 
-    // Upstream gather tuning (re-based from conv3d #43541/#44418): trid-ring depth, coalesced
-    // bank-major reads, and DRAM-read staging.  Host classifier (program factory) selects these.
+    // Upstream gather tuning (re-based from conv3d #43541/#44418): trid-ring depth, coalesced bank-major reads
     constexpr uint32_t gather_trids = get_compile_time_arg_val(36);
     constexpr bool enable_coalesced_shard_reads = get_compile_time_arg_val(37) == 1;
     constexpr uint32_t coalesced_scratch_rows = get_compile_time_arg_val(38);
@@ -173,14 +170,9 @@ void kernel_main() {
     constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
     constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
 
-    // Pipelining CT arg: per-(region,link) progress sems are signaled every `progress_t_batch_size`
-    // input T-frames; the per-T-block halo wait below ramps on that batch count.
+    // Pipelining CT arg: per-(region,link) progress sems are signaled every `progress_t_batch_size` input T-frames
     constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(42);
-    // halo_last: bulk-core two-phase. The conv processes its FULL output range in two passes —
-    // Phase 0 = spatial-interior blocks (receptive field stays on-device, no NP wait), Phase 1 =
-    // boundary blocks (h/w touch the device edge → need the halo) AFTER waiting NP. The interior
-    // overlaps NP fully; boundary runs once NP has landed (no per-T-block stall). Identical
-    // is_edge classification in compute/writer keeps the three kernels in lock-step.
+    // halo_last: bulk-core two-phase
     constexpr bool halo_last = get_compile_time_arg_val(43) == 1;
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
@@ -206,8 +198,7 @@ void kernel_main() {
     const uint32_t h_halo_W = get_arg_val<uint32_t>(argidx++);
     const uint32_t h_halo_padding_h = get_arg_val<uint32_t>(argidx++);
     const uint32_t h_halo_padding_w = get_arg_val<uint32_t>(argidx++);
-    // Per-(W-direction, link) progress sems: a W-edge tile maps the batch it needs to the owning
-    // link (batch-aligned partition) and polls only that link's sem — race-free across links.
+    // Per-(W-direction, link) progress sems: a W-edge tile maps the batch it needs to the owning link
     const uint32_t w_pad2_num_links = get_arg_val<uint32_t>(argidx++);    // [18]
     const uint32_t w_batches_per_link = get_arg_val<uint32_t>(argidx++);  // [19]
     uint32_t wleft_sem_addr[4];                                           // [20..23]
@@ -219,8 +210,7 @@ void kernel_main() {
         wright_sem_addr[l] = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t w_total_batches = get_arg_val<uint32_t>(argidx++);  // [28] cap for the W threshold
-    // CRTA [29..39]: per-(H-region, link) sems + params. H-edge tiles wait these (no barrier), same
-    // per-link scheme as W. addr 0 = no H neighbor on that side (zero-pad) → skip.
+    // CRTA [29..39]: per-(H-region, link) sems + params
     uint32_t htop_sem_addr[4];  // [29..32]
     uint32_t hbot_sem_addr[4];  // [33..36]
     for (uint32_t l = 0; l < 4; l++) {
@@ -237,8 +227,7 @@ void kernel_main() {
     const uint32_t h_halo_wleft_base = 2u * h_halo_outer_dim_size * h_halo_padding_h * h_halo_W;
     const uint32_t h_halo_wright_base = h_halo_wleft_base + h_halo_outer_dim_size * h_halo_padding_w * h_halo_H;
 
-    // Tensor accessor for input tensor and halo buffer (halo reuses in_args: both are
-    // DRAM interleaved with the same page layout).
+    // Tensor accessor for input tensor and halo buffer
     constexpr auto in_args = TensorAccessorArgs<44>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
     const auto halo_reader = TensorAccessor(in_args, h_halo_buffer_addr);
@@ -249,8 +238,7 @@ void kernel_main() {
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
-    // L1 prefetch: enabled when the host allocated a shard buffer (T_shard_max > 0).
-    // The host decides based on kernel size, dilation, and L1 budget.
+    // L1 prefetch: enabled when the host allocated a shard buffer (T_shard_max > 0)
     constexpr bool use_l1_prefetch = (T_shard_max > 0);
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
@@ -269,9 +257,7 @@ void kernel_main() {
         shard_l1_base = shard_cb.get_write_ptr();
     }
 
-    // A core needs the halo only when its output range touches a padded boundary; interior-only cores
-    // never wait. The per-T-block halo wait below is gated on core_needs_halo, so interior tiles can
-    // overlap the NP exchange while boundary tiles wait for the halo to land.
+    // A core needs the halo only when its output range touches a padded boundary
     const bool needs_h_top = padding_h > 0 && (h_out_start * stride_h < padding_h);
     const bool needs_h_bot = padding_h > 0 && ((h_out_end - 1) * stride_h + (kH - 1) * dilation_h >= H_in + padding_h);
     const bool needs_w_left = padding_w > 0 && (w_out_start * stride_w < padding_w);
@@ -291,17 +277,13 @@ void kernel_main() {
                     // 3D blocking loops over assigned ranges:
                     uint32_t t_iter = 0;
                     for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size, ++t_iter) {
-                        // Phase 0 (interior) needs no halo; phase 1 keeps the per-T wait, already satisfied
-                        // since NP completes during phase 0. Legacy (!halo_last) always gates.
+                        // Phase 0 (interior) needs no halo
                         if ((!halo_last || phase == 1u) && input_progress_signal_count > 0 && core_needs_halo) {
-                            // Batches (progress_t_batch_size units) that must be complete for this T-block
-                            // to read its halo: the last T-input frame it touches is
-                            // (t_block + T_block_size - 1) * stride_t + kT - 1 - padding_t; ceil-divide +1.
+                            // Batches (progress_t_batch_size units) that must be complete for this T-block to read
                             const uint32_t last_t_in = (t_block + T_block_size - 1) * stride_t + kT - 1 - padding_t;
                             const uint32_t desired_batches =
                                 (last_t_in + progress_t_batch_size) / progress_t_batch_size;
-                            // H-edge tiles wait the per-(H-side, link) sems (no barrier), same
-                            // wait-all-links scheme as W. needs_h_top → HT, needs_h_bot → HB.
+                            // H-edge tiles wait the per-(H-side, link) sems (no barrier)
                             if ((needs_h_top || needs_h_bot) && h_batches_per_link > 0) {
                                 uint32_t need = desired_batches;
                                 if (need > h_total_batches) {
@@ -324,8 +306,7 @@ void kernel_main() {
                                     }
                                 }
                             }
-                            // W-edge/corner: poll only the (W-side, link) sem that owns the last needed
-                            // batch. Each (side,link) has one producer → its count is monotonic.
+                            // W-edge/corner: poll only the (W-side, link) sem that owns the last needed batch
                             if ((needs_w_left || needs_w_right) && w_batches_per_link > 0) {
                                 uint32_t need = desired_batches;
                                 if (need > w_total_batches) {
@@ -356,8 +337,7 @@ void kernel_main() {
 
                             // H rows persist across w_blocks for sliding window W reuse.
                             uint32_t h_rows_gathered = 0;
-                            // halo_last: the first PROCESSED w_block in this h_block acts as is_first_w, so
-                            // the W sliding window is rebuilt fresh across any phase-skipped blocks.
+                            // halo_last: the first PROCESSED w_block in this h_block acts as is_first_w
                             bool win_fresh = true;
                             const int32_t t_shard_start =
                                 static_cast<int32_t>(t_block * stride_t) - static_cast<int32_t>(padding_t);
@@ -378,9 +358,7 @@ void kernel_main() {
                             for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                                 const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
                                 if constexpr (halo_last) {
-                                    // Boundary blocks (touch a device spatial edge) need the cross-device
-                                    // halo and run in phase 1; interior blocks run in phase 0. The writer
-                                    // uses the same predicate to stay in lock-step.
+                                    // Boundary blocks (touch a device spatial edge) need the cross-device halo
                                     const bool is_edge =
                                         np_is_boundary_block(h_block, h_block_end, w_block, w_block_end, H_out, W_out);
                                     if ((phase == 0u) == is_edge) {
@@ -520,8 +498,7 @@ void kernel_main() {
                                                 h_rows_gathered = h_needed;
                                             }
 
-                                            // Coalesced gather reorders through scratch into the same natural
-                                            // shard layout, so vol2col always keeps the contiguous kW-row fast path.
+                                            // Coalesced gather reorders through scratch into the same natural shard
                                             vol2col_shard_to_cb<
                                                 kT,
                                                 kH,
@@ -539,9 +516,7 @@ void kernel_main() {
                                     chunk.flush();
 
                                 } else {
-                                    // ============================================================
-                                    // DIRECT READER (for 1x1x1 or dilated kernels, no spatial reuse)
-                                    // ============================================================
+                                    // ============================================================ DIRECT READER
                                     const uint32_t t_block_s_start = t_block * stride_t;
                                     const uint32_t t_block_s_end = t_block_end * stride_t;
                                     const uint32_t h_block_s_start = h_block * stride_h;
@@ -627,12 +602,7 @@ void kernel_main() {
         }
     }
 
-    // Trace-safe self-reset (mirrors np_h_reader.cpp / phase2_w_reader.cpp): zero the per-(region,link)
-    // progress sems this core consumed so the next dispatch starts from 0 WITHOUT a host-side reset
-    // (host resets are skipped under trace replay -> stale count -> hang). Gated exactly like the waits
-    // above (input_progress_signal_count>0 && core_needs_halo && needs_<side>), so we only reset a sem
-    // we waited on — the producer's increments to this core have all landed, so the reset can't race
-    // them. Interior cores never wait and never reset; their broadcast-incremented copies are never read.
+    // Trace-safe self-reset (mirrors np_h_reader.cpp / phase2_w_reader.cpp): zero the per-(region,link) progress
     if (input_progress_signal_count > 0 && core_needs_halo) {
         for (uint32_t l = 0; l < h_num_links && l < 4; l++) {
             if (needs_h_top && htop_sem_addr[l] != 0) {
