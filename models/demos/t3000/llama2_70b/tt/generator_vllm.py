@@ -10,6 +10,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.decode_contract import require_full_input_reload
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
@@ -83,8 +84,16 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
         slot_remap=None,
         **kwargs,
     ):
-        if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
-            raise ValueError("T3000 Llama requires a full host-input reload and has no " "device sampling state")
+        # Rejecting these is safe only while this adapter advertises neither
+        # supports_async_decode nor supports_sample_on_device, which is what stops vLLM
+        # from ever planning a partial reload or a sampling update for it.
+        require_full_input_reload(
+            "T3000 Llama",
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
         # This host-only adapter has no persistent model state keyed by vLLM's
         # condensed batch slots. Contract v1 still delivers the layout remap on
         # every decode so stateful adapters can consume it; accepting and

@@ -31,6 +31,7 @@ except ImportError:
     from vllm.multimodal.inputs import MultiModalDataDict
 
 import ttnn
+from models.common.decode_contract import require_full_input_reload
 from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -242,9 +243,13 @@ class HybridAttentionForCausalLM(Generator):
         return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
     @staticmethod
-    def _reload_per_layer_page_tables(kwargs) -> bool:
-        """Whether the explicit contract requests per-layer page-table upload."""
-        return bool(kwargs["reload_inputs"] or kwargs["reload_page_table"])
+    def _reload_per_layer_page_tables(reload_inputs: bool = True, reload_page_table: bool = False) -> bool:
+        """Whether the explicit contract requests per-layer page-table upload.
+
+        Defaults are the conservative full refresh: a caller that omits the commands
+        must fail in ``Generator.decode_forward``, which names them, not here.
+        """
+        return bool(reload_inputs or reload_page_table)
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
@@ -622,17 +627,29 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
             cross_page_table=cross_page_table,
         )
 
-    def decode_forward(self, *args, **kwargs):
-        reload_inputs = kwargs.pop("reload_inputs")
-        reload_page_table = kwargs.pop("reload_page_table")
-        reload_sampling_params = kwargs.pop("reload_sampling_params")
-        reset_sampling_state = kwargs.pop("reset_sampling_state")
-        # Mllama has no persistent model state keyed by vLLM's condensed
-        # decode slots. Contract v1 nevertheless supplies slot_remap for every
-        # decode so adapters with recurrent state can consume it.
-        kwargs.pop("slot_remap", None)
-        if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
-            raise ValueError("Mllama requires a full host-input reload and has no " "device sampling state")
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        slot_remap=None,
+        **kwargs,
+    ):
+        # Rejecting the sampling commands is safe only while this adapter keeps
+        # supports_async_decode and supports_sample_on_device off, which is what stops
+        # vLLM from ever planning a partial reload or a sampling update for it.
+        require_full_input_reload(
+            "Mllama",
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+        # Mllama has no persistent model state keyed by vLLM's condensed decode slots.
+        # Contract v1 nevertheless supplies slot_remap for every decode so adapters with
+        # recurrent state can consume it.
         logits = super().decode_forward_llama_vision(*args, **kwargs)
         if isinstance(logits, tuple):
             return logits[0]
@@ -1020,7 +1037,9 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
+        if per_submesh is not None and self._reload_per_layer_page_tables(
+            kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False)
+        ):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
@@ -1095,7 +1114,9 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
+        if per_submesh is not None and self._reload_per_layer_page_tables(
+            kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False)
+        ):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):

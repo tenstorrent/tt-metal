@@ -258,10 +258,19 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         sample_on_device = bool(sampling_params is not None)
         prompt_tokens = kwargs.get("prompt_tokens")
         output_tokens = kwargs.get("output_tokens")
-        if not reload_inputs or reload_page_table:
-            raise ValueError("DeepSeek vLLM decode requires a full host-input reload")
+        # DeepSeek executes the sampling commands but not partial input reloads. That is
+        # safe only while it does not advertise supports_async_decode, which is what
+        # stops vLLM from planning reload_inputs=False for it.
+        if not reload_inputs:
+            raise ValueError("DeepSeek vLLM decode rebuilds all host inputs and requires reload_inputs=True")
+        if reload_page_table:
+            raise ValueError("DeepSeek vLLM decode has no page-table-only refresh; got reload_page_table=True")
         if not sample_on_device and (reload_sampling_params or reset_sampling_state):
-            raise ValueError("DeepSeek sampling update commands require device sampling")
+            raise ValueError(
+                "DeepSeek sampling update commands require device sampling, but this step "
+                f"passed no sampling_params (reload_sampling_params={reload_sampling_params}, "
+                f"reset_sampling_state={reset_sampling_state})"
+            )
 
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
