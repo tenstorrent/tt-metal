@@ -3,6 +3,11 @@
 
 """The shipped TTNN configuration, pinned.
 
+THIS IS THE BLACKHOLE p150 FORK, and most of what it pins is the OPPOSITE of the parent branch.
+Six N150 decisions reversed here (STATUS.md 6.39-6.45) and the guards below exist so that
+re-introducing any of them fails loudly rather than quietly costing 4-7 ms/frame. The one-line
+reason is with each; the measurement is in the STATUS section named.
+
 There are no runtime toggles left -- every alternative that was measured and rejected has been
 deleted rather than parked behind a flag, so what the code does is what it does. What survives is
 a handful of CONSTANTS, and each one encodes a measurement that is expensive to rediscover. This
@@ -104,3 +109,65 @@ def test_fused_qkv_width_matches_the_head_config():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main(["-svv", __file__]))
+
+
+# ---------------------------------------------------------------------------------------
+# p150 REVERSALS. Each of these was the SHIPPED choice on the N150 and is wrong here.
+# ---------------------------------------------------------------------------------------
+def test_no_width_sharded_norms_anywhere():
+    """Both blocks' decode RMSNorms are the plain interleaved op. Width-sharding them wins ~4.4
+    ms/frame on Wormhole and LOSES ~4.5 on Blackhole: the reshard is the tax (6.9's phrase), and
+    the p150's interleaved kernel made the reduction cheap enough that the tax stops paying for
+    itself. It is also CLOSER to fp32 truth here, not further. STATUS.md 6.39/6.40."""
+    for mod in (gpt, flow):
+        assert not hasattr(mod, "_NORM_SHARD"), f"{mod.__name__}: sharded norm is back -- 6.39/6.40"
+        assert not hasattr(mod, "_NORM_PRG")
+    assert not hasattr(gpt.TtVoxtralGPT, "_norm_dec"), "decode norm split back out -- 6.39"
+
+
+def test_wo_has_no_program_config():
+    """6.25 hand-tuned one for the N150 (+0.196 ms/frame). Here no instrument can find any
+    benefit -- isolated 1.46x, whole step +0.174 (resolution ~0.3), pipeline signs flipping --
+    and removing it is bit-exact: all 45 utterances of a 15x3 run reproduced identical frame
+    counts. STATUS.md 6.43."""
+    assert not hasattr(gpt, "_WO_PRG"), "wo's program config is back -- 6.43 says it buys nothing"
+    assert not hasattr(gpt, "_WO_GRID")
+
+
+def test_kv_cache_uses_two_writes_not_the_fused_one():
+    """paged_fused_update_cache is +0.454 ms/frame on the N150 (6.20/6.22) and 0.687 ms/step
+    SLOWER here. _V_SHARD existed only to let it accept K and V on different cores, so it goes
+    too -- and with it the failure mode where RoPE on a core whose cos/sin table lives elsewhere
+    returns 3.4e38 from uninitialised L1 instead of raising. STATUS.md 6.44."""
+    import inspect
+
+    src = inspect.getsource(gpt.TtVoxtralGPT._layer_step)
+    assert "paged_fused_update_cache" not in src, "fused cache write is back -- 6.44"
+    assert src.count("paged_update_cache") == 2, "expected exactly two cache writes"
+    assert not hasattr(gpt, "_V_SHARD"), "_V_SHARD is back; it has no consumer without the fused op"
+
+
+def test_block2_uses_the_fused_head_split_and_sdpa():
+    """Block 2's interior is 2 ops, not 13. A small op costs 3.4x more here (67.7 us against the
+    N150's ~20), so op count dominates and both 6.31's 9-op hand-rolled split and 6.37's
+    rejection of sdpa reverse -- together worth 6.586 ms/frame. The fused split is accuracy-
+    IDENTICAL; sdpa is 1.57x the velocity error (against the 6.48x that got it rejected on the
+    N150) with the acoustic codes unmoved. STATUS.md 6.45."""
+    import inspect
+
+    src = inspect.getsource(flow.TtVoxtralFlow._block)
+    assert "nlp_create_qkv_heads" in src, "hand-rolled 9-op split is back -- 6.45"
+    assert "scaled_dot_product_attention" in src, "hand-rolled attention interior is back -- 6.45"
+    assert "scale=1.0" in src, (
+        "sdpa MUST take scale=1.0 -- SCALE is folded into wqkv's q rows ([flow-09]), so the "
+        "default applies 1/sqrt(d) twice: 3.8e-01 relative error (6.37)")
+    assert not hasattr(flow, "REP"), "the GQA row fold is back; sdpa handles GQA natively"
+
+
+def test_sdpa_decode_keeps_its_program_config():
+    """The one N150 program config that DID survive. k=512 on 8x2 is 1.751x over the default and
+    is the only candidate exact at all 13 probe positions -- k=128 is faster still and degrades at
+    pos 128 and 1000. 6.27's rule reproduced on new hardware: a position sweep, not a gate run, is
+    what makes an sdpa config safe. STATUS.md 6.46."""
+    assert gpt._SDPA_PRG.k_chunk_size == 512
+    assert gpt._SDPA_PRG.q_chunk_size == gpt.TILE

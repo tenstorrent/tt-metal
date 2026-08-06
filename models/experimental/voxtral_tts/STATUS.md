@@ -16,15 +16,26 @@ Branch: `lserbedzija/voxtral-tts-ttnn_p150` (pushed). All work is under
 > itself does: it ran on the p150 with ZERO source changes at 0 long-form WER errors, and the
 > §6.39+ sections are the re-derivation.
 >
-> Current on the p150: **long-form RTF 0.71–0.78, ~57 ms/frame** (N150: 0.57–0.64, ~48).
+> Current on the p150: **long-form RTF ~0.57, ~45.4 ms/frame** (N150: 0.57–0.64, ~48) — the fork
+> now beats the Wormhole build it forked from, after six reversals (§6.39–§6.45).
 > Divergence from the N150 branch is deliberate and expected — a loser here can be a winner
 > there, so changes are DELETED rather than flagged, and the two branches are not merging back.
 >
 > | | N150 (§1–§6.38) | p150 (§6.39+) |
 > |---|---|---|
-> | Block 1 decode step | 23.15 ms | **21.4 ms** |
-> | Block 1 decode RMSNorm | width-sharded 8×4 | **interleaved** (§6.39) |
-> | long-form RTF | 0.57–0.64 | 0.71–0.78 |
+> | Block 1 decode step | 23.15 ms | **21.2 ms** |
+> | Block 2 frame | 20.8 ms | **21.9 ms** |
+> | long-form gen | ~48 ms/frame | **45.4 ms/frame** |
+> | DRAM ceiling | 194–202 GB/s | **~360 GB/s** (§6.41) |
+> | per-op floor | ~20 µs | **~68 µs** (§6.45) |
+> | decode RMSNorm, both blocks | width-sharded 8×4 | **interleaved** (§6.39/§6.40) |
+> | `wo` program config | hand-tuned | **none** (§6.43) |
+> | KV cache write | fused, V moved to (1,0) | **two plain writes** (§6.44) |
+> | Block 2 head split / interior | 9-op hand-roll / 4 ops | **fused op / sdpa** (§6.45) |
+>
+> **The rule those two hardware numbers imply (§6.45): bytes are cheap and launches are
+> expensive here — the inverse of the N150 — so DELETING ops wins where §6.6 wanted fewer,
+> bigger kernels.**
 >
 > Environment differs too, and `ONBOARDING §2`'s recipe is wrong here: `PYTHONPATH` must be
 > `$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME`. `$TT_METAL_HOME` alone resolves
@@ -3091,6 +3102,47 @@ per-op floor was ~20 us and its DRAM ceiling was 194 GB/s. Blackhole has ~360 GB
 per-op floor, so the balance flips: **bytes are cheap and launches are expensive.** Every
 N150-era decision of the form "trade one op for several to get a better layout" should be
 re-tested here, and so far all three that were have reversed.
+
+### 6.46 — p150: `_SDPA_PRG` swept and KEPT. The one N150 program config that survived
+
+`wo`'s config was deleted (§6.43) so `sdpa_decode`'s got the same treatment: grid x `k_chunk` x
+`q_chunk`, plus "is it needed at all". Unlike `wo`, it earns its place — and the faster
+alternatives are unsafe in exactly the way §6.27 predicted.
+
+**IT IS NEEDED.** Isolated **1.751x** over the default (45.3 -> 25.9 µs), and unlike `_WO_PRG`
+the win survives the whole step:
+
+| | isolated | whole step | verdict |
+|---|---|---|---|
+| `_WO_PRG` | 1.46x | 0, signs flipping | deleted (§6.43) |
+| **`_SDPA_PRG`** | **1.751x** | **+0.197 ms**, mean/median/min same sign | **kept** |
+
+Bit-identical to the default on the 26-layer output, so this was purely a speed question.
+
+**THE CONFIG STAYS AS IT IS, and §6.27's warning reproduced on new hardware.** Faster options
+exist at pos=312 — 8x1 k=128 at 22.8 µs (1.985x) against the shipped 25.9 — but the position
+sweep kills them. Error vs fp64 at 13 positions spanning the chunk boundaries:
+
+| config | µs | positions worse than default |
+|---|---|---|
+| 8x2 k=128 | 23.1 | 3 / 13 |
+| 8x1 k=128 | 22.8 | 2 / 13 |
+| 8x1 k=512 | 23.4 | 1 / 13 |
+| 8x1 k=256 | 23.5 | 1 / 13 |
+| **8x2 k=512 ← ships** | 25.9 | **0 / 13** |
+
+The shipped config reproduces the default's error *exactly* at every position. `8x1 k=128` is
+1.7x worse at **pos=128** — precisely its own chunk boundary — and 1.9x worse at pos=1000. On the
+N150 it was `k=256` failing at 480/511/700; same mechanism, different config, and a
+single-position gate would have shipped either one. **The extra 3.1 µs/layer (0.08 ms/frame) is
+not worth position-dependent degradation on long utterances**, which is where the headline
+quality claim lives.
+
+**The grid axis is inert** — 8x1/8x2/8x4 land within a few µs at fixed `k`, so the 13x10 grid
+buys nothing here either. `k_chunk` is the knob, exactly as [gpt-21] says.
+
+**Why this one survived and `wo`'s did not** is unverified: plausibly `wo` sits between two large
+matmuls that hide it while `sdpa_decode` has less to overlap with. Measured, not established.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
