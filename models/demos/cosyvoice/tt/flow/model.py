@@ -103,15 +103,24 @@ class TtMaskedDiffWithXvec:
         """
         c = h.shape[-1]
         total = h.shape[1]
-        x1 = ttnn.slice(h, [0, 0, 0], [1, token_len1, c])
-        x2 = ttnn.slice(h, [0, token_len1, 0], [1, total, c])
-        r1 = self.length_regulator.resample(x1, token_len1, mel_len1)
-        r2 = self.length_regulator.resample_split(x2, total - token_len1, mel_len2, self.input_frame_rate)
-        ttnn.deallocate(x1)
-        ttnn.deallocate(x2)
-        cat = ttnn.concat([r1, r2], dim=1)
-        ttnn.deallocate(r1)
-        ttnn.deallocate(r2)
+        if token_len1 == 0:
+            # `sft` and `instruct` synthesise from a speaker id with no prompt audio,
+            # so there is no first segment and no seam to protect. Taking the general
+            # path anyway would slice a zero-length tensor and concat it, which
+            # **segfaults inside `ttnn::concat`** rather than raising -- a crash the
+            # caller's try/except cannot catch, several frames from the empty tensor
+            # that caused it.
+            cat = self.length_regulator.resample_split(h, total, mel_len2, self.input_frame_rate)
+        else:
+            x1 = ttnn.slice(h, [0, 0, 0], [1, token_len1, c])
+            x2 = ttnn.slice(h, [0, token_len1, 0], [1, total, c])
+            r1 = self.length_regulator.resample(x1, token_len1, mel_len1)
+            r2 = self.length_regulator.resample_split(x2, total - token_len1, mel_len2, self.input_frame_rate)
+            ttnn.deallocate(x1)
+            ttnn.deallocate(x2)
+            cat = ttnn.concat([r1, r2], dim=1)
+            ttnn.deallocate(r1)
+            ttnn.deallocate(r2)
         out = self.length_regulator(cat, mel_len1 + mel_len2)
         ttnn.deallocate(cat)
         return out
@@ -121,6 +130,11 @@ class TtMaskedDiffWithXvec:
         zeros = ttnn.zeros(
             (1, mel_len2, self.output_size), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
         )
+        if mel_len1 == 0:
+            # No prompt mel at all (`sft`, `instruct`): the condition is all zeros, and
+            # concatenating the empty `[1, 0, 80]` prompt onto it segfaults in
+            # `ttnn::concat`. See `regulate` for the same guard on the token side.
+            return zeros
         out = ttnn.concat([prompt_feat, zeros], dim=1)
         ttnn.deallocate(zeros)
         return out
@@ -145,6 +159,15 @@ class TtMaskedDiffWithXvec:
         ttnn.deallocate(spks)
 
         total = mel_len1 + mel_len2
+        if mel_len1 == 0:
+            # Nothing to trim: with no prompt mel the whole solve is the output. The
+            # slice below would be full-extent, and **a full-extent `ttnn.slice` is an
+            # alias, not a copy** -- so the `deallocate` after it would free the tensor
+            # being returned, and the caller would fault on "Tensor is not allocated"
+            # one stage later. That aliasing is the same behaviour trace integration
+            # ran into; here it only shows up in `sft` and `instruct`, the two modes
+            # with no prompt audio.
+            return feat
         out = ttnn.slice(feat, [0, mel_len1, 0], [1, total, self.output_size])
         ttnn.deallocate(feat)
         return out
