@@ -594,3 +594,29 @@ o_proj remains the better target: N=2048 divides exactly at W=2/W=4, so it pays 
 1. Fix the two o_proj blockers; re-run `oproj_residual_ab.py` at W=4.
 2. Enable `GLM4_MOE_LITE_BLAZE_QKV_A=1` **with `BLAZE_DSM_WORKERS_PER_BANK=4`** and measure traced
    e2e in the blaze tree against **34.8 ms** (not 33.2).
+
+### CORRECTION: the integration seam is NOT a flag flip away
+
+`blaze_ops.qkv_a()` calls `prepare_qkv_a_weights(device, w.w_q_a_torch, w.w_kv_a_torch)`, and
+**neither attribute exists** anywhere in the model — I introduced them without checking. The seam
+is inert today only because `blaze_available()` is False on this tree; the moment blaze imports
+and the flag is set, it raises `AttributeError`.
+
+So the seam is correctly wired at the *call site* but not at the *weight source*. What is missing:
+
+- the torch-side `w_q_a` / `w_kv_a` (or their ttnn tensors converted back) must be reachable from
+  the weight object at decode time, or
+- better, `prepare_qkv_a_weights` should run once at **weight-load** time and cache the
+  DRAM-sharded, tile-shuffled result on the weight object, rather than needing torch tensors on
+  the hot path at all. The prep is a load-time transform — that is how it was described in
+  `blaze_ops.py` and it should be built that way.
+
+Also, the model-side change lives in **this** tt-metal checkout. The e2e run happens in the blaze
+tree, so `tt-metal/models/experimental/glm4_moe_lite` must be synced across first (and *only* that
+directory — the tt-blaze working tree holds uncommitted F3/F11 work).
+
+**Corrected next steps:**
+1. Plumb the weights at load time (above). Without this, enabling the flag raises.
+2. Sync `models/experimental/glm4_moe_lite` into the blaze tree.
+3. `GLM4_MOE_LITE_BLAZE_QKV_A=1 BLAZE_DSM_WORKERS_PER_BANK=4`, traced, vs **34.8 ms**.
+4. Restore the per-row loop in the gather for batch > 1 before this is anything but a bs=1 demo.
