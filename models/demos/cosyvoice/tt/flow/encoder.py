@@ -96,6 +96,55 @@ def _linear(device, bag, name, dtype, weights_dtype=None):
     return w, b
 
 
+def _linear_fused(device, bag, names, dtype, weights_dtype=None, scales=None):
+    """Several sub-linears over the same input, concatenated into one `[d_in, sum(d_out)]`.
+
+    q, k and v are three projections of the *same* activation, so they can be one
+    matmul over a wider weight. The concatenation happens on the host, once, at
+    construction -- the device sees a single weight and never learns there were three.
+
+    **It pays where the matmuls are large and not where they are not**, which is worth
+    stating because the op count alone predicts the opposite. In the flow estimator
+    (T ~ 600, batch 2, 64 blocks x 10 Euler steps) this took the stage from 1.075 s to
+    0.818 s. In the AR decode step, where T = 1, it measured 8.29 -> 8.31 ms: a wash,
+    because `split_query_key_value_and_split_heads` physically rearranges the fused
+    row into three head-major tensors and at that size costs about what the two
+    matmuls it removed did. Fewer ops is a proxy for cost, not the cost itself.
+
+    A missing bias among present ones is filled with zeros rather than dropping the
+    bias for all three, since the fused linear has to be all-or-nothing.
+
+    `scales` optionally multiplies each sub-weight (and its bias) by a constant on the
+    host. Folding attention's `1/sqrt(d_head)` into the q half this way deletes a
+    device `multiply` per block: scaling `q` before the product is the same as scaling
+    `q @ k^T` after it, because the scalar distributes over the matmul. It is exact in
+    the sense that matters here -- the constant is applied once, in fp32, at load time,
+    rather than once per block per step in bfloat16.
+    """
+    scales = scales or (1.0,) * len(names)
+    ws, bs, widths = [], [], []
+    for name, s in zip(names, scales):
+        sub = bag.sub(name)
+        w = sub.tensor("weight").t().contiguous()
+        if s != 1.0:
+            w = w * s
+        ws.append(w)
+        widths.append(w.shape[-1])
+        b = sub.tensor("bias").reshape(1, 1, -1) if sub.has("bias") else None
+        if b is not None and s != 1.0:
+            b = b * s
+        bs.append(b)
+
+    weight = ttnn.from_torch(
+        torch.cat(ws, dim=-1), dtype=weights_dtype or dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    bias = None
+    if any(b is not None for b in bs):
+        parts = [b if b is not None else torch.zeros(1, 1, w) for b, w in zip(bs, widths)]
+        bias = ttnn.from_torch(torch.cat(parts, dim=-1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    return weight, bias
+
+
 def _layernorm_weights(device, bag, name, dtype):
     """LayerNorm gamma/beta must be [1, C] in TILE_LAYOUT, not 1-D ROW_MAJOR.
 
@@ -119,9 +168,7 @@ class TtRelPosAttention:
         # blocks and the AR decoder is 14, and the decoder runs hundreds of times.
         self.cc = accurate_compute_config(device) if cc is None else cc
         self.scale = 1.0 / math.sqrt(d_k)
-        self.wq, self.bq = _linear(device, bag, "linear_q", dtype, weights_dtype)
-        self.wk, self.bk = _linear(device, bag, "linear_k", dtype, weights_dtype)
-        self.wv, self.bv = _linear(device, bag, "linear_v", dtype, weights_dtype)
+        self.wqkv, self.bqkv = _linear_fused(device, bag, ("linear_q", "linear_k", "linear_v"), dtype, weights_dtype)
         self.wo, self.bo = _linear(device, bag, "linear_out", dtype, weights_dtype)
         self.wp, _ = _linear(device, bag, "linear_pos", dtype, weights_dtype)  # bias=False upstream
         # [h, d_k] -> [1, h, 1, d_k] so it broadcasts over time
@@ -131,6 +178,67 @@ class TtRelPosAttention:
         self.bias_v = ttnn.from_torch(
             bag.tensor("pos_bias_v").reshape(1, n_head, 1, d_k), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
+        # Off by default; only the fixed-width decode path turns it on. See `_pos_proj`.
+        self.cache_pos_proj = False
+        # id(pos_emb) -> (pos_emb, pt). The tensor itself is kept so that its `id`
+        # cannot be recycled into a stale hit.
+        self._pt_cache: dict = {}
+
+    def _pos_proj(self, pos_emb, b):
+        """`linear_pos`, head-split and transposed -- cached on the `pos_emb` object.
+
+        **This is the largest matmul in the layer by two orders of magnitude, and on
+        the decode path it recomputes an identical result every token.** `pos_emb` is
+        `[B, 2*key_len - 1, d_model]`, so at `max_len = 256` this projects 511 rows
+        through `[1024, 1024]` -- about 536 MFLOP -- while q, k and v each project a
+        single row, about 1 MFLOP apiece. Roughly 97 % of the layer's arithmetic sits
+        in the one branch that does not depend on the token being decoded.
+
+        It is loop-invariant because `TtARDecoder.positional()` hands back the *same
+        cached tensor* on every step: the window is a function of `max_len`, which is
+        fixed for an utterance. Caching `pt` therefore removes a `linear`, a `reshape`
+        and a `permute` per layer per token, and the `linear` is the expensive one.
+
+        The cache is keyed on `id(pos_emb)` rather than on its width, because width
+        alone would be a lie: two different callers can legitimately pass different
+        `[B, N, d_model]` windows. Keying on identity makes a hit mean "the very
+        tensor whose projection this is". The entry holds a reference to `pos_emb`
+        precisely so that CPython cannot recycle its `id` into a stale hit.
+
+        Allocation happens on first call, which for the traced path is a warm-up pass
+        -- outside `begin_trace_capture`, like the weights, so the replay only reads.
+
+        **Caching is opt-in, and deliberately so.** It pays only where the same window
+        is reused, and it is unsafe wherever entries would have to be evicted: the
+        traced decode step holds a device pointer to `pt` for the life of the trace,
+        so freeing one to make room would be a use-after-free that shows up as
+        corrupted attention several hundred tokens later. The two callers differ:
+
+        * `TtARDecoder`'s fixed-width path always passes `positional(max_len)` -- one
+          window for the whole utterance, so the cache holds exactly one entry and
+          never needs to evict. It calls `enable_pos_proj_cache()`.
+        * The flow encoder's window is `2*T - 1` for the utterance's own `T`, and it
+          runs once per utterance. Caching would buy nothing and leak an entry per
+          distinct length, so it stays off.
+
+        **Ownership follows the flag.** With the cache on, `pt` belongs to the cache
+        and the caller must leave it alone; with it off, `pt` is a fresh tensor the
+        caller must free. `forward_cached` branches on `self.cache_pos_proj` to do
+        exactly that, and getting it backwards leaks a megabyte per layer per token.
+        """
+        if not self.cache_pos_proj:
+            p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, pos_emb.shape[1])
+            pt = ttnn.permute(p, (0, 1, 3, 2))
+            ttnn.deallocate(p)
+            return pt
+        hit = self._pt_cache.get(id(pos_emb))
+        if hit is not None:
+            return hit[1]
+        p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, pos_emb.shape[1])
+        pt = ttnn.permute(p, (0, 1, 3, 2))
+        ttnn.deallocate(p)
+        self._pt_cache[id(pos_emb)] = (pos_emb, pt)
+        return pt
 
     def _heads(self, x, b, t):
         """[B, T, d_model] -> [B, h, T, d_k].
@@ -161,7 +269,20 @@ class TtRelPosAttention:
         Pad a zero column, reinterpret the last two axes transposed, drop the
         first row, reinterpret back, keep the left half. Every step is a reshape
         or a slice -- no gather op needed.
+
+        **At `t1 == 1` the whole sequence collapses to that final slice.** With one
+        query row the pad-and-drop is its own inverse: prepending a zero to a length
+        `n` row and then dropping the first element of the `(n+1, 1)` reinterpretation
+        returns the original `n` elements in the original order, so only the trailing
+        `[..., : n // 2 + 1]` slice survives. Seven ops become one, on a path that
+        runs once per layer per generated token.
+
+        This is a `t1 == 1` identity, not a general one -- it is exactly false for
+        `t1 >= 2`, where the skew genuinely permutes. `test_rel_shift_fast_path_only_
+        holds_at_t1_1` asserts both halves of that, so the guard cannot quietly widen.
         """
+        if t1 == 1:
+            return ttnn.slice(x, [0, 0, 0, 0], [b, h, 1, n // 2 + 1])
         # A zero column, made by zeroing a slice of `x` rather than with
         # `ttnn.zeros`. `ttnn.zeros(device=...)` is a host->device *write*, and
         # writes are illegal inside a trace capture -- "Writes are not supported
@@ -202,10 +323,12 @@ class TtRelPosAttention:
         b, t, _ = x.shape
         tp = pos_emb.shape[1]
 
-        q = self._heads(ttnn.linear(x, self.wq, bias=self.bq, compute_kernel_config=self.cc), b, t)
-        k = self._heads(ttnn.linear(x, self.wk, bias=self.bk, compute_kernel_config=self.cc), b, t)
-        v = self._heads(ttnn.linear(x, self.wv, bias=self.bv, compute_kernel_config=self.cc), b, t)
-        p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, tp)
+        # One matmul for all three projections, then one op to split them and lay out
+        # the heads -- two ops where the obvious form is six. See `_linear_fused`.
+        qkv = ttnn.linear(x, self.wqkv, bias=self.bqkv, compute_kernel_config=self.cc)
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=self.h, transpose_key=False)
+        ttnn.deallocate(qkv)
+        pt = self._pos_proj(pos_emb, b)  # cached, and NOT ours to deallocate
 
         if cache is not None:
             ck, cv = cache
@@ -219,31 +342,48 @@ class TtRelPosAttention:
         qv = ttnn.add(q, self.bias_v)
         ttnn.deallocate(q)
 
-        kt = ttnn.permute(k, (0, 1, 3, 2))
-        ac = ttnn.matmul(qu, kt, compute_kernel_config=self.cc)
+        # `transpose_b` folds the [B, h, T, d_k] -> [B, h, d_k, T] permute into the
+        # matmul, which is one fewer op per layer per token and one fewer full copy
+        # of the key block.
+        ac = ttnn.matmul(qu, k, transpose_b=True, compute_kernel_config=self.cc)
         ttnn.deallocate(qu)
-        ttnn.deallocate(kt)
 
-        pt = ttnn.permute(p, (0, 1, 3, 2))
-        ttnn.deallocate(p)
         bd = ttnn.matmul(qv, pt, compute_kernel_config=self.cc)
         ttnn.deallocate(qv)
-        ttnn.deallocate(pt)
+        if not self.cache_pos_proj:
+            ttnn.deallocate(pt)  # ours only when uncached -- see `_pos_proj`
         # `if matrix_ac.shape != matrix_bd.shape` upstream. With a KV cache the
         # comparison is against the *attention key size*, not the chunk length --
         # a one-token decode step still needs the skew.
         if bd.shape[-1] != ac.shape[-1]:
             bd = self.rel_shift(bd, b, self.h, t, tp)
 
-        scores = ttnn.multiply(ttnn.add(ac, bd), self.scale)
+        raw = ttnn.add(ac, bd)
         ttnn.deallocate(ac)
         ttnn.deallocate(bd)
 
-        if mask is not None:
-            # additive mask, already broadcastable to [B, 1|h, T, T_key]
-            scores = ttnn.add(scores, mask)
-        attn = ttnn.softmax(scores, dim=-1)
-        ttnn.deallocate(scores)
+        if mask is not None and mask.shape[-2] == 1:
+            # `softmax(raw * scale + mask)` in one op instead of three.
+            #
+            # The shape guard is not defensive programming, it is the op's contract:
+            # `scale_mask_softmax` accepts only a `[B, 1, 1, W]` padding mask and
+            # raises `TT_FATAL ... softmax_device_operation.cpp:507` on a square
+            # `[B, 1, T, T]` causal one -- with or without `is_causal_mask`. That is
+            # exactly the split between this model's two paths: prefill and the text
+            # encoder pass a causal mask and take the explicit branch, while a decode
+            # step's mask is `[1, 1, 1, max_len]` and is already the wanted form.
+            # So the fusion lands on the path that runs once per token and skips the
+            # one that runs once per utterance, which is the right way round.
+            attn = ttnn.scale_mask_softmax(raw, self.scale, mask)
+        else:
+            scaled = ttnn.multiply(raw, self.scale)
+            if mask is not None:
+                masked = ttnn.add(scaled, mask)  # additive, broadcast over [B, 1|h, T, T_key]
+                ttnn.deallocate(scaled)
+                scaled = masked
+            attn = ttnn.softmax(scaled, dim=-1)
+            ttnn.deallocate(scaled)
+        ttnn.deallocate(raw)
 
         ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)  # [B, h, T, d_k]
         ttnn.deallocate(attn)
