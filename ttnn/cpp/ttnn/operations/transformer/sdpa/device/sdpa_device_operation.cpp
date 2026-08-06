@@ -464,6 +464,20 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "cu_window_seqlens must have between 2 and {} elements, got {}.",
             max_cu_window_seqlens,
             cu_eles);
+        // A sharded Q must start on a tile boundary -- the mask generator offsets whole tiles -- and its
+        // rows must lie inside the sequence the windows describe.
+        const auto q_rows = q.logical_shape()[-2];
+        TT_FATAL(
+            attrs.windowed_q_token_offset % tt::constants::TILE_HEIGHT == 0,
+            "windowed_q_token_offset must be a multiple of {}, got {}.",
+            tt::constants::TILE_HEIGHT,
+            attrs.windowed_q_token_offset);
+        TT_FATAL(
+            attrs.windowed_q_token_offset + q_rows <= static_cast<uint32_t>(k.logical_shape()[-2]),
+            "windowed Q shard [{}, {}) does not fit in the K sequence length {}.",
+            attrs.windowed_q_token_offset,
+            attrs.windowed_q_token_offset + q_rows,
+            k.logical_shape()[-2]);
     };
 
     check_conditions();
@@ -602,6 +616,7 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
+    uint32_t windowed_q_token_offset,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -617,6 +632,7 @@ Tensor sdpa(
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
             .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
