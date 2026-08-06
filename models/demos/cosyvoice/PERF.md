@@ -252,9 +252,30 @@ self-computed excitation the honest metrics are the energy envelope and the RMS,
 (`0.9975` envelope, RMS within 6 %). Same discipline the CFM's initial noise and `SineGen`'s two
 draws already follow.
 
+## Generation modes
+
+All four modes run on device across five languages — 20 cases, all synthesising:
+
+| mode | prompt | on device |
+|---|---|---|
+| zero-shot | reference audio | ✅ 5/5 |
+| cross-lingual | reference audio, different language | ✅ 5/5 |
+| SFT | speaker id, no prompt audio | ✅ 5/5 |
+| instruct | speaker id + description, no prompt audio | ✅ 5/5 |
+
+The two modes with no prompt audio needed three fixes in the flow stage, all guarded by
+a length that is only ever zero without a prompt: two zero-length `ttnn::concat` calls
+(which **segfault rather than raise**) and a full-extent `ttnn.slice` that aliases its
+input, so the `deallocate` after it freed the tensor being returned.
+
+Per-case RTFs from those sweeps are **cold-cache** figures — every distinct sequence
+length is a fresh JIT compile and the sweep path is not traced — and are not comparable
+to the `0.648` benchmark above.
+
 ## Speech quality — 5 languages, 2 modes
 
-Scored with whisper `large-v3`; CER for CJK, WER for English.
+Scored with whisper `large-v3`; CER for CJK, WER for English. The two prompt-based modes
+are the ones with a reference recording to score speaker similarity against.
 
 | Mode | zh | en | ja | ko | yue |
 |---|---:|---:|---:|---:|---:|
