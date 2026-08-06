@@ -725,7 +725,7 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
 Build only the Gen1 config; do not populate a `Gen2Config` or add your own `if (arch == QUASAR)` branch. Two reasons:
 
 - **A custom DM config has no mechanical Gen1→Gen2 mapping.** Gen2 has no processor/NOC concept, so its config isn't derivable from the Gen1 one — authoring it means Quasar-specific judgment (e.g. whether to set `disable_dfb_implicit_sync_for_all`) that you cannot validate on a Gen1 bench.
-- **The Gen2-only compute fields are temporary.** `enable_2x_src_register` and `unpack_to_dest_en` are explicitly interim LLK hacks (issue #49445).
+- **The Gen2-only compute field is temporary.** `enable_2x_src_register` is an explicitly interim setting, documented in the header as not final and subject to change.
 
 In the *default* DM and compute cases the arch-agnostic helpers already emit a correct Gen2 branch for free; anything beyond that is a separate, later Quasar-uplift pass carried out with the right expertise.
 
