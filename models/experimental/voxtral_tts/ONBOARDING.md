@@ -228,9 +228,19 @@ frames exactly is real proof of bit-identity. Two cases, ~90 s. See `§6.32`.
   is. Candidates in `§6.33`; none verified.
 - **`§6.8`'s absolute levels do not reproduce.** Ruled out gate code, model code, reference, ttnn
   build, prefill rows and prompt selection. Still unexplained.
-- **Structural, not yet attempted**: decode uses 1 of every 32 tile rows, so there is 32× free
-  capacity for concurrency or speculative decoding. And Block 2's 7 Euler steps → 5 would be ~28%
-  of Block 2, but it is a listening call, not a metric one.
+- **The 31 unused tile rows — now MEASURED, `§6.35`, and the biggest lead here.** Decode uses 1 row
+  of every 32. In Block 2, **4 utterances cost 1.18× the time of 1 — 3.4× throughput** (844.9 →
+  995.1 µs per `_block`). The 32-row ceiling is **our own constant**, not the hardware:
+  `_NORM_SHARD`'s shape is hardcoded `(32, 96)` and raises at 48 rows, while `wqkv` handles 48 rows
+  fine. Crossing a tile needs a row-count-aware norm shard cached per batch size, the way
+  `_schedule` already caches timestep tokens — not a new kernel. Note this is **throughput, not
+  latency**: per-utterance RTF is unchanged.
+- **Block 2's 7 Euler steps → 5** would be ~28% of Block 2, but it is a listening call, not a metric
+  one — no gate can tell you whether it still sounds right.
+- **Do NOT chase CFG elimination.** `§6.35` measured it: the duplicated forward pass costs **1.8%**
+  (0.322 ms/frame), because 3 rows and 6 rows both pad to one 32-row tile and the row fold reads
+  each weight once. The same arithmetic makes `p2`'s known-zero unconditional half free to compute
+  (65.1 µs either way). The "CFG doubles the work" intuition does not hold on this hardware.
 
 ---
 
