@@ -951,6 +951,75 @@ Result conv2d_L1(
             in_channels,
         };
 
+        // [#48552] 1x1 conv that use_matmul_for_1x1_conv REJECTED (stride>1, e.g. the layer4 downsample
+        // 1024->2048 s2): the halo above already produced the stride-subsampled activation [M, Cin], so this is
+        // now a plain 1x1 matmul. Route it through matmul::linear (K-spilled DRAM weights) exactly like the s1
+        // 1x1 path, instead of the fused conv -- which on a full-N HEIGHT_SHARDED downsample overflows the
+        // resident weights block and silently N-HALVES (output 1024 ch instead of 2048), besides being the 0x19
+        // kernel. Scoped to 1x1 so real windowed convs (conv2 3x3, and the split path below) are untouched.
+        if (kernel_size[0] == 1 && kernel_size[1] == 1) {
+            std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> mm_pc = std::nullopt;
+            std::optional<MemoryConfig> mm_mc = std::nullopt;
+            if (input_tensor_post_tm.is_sharded()) {
+                uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+                mm_pc = determine_matmul_op_config_from_conv_op_config_qsr(
+                    opt_conv_op_parallel_config,
+                    opt_conv_op_block_config,
+                    parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+                    conv_config.activation,
+                    parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+                    num_cores_c);
+                mm_mc = conv_out_memory_config;
+                const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
+                auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
+                    constexpr uint32_t kSingleBlockFitTiles = 512;
+                    constexpr uint32_t kSpillTargetTiles = 256;
+                    if (per_core_n == 0 || per_core_n * full_k_mm <= kSingleBlockFitTiles) {
+                        return full_k_mm;
+                    }
+                    uint32_t k_blk = full_k_mm;
+                    while (k_blk > 1 && ((full_k_mm % k_blk) != 0 || k_blk * per_core_n > kSpillTargetTiles)) {
+                        k_blk--;
+                    }
+                    return k_blk;
+                };
+                if (auto* c1 = std::get_if<
+                        ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                        &mm_pc.value())) {
+                    c1->in0_block_w = kspill_in0_bw(c1->per_core_N);
+                } else if (
+                    auto* c2 = std::get_if<
+                        ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                        &mm_pc.value())) {
+                    c2->in0_block_w = kspill_in0_bw(c2->per_core_N);
+                }
+            }
+            ttnn::Tensor mm_out = ttnn::operations::experimental::quasar::matmul::linear(
+                input_tensor_post_tm,
+                weight_tensor_on_device,
+                bias_tensor_on_device,
+                false,
+                false,
+                mm_mc,
+                output_dtype,
+                mm_pc,
+                input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
+                compute_config);
+            if (should_deallocate_act) {
+                input_tensor_post_tm.deallocate(/*force*/ true);
+            }
+            if (memory_config.has_value() && memory_config.value() != mm_out.memory_config()) {
+                mm_out = ttnn::operations::experimental::quasar::to_memory_config(
+                    mm_out, memory_config.value(), std::nullopt);
+            }
+            return {
+                fix_conv_output_logical_nhw(mm_out, batch_size, output_height, output_width),
+                output_height,
+                output_width,
+                weight_tensor_on_device,
+                bias_tensor_on_device};
+        }
+
         // call conv micro op
         auto conv_output = ttnn::prim::qsr::conv2d(
             input_tensor_post_tm,
