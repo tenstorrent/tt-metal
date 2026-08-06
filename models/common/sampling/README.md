@@ -93,18 +93,42 @@ plus `apply_decode_state(...)`.
 
 **`SamplingGenerator.apply_prefill_state(...)`**: Reset params, seeds, prompt tokens, and output state for a prefill request.
 
-**`SamplingGenerator.apply_decode_state(chunks, ...)`**: Execute the sampling
-half of vLLM's explicit decode update contract. `reload_sampling_params=True`
-formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
-prompt/output penalty state. The flags are independent. The method does NOT
-touch seeds — callers apply slot remaps first, reset/align seeds when state is
-reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
-Both command flags are required at every decode call.
+**`SamplingGenerator.apply_decode_update(chunks, ...)`**: The entry point a
+generator calls for one decode's sampling update. It owns the order the contract
+requires: parameter upload, then penalty state, then the seed reset, then at most
+one seed advance. Per-family code supplies the slot layout and nothing else.
 
-On `reset_sampling_state=True` the caller must use `reset_seed_from_slots(...)`
-rather than the conditional helper: when both the requested and the cached seed
-are `None`, the conditional helper sees no change and skips, leaving decode-only
-sampling with no device seed at all.
+- `reload_sampling_params` / `reset_sampling_state`: the two commands, passed
+  through as received.
+- `seeds`: slot-indexed seed values padded to the sampler's batch size. Required
+  whenever either command is set and `active_slots` is non-empty.
+- `active_slots`: device slots sampling this step. `None` means every slot; an
+  empty list means none, which skips the reset entirely (a reset marks the
+  manager dirty even when it moves nothing, forcing a full-batch upload next
+  step).
+- `positions`: slot-indexed absolute decode positions, consulted **only** on a
+  state reset. Host positions are authoritative only on a reloading step, and
+  vLLM guarantees a state reset always accompanies one. Aligning on a
+  params-only update would tie the RNG stream to a position that lags the device.
+- `advance_seeds`: `False` for generators that advance inside their sampling
+  call, which is the only way to keep one advance per sampled token when state
+  application and sampling are separate calls.
+
+Do not drive `reset_seed_from_slots` / `align_seed_counters_to_positions`
+directly: a per-family copy of the ordering silently changes reproducibility, and
+a test asserts no generator does.
+
+Pass **raw, unformatted** chunks. `format_sampling_params` inverts temperature and
+is not idempotent, so pre-formatting inverts it back. Pass `None` only when the
+caller uploaded the parameters itself (Galaxy does, because its inactive-slot fill
+needs params already padded to the device batch).
+
+**`SamplingGenerator.apply_decode_state(chunks, ...)`**: The parameter and penalty
+half, called by `apply_decode_update`. `reload_sampling_params=True`
+formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
+prompt/output penalty state. It does not touch seeds. A state reset without
+`prompt_tokens` keeps the existing prompt mask, since penalties cannot rebuild it
+without the real tokens; the output counters are cleared either way.
 
 ## vLLM Decode Update Contract
 
@@ -112,7 +136,9 @@ The command semantics live in
 [`models/common/decode_contract.py`](../decode_contract.py), next to the helper
 that adapters use to reject commands they cannot execute. The mode definitions,
 transition matrix, and negotiation table are owned by the paired vLLM plugin
-document `plugins/vllm-tt-plugin/docs/decode-reload-contract.md`. This section
+document
+[`plugins/vllm-tt-plugin/docs/decode-reload-contract.md`](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/docs/decode-reload-contract.md)
+in the tenstorrent/vllm repository. This section
 records only what a tt-metal generator author has to honor.
 
 Adapters advertise support with `decode_input_update_contract = 1`, declared on
@@ -132,61 +158,102 @@ retry safety because slot remaps are non-idempotent. An authoritative rebuild ma
 replace the remap for that subsystem; inactivity may not. Version-0 adapters
 retain their historical remap behavior unchanged.
 
+**One exemption**, and only one: state that is not addressable by vLLM slot cannot
+be remapped, only reset. The known case is unseeded on-device RNG, whose state is
+a per-core hardware PRNG register (`PRNG_SEED_Seed_Val`) with no move primitive.
+`SeedManager.apply_slot_remap` returns early on an all-unseeded batch for exactly
+that reason, which also skips its host-side per-slot bookkeeping, since that
+bookkeeping only describes seeds nothing has registered. An adapter with any other
+unmovable slot state must say so here, next to the code that skips the remap.
+Inconvenience is not an exemption.
+
+**Host input authority** (vLLM requirement 7, the one adapter authors most often
+break): `tokens` and `start_pos` are authoritative only when `reload_inputs` is
+true. When it is false they are deliberately one step behind, and nothing may be
+derived from them, forward inputs or sampling state. Deriving an RNG counter from
+`start_pos` on a steady step makes the sampled stream depend on when the async
+readback landed, so the same request and seed stop reproducing. `positions` is
+therefore consulted only on a state reset, which vLLM guarantees implies a reload.
+
 Generators execute these commands without adding page-table comparisons,
-sampling-mode checks, or model-specific forced reloads. `models/common/models/
-executor.py` is a deliberate version-0 holdout: it still infers reloads from its
-own call history and does not advertise the marker, so vLLM keeps it on the
-legacy `reset_batch` path. An adapter that cannot execute part of the contract
-rejects those combinations loudly (`require_full_input_reload`) rather than
-silently degrading; advertising version 1 while quietly ignoring a command is an
-adapter bug.
+sampling-mode checks, or model-specific forced reloads. An adapter that cannot
+execute part of the contract rejects those combinations loudly
+(`require_full_input_reload`) rather than silently degrading; advertising version 1
+while quietly ignoring a command is an adapter bug. Rejecting is conformant only
+while the adapter leaves `supports_async_decode` off, which is what stops vLLM
+from planning the combination.
+
+### Version-0 holdouts
+
+This list is authoritative for which tt-metal generator stacks still take the
+legacy path, and the paired vLLM document points here for it.
+
+- [`models/common/models/executor.py`](../models/executor.py), driving
+  `Llama3Generator` and its eleven `models/common/models/*/generator.py` siblings.
+  It still infers reloads from its own call history and from a `torch.equal`
+  page-table comparison, and declares no marker, so vLLM keeps it on the legacy
+  `reset_batch` path. Converting it needs host tests for that executor stack which
+  do not exist yet. A test asserts none of these files declares the marker, since
+  doing so without converting the executor makes the first vLLM decode a bare
+  `TypeError`.
+
+### Driving these adapters from vLLM
 
 The plugin falls back to the legacy `reset_batch` interface for adapters that do
 not advertise the contract, preserving their existing reload and overlap
-behavior, and warns that correctness is not guaranteed on that path. This lets
-vLLM land first and adapters opt in as they are refactored. **A pre-#456 vLLM
-cannot drive these adapters at all**: it omits the four commands, so decode
-raises `TypeError`. Bump the vLLM pin along with tt-metal.
+behavior, and logs that correctness is not guaranteed on that path. This lets
+vLLM land first and adapters opt in as they are refactored.
 
-All refactored generator APIs require direct callers, including demos and warmup
-code, to provide all four commands. No model-side fallback heuristics are
-restored. Any demo-side decision to retain traced inputs is made at the call
-site.
+**A vLLM predating [tenstorrent/vllm#458](https://github.com/tenstorrent/vllm/pull/458)
+cannot drive a contract adapter.** What it does depends on the tier:
 
-`model_capabilities["supports_async_decode"]` is separate from contract
+- The model-tier generators (`models/tt_transformers/tt/generator.py`,
+  `models/demos/llama3_70b_galaxy/tt/generator.py`) reject `reset_batch` by name
+  with a `ValueError` naming the fix. They cannot simply accept the call: their
+  commands carry host-authoritative defaults, so an old vLLM's layout changes
+  would be silently reinterpreted as a full reload on every step.
+- The wrapper-tier adapters with required keyword-only commands (DeepSeek,
+  Qwen2.5-VL, Qwen3-VL, T3000 Llama, Mllama) raise `TypeError` for the missing
+  arguments.
+
+Update the vLLM pin along with tt-metal. In the plugin the pin lives in the
+deployment's vLLM checkout, not in this repo.
+
+vLLM sends all four commands explicitly on every contract decode. A direct caller
+(demo, warmup, accuracy test) may omit one, in which case it takes the
+host-authoritative default: `reload_inputs=True` and the other three `False`. That
+is the only permitted default, and a test enforces it across every adapter. No
+model-side fallback heuristics are restored, and any decision to retain traced
+inputs is made at the call site.
+
+`model_capabilities["supports_async_decode"]` is a separate key from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and
 device-resident sampled-token feedback; wrappers without it receive explicit
-full-input reload commands instead.
+full-input reload commands instead. The two are not fully orthogonal: leaving the
+capability off is what makes a rejecting adapter safe.
 
-### Requirements for `supports_async_decode=True`
+### Requirements
 
-A model wrapper may opt in only if all of the following hold:
+The normative requirement list is owned by the paired vLLM document, which splits
+it into obligations of any version-1 adapter (5, 6, 8, 9) and the additional ones
+needed to advertise `supports_async_decode` (1 to 4, and 7). Do not restate it
+here: a second copy in a second repo loses clauses, and the clause it lost last
+time was requirement 7.
 
-- `decode_forward(..., read_from_device=False)` and
-  `read_decode_output(..., async_read=True)` split submission from observational
-  readback.
-- Device sampling writes the selected token into the persistent token input
-  consumed by the next decode.
-- Decode forward advances the persistent position exactly once; sampling and
-  readback never advance it.
-- Page tables can be refreshed without copying or rebinding token, position, or
-  RoPE trace inputs.
-- All four reload commands are honored independently, without model-local
-  heuristics escalating page-table-only refresh into a full reload. An adapter
-  that rejects a command combination (see `require_full_input_reload`) must not
-  advertise this capability, since that is what stops vLLM from planning the
-  combination in the first place.
-- Slot remap applies before the forward to every persistent slot-indexed state
-  that the forward reads, in both sampling modes. Dormant sampler state is also
-  remapped exactly once after a successful host-sampling decode. For device
-  sampling, parameter upload, penalty/RNG reset, and seed advancement follow
-  in that order, with one seed advance per sampled token.
-- Persistent buffers remain valid through deferred readback and until an
-  explicit reload replaces them.
+What this repo adds on top, all sampling-side ordering:
 
-If any item is unsupported, leave the capability absent or `False`. vLLM will
-disable async scheduling and issue a full input reload for every decode. Record
-the reason next to the capability: it is a deliberate throughput trade, and
+- Parameter upload, then penalty state, then the seed reset, then at most one seed
+  advance per sampled token. `apply_decode_update` owns that order; supply the
+  slot layout and let it run.
+- Slot remaps are applied before `apply_decode_update`, because they are not
+  idempotent and the layer that owns the device-slot mapping owns the timing.
+- A global `slot_remap` is rebased onto rank-local slots before it reaches
+  per-rank state; use `rank_local_slot_remap`, which also checks that the plugin
+  and the model agree on the per-rank stride.
+
+If any requirement is unsupported, leave the capability absent or `False`. vLLM
+will disable async scheduling and issue a full input reload for every decode.
+Record the reason next to the capability: it is a deliberate throughput trade, and
 without a stated reason someone will flip it back.
 
 ## Pitfalls
