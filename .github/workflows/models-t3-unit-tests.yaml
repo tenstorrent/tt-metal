@@ -30,6 +30,17 @@ on:
           - gemma-4-e4b
           - panoptic-deeplab
           - bevformer
+          - efficientnet-b0
+          - mobilenetv2
+          - segformer
+          - sentence-bert
+          - stable-diffusion-1-4
+          - swin-s
+          - swin-v2
+          - ufld-v2
+          - vanilla-unet
+          - vgg-unet
+          - vovnet
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

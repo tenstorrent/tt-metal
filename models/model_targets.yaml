@@ -1398,3 +1398,257 @@ targets:
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
+
+  # Tier 3 small vision / CNN models ported off the single-card Demo and frequent
+  # pipelines. Tier 3 is exempt from perf targets; these demos also emit no benchmark
+  # payload for the verifier, so accuracy is TODO until the first tiered run reports
+  # numbers. Entries exist so every registered (model, SKU) combo has coverage.
+  efficientnet-b0:
+    aliases: ["EfficientNet-B0", "efficientnet-b0"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+  mobilenetv2:
+    aliases: ["MobileNetV2", "mobilenetv2"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+  segformer:
+    aliases: ["SegFormer", "segformer"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+  sentence-bert:
+    aliases: ["SentenceBERT", "sentence-bert"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_galaxy_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+  stable-diffusion-1-4:
+    aliases: ["Stable Diffusion 1.4", "stable-diffusion-1-4"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+  swin-s:
+    aliases: ["Swin-S", "swin-s"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+  swin-v2:
+    aliases: ["Swin-V2", "swin-v2"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+  ufld-v2:
+    aliases: ["UFLD v2", "ufld-v2"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+  vanilla-unet:
+    aliases: ["Vanilla-UNet", "vanilla-unet"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+  vgg-unet:
+    aliases: ["VGG-UNet", "vgg-unet"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+  vovnet:
+    aliases: ["VoVNet", "vovnet"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+            team: models

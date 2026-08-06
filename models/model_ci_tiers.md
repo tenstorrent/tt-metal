@@ -104,6 +104,17 @@ it is classified differently on different systems.
 | Janus-Pro-7B | BH P150 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
+| EfficientNet-B0 | WH N150, WH N300 |
+| MobileNetV2 | WH N150, WH N300 |
+| SegFormer | WH N150, WH N300 |
+| SentenceBERT | WH N150, WH N300, WH LLMBox, WH Galaxy |
+| Stable Diffusion 1.4 | WH N150, WH N300 |
+| Swin-S | WH N150, WH N300 |
+| Swin-V2 | WH N150, WH N300 |
+| UFLD v2 | WH N150, WH N300 |
+| Vanilla-UNet | WH N150, WH N300 |
+| VGG-UNet | WH N150, WH N300 |
+| VoVNet | WH N150, WH N300 |
 
 
 # Pipelines

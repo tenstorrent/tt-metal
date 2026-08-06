@@ -1160,3 +1160,184 @@
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
+
+# ── Small vision / CNN models (ported from the single-card frequent pipeline) ──
+# Each cmd keeps pointing at the curated tests/nightly/single_card/<model> suite the
+# `<model> nightly` entry ran, so the set of tests executed is unchanged.
+
+- name: Swin-S unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/swin_s
+  model: swin-s
+  model_family: Swin
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+    wh_n300:
+      timeout: 9
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: EfficientNet-B0 unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/efficientnetb0
+  model: efficientnet-b0
+  model_family: EfficientNet
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+    wh_n300:
+      timeout: 9
+      tier: 3
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+  team: models
+
+- name: MobileNetV2 unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/mobilenetv2
+  model: mobilenetv2
+  model_family: MobileNet
+  skus:
+    wh_n150:
+      timeout: 7
+      tier: 3
+    wh_n300:
+      timeout: 8
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: UFLD v2 unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/ufld_v2
+  model: ufld-v2
+  model_family: UFLD
+  skus:
+    wh_n150:
+      timeout: 7
+      tier: 3
+    wh_n300:
+      timeout: 9
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: VoVNet unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/vovnet
+  model: vovnet
+  model_family: VoVNet
+  skus:
+    wh_n150:
+      timeout: 12
+      tier: 3
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+  team: models
+
+- name: SegFormer unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/segformer
+  model: segformer
+  model_family: SegFormer
+  skus:
+    wh_n150:
+      timeout: 11
+      tier: 3
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: SentenceBERT unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/sentence_bert
+  model: sentence-bert
+  model_family: SentenceBERT
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+    wh_n300:
+      timeout: 13
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Swin-V2 unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/swin_v2
+  model: swin-v2
+  model_family: Swin
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+    wh_n300:
+      timeout: 9
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Vanilla-UNet unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/vanilla_unet
+  model: vanilla-unet
+  model_family: UNet
+  skus:
+    wh_n150:
+      timeout: 7
+      tier: 3
+    wh_n300:
+      timeout: 9
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: VGG-UNet unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/vgg_unet
+  model: vgg-unet
+  model_family: UNet
+  skus:
+    wh_n150:
+      timeout: 7
+      tier: 3
+    wh_n300:
+      timeout: 7
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: Stable Diffusion 1.4 unit tests
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    export HF_HUB_OFFLINE=0
+    pytest tests/nightly/single_card/stable_diffusion
+  model: stable-diffusion-1-4
+  model_family: Stable Diffusion
+  skus:
+    wh_n150:
+      timeout: 33
+      tier: 3
+    wh_n300:
+      timeout: 37
+      tier: 3
+  owner_id: U088DBNUKGR # Evan Smal
+  team: models

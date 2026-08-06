@@ -318,8 +318,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 765
-    wh_n300: 765
+    wh_n150: 420
+    wh_n300: 420
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -349,9 +349,10 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 64
-    wh_n150: 42
-    wh_n300: 15
+    wh_llmbox_perf: 78
+    wh_n150: 120
+    wh_n300: 87
+    wh_galaxy_perf: 6
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
@@ -378,8 +379,8 @@ models:
     bh_quietbox_2: 50
   unit_tier3:
     wh_llmbox_perf: 58
-    wh_n150: 33
-    wh_n300: 15
+    wh_n150: 149
+    wh_n300: 145
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21
@@ -395,9 +396,9 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 1290
+    wh_llmbox_perf: 1285
     wh_galaxy: 345
-    wh_galaxy_perf: 150
+    wh_galaxy_perf: 145
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
