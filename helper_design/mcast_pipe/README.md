@@ -24,11 +24,11 @@ evidence. All seven gates in `mcast_feedback_plan_2026-08-04.md` are green.
 
 ## Remaining review work
 
-API-002 face metadata and RT compaction remain intentionally open and were
-explicitly deferred from this rollout. API-001, API-003 through API-006, and
-MIG-001 through MIG-004 are implemented. Any future API-002 work should begin
-as a separate planned wire revision rather than extending this completed gate
-sequence.
+API-002 compile-time sender/receiver-face enforcement remains intentionally
+open and was explicitly deferred from this rollout. RT compaction is not part
+of that feedback. API-001, API-003 through API-006, and MIG-001 through MIG-004
+are implemented. Future API-002 work should be picked up as a separate focused
+safety change rather than extending this completed gate sequence.
 
 ## Active review queue
 

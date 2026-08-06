@@ -80,7 +80,7 @@ mapped Matmul, Conv, GroupNorm, and Sort production inventories passed. A
 durable source audit rejects any reintroduction of a third `McastArgs` template
 argument.
 
-## API-002 — Encode and enforce the kernel's permitted mcast face
+## API-002 — Enforce the kernel's permitted sender/receiver face
 
 - **Date:** 2026-08-04
 - **Status:** Open
@@ -103,13 +103,7 @@ auto receiver = args.receiver(noc);
 For a fixed sender, the four RT words are a destination rectangle. For a fixed
 receiver, the same four slots contain `[sender_x, sender_y, 0, 0]`. A mistaken
 `sender()` call in a receiver-only kernel therefore interprets receiver data as
-a rectangle; there is no compile-time or runtime diagnostic.
-
-The current fixed receiver wire does not carry an actual sender rectangle, but
-it is still padded to four words even though only two are meaningful. The
-rotating union wire carries both a four-word rectangle and all sender-coordinate
-pairs, so a split sender-only or receiver-only kernel receives a larger block
-than its face needs.
+a rectangle; there is no compile-time diagnostic.
 
 ### Desired contract
 
@@ -126,37 +120,21 @@ constexpr face mask, `sender()` and `receiver()` should reject use of a face not
 permitted by the kernel binding, preferably with `static_assert` when that
 method is instantiated.
 
-For a `Both` binary whose role varies per core at runtime, a CT-only assertion
-cannot detect calling the wrong face on an individual core. Decide separately
-whether such wires need a per-core role tag and a debug/runtime assertion.
+### Scope
 
-### Wire-size question
-
-Role enforcement and wire compaction are related but separable:
-
-1. The minimum change is to add permitted-face metadata while retaining the
-   current uniform RT union layout. This provides misuse detection without
-   complicating offsets.
-2. A stronger change makes the host emit face-specific RT projections:
-   fixed sender = rectangle, fixed receiver = one coordinate pair, rotating
-   sender = rectangle, rotating receiver = sender-coordinate list, and Both =
-   their union. That avoids sending unused fields but requires
-   `compile_time_args` and `runtime_args` to be emitted for a specific kernel
-   binding rather than from a role-neutral helper object.
-
-The safety contract should be decided independently of whether the saved RT
-words justify face-specific layouts.
+This feedback tracks only compile-time sender/receiver-face enforcement. Keep
+the current uniform CT/RT block sizes and role-neutral runtime layout. `Both`
+permits construction of both faces; per-core runtime-role validation and RT
+wire compaction are not part of this item.
 
 ### Resolution checklist
 
-- Inventory sender-only, receiver-only, Both, and per-core mixed-role kernels.
-- Decide whether permitted face is a dedicated CT word or part of a general
-  self-describing mcast metadata word alongside API-001's rotating span.
+- Inventory sender-only, receiver-only, and Both kernels.
+- Encode the permitted face in the existing self-describing CT metadata without
+  changing the current block widths.
 - Add negative compile tests for calling `sender()` on ReceiverOnly and
   `receiver()` on SenderOnly.
-- Decide whether mixed-role binaries need a per-core runtime assertion.
-- Measure the value and complexity of compact face-specific RT layouts before
-  coupling that optimization to role enforcement.
+- Re-run the helper suites and all migrated production inventories.
 
 ## API-003 — Signal-only operations silently ignore handshake configuration
 
