@@ -701,10 +701,6 @@ void kernel_main() {
                 }
             }
         }
-        // DIAGNOSTIC (temporary): force the force-push-all + compute-drain path for ALL sparse
-        // shards, bypassing the reader-skip + compute-zero-work-empty path. If the windowed tests
-        // pass with this, the regression is in that skipped path. Revert to restore real sparsity.
-        shard_attends_nothing = true;
     }
 
     // Sliding consumes local and halo ranges in one logical Q pass. Wait for every halo that
