@@ -525,8 +525,11 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 8.8
-              prefill_time_to_first_token: 195
+              # Greedy decode now takes the on-device argmax fast-path on single-chip
+              # (allow_force_argmax gated on num_devices == 1). Measured 23.50-23.60 t/s/u
+              # over 3 CI runs, was 8.8; TTFT 113.2-113.5 ms, was 195.
+              decode_t/s/u: 23.5
+              prefill_time_to_first_token: 113
             accuracy: {}
       wh_n300:
         entries:
@@ -559,8 +562,10 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 20.3
-              prefill_time_to_first_token: 75
+              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
+              # was 20.3; TTFT 53.31-53.35 ms, was 75.
+              decode_t/s/u: 33.0
+              prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:
         entries:
