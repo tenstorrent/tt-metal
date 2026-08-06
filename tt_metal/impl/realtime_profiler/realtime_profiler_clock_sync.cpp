@@ -37,35 +37,15 @@ namespace tt::tt_metal {
 
 namespace {
 
-// ~0.5s at these values.
-constexpr uint32_t kFitProbes = 100;
-constexpr auto kProbeInterval = std::chrono::milliseconds(5);
-constexpr auto kSettleDelay = std::chrono::milliseconds(50);
-constexpr int kProbesPerPoint = 4;
-
-constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
-
 // The counter could have been read anywhere inside the bracket.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds bracket) { return bracket / 2; }
 
-// Loose enough that ordinary spread survives; only reads serviced late are cut.
-constexpr int kFitBracketOutlierFactor = 2;
-
-// Lets a rapid MeshDevice reopen skip the bring-up fit: the device WALL_CLOCK free-runs across close, so the rate
-// measured last time still holds.
-struct FrequencyCache {
-    struct Entry {
-        double frequency = 0.0;
-        std::chrono::steady_clock::time_point updated_at;
-    };
-    std::mutex mutex;
-    std::unordered_map<uint32_t, Entry> by_chip;
-};
-
-FrequencyCache& frequency_cache() {
-    static ttsl::Indestructible<FrequencyCache> cache;
-    return cache.get();
-}
+// How long a gap between probes forces the high word to be read from the device rather than derived by counting wraps.
+// Two wraps inside one gap are indistinguishable from none, and 2^32 ticks is 3.2s at 1.35GHz -- 2.1s if AICLK ever
+// reaches 2GHz -- so this has to stay well under the shortest wrap any part might have. A device is probed after every
+// non-empty read and on a millisecond idle cadence besides, so reaching this at all means the receiver thread was
+// stalled for a second, and then one extra PCIe read is exactly what is wanted.
+constexpr auto kMaxProbeGapBeforeRereadingHi = std::chrono::seconds(1);
 
 }  // namespace
 
@@ -73,93 +53,6 @@ std::chrono::nanoseconds RealtimeProfilerClockSync::sync_interval() {
     static const std::chrono::nanoseconds interval =
         std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 500));
     return interval;
-}
-
-void RealtimeProfilerClockModel::seed_frequency(double frequency) {
-    TT_FATAL(frequency > 0.0, "Real-time profiler clock model needs a positive seed frequency, got {}", frequency);
-    frequency_ = frequency;
-}
-
-void RealtimeProfilerClockModel::adopt_rate(double rate) {
-    if (rate <= 0.0) {
-        return;
-    }
-    frequency_ = rate;
-}
-
-std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockModel::fit(
-    std::span<const ClockProbe> probes, std::chrono::steady_clock::time_point host_start) {
-    if (probes.size() < 2) {
-        return std::nullopt;
-    }
-
-    std::vector<std::chrono::nanoseconds> brackets;
-    brackets.reserve(probes.size());
-    for (const auto& p : probes) {
-        brackets.push_back(p.bracket);
-    }
-    const auto median = brackets.begin() + static_cast<ptrdiff_t>(brackets.size() / 2);
-    std::nth_element(brackets.begin(), median, brackets.end());
-    const std::chrono::nanoseconds median_bracket = *median;
-
-    std::vector<ClockProbe> tight;
-    tight.reserve(probes.size());
-    for (const auto& p : probes) {
-        if (p.bracket <= median_bracket * kFitBracketOutlierFactor) {
-            tight.push_back(p);
-        }
-    }
-    const std::span<const ClockProbe> fitted_probes = tight.size() >= 2 ? std::span<const ClockProbe>(tight) : probes;
-
-    // Centered on host_start to avoid catastrophic cancellation from regressing at absolute-timestamp magnitudes.
-    const double n = static_cast<double>(fitted_probes.size());
-    const auto centered_host = [host_start](const ClockProbe& p) {
-        return static_cast<double>((p.host_time + placement_error(p.bracket) - host_start).count());
-    };
-
-    double host_mean = 0.0;
-    double device_mean = 0.0;
-    for (const auto& p : fitted_probes) {
-        host_mean += centered_host(p);
-        device_mean += static_cast<double>(p.device_ticks);
-    }
-    host_mean /= n;
-    device_mean /= n;
-
-    double num = 0.0;
-    double den = 0.0;
-    for (const auto& p : fitted_probes) {
-        const double dx = centered_host(p) - host_mean;
-        const double dy = static_cast<double>(p.device_ticks) - device_mean;
-        num += dx * dy;
-        den += dx * dx;
-    }
-    if (std::abs(den) > 1e-10) {
-        const double fitted = num / den;
-        // Consumers divide by this, so an unusable slope must not reach them; the seeded AICLK still maps.
-        if (fitted > 0.0) {
-            frequency_ = fitted;
-        } else {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Clock fit produced a non-positive frequency ({}); keeping the commanded AICLK",
-                fitted);
-        }
-    }
-
-    FitResidual residual;
-    double residual_sumsq_ns = 0.0;
-    for (const auto& p : fitted_probes) {
-        const double predicted = device_mean + frequency_ * (centered_host(p) - host_mean);
-        const double residual_ns = (static_cast<double>(p.device_ticks) - predicted) / frequency_;
-        residual_sumsq_ns += residual_ns * residual_ns;
-        residual.max_ns = std::max(residual.max_ns, std::abs(residual_ns));
-    }
-    residual.rms_ns = std::sqrt(residual_sumsq_ns / n);
-    residual.num_probes_fitted = fitted_probes.size();
-    residual.num_probes_offered = probes.size();
-
-    return residual;
 }
 
 RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core) :
@@ -170,7 +63,8 @@ RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevi
     const auto& hal = MetalContext::instance(context_id_).hal();
     wall_clock_addr_lo_ = hal.get_tensix_wall_clock_reg_addr_lo();
     wall_clock_addr_hi_ = hal.get_tensix_wall_clock_reg_addr_hi();
-    model_.seed_frequency(MetalContext::instance(context_id_).get_cluster().get_device_aiclk(chip_id_) / 1000.0);
+    fallback_rate_ = MetalContext::instance(context_id_).get_cluster().get_device_aiclk(chip_id_) / 1000.0;
+    TT_FATAL(fallback_rate_ > 0.0, "Device {} reported a non-positive AICLK", chip_id_);
     configure_clock_read_path();
 }
 
@@ -262,6 +156,9 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     const uint64_t probes_begin = oldest_probe();
     const uint64_t close_index = first_probe_at_or_past(ticks);
     const auto baseline = baseline_rate();
+    if (baseline.has_value() && baseline->rate > 0.0) {
+        fallback_rate_ = baseline->rate;
+    }
 
     // Past every retained probe. The caller probes after reading a batch, so this is not the ordinary case for a record
     // -- it means the read raced the probe, or the probe failed -- and there is nothing to wait for either way, since
@@ -288,7 +185,6 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
             current_rate_ = chord->chord_rate;
             current_rate_noise_ = chord->chord_rate_noise;
             last_published_sync_error_ = chord->mapping.sync_error;
-            model_.adopt_rate(chord->frequency);
             return chord;
         }
         break;
@@ -384,14 +280,12 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
     TTZoneScopedDN(RT_PROFILER, "Probe");
     uint32_t lo = 0;
     try {
-        if (model_.frequency() != wrap_period_frequency_) {
-            wrap_period_frequency_ = model_.frequency();
-            wrap_period_ =
-                std::chrono::nanoseconds(static_cast<int64_t>((1ull << 32) / std::max(wrap_period_frequency_, 0.1)));
-        }
-        // Halved for a safety margin.
-        const bool wrap_could_have_been_missed = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
-                                                 std::chrono::steady_clock::now() - last_probe_at_ > wrap_period_ / 2;
+        // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a
+        // gap long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low
+        // word wrapping advances the high word by exactly one -- which is both exact and one fewer PCIe access on the
+        // one path where an access is least welcome.
+        const bool must_read_hi = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
+                                  std::chrono::steady_clock::now() - last_probe_at_ > kMaxProbeGapBeforeRereadingHi;
 
         std::chrono::steady_clock::time_point host_before;
         std::chrono::steady_clock::time_point host_after;
@@ -400,10 +294,12 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
             lo = *mapped_clock_lo_;
             host_after = std::chrono::steady_clock::now();
         }
-        // The high word only moves when the low word wraps, and reading the low word latches it, so it stays outside
-        // the bracket.
-        if (wrap_could_have_been_missed || lo < last_clock_lo_) {
+        // Reading the low word latches the high one, so this read is of the value that goes with `lo`, and it stays
+        // outside the bracket.
+        if (must_read_hi) {
             cached_clock_hi_ = *mapped_clock_hi_;
+        } else if (lo < last_clock_lo_) {
+            ++cached_clock_hi_;
         }
         last_clock_lo_ = lo;
         last_probe_at_ = host_after;
@@ -444,140 +340,21 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::best_of(int probes) {
     return best;
 }
 
-void RealtimeProfilerClockSync::bring_up() {
-    TTZoneScopedDN(RT_PROFILER, "ClockBringUp");
-    constexpr uint32_t kMaxRetries = 3;
-    constexpr auto kRetryDelay = std::chrono::milliseconds(500);
-
-    if (try_cached_calibration()) {
-        return;
-    }
-    for (uint32_t attempt = 0; attempt <= kMaxRetries; attempt++) {
-        if (attempt > 0) {
-            log_debug(tt::LogMetal, "[Real-time profiler] Device {} sync retry {}/{}", chip_id_, attempt, kMaxRetries);
-            std::this_thread::sleep_for(kRetryDelay);
-        }
-        if (calibrate()) {
-            return;
-        }
-    }
-}
-
-bool RealtimeProfilerClockSync::try_cached_calibration() {
-    TTZoneScopedDN(RT_PROFILER, "RestoreCalibration");
-    const auto now = std::chrono::steady_clock::now();
-    std::optional<double> frequency;
-    {
-        auto& cache = frequency_cache();
-        std::lock_guard lock(cache.mutex);
-        const auto it = cache.by_chip.find(chip_id_);
-        if (it != cache.by_chip.end() && now - it->second.updated_at < kCalibrationCacheMaxAge) {
-            frequency = it->second.frequency;
-        }
-    }
-    if (!frequency.has_value()) {
-        return false;
-    }
-
-    model_.seed_frequency(*frequency);
-    if (!resync()) {
-        return false;  // the read failed, so fall back to a full fit
-    }
-    log_debug(
-        tt::LogMetal,
-        "[Real-time profiler] Device {}: reusing cached clock frequency (fit within {}s), skipping the multi-probe fit",
-        chip_id_,
-        static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(kCalibrationCacheMaxAge).count()));
-    return true;
-}
-
-bool RealtimeProfilerClockSync::calibrate() {
-    TTZoneScopedDN(RT_PROFILER, "Calibrate");
-    constexpr uint32_t kMaxConsecutiveFailures = 3;
-    // A settled clock fits to ~2ns rms; a fit across an AICLK ramp still looks well-conditioned but lands tens of
-    // ppm off, giving a residual ~1000x higher.
-    constexpr double kMaxFitResidualRmsNs = 200.0;
-    const auto host_start_time = std::chrono::steady_clock::now();
-
-    std::vector<ClockProbe> probes;
-    probes.reserve(kFitProbes);
-    std::this_thread::sleep_for(kSettleDelay);
-
-    // Warms the cold PCIe path first; otherwise it lands at one end of the span with outsized leverage over the
-    // slope.
+// Spaced so the pair spans kRateBaseline, which is the whole point: baseline_rate() is what a record's frequency comes
+// from, and until it exists a record would be published at the commanded AICLK, which is off by a percent or so. Four
+// probes over ~4ms replaces a 100-probe half-second fit whose result never reached a consumer -- the published rate is
+// the baseline's, measured continuously, not a fit taken once at bring-up.
+void RealtimeProfilerClockSync::warm_up() {
+    TTZoneScopedDN(RT_PROFILER, "ClockWarmUp");
+    constexpr int kWarmUpProbes = 4;
+    // Warms the cold PCIe path; its bracket is not representative and it is not retained.
     (void)probe();
-
-    uint32_t consecutive_failures = 0;
-    for (uint32_t attempt = 0; attempt < kFitProbes; attempt++) {
-        std::this_thread::sleep_for(kProbeInterval);
-        const auto p = best_of(kProbesPerPoint);
-        if (!p.has_value()) {
-            if (++consecutive_failures >= kMaxConsecutiveFailures) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} sync aborted after {} consecutive failed clock reads",
-                    chip_id_,
-                    consecutive_failures);
-                break;
-            }
-            continue;
+    for (int i = 0; i < kWarmUpProbes; i++) {
+        if (i != 0) {
+            std::this_thread::sleep_for(kRateBaseline / (kWarmUpProbes - 1));
         }
-        consecutive_failures = 0;
-        probes.push_back(*p);
+        resync();
     }
-
-    const std::optional<RealtimeProfilerClockModel::FitResidual> residual = model_.fit(probes, host_start_time);
-    // fit() always sets the anchor, even though the fit may be rejected below: records can drain before bring-up
-    // finishes, so the mapping must stay readable regardless.
-    if (!residual.has_value()) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} sync failed - not enough probes, using the commanded AICLK",
-            chip_id_);
-        return false;
-    }
-
-    // Checked against kFitProbes, not what was collected, to catch both an unreadable link and probes the model
-    // discarded.
-    if (residual->num_probes_fitted * 2 < kFitProbes) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} fit only {} of {} wanted sync probes; retrying rather than fitting a "
-            "frequency from what is left",
-            chip_id_,
-            residual->num_probes_fitted,
-            kFitProbes);
-        return false;
-    }
-
-    if (residual->rms_ns > kMaxFitResidualRmsNs) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} clock fit residual is {:.0f} ns rms, past the {:.0f} ns a settled clock "
-            "gives; the frequency was likely fitted across an AICLK change, so retrying",
-            chip_id_,
-            residual->rms_ns,
-            kMaxFitResidualRmsNs);
-        return false;
-    }
-
-    // Only once the fit is worth reusing: a bad one would outlive the run that produced it.
-    {
-        auto& cache = frequency_cache();
-        std::lock_guard lock(cache.mutex);
-        cache.by_chip[chip_id_] = FrequencyCache::Entry{model_.frequency(), std::chrono::steady_clock::now()};
-    }
-    log_info(
-        tt::LogMetal,
-        "[Real-time profiler] Device {} sync complete: fit {} of {} collected probes, frequency={:.6f} GHz, fit "
-        "residual rms={:.0f} ns max={:.0f} ns",
-        chip_id_,
-        residual->num_probes_fitted,
-        residual->num_probes_offered,
-        model_.frequency(),
-        residual->rms_ns,
-        residual->max_ns);
-    return true;
 }
 
 bool RealtimeProfilerClockSync::resync() {

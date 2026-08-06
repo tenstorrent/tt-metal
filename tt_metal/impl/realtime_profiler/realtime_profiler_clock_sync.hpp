@@ -31,39 +31,11 @@ struct ClockProbe {
     uint64_t device_ticks = 0;
 };
 
-// The device clock's rate in ticks per host nanosecond: regressed over the bring-up probes, then re-measured from
-// each chord the receiver closes. Records are mapped from their own pair of probes, not from here -- this rate is
-// what a chord's slope is sanity-checked against, and what stands in before the first chord exists.
-class RealtimeProfilerClockModel {
-public:
-    struct FitResidual {
-        double rms_ns = 0.0;  // in device time
-        double max_ns = 0.0;
-        size_t num_probes_fitted = 0;   // regressed after discarding wide brackets
-        size_t num_probes_offered = 0;  // handed to fit()
-    };
-
-    void seed_frequency(double frequency);
-
-    // Empty when there were fewer than two probes to regress; the seeded frequency then stands.
-    std::optional<FitResidual> fit(
-        std::span<const ClockProbe> probes, std::chrono::steady_clock::time_point host_start);
-
-    [[nodiscard]] double frequency() const { return frequency_; }
-
-    // Adopts a rate measured elsewhere -- the secant across a closed interval, which is the local AICLK. Only a
-    // non-positive rate is refused, because consumers divide by this.
-    void adopt_rate(double rate);
-
-private:
-    double frequency_ = 0.0;
-};
-
 // Reads the profiler core's cycle counter and keeps the probes a record needs to be interpolated between. Nothing
 // runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
 // push loop.
 //
-// bring_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here is
+// warm_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here is
 // shared and none of it needs a publication protocol.
 class RealtimeProfilerClockSync {
 public:
@@ -112,13 +84,17 @@ public:
     // which lands inside the bracket that is the whole error bound, so a device without a window is not profiled.
     [[nodiscard]] bool has_direct_clock_read() const { return mapped_clock_lo_ != nullptr; }
 
-    // The commanded AICLK stands if every fit attempt fails, so the mapping is usable either way.
-    void bring_up();
+    // Takes a few spaced probes so that baseline_rate() is already measurable when the first record arrives. Runs
+    // before the receiver thread starts; a device that cannot be probed keeps the commanded AICLK, which is what the
+    // fallback in place() is for.
+    void warm_up();
 
     // Takes one probe and retains it. False only when the device did not answer.
     bool resync();
 
-    [[nodiscard]] double frequency() const { return model_.frequency(); }
+    // The last rate measured across kRateBaseline, or the commanded AICLK before any has been. Only a timestamp the
+    // probe history does not surround is published at this rate; anything it does surround rides its own chord.
+    [[nodiscard]] double frequency() const { return fallback_rate_; }
 
     // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
     // them via their secant, whatever the clock did in between.
@@ -236,10 +212,6 @@ private:
     // what turns a backlog into a stall.
     [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
 
-    // False when there is no usable cache entry, or the probe failed and a full fit is needed.
-    bool try_cached_calibration();
-    // False when the fit is not worth keeping and another attempt is likely to beat it.
-    bool calibrate();
     void configure_clock_read_path();
     std::optional<ClockProbe> probe();
     // Ranked, not thresholded: under record load the whole bracket distribution shifts.
@@ -298,10 +270,7 @@ private:
     double previous_rate_noise_ = 0.0;
     std::chrono::nanoseconds last_published_sync_error_{};
 
-    double wrap_period_frequency_ = 0.0;
-    std::chrono::nanoseconds wrap_period_{};
-
-    RealtimeProfilerClockModel model_;
+    double fallback_rate_ = 0.0;
 };
 
 }  // namespace tt::tt_metal

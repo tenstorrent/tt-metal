@@ -93,9 +93,15 @@ constexpr auto kSyncCostReportInterval = std::chrono::seconds(5);
 
 constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 
-// Consecutive failed clock reads before a device is reported stalled. Single misses are common under PCIe
-// contention; only a device that answers none of them has actually stopped serving its counter.
-constexpr uint32_t kResyncFailuresBeforeStalled = 16;
+// How long a device may go without a successful clock read before its mapping is reported as aging. Stated as a
+// duration rather than a count of consecutive misses, because a miss is not a fixed amount of time any more: a device
+// is probed after every non-empty read, so misses arrive microseconds apart under load and kIdleProbeInterval apart
+// when quiet, and the same count would mean anywhere from tens of microseconds to a second.
+//
+// The number that matters is what the gap costs a record. Past the last anchor a timestamp is extrapolated, and
+// place_on_chord charges it the baseline rate's ~500ppm over the distance, so 10ms of silence is ~5us against the
+// ~0.6us a placed record normally carries. That is where the bound stops being the one the design promises.
+constexpr auto kMappingStaleAfter = std::chrono::milliseconds(10);
 
 // How often a device with nothing to drain is probed anyway. A batch is bracketed by the probe taken after its own read
 // and the one before it, so a busy device needs no cadence at all; this exists only so that the first batch after a
@@ -438,10 +444,8 @@ std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
     dev_state.next_idle_probe_at = now + kIdleProbeInterval;
     const auto before = dev_state.clock_sync->cost().busy;
-    if (!dev_state.clock_sync->resync()) {
-        ++dev_state.consecutive_resync_failures;
-    } else {
-        dev_state.consecutive_resync_failures = 0;
+    if (dev_state.clock_sync->resync()) {
+        dev_state.last_probe_success_at = now;
     }
     return dev_state.clock_sync->cost().busy - before;
 }
@@ -497,19 +501,28 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
 
 void RealtimeProfilerReceiver::report_stalled_syncs(std::chrono::steady_clock::time_point now) {
     size_t stalled = 0;
+    std::chrono::nanoseconds worst{};
     for (const auto& dev_state : devices_) {
-        stalled += dev_state.consecutive_resync_failures >= kResyncFailuresBeforeStalled;
+        if (dev_state.last_probe_success_at == std::chrono::steady_clock::time_point{}) {
+            continue;  // never probed, so there is no gap to measure yet
+        }
+        const auto silent_for = now - dev_state.last_probe_success_at;
+        if (silent_for >= kMappingStaleAfter) {
+            ++stalled;
+            worst = std::max(worst, std::chrono::duration_cast<std::chrono::nanoseconds>(silent_for));
+        }
     }
     if (stalled != 0) {
         TT_LOG_WARNING_THROTTLED(
             last_probe_timeout_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] {} of {} device(s) have not answered a clock resync for {} consecutive attempts; "
-            "their published mapping is aging and its error bound no longer covers the drift since it was placed",
+            "[Real-time profiler] {} of {} device(s) have not answered a clock read for at least {}ms (worst {}ms); "
+            "records from them are extrapolated from an aging anchor, and sync_error is charging them for it",
             stalled,
             devices_.size(),
-            kResyncFailuresBeforeStalled);
+            kMappingStaleAfter.count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(worst).count());
     }
 }
 
@@ -613,7 +626,7 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
-    bring_up_device_clocks();
+    warm_up_device_clocks();
     // Resized before being cleared, not just reserved: the pages have to be touched here, because a first-touch fault
     // on the drain thread waits on mmap_lock the same way an allocation does.
     publish_batch_.resize(kMaxSocketPagesPerRead);
@@ -780,30 +793,20 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
     return devices;
 }
 
-void RealtimeProfilerReceiver::bring_up_device_clocks() {
-    // Bring-up is ~0.5s of mostly waiting per device; running them concurrently (jthreads join at scope exit) avoids
-    // half a minute of serial wait on a large mesh.
-    std::vector<std::jthread> bring_ups;
-    bring_ups.reserve(devices_.size());
+// Serial: a warm-up is four probes over kRateBaseline, so a whole mesh costs milliseconds. It replaced a half-second
+// per-device fit, which is what the concurrency here existed for.
+void RealtimeProfilerReceiver::warm_up_device_clocks() {
     for (DeviceState& dev_state : devices_) {
-        bring_ups.emplace_back([&dev_state] {
-            // A device that throws is skipped rather than taking the others with it; its mapping keeps the seeded
-            // AICLK.
-            try {
-                dev_state.clock_sync->bring_up();
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} init sync failed, skipping device: {}",
-                    dev_state.chip_id,
-                    e.what());
-            } catch (...) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} init sync failed, skipping device",
-                    dev_state.chip_id);
-            }
-        });
+        // A device that throws is skipped rather than taking the others with it; its mapping keeps the commanded AICLK.
+        try {
+            dev_state.clock_sync->warm_up();
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} clock warm-up failed, continuing on the commanded AICLK: {}",
+                dev_state.chip_id,
+                e.what());
+        }
     }
 }
 

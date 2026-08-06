@@ -82,7 +82,8 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        uint32_t consecutive_resync_failures = 0;
+        // Zero until the first successful clock read. See kMappingStaleAfter.
+        std::chrono::steady_clock::time_point last_probe_success_at{};
         // When this device is due a probe with no records to bracket. See probe_device.
         std::chrono::steady_clock::time_point next_idle_probe_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
@@ -101,7 +102,7 @@ private:
     // Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
-    void bring_up_device_clocks();
+    void warm_up_device_clocks();
 
     // Takes one probe and returns what the clock read blocked for. Called after every non-empty read, because that
     // probe is what brackets the batch just read, and on kIdleProbeInterval otherwise so that the first batch after a

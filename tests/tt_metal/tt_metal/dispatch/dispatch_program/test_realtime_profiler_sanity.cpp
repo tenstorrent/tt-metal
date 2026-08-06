@@ -4,7 +4,6 @@
 
 // Merge-gate sanity coverage for the real-time (RT) profiler, in three layers:
 //
-//   RealtimeProfilerClockModel -- host-side clock logic, exercised directly with synthetic probes; no device needed.
 //   RealtimeProfilerSanity -- the record service and its consumer threads, driven through hand-fed rings. A MeshDevice
 //       contributes exactly one ring, so multi-ring and mid-callback behaviour is unreachable from a device test.
 //   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, clock
@@ -263,21 +262,6 @@ constexpr std::chrono::steady_clock::time_point host_instant(int64_t ns) {
     return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
 }
 
-std::vector<ClockProbe> make_fit_probes(
-    std::chrono::steady_clock::time_point start, double frequency, uint64_t ticks_at_start, size_t count) {
-    std::vector<ClockProbe> probes;
-    probes.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        const auto host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i));
-        const double elapsed_ns = static_cast<double>((host_time - start).count());
-        probes.push_back(ClockProbe{
-            .host_time = host_time,
-            .bracket = std::chrono::nanoseconds(1200),
-            .device_ticks = ticks_at_start + static_cast<uint64_t>(frequency * elapsed_ns)});
-    }
-    return probes;
-}
-
 // A probe at `at` reading a clock that has been running at `rate` ticks/ns since tick zero of the session.
 RealtimeProfilerClockSync::Anchor anchor_at(
     std::chrono::steady_clock::time_point at, double rate, std::chrono::nanoseconds bracket) {
@@ -485,38 +469,6 @@ TEST(RealtimeProfilerChordMapping, RecordLandsOnTheChordWhateverRateIsPublished)
     EXPECT_NEAR(mapped_host_ns, chord_host_ns, 1.0);
     // And nothing beyond the two placements is charged for it.
     EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
-}
-
-TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);
-    const auto start = host_instant(1'000'000'000);
-    const auto probes = make_fit_probes(start, /*frequency=*/1.35, /*ticks_at_start=*/1'000'000, /*count=*/100);
-
-    const std::optional<RealtimeProfilerClockModel::FitResidual> residual = model.fit(probes, start);
-
-    ASSERT_TRUE(residual.has_value());
-    EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
-    // Residual is bounded by truncation of device_ticks to whole cycles, i.e. under one cycle.
-    EXPECT_LT(residual->rms_ns, 1.0);
-}
-
-// Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
-TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.35);
-    const auto start = host_instant(1'000'000'000);
-    std::vector<ClockProbe> probes;
-    for (size_t i = 0; i < 8; ++i) {
-        probes.push_back(ClockProbe{
-            .host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i)),
-            .bracket = std::chrono::nanoseconds(1200),
-            .device_ticks = 100'000 - i * 1'000});
-    }
-
-    model.fit(probes, start);
-
-    EXPECT_EQ(model.frequency(), 1.35);
 }
 
 // Drives RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes exactly one record
