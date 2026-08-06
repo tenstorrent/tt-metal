@@ -1418,7 +1418,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(36, 0);
+            std::vector<uint32_t> res(40, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -1441,6 +1441,16 @@ void PerfDebugProfiler::stop() {
                 res[7],
                 kernel_profiler::PROFILER_L1_VECTOR_SIZE,
                 res[8]);
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] NoC check: runtime noc_index before Noc{{}} = {}, after = {}; "
+                "compile-time NOC_INDEX = {}, read NoC = {}{}",
+                res[36],
+                res[37],
+                res[38],
+                res[39],
+                res[37] != res[38] ? "  <<< MISMATCH: the default-arg write barrier watches the WRONG NoC"
+                                   : "  (agree -- default-arg barrier is correct)");
             // A bounded credit wait means a wedged consumer costs FRAMES, not the workload. Never let that
             // trade happen quietly: without this line a dropped frame is indistinguishable from a clean run.
             if (res[33] != 0 || res[34] != 0) {
