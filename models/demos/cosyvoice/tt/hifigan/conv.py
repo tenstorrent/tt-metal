@@ -58,6 +58,33 @@ def accurate_compute_config(device):
     )
 
 
+def prepare_weights_default(device) -> bool:
+    """Whether to hoist conv weight preparation out of the op. Off on Wormhole.
+
+    `ttnn.prepare_conv_weights` disagrees with the op's own preparation on Wormhole at
+    some input lengths -- see `TtConv1d._prepared` for the measurements and
+    `scripts/repro_conv1d_wormhole.py` for a standalone case. The disagreement reaches
+    `1e37`, which is what breaks the streamed vocoder there.
+
+    Defaulted by architecture rather than left to the caller because the failure is
+    silent: the wrong answer is a number, not an exception, and it only appears at some
+    lengths. `COSYVOICE_CONV_PREPARE` overrides in either direction so the A/B stays
+    measurable -- and so the default can be dropped in one line once upstream is fixed.
+
+    Applied to the **vocoder only**. The flow estimator uses the same `TtConv1d` and is
+    captured in a trace, which unprepared weights make impossible; disabling it there took
+    the flow stage from 0.683 to 1.723 s on n300. The vocoder is not traced, so it gives
+    up nothing but ~1 ms per call.
+    """
+    override = os.environ.get("COSYVOICE_CONV_PREPARE")
+    if override is not None:
+        return override != "0"
+    try:
+        return device.arch() != ttnn.Arch.WORMHOLE_B0
+    except Exception:  # noqa: BLE001 -- a mesh or mock device without .arch()
+        return True
+
+
 def fold_weight_norm(weight_v: torch.Tensor, weight_g: torch.Tensor, dim: int = 0) -> torch.Tensor:
     """w = g * v / ||v||, with the norm taken over every axis except `dim`."""
     norm_dims = [d for d in range(weight_v.dim()) if d != dim]
@@ -120,6 +147,15 @@ class TtConv1d:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
         self.compute_config = accurate_compute_config(device) if high_fidelity else None
+        self._verify = False  # set by the vocoder on Wormhole; see _verify_prepared
+        self._verified: set = set()
+        # On by default. The vocoder turns it off on Wormhole -- see
+        # `prepare_weights_default` and `TtHiFTGenerator.__init__`. Deliberately *not*
+        # defaulted by architecture here: this class is also the flow estimator's
+        # convolution, and those run inside a captured trace, which is the one thing
+        # unprepared weights make impossible. Setting the default here cost the flow
+        # stage 0.683 -> 1.723 s on n300 before that was noticed.
+        self._prepare = True
 
     @classmethod
     def from_module(cls, device, module: torch.nn.Module, **kw):
@@ -157,7 +193,23 @@ class TtConv1d:
 
         The prepared layout depends on the input geometry -- the sharding scheme
         follows `input_length` -- so the cache is keyed on it.
+
+        **`bit-identical` is true on Blackhole and false on Wormhole.** At some input
+        lengths the two paths disagree -- by a few percent at `input_length` 8321 and by
+        `1e37` at 8193, for the vocoder's `Conv1d(128 -> 128, k=11, pad=5)`. The `1e37`
+        is what breaks streaming there: `sin()` of it is `inf`, the vocoder's magnitude
+        spectrum rails at its `1e2` clip, and the waveform saturates. Blackhole agrees
+        exactly at every length tested.
+
+        `COSYVOICE_CONV_PREPARE=0` takes the op's own preparation instead, which measured
+        correct at every length on both parts. It is the default on Wormhole for that
+        reason, and the cost is ~1 ms per call at these sizes -- paid only by the vocoder,
+        which is the only user of this class and is not traced, so the traceability the
+        preparation exists for is not being given up. Revisit when the upstream defect is
+        fixed; `scripts/probe_prepared_weights.py` is the check.
         """
+        if not self._prepare:
+            return self.weight, self.bias
         key = (input_length, batch_size)
         if key in self._prep_cache:
             return self._prep_cache[key]
@@ -196,6 +248,59 @@ class TtConv1d:
         self._prep_cache[key] = (w, b)
         return w, b
 
+    def _verify_prepared(self, x, out, input_length: int, batch_size: int):
+        """Check this geometry's prepared weight against the op's own, once.
+
+        Disabling preparation everywhere on Wormhole is correct and costs the vocoder
+        `0.084 -> 0.181 s` -- but only some geometries are affected, so most of that is
+        paid for nothing. Running the convolution both ways the first time a geometry is
+        seen, and keeping the prepared weight only where the two agree, is precise instead:
+        one extra call per (length, batch) per conv, amortised to nothing over an
+        utterance, against ~1 ms on every call thereafter.
+
+        The comparison is `max|out|` rather than a full PCC because the failure is not
+        subtle where it matters -- the observed disagreements run from 6x to 1e37 -- and a
+        full comparison would mean a second device-to-host read of the whole activation.
+        """
+        key = (input_length, batch_size)
+        self._verified.add(key)
+        ref, _ = self._conv(x, self.weight, self.bias, input_length, batch_size)
+        a = float(ttnn.to_torch(out).float().abs().max())
+        b = float(ttnn.to_torch(ref).float().abs().max())
+        ok = a == a and abs(a - b) <= 0.02 * max(b, 1e-9)  # a != a catches NaN/inf
+        if ok:
+            ttnn.deallocate(ref)
+            return out
+        self._prep_cache[key] = (self.weight, self.bias)
+        logger.warning(
+            f"prepare_conv_weights disagrees at Conv1d({self.in_channels}->{self.out_channels}, "
+            f"k={self.kernel_size}) length {input_length}: max|out| {a:.4g} vs {b:.4g}; "
+            "using the op's own preparation for this geometry"
+        )
+        ttnn.deallocate(out)
+        return ref
+
+    def _conv(self, x, weight, bias, input_length: int, batch_size: int):
+        return ttnn.conv1d(
+            input_tensor=x,
+            weight_tensor=weight,
+            bias_tensor=bias,
+            device=self.device,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_length=input_length,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+            conv_config=self.conv_config,
+            compute_config=self.compute_config,
+            dtype=self.dtype,
+            return_output_dim=True,
+        )
+
     def __call__(self, x, input_length: int, batch_size: int = 1):
         weight, bias = self._prepared(x, input_length, batch_size)
         out, out_length = ttnn.conv1d(
@@ -217,6 +322,8 @@ class TtConv1d:
             dtype=self.dtype,
             return_output_dim=True,
         )
+        if self._verify and weight is not self.weight and (input_length, batch_size) not in self._verified:
+            out = self._verify_prepared(x, out, input_length, batch_size)
         # ttnn.conv1d returns the flattened conv layout, not [N, L, C]. Restoring
         # the documented shape here rather than at each call site is what makes
         # `ttnn.permute(x, (0, 2, 1))` and the residual adds downstream legal --
