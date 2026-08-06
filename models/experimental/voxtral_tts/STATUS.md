@@ -3144,6 +3144,46 @@ buys nothing here either. `k_chunk` is the knob, exactly as [gpt-21] says.
 **Why this one survived and `wo`'s did not** is unverified: plausibly `wo` sits between two large
 matmuls that hide it while `sdpa_decode` has less to overlap with. Measured, not established.
 
+### 6.47 — p150: in-place elementwise, +0.929 ms/step. Residual-as-bias rejected
+
+§6.45's map put five trivial ops — two residual adds, two norms and one multiply — at **8.3
+ms/frame, 39% of the step**, every one of them at the ~65 µs launch floor rather than doing any
+arithmetic. Two attacks on that, one of which worked.
+
+**SHIPPED — in-place, +0.929 ms/step, bit-identical.** `multiply_` and both `add_`. §6.37
+measured exactly this on the N150 at **+0.001 ms**, i.e. indistinguishable from nothing. It is
+~1000x that here, because in-place removes an ALLOCATION rather than a launch, and the allocator
+is roughly 12 of the 65 µs. Frame counts reproduce 68/452/493 on cases 0/2/3, so it is bit-exact
+end to end.
+
+**REJECTED — residual-as-bias.** In decode M=1, so the residual is exactly a row-vector bias and
+`linear(a, wo, bias=x)` is expressible and bit-identical. Against a 0.062 ms noise floor:
+
+| arm | ms/step | vs shipped |
+|---|---|---|
+| **in-place only ← SHIPS** | **20.405** | **+0.929** |
+| both bias + in-place | 21.105 | +0.229 |
+| w2 bias | 21.257 | +0.076 |
+| wo bias | 21.264 | +0.069 |
+| shipped | 21.333 | — |
+| both bias | 21.481 | −0.148 |
+
+§6.27's N150 verdict (w2's add already free, wo's worth 4 µs) therefore stands — and the two
+ideas are **anti-complementary**: bias removes the adds that in-place accelerates, so the
+combination is worth a fifth of in-place alone.
+
+**⚠ THE PREDICTION THAT MOTIVATED THIS WAS WRONG BY ~48x, AND IT IS THE THIRD TIME TODAY.** The
+map showed each add at 65 µs isolated, so I estimated residual-as-bias at "up to 3.35 ms/frame".
+It delivered 0.07. That is precisely the inference §6.43 was written to forbid — `wo` showed
+1.69x isolated and zero on the step — and I made it anyway, two sections later. **Isolated op
+cost predicts nothing about what removing the op is worth. Rank with the map, decide on the
+step**, every time.
+
+**One idea that is NOT available, recorded so it is not proposed again.** `u = g * w3_out` cannot
+be folded into either matmul: it is an elementwise product of two separate matmul outputs. The
+only op that eliminates it is `ttnn.swiglu`, which requires w1|w3 fused, and §6.42 measured that
+at 21–23 µs/layer worse at this exact shape. The multiply can only be made cheaper, not removed.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

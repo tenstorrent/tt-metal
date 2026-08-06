@@ -1906,6 +1906,37 @@ warns is not a correctness test.
  was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
 ```
 
+### [gpt-25] `_mlp` / `_layer_step` — in-place elementwise, worth 0.929 ms/step
+
+The three elementwise ops in the MLP tail — `multiply(g, w3_out)` and both residual adds — run
+in place. **+0.929 ms/step, bit-identical**, and the frame-count A/B confirms it end to end
+(cases 0/2/3 reproduce 68/452/493 exactly).
+
+**§6.37 measured this at +0.001 ms on the N150**, i.e. nothing, and it is ~1000x that here. The
+reason is that in-place removes an ALLOCATION, not a launch: on Blackhole an op costs ~65 us
+against the N150's ~20 (§6.45), and roughly 12 us of that is the allocator. Whatever the parent
+branch measured as noise is a real line item on this chip.
+
+**SAFETY, since in-place is where aliasing bugs live.** `add_(x, …)` mutates the layer input,
+which is safe at both sites because `x` is dead the moment the layer returns — layer 0's comes
+from a fresh `from_torch` per frame, layers 1–25's from the previous layer — and `_norm(x, …)` in
+`_layer_step` is evaluated as an argument, i.e. BEFORE `_mlp` can mutate anything.
+`multiply_(g, …)` mutates a fresh matmul output that has no other consumer. `_mlp` is shared with
+prefill and the same argument holds there.
+
+**A HARNESS TRAP THIS WALKED INTO, and §6.37 documents the same one.** The first measurement
+showed in-place at maxabs 2.4e+01 — apparently broken. It was the benchmark: the timing loop
+reused one `x0` across iterations, so layer 0's `add_` ate it. §6.37 hit this from the other side
+and wrapped the operands in `ttnn.clone`, which made in-place look SLOWER. Clone the input per
+iteration, not the operands.
+
+**RESIDUAL-AS-BIAS WAS TESTED IN THE SAME PASS AND REJECTED.** `linear(a, wo, bias=x)` is
+expressible (decode has M=1, so the residual is exactly a row-vector bias) and bit-identical, but
+worth +0.069 ms for `wo` and +0.076 for `w2` against a 0.062 ms noise floor — and doing BOTH is
+−0.148, i.e. worse than shipped. It is also anti-complementary with in-place: bias removes the
+very adds that in-place accelerates, so the combination (+0.229) is worse than in-place alone
+(+0.929). §6.27's N150 verdict therefore stands here, for a different reason. STATUS.md §6.47.
+
 ### [gpt-21] `_SDPA_PRG` — sdpa_decode's program config, and why only a position sweep is safe
 
 ```text
