@@ -1,5 +1,7 @@
 transformer_config:
   model_type: "deepseek"
+  # Full GPT-2/DeepSeek vocab; pair with tokenized data (data/shakespeare_deepseek.yaml).
+  vocab_size: 102400
   embedding_dim: 1536
   num_blocks: 16
   num_heads: 12
