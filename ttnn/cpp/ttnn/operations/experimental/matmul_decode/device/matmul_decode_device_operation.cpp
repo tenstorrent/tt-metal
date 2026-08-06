@@ -6,6 +6,7 @@
 
 #include "tt-metalium/math.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tt-metalium/work_split.hpp"
 
@@ -33,17 +34,10 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    if (operation_attributes.global_cb.has_value()) {
-        TT_FATAL(
-            !operation_attributes.partial_width_sharded,
-            "matmul_decode: global_cb (tensor prefetcher weights) is only supported by the full width-sharded "
-            "program factory, but partial_width_sharded was requested.");
-        TT_FATAL(
-            !(input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1),
-            "matmul_decode: global_cb (tensor prefetcher weights) is only supported by the full width-sharded "
-            "program factory, but a batched (rank-4, batch={}) activation selects the batched factory.",
-            operation_attributes.batch);
-    }
+    // Mirrors select_program_factory so the geometry validated here is always the geometry the
+    // chosen factory will consume.
+    const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
+    const bool partial = !batched && operation_attributes.partial_width_sharded;
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
@@ -53,8 +47,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.memory_config().memory_layout());
     if (operation_attributes.global_cb.has_value()) {
         // Prefetcher-fed weights live in DRAM as an ND-sharded (receiver-contiguous) tensor:
-        // one contiguous [K, N/num_receivers] slab per receiver core. There is no legacy
-        // shard spec on such a tensor, so the receiver grid comes from the GCB.
+        // one contiguous slab per receiver core, whose shape depends on the factory that will
+        // consume it. There is no legacy shard spec on such a tensor, so the receiver grid
+        // comes from the GCB.
         TT_FATAL(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
             "matmul_decode with global_cb requires input tensor B to be ND_SHARDED, but got {}",
@@ -63,12 +58,8 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "matmul_decode with global_cb requires input tensor B to live in DRAM (the prefetcher reads DRAM), "
             "but it is in L1");
-        const uint32_t num_receivers = gcb_num_receivers(*operation_attributes.global_cb);
-        TT_FATAL(
-            num_receivers > 0 && operation_attributes.N % static_cast<int>(num_receivers) == 0,
-            "matmul_decode with global_cb requires N ({}) to be divisible by the GCB receiver count ({})",
-            operation_attributes.N,
-            num_receivers);
+        const int num_receivers = static_cast<int>(gcb_num_receivers(*operation_attributes.global_cb));
+        TT_FATAL(num_receivers > 0, "matmul_decode with global_cb requires the GCB to have at least one receiver core");
         // Note: the NdShardSpec lives on the Tensor, not on the MemoryConfig, and the shard count
         // comes from the buffer's BufferDistributionSpec -- same accessors the recv-contig weight
         // validator in ttnn/core/global_circular_buffer.cpp uses.
@@ -80,22 +71,63 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         const auto& bds = input_tensor_b.buffer()->buffer_distribution_spec();
         TT_FATAL(
             bds.has_value(), "matmul_decode with global_cb requires input tensor B to have a BufferDistributionSpec");
-        const uint32_t num_shards = static_cast<uint32_t>(bds->num_shards());
+        const int num_shards = static_cast<int>(bds->num_shards());
         TT_FATAL(
             num_shards == num_receivers,
             "matmul_decode with global_cb requires one weight shard per GCB receiver, but the weight has {} shards "
             "and the GCB has {} receivers",
             num_shards,
             num_receivers);
-        TT_FATAL(
-            static_cast<int>(nd->shard_shape[-2]) == operation_attributes.K &&
-                static_cast<int>(nd->shard_shape[-1]) == operation_attributes.N / static_cast<int>(num_receivers),
-            "matmul_decode with global_cb requires each weight shard to be [K, N/num_receivers] = [{}, {}], but got "
-            "[{}, {}]",
-            operation_attributes.K,
-            operation_attributes.N / static_cast<int>(num_receivers),
-            nd->shard_shape[-2],
-            nd->shard_shape[-1]);
+
+        const int K = operation_attributes.K;
+        const int N = operation_attributes.N;
+        const int slab_h = static_cast<int>(nd->shard_shape[-2]);
+        const int slab_w = static_cast<int>(nd->shard_shape[-1]);
+        if (batched) {
+            const int b_blocks = operation_attributes.b_blocks;
+            const int n_blocks = operation_attributes.n_blocks;
+            TT_FATAL(
+                b_blocks > 0 && n_blocks > 0 && operation_attributes.batch % b_blocks == 0 && N % n_blocks == 0,
+                "batched matmul_decode with global_cb requires b_blocks ({}) and n_blocks ({}) to be positive "
+                "divisors of the batch ({}) and N ({})",
+                b_blocks,
+                n_blocks,
+                operation_attributes.batch,
+                N);
+            const int Bc = operation_attributes.batch / b_blocks;
+            const int Nc = N / n_blocks;
+            TT_FATAL(
+                slab_h == Bc * K && slab_w == Nc,
+                "batched matmul_decode with global_cb requires each weight shard to be [Bc*K, Nc] = [{}, {}], but "
+                "got [{}, {}]",
+                Bc * K,
+                Nc,
+                slab_h,
+                slab_w);
+        } else if (partial) {
+            TT_FATAL(
+                slab_h > 0 && slab_w > 0 && K % slab_h == 0 && N % slab_w == 0,
+                "partial_width_sharded matmul_decode with global_cb requires each weight shard to be [Kc, Nc] with "
+                "Kc dividing K ({}) and Nc dividing N ({}), but got [{}, {}]",
+                K,
+                N,
+                slab_h,
+                slab_w);
+        } else {
+            TT_FATAL(
+                N % num_receivers == 0,
+                "matmul_decode with global_cb requires N ({}) to be divisible by the GCB receiver count ({})",
+                N,
+                num_receivers);
+            TT_FATAL(
+                slab_h == K && slab_w == N / num_receivers,
+                "full width-sharded matmul_decode with global_cb requires each weight shard to be [K, "
+                "N/num_receivers] = [{}, {}], but got [{}, {}]",
+                K,
+                N / num_receivers,
+                slab_h,
+                slab_w);
+        }
     } else {
         TT_FATAL(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -109,7 +141,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape()[-2] == operation_attributes.M,
         "Input tensor A must have the same M dimension as the operation attributes");
 
-    if (input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
+    if (batched) {
         const int batch = operation_attributes.batch;
         const int b_blocks = operation_attributes.b_blocks;
         const int n_blocks = operation_attributes.n_blocks;
@@ -160,37 +192,41 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             a_shard.shape[1],
             tt::constants::TILE_WIDTH);
 
-        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
-        const uint32_t b_shard_h = b_shard.shape[0];
-        const uint32_t b_shard_w = b_shard.shape[1];
-        TT_FATAL(
-            b_shard_h % tt::constants::TILE_HEIGHT == 0 && b_shard_w % tt::constants::TILE_WIDTH == 0,
-            "batched matmul_decode requires B shard dims [{}, {}] to be tile-aligned (tile {}x{})",
-            b_shard_h,
-            b_shard_w,
-            tt::constants::TILE_HEIGHT,
-            tt::constants::TILE_WIDTH);
-        TT_FATAL(
-            b_shard_h == static_cast<uint32_t>(Bc) * operation_attributes.K,
-            "batched matmul_decode expects B shard height {} to equal Bc * K = {} * {} = {}",
-            b_shard_h,
-            Bc,
-            operation_attributes.K,
-            Bc * operation_attributes.K);
-        TT_FATAL(
-            b_shard_w == static_cast<uint32_t>(Nc),
-            "batched matmul_decode expects B shard width {} to equal Nc = N / n_blocks = {}",
-            b_shard_w,
-            Nc);
+        // A prefetcher weight carries no legacy shard spec; the GCB branch above has already
+        // checked the equivalent slab shape and block count against the receiver grid.
+        if (!operation_attributes.global_cb.has_value()) {
+            const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
+            const uint32_t b_shard_h = b_shard.shape[0];
+            const uint32_t b_shard_w = b_shard.shape[1];
+            TT_FATAL(
+                b_shard_h % tt::constants::TILE_HEIGHT == 0 && b_shard_w % tt::constants::TILE_WIDTH == 0,
+                "batched matmul_decode requires B shard dims [{}, {}] to be tile-aligned (tile {}x{})",
+                b_shard_h,
+                b_shard_w,
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH);
+            TT_FATAL(
+                b_shard_h == static_cast<uint32_t>(Bc) * operation_attributes.K,
+                "batched matmul_decode expects B shard height {} to equal Bc * K = {} * {} = {}",
+                b_shard_h,
+                Bc,
+                operation_attributes.K,
+                Bc * operation_attributes.K);
+            TT_FATAL(
+                b_shard_w == static_cast<uint32_t>(Nc),
+                "batched matmul_decode expects B shard width {} to equal Nc = N / n_blocks = {}",
+                b_shard_w,
+                Nc);
 
-        const int num_B_cores = static_cast<int>(b_shard.grid.num_cores());
-        TT_FATAL(
-            num_B_cores == b_blocks * n_blocks,
-            "batched matmul_decode expects B sharded across b_blocks * n_blocks = {} * {} = {} cores, but got {}",
-            b_blocks,
-            n_blocks,
-            b_blocks * n_blocks,
-            num_B_cores);
+            const int num_B_cores = static_cast<int>(b_shard.grid.num_cores());
+            TT_FATAL(
+                num_B_cores == b_blocks * n_blocks,
+                "batched matmul_decode expects B sharded across b_blocks * n_blocks = {} * {} = {} cores, but got {}",
+                b_blocks,
+                n_blocks,
+                b_blocks * n_blocks,
+                num_B_cores);
+        }
 
         TT_FATAL(
             input_tensor_b.logical_shape()[-2] == Bc * operation_attributes.K,
@@ -210,7 +246,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         return;
     }
 
-    if (operation_attributes.partial_width_sharded) {
+    if (partial) {
         const auto& a_tile = input_tensor_a.tensor_spec().tile();
         const uint32_t a_tile_height = a_tile.get_height();
         const int M_tiles = tt::div_up(operation_attributes.M, static_cast<int>(a_tile_height));
@@ -238,9 +274,13 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             a_shard.shape[1],
             tt::constants::TILE_WIDTH);
 
-        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
-        const uint32_t Kc = b_shard.shape[0];
-        const uint32_t Nc = b_shard.shape[1];
+        const bool b_from_gcb = operation_attributes.global_cb.has_value();
+        // A prefetcher weight carries no legacy shard spec, so its [Kc, Nc] slab comes from the ND
+        // shard shape the GCB branch above validated.
+        const uint32_t Kc = b_from_gcb ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
+                                       : input_tensor_b.memory_config().shard_spec().value().shape[0];
+        const uint32_t Nc = b_from_gcb ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-1])
+                                       : input_tensor_b.memory_config().shard_spec().value().shape[1];
         TT_FATAL(
             Kc % tt::constants::TILE_HEIGHT == 0 && Nc % tt::constants::TILE_WIDTH == 0,
             "partial_width_sharded matmul_decode requires B shard dims [{}, {}] to be tile-aligned (tile {}x{})",
@@ -275,29 +315,34 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             Nc);
         const int N_blocks = N_tiles / Nc_tiles;
 
-        const int num_B_cores = static_cast<int>(b_shard.grid.num_cores());
-        TT_FATAL(
-            num_B_cores == K_blocks * N_blocks,
-            "partial_width_sharded matmul_decode expects B sharded across K_blocks * N_blocks = {} * {} = {} "
-            "cores, but got {}",
-            K_blocks,
-            N_blocks,
-            K_blocks * N_blocks,
-            num_B_cores);
+        // The prefetcher weight is a plain [K, N] tensor cut into slabs by its ND shard spec, not
+        // the K-block-folded L1 layout, and its block count was checked against the GCB above.
+        if (!b_from_gcb) {
+            const int num_B_cores =
+                static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
+            TT_FATAL(
+                num_B_cores == K_blocks * N_blocks,
+                "partial_width_sharded matmul_decode expects B sharded across K_blocks * N_blocks = {} * {} = {} "
+                "cores, but got {}",
+                K_blocks,
+                N_blocks,
+                K_blocks * N_blocks,
+                num_B_cores);
 
-        TT_FATAL(
-            input_tensor_b.logical_shape()[-2] == static_cast<int>(Kc),
-            "partial_width_sharded matmul_decode expects B logical height {} to equal the shard height Kc={}",
-            input_tensor_b.logical_shape()[-2],
-            Kc);
-        TT_FATAL(
-            input_tensor_b.logical_shape()[-1] == K_blocks * operation_attributes.N,
-            "partial_width_sharded matmul_decode expects B logical width {} to equal K_blocks * N = {} * {} = {} "
-            "(B is reshaped/permuted so the K-blocks fold into the width)",
-            input_tensor_b.logical_shape()[-1],
-            K_blocks,
-            operation_attributes.N,
-            K_blocks * operation_attributes.N);
+            TT_FATAL(
+                input_tensor_b.logical_shape()[-2] == static_cast<int>(Kc),
+                "partial_width_sharded matmul_decode expects B logical height {} to equal the shard height Kc={}",
+                input_tensor_b.logical_shape()[-2],
+                Kc);
+            TT_FATAL(
+                input_tensor_b.logical_shape()[-1] == K_blocks * operation_attributes.N,
+                "partial_width_sharded matmul_decode expects B logical width {} to equal K_blocks * N = {} * {} = {} "
+                "(B is reshaped/permuted so the K-blocks fold into the width)",
+                input_tensor_b.logical_shape()[-1],
+                K_blocks,
+                operation_attributes.N,
+                K_blocks * operation_attributes.N);
+        }
         return;
     }
 
@@ -317,6 +362,24 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_b.logical_shape()[-1] == operation_attributes.N,
         "Input tensor B must have the same N dimension as the operation attributes");
+}
+
+ttsl::hash::hash_t MatmulDecodeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // GlobalCircularBuffer hashes on (sender_receiver_core_mapping, size, buffer_type) and not on its
+    // address, so two identically shaped GCBs are indistinguishable to the default reflection hash.
+    // The program bakes in this GCB's addresses, so without folding an address in, a second call with
+    // a different same-shaped GCB reuses a program pointing at the first one and hangs waiting for
+    // credits written into the other buffer. Hashing `attributes` and `tensor_args` wholesale keeps
+    // this additive: both still cover every member (and any added later) exactly as the default hash
+    // did. Both GCB addresses are folded in because the program depends on both, and the config and
+    // data buffers are independent allocations -- a replacement GCB could reuse one address without
+    // reusing the other.
+    const auto gcb_identity =
+        attributes.global_cb.has_value()
+            ? std::make_pair(attributes.global_cb->config_address(), attributes.global_cb->buffer_address())
+            : std::make_pair(tt::tt_metal::DeviceAddr{0}, tt::tt_metal::DeviceAddr{0});
+    return tt::tt_metal::operation::hash_operation<MatmulDecodeDeviceOperation>(attributes, gcb_identity, tensor_args);
 }
 
 MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::compute_output_specs(
@@ -348,13 +411,25 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
                                              : input_tensor_b.memory_config().shard_spec().value().grid;
     int output_num_cores = output_core_range_set.num_cores();
     if (operation_attributes.partial_width_sharded) {
-        const auto& b_shard_spec = input_tensor_b.memory_config().shard_spec().value();
+        const int Nc = operation_attributes.global_cb.has_value()
+                           ? static_cast<int>(input_tensor_b.nd_shard_spec().value().shard_shape[-1])
+                           : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().shape[1]);
         const int N_tiles = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
-        const int Nc_tiles = static_cast<int>(b_shard_spec.shape[1]) / tt::constants::TILE_WIDTH;
+        const int Nc_tiles = Nc / tt::constants::TILE_WIDTH;
         const int N_blocks = N_tiles / Nc_tiles;
         output_num_cores = N_blocks;
-        output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
-            output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+        if (operation_attributes.global_cb.has_value()) {
+            // The factory reduces the K-partials onto the k_idx == 0 row of the receiver grid --
+            // its first N_blocks cores in row-major order -- and requires every one of them to be
+            // in the output grid. A grid anchored at (0, 0) only satisfies that when the receiver
+            // grid happens to be anchored there too.
+            const auto base_cores =
+                tt::tt_metal::corerange_to_cores(output_core_range_set, output_num_cores, /*row_wise=*/true);
+            output_core_range_set = CoreRangeSet(base_cores);
+        } else {
+            output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
+                output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+        }
     }
     int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     const uint32_t shard_height =
@@ -390,6 +465,18 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
+    using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
+
+    // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
+    // weight's ND shard shape on the GCB path, so this precondition has to sit ahead of both --
+    // otherwise a legacy-sharded weight dies there with a bare bad_optional_access.
+    if (global_cb.has_value()) {
+        TT_FATAL(
+            input_tensor_b.nd_shard_spec().has_value(),
+            "matmul_decode with global_cb requires input tensor B to be ND_SHARDED (receiver-contiguous, one shard "
+            "per receiver), but its memory layout is {} and it carries no NdShardSpec",
+            input_tensor_b.memory_config().memory_layout());
+    }
 
     if (input_tensor_a.logical_shape().rank() == 4) {
         const int batch = input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1];
@@ -423,8 +510,12 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 weight_width,
                 b_blocks);
             const int N = weight_width / b_blocks;
+            // A prefetcher weight is ND-sharded in DRAM and carries no legacy shard spec, so the
+            // weight-holding core count is the GCB receiver count.
             const int num_B_cores =
-                static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
+                global_cb.has_value()
+                    ? static_cast<int>(gcb_num_receivers(*global_cb))
+                    : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
             TT_FATAL(
                 num_B_cores % b_blocks == 0,
                 "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",

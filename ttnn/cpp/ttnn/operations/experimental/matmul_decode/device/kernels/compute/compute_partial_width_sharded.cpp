@@ -14,6 +14,11 @@ using std::uint32_t;
 
 // Phase 1: partial matmul per K-block. Phase 2 (base core): sum K_blocks partials.
 // full_in0 is sender-major; matmul_block does not reduce over kt_dim.
+//
+// With ENABLE_GLOBAL_CB the in1 tiles arrive through a GCB-backed circular buffer instead of a
+// globally-allocated one, so this kernel must tell the reader (via the sync CB) that the GCB
+// page can be released. That happens as soon as phase 1 ends: phase 2 never touches in1, and
+// holding the page across it would serialize the GCB ring behind the cross-core reduction.
 using namespace ckernel;
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -22,6 +27,7 @@ void kernel_main() {
     constexpr uint32_t Nc_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(6);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
@@ -47,6 +53,9 @@ void kernel_main() {
     CircularBuffer out_cb(out_cb_id);
     CircularBuffer partial_cb(partial_cb_id);
     CircularBuffer reduce_cb(reduce_cb_id);
+#ifdef ENABLE_GLOBAL_CB
+    CircularBuffer sync_cb(sync_cb_id);
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(full_in0_cb_id, in1_cb_id, partial_cb_id);
 
@@ -77,6 +86,12 @@ void kernel_main() {
     }
     partial_cb.push_back(block_num_tiles);
     full_in0_cb.pop_front(full_in0_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
+    // Every in1 tile has been read; release the local alias and let the reader ack the GCB page.
+    in1_cb.pop_front(in1_num_tiles);
+    sync_cb.reserve_back(1);
+    sync_cb.push_back(1);
+#endif
 
     if (is_base == 0) {
         return;

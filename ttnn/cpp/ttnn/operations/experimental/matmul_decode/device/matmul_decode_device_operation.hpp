@@ -75,6 +75,13 @@ struct MatmulDecodeDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    // The default reflection hash cannot tell two identically shaped GlobalCircularBuffers apart
+    // (GlobalCircularBuffer::attribute_names carries no address), so the GCB's addresses are folded
+    // in on top of everything the default hash already covered. See the .cpp for why that matters.
+    // Note that declaring this opts the op out of attribute-level canonical-key collision
+    // resolution, so cache separation rests on the hash alone.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
