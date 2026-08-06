@@ -107,6 +107,25 @@ inline bool reserve_pages_bounded(
     return true;
 }
 
+// Bounded noc_async_write_barrier(). Same predicate the real barrier spins on
+// (ncrisc_noc_nonposted_writes_flushed: hardware NIU_MST_WR_ACK_RECEIVED == software
+// noc_nonposted_writes_acked), but it gives up instead of hanging.
+//
+// This barrier is NOT optional bookkeeping -- it is what makes staging reuse safe. The staged span is
+// overwritten by the next batch's reads, so continuing past an unflushed barrier would let staging be
+// rewritten while writes are still in flight, i.e. trade a hung drainer for silently corrupt capture. So
+// the caller must treat `false` as "egress is dead": stop shipping entirely and leave the loop, never as
+// "carry on". That is safe precisely because it only ever fires when the consumer has already gone away.
+inline bool write_barrier_bounded(uint64_t deadline) {
+    while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+        invalidate_l1_cache();
+        if (get_timestamp() >= deadline) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void kernel_main() {
     constexpr uint32_t kStageBase = get_compile_time_arg_val(0);  // slot 0's PREFIX (not its span)
     constexpr uint32_t kNStage = get_compile_time_arg_val(1);     // cores per batch = max cores per push
@@ -233,6 +252,9 @@ void kernel_main() {
     uint32_t sweeps_idle = 0;
     uint32_t max_sweep = 0;
     uint32_t max_reserve = 0;
+    // Set when a bounded write barrier expires: egress is dead, so STOP SHIPPING for good.
+    // Never means "continue anyway" -- staging reuse depends on that barrier having flushed.
+    bool egress_dead = false;
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
     // ~50 ms at 1.35 GHz. Enormously above anything healthy (worst observed credit wait is ~0.1 us), so it
@@ -243,6 +265,11 @@ void kernel_main() {
     // copied, nothing is assembled.
     auto ship_run = [&](uint32_t start, uint32_t count) {
         if (count == 0) {
+            return;
+        }
+        if (egress_dead) {
+            *phase = kPhDropped;
+            dropped_frames += count;
             return;
         }
         const uint32_t nbytes = count * kSlotBytes;
@@ -293,7 +320,7 @@ void kernel_main() {
     };
 
     const uint64_t t_start = get_timestamp();
-    while (sweeps < kMaxSweeps && *stop == 0) {
+    while (sweeps < kMaxSweeps && *stop == 0 && !egress_dead) {
         sweeps++;
         *hb = sweeps;
         *phase = kPhasePoll;
@@ -386,8 +413,12 @@ void kernel_main() {
             if (gen_shipped[gen]) {
                 const uint64_t t_b0 = get_timestamp();
                 *phase = kPhBar1;
-                noc_async_write_barrier();
+                const bool flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles);
                 c_barrier += get_timestamp() - t_b0;
+                if (!flushed) {
+                    egress_dead = true;
+                    break;
+                }
                 gen_shipped[gen] = false;
             }
 
@@ -425,7 +456,9 @@ void kernel_main() {
         {
             const uint64_t t_b0 = get_timestamp();
             *phase = kPhBar2;
-            noc_async_write_barrier();
+            if (!write_barrier_bounded(t_b0 + kCreditWaitCycles)) {
+                egress_dead = true;
+            }
             c_barrier += get_timestamp() - t_b0;
         }
 
@@ -447,9 +480,14 @@ void kernel_main() {
         }
     }
 
-    socket_barrier(sender);
+    // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
+    // like the write barrier did. Skip both when we already know the consumer is gone.
+    const bool consumer_gone = egress_dead || credit_timeouts != 0;
+    if (!consumer_gone) {
+        socket_barrier(sender);
+    }
     *phase = kPhBarTail;
-    noc_async_write_barrier();
+    (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
     const uint64_t t_end = get_timestamp();
 
     const uint64_t cycles = t_end - t_start;
@@ -489,13 +527,14 @@ void kernel_main() {
     out[32] = static_cast<uint32_t>(c_wr_notify >> 32);
     out[33] = credit_timeouts;
     out[34] = dropped_frames;
+    out[35] = egress_dead ? 1u : 0u;
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
     // host FIFO the credit wait just gave up on, so on a dead consumer it blocks and the kernel never
     // exits -- which strands a resident drainer on the core and forces a card reset before the next run.
     // Skipping it costs nothing: the socket is being torn down anyway.
-    if (credit_timeouts == 0) {
+    if (!consumer_gone) {
         update_socket_config(sender);
     }
 

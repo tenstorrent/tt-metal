@@ -1418,7 +1418,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(35, 0);
+            std::vector<uint32_t> res(36, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -1448,9 +1448,13 @@ void PerfDebugProfiler::stop() {
                     tt::LogMetal,
                     "[perf-debug profiler] CREDIT WAIT TIMED OUT {}x -- dropped {} frames to keep the "
                     "workload running. The host consumer stopped acking (see the writer WALL TIMEOUT above); "
-                    "capture for those frames is lost but the producers were never blocked.",
+                    "capture for those frames is lost but the producers were never blocked.{}",
                     res[33],
-                    res[34]);
+                    res[34],
+                    res[35] != 0 ? " EGRESS DECLARED DEAD: a write barrier expired, so the drainer stopped "
+                                   "shipping and left its loop rather than reuse staging with writes still in "
+                                   "flight."
+                                 : "");
             }
             // Per-phase, so a lifetime average can never again hide that empty and loaded sweeps differ by
             // orders of magnitude. `reserve` is the host FIFO credit wait: if that dominates, the DRISC is not
