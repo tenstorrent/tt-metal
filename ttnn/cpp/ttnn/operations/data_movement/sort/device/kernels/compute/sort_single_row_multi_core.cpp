@@ -275,9 +275,10 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                // Reconfig packer to bf16 before value untilize: the preceding
-                                // index pack_tile leaves the packer in uint32 format, and
-                                // pack_untilize_init alone does not fully reset that state.
+                                // Reconfig packer to the value-output CB format before value
+                                // untilize: the preceding index pack_tile leaves the packer in
+                                // uint32 format, and pack_untilize_init alone does not fully
+                                // reset that state.
                                 binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
                                 // Untilize tiles one at a time so each tile is written into its own
                                 // TILE_H output pages (block_rt_dim>1 would stall both pointers).
@@ -291,7 +292,7 @@ void kernel_main() {
                                 }
                                 pack_untilize_uninit(rm_output_value_cb_id);
                                 binary_op_init_common(
-                                    rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
+                                    rm_input_index_cb_id, rm_input_index_cb_id, rm_output_index_cb_id);
 
                                 pack_untilize_init<1>(index_tensor_output_cb_id, rm_output_index_cb_id);
                                 index_tensor_output_dfb.wait_front(2);
