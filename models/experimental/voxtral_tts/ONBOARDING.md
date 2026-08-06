@@ -299,11 +299,31 @@ directly unblocks the biggest open lead.
   revisited (e.g. the 7→5 Euler-step question) these are the nearest neighbours in-tree. Not examined
   in depth.
 
+- **`models/common/tests/modules/attention/profiling/`** — uses trace capture for device-side timing
+  without host dispatch. **Checked against our method, and ours holds**: on `_solve`, eager 19.145 ms vs
+  traced 19.230, so host dispatch is **0%** of what the probes here measure (`§6.38`). Every
+  `perf_counter`-around-`synchronize_device` number in this project is genuine device time. The full
+  tracy op profiler (`tools/tracy/process_ops_logs.py`, `python -m tracy -r -m …`) would give per-op
+  device times — the right tool if `§6.33`'s unexplained whole-block gain is ever chased — but it needs
+  `websockets` (absent from the venv) and probably a profiler-enabled rebuild.
+
 Checked and **not** reusable: `models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/` is a bespoke
 multi-device kernel on deepseek's CCL/MoE infrastructure, and our semantic matmul is already at the
 roofline (182 GB/s of ~194). `ttnn.sampling` and `ttnn.topk` exist but our host argmax is both simpler
 and 1.439× faster. `models/experimental/speecht5_tts` and `models/demos/audio/whisper` are different
 architectures.
+
+Two shared-library **choices** differ from ours and are already settled here: `mlp_1d` defaults to HiFi2
+with fp16 accumulation (tested — **slower and 9× worse**, `[flow-03]`: PCC 0.9998382 / 35-of-222 code
+errors / 48.72 ms against HiFi4's 0.9999845 / 4-of-222 / 42.57), and their `_matmul_config` derives
+`in0_block_w` from a divisor heuristic where we swept it and found an exactness cliff a heuristic would
+miss (`[gpt-20]`).
+
+**This survey sampled by relevance, not exhaustively** — the repo has hundreds of models. It covered:
+audio/TTS models, speculative decoding, continuous/paged batching, sharded-norm program configs,
+sampling and argmax, flow-matching and DiT pipelines, shared matmul config helpers, math-fidelity
+defaults, and the profiler tooling. Untouched areas include vision/CNN models, multi-device CCL, and
+training.
 
 ## 7. Things that are settled — do not re-run these
 
