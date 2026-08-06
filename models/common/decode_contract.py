@@ -116,32 +116,39 @@ def per_layer_page_tables_need_upload(commands: dict) -> bool:
 def rank_local_slot_remap(slot_remap, rank: int, slots_per_rank: int, data_parallel: int = 1) -> list[int]:
     """Rebase one DP rank's slice of a global ``slot_remap`` onto rank-local slots.
 
-    ``slot_remap`` holds GLOBAL slot indices: vLLM offsets each rank's local
-    ``[0, slots_per_rank)`` mapping by ``rank * slots_per_rank``. Per-rank state such as
-    the seed manager indexes its own rank-local slots, so the slice has to be rebased
-    before it is handed over, or rank >= 1 indexes past the end of its own state.
+    ``slot_remap`` holds GLOBAL slot indices: vLLM offsets each rank's local mapping by
+    ``rank * stride``, where the stride is the width of the scheduler's own per-rank
+    batch. Per-rank state such as the seed manager indexes its own rank-local slots, so
+    the slice has to be rebased before it is handed over, or rank >= 1 indexes past the
+    end of its own state.
 
-    The length check is the actual cross-rank guard. A range check on each value is not:
-    if the caller's ``slots_per_rank`` is larger than the stride vLLM used, rank 0's slice
-    silently swallows rank 1's entries, every one of them lands inside
-    ``[0, slots_per_rank)``, and rank 1 gets an empty slice. Both sides must agree on the
-    stride, so require the mapping to be exactly as wide as this rank's view implies.
+    The stride is taken from the delivered mapping, never from ``slots_per_rank``. Those
+    are different dimensions: the scheduler's ``max_num_seqs`` versus a device constant
+    that is typically larger, so assuming they match rejects every deployment that serves
+    fewer requests than the sampler has slots. Deriving it is also what closes the
+    cross-rank hole, because a ``slots_per_rank`` wider than the real stride would have
+    rank 0 slice up its neighbour's entries, find every one of them in range, and leave
+    rank 1 an empty slice.
     """
-    expected = data_parallel * slots_per_rank
-    if len(slot_remap) != expected:
+    total = len(slot_remap)
+    if data_parallel < 1 or total % data_parallel:
         raise ValueError(
-            f"slot_remap has {len(slot_remap)} entries but this generator expects "
-            f"{expected} ({data_parallel} DP rank(s) x {slots_per_rank} slots); the "
-            f"plugin and the model disagree on the per-rank slot stride"
+            f"slot_remap has {total} entries, which is not divisible across " f"{data_parallel} DP rank(s)"
         )
-    base = rank * slots_per_rank
+    stride = total // data_parallel
+    if stride > slots_per_rank:
+        raise ValueError(
+            f"slot_remap carries {stride} slots per DP rank but this generator holds "
+            f"only {slots_per_rank}; the plugin's batch is wider than the sampler's"
+        )
+    base = rank * stride
     rank_remap = []
-    for new_slot, old_value in enumerate(slot_remap[base : base + slots_per_rank]):
+    for new_slot, old_value in enumerate(slot_remap[base : base + stride]):
         old_slot = int(old_value) - base
-        if not 0 <= old_slot < slots_per_rank:
+        if not 0 <= old_slot < stride:
             raise ValueError(
                 f"slot_remap[{base + new_slot}]={int(old_value)} moves a request across "
-                f"DP rank {rank} (slots [{base}, {base + slots_per_rank}))"
+                f"DP rank {rank} (slots [{base}, {base + stride}))"
             )
         rank_remap.append(old_slot)
     return rank_remap

@@ -825,10 +825,13 @@ class SeedManager:
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
 
-        ``remap`` is a 1-D int tensor of length ``max_batch_size`` where
-        ``remap[i] = j`` means slot *i* now holds the request that was
-        previously at slot *j*. Identity entries (``remap[i] == i``) are
-        no-ops. Only non-identity entries trigger a move.
+        ``remap[i] = j`` means slot *i* now holds the request that was previously at
+        slot *j*, in this instance's own slot space. Identity entries
+        (``remap[i] == i``) are no-ops; only non-identity entries trigger a move.
+
+        Shorter than ``max_batch_size`` is normal, not an error: it covers the first
+        ``len(remap)`` slots, and the scheduler's batch is often narrower than the
+        device's slot count.
         """
         if not self._seed_active:
             return

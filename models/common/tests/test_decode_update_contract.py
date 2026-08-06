@@ -839,20 +839,32 @@ def test_rank_local_slot_remap_rebases_each_rank_onto_its_own_slots():
     assert rank_local_slot_remap(global_remap, rank=1, slots_per_rank=4, data_parallel=2) == [1, 0, 2, 3]
 
 
-def test_rank_local_slot_remap_rejects_a_stride_the_plugin_did_not_use(expect_error):
-    """The length check is the real cross-rank guard; a range check is not.
+def test_rank_local_slot_remap_takes_the_stride_from_the_mapping():
+    """The stride is the scheduler's per-rank batch, not the sampler's slot count.
 
-    The plugin strides by ``max_num_seqs`` while a sampler's ``max_batch_size`` can be
-    larger. With the wider stride assumed, rank 0's slice swallows rank 1's entries,
-    every value still lands inside range so no per-value check fires, and rank 1 gets an
-    empty slice: its seed state silently stays attached to the previous request.
+    Serving fewer requests than the sampler has slots is the normal case
+    (``--max_num_seqs 1`` against a 32-slot device sampler), so a rule that required the
+    two to match would reject it outright. Deriving the stride is also what keeps rank 0
+    from slicing up its neighbour's entries: with a wider stride assumed, every one of
+    them lands in range and rank 1 is left an empty slice.
     """
-    # world=2 at max_num_seqs=16 gives 32 entries; a sampler with max_batch_size=32
-    # across 2 ranks would expect 64.
+    # world=2 at max_num_seqs=16 against a 32-slot sampler: 32 entries, stride 16.
     two_ranks_of_sixteen = list(range(16)) + [16 + i for i in range(16)]
 
-    with expect_error(ValueError, "per-rank slot stride"):
-        rank_local_slot_remap(two_ranks_of_sixteen, rank=0, slots_per_rank=32, data_parallel=2)
+    assert rank_local_slot_remap(two_ranks_of_sixteen, rank=0, slots_per_rank=32, data_parallel=2) == list(range(16))
+    assert rank_local_slot_remap(two_ranks_of_sixteen, rank=1, slots_per_rank=32, data_parallel=2) == list(range(16))
+
+    # A single request against the same sampler: one entry, not 32.
+    assert rank_local_slot_remap([0], rank=0, slots_per_rank=32) == [0]
+
+
+def test_rank_local_slot_remap_rejects_a_batch_wider_than_the_sampler(expect_error):
+    # The other direction is a genuine mismatch: those slots have nowhere to land.
+    with expect_error(ValueError, "wider than the sampler"):
+        rank_local_slot_remap(list(range(8)), rank=0, slots_per_rank=4)
+
+    with expect_error(ValueError, "not divisible"):
+        rank_local_slot_remap(list(range(3)), rank=0, slots_per_rank=4, data_parallel=2)
 
 
 def test_rank_local_slot_remap_rejects_a_cross_rank_move(expect_error):
@@ -886,8 +898,8 @@ def test_galaxy_generator_validates_the_remap_it_slices(expect_error):
     GalaxyGenerator._apply_sampling_slot_remap(fake, [1, 0])
     assert manager.events == [("remap", [1, 0])]
 
-    # A bare slice would have taken the first two entries of a wider mapping as its own.
-    with expect_error(ValueError, "per-rank slot stride"):
+    # One model, so a mapping wider than its own slots is a mismatch, not a slice.
+    with expect_error(ValueError, "wider than the sampler"):
         GalaxyGenerator._apply_sampling_slot_remap(fake, [1, 0, 3, 2])
 
 
