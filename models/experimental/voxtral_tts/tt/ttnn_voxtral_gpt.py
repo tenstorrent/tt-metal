@@ -38,16 +38,10 @@ DTYPE = ttnn.bfloat16
 # NOTES.md [gpt-03] -- DECODE'S INTERMEDIATES LIVE IN L1, not DRAM -- the same...
 _L1 = ttnn.L1_MEMORY_CONFIG
 
-# NOTES.md [gpt-04] -- RMSNORM, WIDTH-SHARDED, for the DECODE shape...
-_NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
-_NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
-_NORM_SHARD = ttnn.create_sharded_memory_config(
-    shape=(1, 1, TILE, DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
-    strategy=ttnn.ShardStrategy.WIDTH)
-_NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(_NORM_GRID_X, _NORM_GRID_Y),
-    subblock_w=_NORM_SUBBLOCK_W, block_h=1,
-    block_w=DIM // _NORM_CORES // TILE, inplace=False)
+# NOTES.md [gpt-04] -- the decode RMSNorm is NOT width-sharded on Blackhole. Sharding it wins
+# on Wormhole and LOSES here, by the same margin and for the same reason -- the reshard is the
+# tax, and the p150's interleaved kernel made the reduction cheap enough that the tax is pure
+# loss. That is why _NORM_SHARD / _NORM_PRG / _norm_dec are gone from this branch.
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
@@ -187,16 +181,6 @@ class TtVoxtralGPT:
         return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
 
-    def _norm_dec(self, x, gamma):
-        """The same RMSNorm at the DECODE shape, width-sharded -- see _NORM_SHARD. Decode only,
-        because the program config pins the row count and prefill's S varies per prompt (prefill is
-        ~3% of wall time, so it keeps the interleaved op)."""
-        h = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=NORM_EPS,
-                          compute_kernel_config=COMPUTE_CONFIG, program_config=_NORM_PRG,
-                          memory_config=_NORM_SHARD)
-        return ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
-
-
     # ----------------------------------------------------------------------------
     # PREFILL PATH -- whole prompt at once, fills the KV cache
     # Runs once per utterance (~1 s), so it is not where the frame budget goes.
@@ -259,7 +243,7 @@ class TtVoxtralGPT:
 
         See NOTES.md [gpt-16].
         """
-        qkv = ttnn.linear(self._norm_dec(x, w["an"]), w["wqkv"],
+        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -280,7 +264,7 @@ class TtVoxtralGPT:
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
                                     memory_config=_L1, program_config=_WO_PRG), memory_config=_L1)
-        return self._mlp(x, self._norm_dec(x, w["fn"]), w, _L1)
+        return self._mlp(x, self._norm(x, w["fn"]), w, _L1)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
@@ -343,7 +327,7 @@ class TtVoxtralGPT:
         x = up(embed.reshape(1, 1, DIM))
         for i, w in enumerate(self.layers):
             x = self._layer_step(x, w, cos, sin, self.caches[i], pos_t)
-        x = self._norm_dec(x, self.norm)
+        x = self._norm(x, self.norm)
         self.pos = pos + 1
         return ttnn.to_torch(x).float().reshape(1, 1, DIM)
 
