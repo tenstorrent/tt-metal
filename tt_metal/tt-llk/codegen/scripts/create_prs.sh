@@ -23,6 +23,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "${CODEGEN_NO_PUSH:-}" =~ ^(1|true|yes|on)$ ]] && ! $DRY_RUN; then
+  echo "CODEGEN_NO_PUSH is set; refusing to create remote pull requests" >&2
+  exit 2
+fi
+
 create_pr() {
   local kernel="$1"
   local branch="$2"

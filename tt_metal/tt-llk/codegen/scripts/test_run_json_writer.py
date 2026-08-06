@@ -76,6 +76,32 @@ def test_init_records_version_when_passed(tmp_path):
     assert doc["version"] == "1.2.3"
 
 
+def test_init_records_audit_lane_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEGEN_RUNNER_POOL", "audit")
+    monkeypatch.setenv("CODEGEN_BASE_COMMIT", "a" * 40)
+    monkeypatch.setenv("CODEGEN_CAMPAIGN_ID", "infra-audit")
+    monkeypatch.setenv("CODEGEN_ATTEMPT_ID", "try-1")
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "audit-1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "Analyzing",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["runner_pool"] == "audit"
+    assert doc["base_commit"] == "a" * 40
+    assert doc["campaign_id"] == "infra-audit"
+    assert doc["attempt_id"] == "try-1"
+
+
 def test_issue_url_preserved(tmp_path):
     issue = {
         "number": 1148,
