@@ -338,7 +338,27 @@ def depthwise_mac_preferred() -> bool:
     return os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", "1" if audio_accurate_mode() else "0") == "1"
 
 
-CONV1D_L1_MODES = ("off", "safe", "aggressive")
+CONV1D_L1_MODES = ("off", "safe", "aggressive", "verify")
+
+# Shapes whose L1_FULL output has been checked against the DRAM path, keyed by (B, C, T_pad, K, stride)
+# and shared across layer instances -- the model builds ~127 `Activation1d`s over a handful of distinct
+# shapes, and the check costs a host round trip, so it must happen once per shape and not once per layer.
+_CONV1D_L1_VERIFIED: dict = {}
+
+
+def _l1_matches_dram(run) -> bool:
+    """Whether the L1_FULL route reproduces the DRAM route bit-for-bit at this shape.
+
+    L1_FULL is faster (1.2-2.3x) and is supposed to be a pure routing change, but at C=16 / B=2 it
+    returns a *different answer* -- max abs diff 1.459 on a ~0.3-scale signal, and identically so in
+    bf16, i.e. structural rather than numeric. C=8, C=32 and C=512 are all exact. Rather than encode a
+    list of widths that happen to work today, check the shape once and believe the measurement.
+    """
+    import torch as _torch
+
+    a = ttnn.to_torch(run("dram"))
+    b = ttnn.to_torch(run("l1"))
+    return a.shape == b.shape and _torch.equal(a, b)
 
 
 def conv1d_l1_full_mode() -> str:
@@ -369,7 +389,18 @@ def conv1d_l1_full_mode() -> str:
     `test_decode` asserts. Note it does **not** reproduce at B=1, which is why a per-shape sweep at
     batch 1 reports the two routes agreeing to four significant figures of rel_rmse.
 
+    **Worth almost nothing at the real shapes, which is why ``off`` is the default.** `verify` over a
+    full decode reports that **1 of 42 distinct shapes** can use L1 (C=512, K=12, stride 2); every
+    other one fails to fit. The 1.2-2.3x quoted from a per-shape sweep does not transfer, because that
+    sweep ran the analysis doc's §3 table at B=1 while production is B=2 and substantially longer --
+    C=16 is T_pad=165606, not the 82806 the table implies. Doubling the rows takes the activation out
+    of L1. Measured end to end, `verify` lands at 1.177 / 2.270 / 3.634 s against 1.158-1.213 s for
+    `off`: inside the run-to-run spread, and it pays a warm-up probe per shape for it.
+
     * ``off`` (default) -- no slice config; previous behaviour exactly.
+    * ``verify`` -- check each shape once against the DRAM path and use L1 only where the output is
+      bit-identical. The safe way to try L1: it cannot introduce the C=16 defect below, because that
+      shape fails its own check. Costs one extra call plus a host round trip per distinct shape.
     * ``safe`` -- L1 only for shapes the DRAM path can also serve, via a DRAM probe on the first call,
       so enabling it cannot move a shape off the exact MAC fallback. This was intended to be
       accuracy-neutral and **is not**, because it still routes ``s5_up`` through L1: measured 23.07 dB,
@@ -538,7 +569,32 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     pkey = ("path", B, C, T_pad, K, stride)
     path = cache.get(pkey)
     if path is None:
-        path = {"off": "dram", "safe": "probe", "aggressive": "l1"}[l1_mode]
+        if l1_mode == "verify":
+            # Check this shape once, globally, then take the fast route only where it is exact.
+            vkey = (B, C, T_pad, K, stride)
+            verdict = _CONV1D_L1_VERIFIED.get(vkey)
+            if verdict is None:
+                why = "bit-exact, using L1"
+                try:
+                    verdict = _l1_matches_dram(_run_split)
+                    if not verdict:
+                        why = "DIFFERS from DRAM, staying on DRAM"
+                except RuntimeError:
+                    # Any failure while probing means "do not take the fast path", not "the call is
+                    # wrong" -- deliberately unfiltered, for the same reason the L1 attempt below is.
+                    # L1 exhaustion does not present consistently: this shape reports "Statically
+                    # allocated circular buffers ... grow to 2175936 B which is beyond max L1 size",
+                    # naming neither slicing nor memory. A real bug still surfaces, because the DRAM
+                    # path we fall back to runs the same convolution.
+                    verdict = False
+                    why = "does not fit L1, staying on DRAM"
+                _CONV1D_L1_VERIFIED[vkey] = verdict
+                logger.warning(
+                    f"depthwise conv1d L1_FULL at B={B}, T_pad={T_pad}, C={C}, K={K}, stride={stride}: {why}"
+                )
+            path = "l1" if verdict else "dram"
+        else:
+            path = {"off": "dram", "safe": "probe", "aggressive": "l1"}[l1_mode]
 
     if path == "mac":
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)

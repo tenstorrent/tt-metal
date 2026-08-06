@@ -35,15 +35,31 @@ from .module import Module
 
 
 def fuse_band_enabled() -> bool:
-    """Whether `Activation1d` runs as one fused band, from ``MINIMAX_H3_AUDIO_FUSE_BAND`` (default on).
+    """Whether `Activation1d` runs as one fused band, from ``MINIMAX_H3_AUDIO_FUSE_BAND`` (default off).
 
     The band is ``up2 -> activation -> down2``. Run literally, the 2x upsampled tensor is written to
     DRAM and read back by the interleave concat, the activation's layout round trip, the downsampler's
     replicate pad and the downsampler itself. Since the activation is pointwise, none of that is
     necessary: see `Activation1d._forward_fused`. Off restores the literal form, which is what the
     fused path is checked against.
+
+    **Exact, and not worth switching on.** rel_rmse against the literal form is 8.5e-08 at every
+    production shape -- fp32 round-off, so the algebra is right -- but per band it is a wash to a loss:
+
+        shape              unfused    fused
+        s3 C64  T20701      6.99 ms   6.53 ms
+        s4 C32  T41403      7.08 ms   7.36 ms
+        s5 C16  T82806      9.47 ms   9.53 ms
+        s6 C8   T165606    18.84 ms  21.11 ms
+
+    End to end it measures 1.200 / 2.312 / 3.672 s at 5/10/15 s, i.e. inside the run-to-run spread of
+    the unfused path -- neutral, not a win. Removing the 2x tensor roughly doubles the band's op count
+    (two activations, two concats and two FIRs over half-length signals instead of one of each over the
+    full length), and this stage is as sensitive to op count as to bytes. Kept off because neutral and
+    more complex loses; kept at all because the decomposition is the one a real fused kernel wants, and
+    it is proven correct here.
     """
-    return os.environ.get("MINIMAX_H3_AUDIO_FUSE_BAND", "1") == "1"
+    return os.environ.get("MINIMAX_H3_AUDIO_FUSE_BAND", "0") == "1"
 
 
 def _make_hann_sinc_kernel_1d(*, ratio: int) -> tuple[torch.Tensor, int, int, int, int]:
