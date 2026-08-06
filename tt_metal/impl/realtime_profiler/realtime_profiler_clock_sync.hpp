@@ -87,6 +87,12 @@ public:
     // TT_RT_PROFILER_SYNC_INTERVAL_US.
     static std::chrono::nanoseconds sync_interval();
 
+    // Ranking a few reads and keeping the tightest holds the anchor's settling error near the read floor rather than
+    // wherever the link happened to be. It fires rarely -- reads per resync reads 1.00 to two decimals -- but the reads
+    // it does take are the wide ones, and they are what the error bound is made of: removing this moved stress sync
+    // error p99 from 0.63us to 5.05us, max from 1.28us to 25.06us, and the fitted frequency from 0.25ppm to 3.5ppm.
+    static constexpr int kResyncProbes = 4;
+
     // How wide a baseline the rate a record is published with is measured across. A chord's slope is uncertain by
     // (both brackets)/span, so the ~100us chord a record sits in carries a few thousand ppm -- measured 600ppm rms and
     // 3800ppm p1-p99 on an 8-chip mesh -- and that lands on every duration a consumer divides out. The same probes
@@ -94,15 +100,12 @@ public:
     // has to keep tracking, so widening it further would start smoothing over real DVFS instead of noise.
     static constexpr auto kRateBaseline = std::chrono::milliseconds(4);
 
-    // Ranking a few reads and keeping the tightest keeps the anchor's settling error near the read floor rather
-    // than whatever the link was doing at the time: on a 32-chip mesh a lone read brackets 11-36us against
-    // 0.7-0.9us here.
-    static constexpr int kResyncProbes = 4;
-
     // What the sync path costs its caller. `busy` is wall time inside resync(), which is dominated by the blocking
     // clock read, so on the receiver thread it is time not spent draining.
     struct Cost {
         uint64_t resyncs = 0;
+        // Reads taken to satisfy those resyncs. Reported to enough precision to see the rare second read, since that is
+        // what kResyncProbes exists for.
         uint64_t clock_reads = 0;
         std::chrono::nanoseconds busy{};
     };
@@ -110,6 +113,11 @@ public:
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
     RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core);
     ~RealtimeProfilerClockSync();
+
+    // False when no UC window could be mapped onto the clock register. There is no slower path to fall back to: the
+    // generic register read holds a chip-wide mutex and rewrites the window's configuration over PCIe on every call,
+    // which lands inside the bracket that is the whole error bound, so a device without a window is not profiled.
+    [[nodiscard]] bool has_direct_clock_read() const { return mapped_clock_lo_ != nullptr; }
 
     // The commanded AICLK stands if every fit attempt fails, so the mapping is usable either way.
     void bring_up();
@@ -216,11 +224,15 @@ private:
     CoreCoord profiler_core_virtual_;
     uint32_t wall_clock_addr_lo_ = 0;
     uint32_t wall_clock_addr_hi_ = 0;
-    // A UC window makes a probe a load rather than a UMD call, whose TLB reconfiguration would sit inside the
-    // bracket and widen it by ~450ns.
+    // A UC window makes a probe a plain load. Required, not preferred: see has_direct_clock_read.
     std::unique_ptr<tt::umd::TlbWindow> clock_tlb_;
     volatile uint32_t* mapped_clock_lo_ = nullptr;
     volatile uint32_t* mapped_clock_hi_ = nullptr;
+    // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
+    // whole bracket distribution shifts with record load, so a fixed target would never be met under load or never
+    // filter when quiet.
+    std::chrono::nanoseconds typical_bracket_{};
+
     // The high word only advances when the low word wraps, every 3.2s at ~1.35GHz.
     uint32_t cached_clock_hi_ = 0;
     uint32_t last_clock_lo_ = 0;
@@ -253,10 +265,6 @@ private:
 
     double wrap_period_frequency_ = 0.0;
     std::chrono::nanoseconds wrap_period_{};
-    // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
-    // whole bracket distribution shifts with record load, so a fixed target would never be met under load or never
-    // filter when quiet.
-    std::chrono::nanoseconds typical_bracket_{};
 
     RealtimeProfilerClockModel model_;
 };

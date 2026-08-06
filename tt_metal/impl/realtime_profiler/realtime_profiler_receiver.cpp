@@ -499,7 +499,7 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     report_stalled_syncs(now);
     log_info(
         tt::LogMetal,
-        "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.2f} per resync), "
+        "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
         "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
@@ -727,6 +727,20 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
         dev_state.realtime_profiler_core = realtime_profiler_core;
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
+        // Constructed before anything is published to dispatch_s or launched, so a device whose clock register cannot
+        // be mapped is skipped rather than left half configured. There is no slower read to fall back to; see
+        // has_direct_clock_read.
+        dev_state.clock_sync =
+            std::make_unique<RealtimeProfilerClockSync>(context_id, device, dev_state.realtime_profiler_core);
+        if (!dev_state.clock_sync->has_direct_clock_read()) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: the profiler core's clock register could not be mapped into "
+                "a UC TLB window, and every published host time is anchored on a read of it.",
+                device_id);
+            return std::nullopt;
+        }
+
         log_debug(
             tt::LogMetal,
             "[Real-time profiler] Initializing real-time profiler D2H socket for device {} on distributed::MeshDevice "
@@ -765,9 +779,6 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
             dev_state.core_l1.ring_buffer,
             realtime_profiler_base_addr,
             factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>());
-
-        dev_state.clock_sync =
-            std::make_unique<RealtimeProfilerClockSync>(context_id, device, dev_state.realtime_profiler_core);
 
         ProfilerKernelAddrs kernel_addrs;
         kernel_addrs.ring_buffer = dev_state.core_l1.ring_buffer;

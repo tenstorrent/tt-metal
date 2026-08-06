@@ -189,6 +189,10 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         auto* tlb_manager =
             MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tlb_manager();
         if (tlb_manager == nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: no TLB manager, so the clock register cannot be mapped",
+                chip_id_);
             return;
         }
         tt::umd::tlb_data cfg{};
@@ -198,6 +202,10 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         cfg.ordering = tt::umd::tlb_data::Strict;
         clock_tlb_ = tlb_manager->allocate_tlb_window(cfg, tt::umd::TlbMapping::UC);
         if (clock_tlb_ == nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: no UC TLB window available for the clock register",
+                chip_id_);
             return;
         }
         // Resolved once for sync-latency purposes
@@ -206,11 +214,8 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         mapped_clock_lo_ = reinterpret_cast<volatile uint32_t*>(base + (wall_clock_addr_lo_ - local));
         mapped_clock_hi_ = reinterpret_cast<volatile uint32_t*>(base + (wall_clock_addr_hi_ - local));
     } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: no TLB window for the clock register ({}); sync reads it through UMD",
-            chip_id_,
-            e.what());
+        log_warning(
+            tt::LogMetal, "[Real-time profiler] Device {}: could not map the clock register ({})", chip_id_, e.what());
     }
 }
 
@@ -377,25 +382,15 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
 
         std::chrono::steady_clock::time_point host_before;
         std::chrono::steady_clock::time_point host_after;
-        if (mapped_clock_lo_ != nullptr) {
-            {  // latency-critical
-                host_before = std::chrono::steady_clock::now();
-                lo = *mapped_clock_lo_;
-                host_after = std::chrono::steady_clock::now();
-            }
-
-            if (wrap_could_have_been_missed || lo < last_clock_lo_) {
-                cached_clock_hi_ = *mapped_clock_hi_;
-            }
-        } else {
-            auto& cluster = MetalContext::instance(context_id_).get_cluster();
-            const tt_cxy_pair target(chip_id_, profiler_core_virtual_);
+        {  // latency-critical
             host_before = std::chrono::steady_clock::now();
-            cluster.read_reg(&lo, target, wall_clock_addr_lo_);
+            lo = *mapped_clock_lo_;
             host_after = std::chrono::steady_clock::now();
-            if (wrap_could_have_been_missed || lo < last_clock_lo_) {
-                cluster.read_reg(&cached_clock_hi_, target, wall_clock_addr_hi_);
-            }
+        }
+        // The high word only moves when the low word wraps, and reading the low word latches it, so it stays outside
+        // the bracket.
+        if (wrap_could_have_been_missed || lo < last_clock_lo_) {
+            cached_clock_hi_ = *mapped_clock_hi_;
         }
         last_clock_lo_ = lo;
         last_probe_at_ = host_after;
