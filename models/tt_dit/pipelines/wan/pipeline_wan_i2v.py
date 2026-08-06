@@ -32,8 +32,8 @@ _DEFAULT_I2V_CHECKPOINT = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
 _CHECKPOINT_DIR_ENV = "WAN22_I2V_CHECKPOINT_DIR"
 
 # encoder_t_chunk_size per mesh. None = full-T single pass, N = chunked with feat_cache;
-# the two are numerically identical and full-T is faster. A mesh absent here falls back to
-# both the default forward chunking and the fallback conv3d blocking table.
+# the two are numerically identical and full-T is faster. A mesh absent here uses full-T
+# forward and the fallback conv3d blocking table.
 _ENCODER_T_CHUNK_BY_MESH = {
     (4, 8): 16,
     (4, 32): None,
@@ -76,14 +76,20 @@ class ImagePrompt(NamedTuple):
     frame_pos: int
 
 
-def _truncated_encode_frames(max_cond_pos: int, num_frames: int) -> int:
-    """Pixel frames to encode: the truncation point, extended to cover the last conditioned frame.
+def _truncated_encode_frames(
+    max_cond_pos: int,
+    num_frames: int,
+    *,
+    encoder_t_chunk_size: int | None = None,
+) -> int:
+    """Pixel frames to encode, extended to cover the last conditioned frame.
 
-    Rounded up to the next 4n+1 that temporal downsampling expects, so the latent count is
-    exact and the encoder keeps seeing the shapes its blockings were picked for.
+    Rounded up to 4n+1 for temporal downsampling. When forward chunking is active, also
+    aligned to 1 + k * encoder_t_chunk_size so WanEncoder.forward does not drop frames.
     """
     frames = max(_I2V_ENCODE_FRAMES, max_cond_pos + 1)
-    frames = ((frames - 2) // 4 + 1) * 4 + 1
+    step = encoder_t_chunk_size if encoder_t_chunk_size is not None else 4
+    frames = (frames - 1 + step - 1) // step * step + 1
     return min(frames, num_frames)
 
 
@@ -333,7 +339,8 @@ class WanPipelineI2V(WanPipeline):
                 tt_frame = tt_padded
             cond_by_pos[frame_pos] = tt_frame
 
-        encode_frames = _truncated_encode_frames(max(cond_by_pos), num_frames)
+        chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
+        encode_frames = _truncated_encode_frames(max(cond_by_pos), num_frames, encoder_t_chunk_size=chunk)
 
         # ---- device: one zeroed video, conditioned frames written in place ---
         # Assembling by concat instead would hold the pieces and the assembled result live at
@@ -361,8 +368,6 @@ class WanPipelineI2V(WanPipeline):
         # Restore the batch axis for the encoder. Free: row major with an unchanged last
         # dimension reshapes to a view over the same buffer rather than a copy.
         tt_video_BTHWC = ttnn.unsqueeze(tt_video_THWC, 0)
-
-        chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
 
         pc_before = self.mesh_device.num_program_cache_entries()
         encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(

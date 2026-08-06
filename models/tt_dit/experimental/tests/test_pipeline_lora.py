@@ -186,8 +186,8 @@ def test_pipeline_inference(
             negative_prompts=[negative_prompt],
             num_inference_steps=num_inference_steps,
             seed=seed,
-            guidance_scale=1.0,  # guidance_scale,
-            guidance_scale_2=1.0,  # guidance_scale_2,
+            guidance_scale=guidance_scale,
+            guidance_scale_2=guidance_scale_2,
             output_type="uint8",
             traced=traced,
         )
