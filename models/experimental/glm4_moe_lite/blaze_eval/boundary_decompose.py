@@ -68,8 +68,16 @@ from blaze_tests.micro_ops.common.test_dram_streaming_matmul import (  # noqa: E
 d = ttnn.open_device(device_id=0)
 K, NQ, NKV, M = 2048, 768, 576, 32
 banks = d.dram_grid_size().x
-nq, nkv = _pad_to_dram_banks(NQ, 32, 32 * banks), _pad_to_dram_banks(NKV, 32, 32 * banks)
-_, worker_grid = dram_bank_worker_cores(d)
+# Pad N to 32*banks*2 for BOTH W values, so W=1 and W=2 do identical total work and the only
+# variable is how many cores it is spread over. A core's shard width must be a multiple of the
+# 32-wide tile, so W workers per bank require N % (32*banks*W) == 0 -- the constraint that makes
+# GLM's 768/576 projections awkward at W=2 and o_proj's N=2048 a clean fit.
+_PADM = 32 * banks * 2
+nq, nkv = _pad_to_dram_banks(NQ, 32, _PADM), _pad_to_dram_banks(NKV, 32, _PADM)
+worker_list, worker_grid = dram_bank_worker_cores(d)
+# Core count is no longer == bank count once BLAZE_DSM_WORKERS_PER_BANK > 1: weights stay sharded
+# over the 8 DRAM banks, but per-core N is split across the workers sharing each bank.
+ncores = len(worker_list)
 
 torch.manual_seed(47)
 row = torch.randn(1, 1, 1, K).bfloat16().float()
@@ -86,10 +94,10 @@ act_model = ttnn.from_torch(
     model_act_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=d, memory_config=ttnn.DRAM_MEMORY_CONFIG
 )
 # (1,32) L1 replicated -- blaze's own activation, no conversion needed.
-act_native = _make_act_tensor(d, row, m=1, k=K, tile_h=1, tile_w=32, compute_core_grid=worker_grid, num_cores=banks)
+act_native = _make_act_tensor(d, row, m=1, k=K, tile_h=1, tile_w=32, compute_core_grid=worker_grid, num_cores=ncores)
 
 mk_l1 = lambda n: _make_output_tensor(
-    d, m=1, n_padded=n, tile_h=1, tile_w=32, compute_core_grid=worker_grid, per_core_N=n // banks
+    d, m=1, n_padded=n, tile_h=1, tile_w=32, compute_core_grid=worker_grid, per_core_N=n // ncores
 )
 mk_dram = lambda n: ttnn.from_torch(
     torch.zeros(1, 1, 1, n),

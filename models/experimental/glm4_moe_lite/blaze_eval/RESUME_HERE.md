@@ -400,3 +400,42 @@ deferred.
 
 Steps 1-4 of the recipe above are mechanical; step 5 is ~5 lines plus a per-core map. Roughly an
 hour of work with the hardware gate already built, not the redesign it was previously scoped as.
+
+## BREAKTHROUGH: the widening works — 3.02x on the matmul core
+
+Implemented and measured. `BLAZE_DSM_WORKERS_PER_BANK` (default 1) puts W workers on each DRAM
+bank; per-core N is divided by W and each worker takes a contiguous byte offset into its bank's
+shard. Patch: `upstream/08-dram-streaming-matmul-workers-per-bank.patch`.
+
+**W=1 is a verified no-op** — 93.7 µs and PCC 0.999954/0.999938, identical to before the change.
+That is what makes it safe in a kernel every blaze op shares.
+
+Matched work (N padded to 1024 for every W, so the only variable is core count):
+
+| W | cores | core only | + input boundary |
+|---|---:|---:|---:|
+| 1 | 8 | 48.4 µs | 64.7 |
+| 2 | 16 | 29.9 µs | 46.0 |
+| 4 | 32 | **16.0 µs** | **33.6** |
+
+**3.02x on the core, and at W=4 the op with its input boundary is 33.6 µs against ttnn's 47.4 —
+1.41x, a win** — provided the outputs stay in L1. The 8-worker deficit was the entire problem and
+it is removable.
+
+### Two constraints found
+
+1. **`N % (32 * banks * W) == 0`.** A core's shard must be a whole number of 32-wide tiles.
+   GLM's `q_a`=768 / `kv_a`=576 need padding to 1024 at W=2/W=4 (33%/78% waste), but **o_proj's
+   N=2048 divides exactly at W=2 and W=4** — the big matmul is the clean fit. W=8 needs
+   N % 2048 == 0 and is blocked at these shapes.
+2. **`GatherRowToDRAM` still assumes 8 senders** — "sender pages do not cover destination width".
+   This is now the blocker for the *whole* fused op, and it is the same op that still has the
+   barrier-per-page defect. Fixing it is the remaining work.
+
+### Next, in order
+
+1. Teach `GatherRowToDRAM` the sender count (and give it the chunked-barrier treatment).
+2. Re-run `native_boundary_ab.py` and `oproj_residual_ab.py` at W=2/W=4 — o_proj is the better
+   target on both shape and size grounds.
+3. If they clear ~1.1x, enable `GLM4_MOE_LITE_BLAZE_QKV_A=1` and measure traced e2e against
+   34.8 ms in the blaze tree.

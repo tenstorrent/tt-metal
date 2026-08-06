@@ -1,0 +1,90 @@
+--- a/blaze/ops/dram_streaming_matmul/common.py	2026-08-06 17:28:58.268956710 +0000
++++ blaze/ops/dram_streaming_matmul/common.py	2026-08-06 17:31:46.279979408 +0000
+@@ -31,6 +31,12 @@
+ FUSED_ACT_SCALED_TANH = 7
+ 
+ 
++def _workers_per_bank() -> int:
++    import os as _os
++
++    return max(1, int(_os.environ.get("BLAZE_DSM_WORKERS_PER_BANK", "1")))
++
++
+ def dram_bank_worker_cores(device) -> tuple[list, ttnn.CoreRangeSet]:
+     """One worker core per DRAM bank, pinned adjacent to the bank it streams
+     from (NOC_0). Returns ``(worker_cores, core_range_set)``.
+@@ -39,6 +45,23 @@
+         device,
+         ttnn.NOC.NOC_0,
+     )
++    w = _workers_per_bank()
++    if w > 1:
++        # Additional workers per bank, ordered [bank0..bankN, bank0..bankN, ...] so the existing
++        # `idx % num_banks` bank assignment keeps mapping correctly. These are not NOC-pinned to
++        # their bank the way the first set is, so they take a longer hop.
++        pinned = {(c.x, c.y) for c in worker_cores}
++        grid = device.compute_with_storage_grid_size()
++        spare = [
++            ttnn.CoreCoord(x, y)
++            for y in range(grid.y)
++            for x in range(grid.x)
++            if (x, y) not in pinned
++        ]
++        need = len(worker_cores) * (w - 1)
++        if len(spare) < need:
++            raise ValueError(f"workers_per_bank={w} needs {need} spare cores, have {len(spare)}")
++        worker_cores = list(worker_cores) + spare[:need]
+     core_range_set = ttnn.CoreRangeSet(
+         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in worker_cores]
+     )
+@@ -271,7 +294,7 @@
+     weights_tile_shape = weights_tile.tile_shape
+     weights_dtype = weights.dtype
+     weights_shard = weights.memory_config().shard_spec.shape
+-    per_core_N = weights_shard[1] // weights_tile_shape[1]
++    per_core_N = (weights_shard[1] // weights_tile_shape[1]) // _workers_per_bank()
+ 
+     K_from_weights = weights_shard[0]
+     K_from_act = Kt * act_tile_w
+@@ -393,7 +416,7 @@
+     f.per_core_unified_ct_args(per_core_flags)
+ 
+     # ── Per-core: DRAM bank_id and virtual channel ───────────
+-    num_banks = len(all_worker_cores)
++    num_banks = len(all_worker_cores) // _workers_per_bank()
+     bank_id_map: dict = {}
+     vc_map: dict = {}
+     bank_ids: list[int] = []
+@@ -412,6 +435,13 @@
+     f.per_core_unified_rt_or_ct_arg(
+         [
+             (f"{prefix}.bank_id", bank_id_map),
++            (
++                f"{prefix}.weights_byte_offset",
++                {
++                    ttnn.CoreCoord(c.x, c.y): (i // num_banks) * per_core_N * Kt * weights_tile_size
++                    for i, c in enumerate(all_worker_cores)
++                },
++            ),
+             (f"{prefix}.vc", vc_map),
+         ]
+     )
+--- a/blaze/ops/dram_streaming_matmul/kernels/op.hpp	2026-08-06 17:28:58.270956735 +0000
++++ blaze/ops/dram_streaming_matmul/kernels/op.hpp	2026-08-06 17:28:58.289956966 +0000
+@@ -63,6 +63,7 @@
+         static constexpr uint32_t weights_block_size_bytes = A::weights_block_size_bytes;
+         static constexpr uint32_t out_num_tiles = A::out_num_tiles;
+         static constexpr CtRtArg bank_id = A::bank_id;
++        static constexpr CtRtArg weights_byte_offset = A::weights_byte_offset;
+         static constexpr CtRtArg vc = A::vc;
+         static constexpr Flag wait_for_out = A::wait_for_out;
+         static constexpr Flag act_is_tensor_backed = A::act_is_tensor_backed;
+@@ -137,7 +138,7 @@
+ 
+                 // Weights: NOC base address for this core's DRAM bank.
+                 uint64_t weights_base_addr =
+-                    get_noc_addr_from_bank_id<true>(dram_bank_id, dm1_cta::weights_tensor_addr);
++                    get_noc_addr_from_bank_id<true>(dram_bank_id, dm1_cta::weights_tensor_addr + unified_kernels::rt_ct_arg<dm1_cta::weights_byte_offset>());
+                 uint32_t l1_write_addr_weights;
+ 
+                 // Triple-buffer state: weights use TRIDs 1..num_buffers; bias uses BIAS_TRID.
