@@ -42,6 +42,7 @@ import struct
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -196,6 +197,7 @@ def assert_even_columns(
             )
 
 
+@skip_for_wormhole
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],

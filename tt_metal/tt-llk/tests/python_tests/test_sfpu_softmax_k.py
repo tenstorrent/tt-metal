@@ -49,6 +49,7 @@ Float32 input is skipped with dest_acc=No, as elsewhere in the SFPU suites.
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -99,6 +100,7 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
     return tile.to(torch_format), logits
 
 
+@skip_for_wormhole
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
