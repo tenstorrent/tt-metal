@@ -36,6 +36,7 @@ pre-divided by sqrt(d_k), since SDPA scales before adding.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -159,6 +160,33 @@ def _layernorm_weights(device, bag, name, dtype):
     return g, b
 
 
+def decode_mask(mask, n_head: int):
+    """`[b, 1, 1, W]` padding mask -> the `[b, 1, h, W]` form `sdpa_decode` wants.
+
+    `sdpa_decode` matches the mask's head axis against Q's **logically**, not by
+    broadcast (`sdpa_decode_device_operation.cpp:119`), so the row has to be
+    materialised per head.
+
+    **Called once per decode step, by the decoder — not once per layer, by the
+    attention.** All 14 layers share one mask, so this is 1 op per token rather than
+    14. The attention cannot do the memoising itself: `TracedDecodeStepInPlace`
+    captures 65 traces from the same `mask_buf` object, and any cache keyed on that
+    object records the `repeat` into the first trace only, leaving the other 64
+    replaying a value the first trace wrote. That is a stale read that no shape check
+    catches, so the conversion is hoisted to the one place that runs once per step.
+
+    **No `1/scale` division, deliberately.** The kernel computes
+    `softmax((QK^T + M) * scale)` — `sdpa_flash_decode.cpp:378` fuses `QK += MASK`
+    into the matmul and `:435` scales after — so an additive term meant to land
+    *after* the scale would need pre-dividing. This mask is binary, 0 or `NEG_INF`,
+    and both survive the scaling unchanged in effect: a live entry is 0 either way,
+    a suppressed one is -1.25e8 rather than -1e9, which softmax kills just as dead.
+    Only `bd` carries real values, and `bd` wants the unscaled form the model already
+    computes. A *soft* bias here — an ALiBi slope, say — would need the division.
+    """
+    return ttnn.repeat(mask, ttnn.Shape((1, 1, n_head, 1)))
+
+
 class TtRelPosAttention:
     """ESPnet RelPositionMultiHeadedAttention, explicit-matmul form."""
 
@@ -183,6 +211,36 @@ class TtRelPosAttention:
         # id(pos_emb) -> (pos_emb, pt). The tensor itself is kept so that its `id`
         # cannot be recycled into a stale hit.
         self._pt_cache: dict = {}
+        # Fused decode attention. `COSYVOICE_SDPA_DECODE=0` restores the explicit chain.
+        self.sdpa_decode = os.environ.get("COSYVOICE_SDPA_DECODE", "1") != "0"
+        self._sdpa_prog: dict = {}
+
+    # ------------------------------------------------------------------
+    def _sdpa_program(self, key_w: int):
+        """`SDPAProgramConfig` for a key axis `key_w` wide, cached per width.
+
+        **`k_chunk_size` is the parameter to get right, and getting it wrong is
+        silent.** `sdpa_decode` validates only `mask_width % k_chunk_size == 0`, so
+        32 passes for every width this model uses -- and then returns a wrong
+        answer: PCC 0.016 at width 384 and 0.737 at 448, against 0.99998 at the
+        right value. Nothing raises. The op's own tests
+        (`sdpa_test_utils.py:get_chunk_size`) take the largest power of two dividing
+        the key length, capped at 128, and that is reproduced here: 384 -> 128,
+        448 -> 64, 256 -> 128.
+        """
+        prog = self._sdpa_prog.get(key_w)
+        if prog is None:
+            pow2 = key_w & -key_w  # largest power of two dividing key_w
+            prog = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=32,
+                k_chunk_size=min(128, pow2),
+                exp_approx_mode=False,  # accuracy is the gate; see F20
+            )
+            self._sdpa_prog[key_w] = prog
+        return prog
+
+        return prog
 
     def _pos_proj(self, pos_emb, b):
         """`linear_pos`, head-split and transposed -- cached on the `pos_emb` object.
@@ -435,11 +493,36 @@ class TtRelPosAttention:
         qv = ttnn.add(q, self.bias_v)
         ttnn.deallocate(q)
 
+        # **Fused decode attention.** At `T = 1` the whole score row is
+        # `(q+u)K^T + (q+v)P^T`, and the second term is a `[B, h, 1, W]` vector -- an
+        # *additive bias* over the key axis. `scaled_dot_product_attention_decode`
+        # takes exactly that as `attn_mask` when `is_causal=False`, so the four ops
+        # below (score matmul, bias add, masked softmax, context matmul) collapse into
+        # one kernel that never writes the `[1, h, 1, W]` score matrix at all.
+        #
+        # 3.3x on the attention block with the two layout permutes charged, 1.10 ms
+        # per token at W=384 and 1.26 at 448, PCC 0.99998 against a torch golden
+        # where the chain it replaces scores 0.99998. See F48 and
+        # `scripts/probe_sdpa_decode.py`.
+        #
+        # `03_plan.md` P5 scoped this as ~1500 LOC of new C++ at high risk. None of
+        # it was needed; the module docstring above had the identity right all along.
+        # The trigger is the mask's *form*: `[b, 1, h, W]` means the caller ran it
+        # through `decode_mask` and is asking for the fused path; `[b, 1, 1, W]` is
+        # the explicit chain's contract and still takes it. Keying on the argument
+        # rather than on a flag means the two can never disagree — a mask in the wrong
+        # form takes the slow path instead of computing something wrong.
+        fused = self.sdpa_decode and t == 1 and mask is not None and mask.shape[-2] == self.h
+        key_w = k.shape[-2]
+
         # `transpose_b` folds the [B, h, T, d_k] -> [B, h, d_k, T] permute into the
         # matmul, which is one fewer op per layer per token and one fewer full copy
         # of the key block.
-        ac = ttnn.matmul(qu, k, transpose_b=True, compute_kernel_config=self.cc)
-        ttnn.deallocate(qu)
+        if fused:
+            ac = None
+        else:
+            ac = ttnn.matmul(qu, k, transpose_b=True, compute_kernel_config=self.cc)
+            ttnn.deallocate(qu)
 
         bd = ttnn.matmul(qv, pt, compute_kernel_config=self.cc)
         ttnn.deallocate(qv)
@@ -466,12 +549,40 @@ class TtRelPosAttention:
             # a plain slice of `bd` starting at column `31 - i`, independent of `W`.
             # Passing it explicitly keeps that arithmetic at the one call site that
             # knows `i`, rather than hiding an alignment assumption inside attention.
-            key_w = ac.shape[-1]
             sliced = ttnn.slice(bd, [0, 0, 0, bd_offset], [b, self.h, t, bd_offset + key_w])
             ttnn.deallocate(bd)
             bd = sliced
-        elif bd.shape[-1] != ac.shape[-1]:
+        elif bd.shape[-1] != key_w:
             bd = self.rel_shift(bd, b, self.h, t, tp)
+
+        if fused:
+            # Heads move from dim 1 to dim 2: decode-mode q is `[1, B, h, d_k]` and the
+            # bias `[B, 1, h, W]`. Two permutes per layer, and they are the price of
+            # entry -- the 3.3x above is measured with them charged.
+            bd_p = ttnn.permute(bd, (0, 2, 1, 3))
+            ttnn.deallocate(bd)
+            bias = ttnn.add(bd_p, mask)
+            ttnn.deallocate(bd_p)
+            q4 = ttnn.permute(qu, (0, 2, 1, 3))
+            ttnn.deallocate(qu)
+            ctx = ttnn.transformer.scaled_dot_product_attention_decode(
+                q4,
+                k,
+                v,
+                is_causal=False,
+                attn_mask=bias,
+                scale=self.scale,
+                program_config=self._sdpa_program(key_w),
+                compute_kernel_config=self.cc,
+            )
+            ttnn.deallocate(bias)
+            ttnn.deallocate(q4)
+            # `[1, B, h, d_k]` -- same element order as the explicit path's
+            # `[B, h, 1, d_k]` at B = 1, so the reshape below is unchanged.
+            ctx = ttnn.reshape(ctx, (b, 1, self.h * self.d_k))
+            out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
+            ttnn.deallocate(ctx)
+            return self._return_kv(out, k, v, kv_inplace, kv_free, return_cache)
 
         raw = ttnn.add(ac, bd)
         ttnn.deallocate(ac)
@@ -509,7 +620,17 @@ class TtRelPosAttention:
             ctx = ttnn.reshape(ctx, (b, t, self.h * self.d_k))
         out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
+        return self._return_kv(out, k, v, kv_inplace, kv_free, return_cache)
 
+    @staticmethod
+    def _return_kv(out, k, v, kv_inplace, kv_free, return_cache):
+        """Hand back `(output, cache)` and free whatever this call owns.
+
+        Shared by the explicit and fused paths, which differ only in how they get to
+        `out`. Which tensors are the caller's is the one thing about this function
+        that is not obvious, and getting it wrong is a use-after-free rather than a
+        wrong number -- so it lives in one place.
+        """
         if kv_inplace:
             # `k` and `v` *are* the caller's buffers -- already updated in place, and
             # freeing them here would pull the cache out from under the next step.
