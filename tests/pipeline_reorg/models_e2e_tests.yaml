@@ -575,6 +575,23 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Mistral-Small-3.1-24B e2e tests
+  cmd: |
+    set -e
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=T3K
+    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  model: mistral-small-3.1-24b
+  model_family: Mistral
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Mixtral-8x7B e2e tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1

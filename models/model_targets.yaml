@@ -911,6 +911,32 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+  mistral-small-3.1-24b:
+    aliases: ["Mistral-Small-3.1-24B", "mistralai/Mistral-Small-3.1-24B-Instruct-2503"]
+    skus:
+      # Ported from blackhole_demo_tests.yaml / t3k_unit_tests.yaml — neither the
+      # e2e pipeline_tests nor the vision unit tests emit a benchmark payload yet,
+      # so there are no measured numbers to target. Populate after the first
+      # tiered run reports perf / accuracy.
+      wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08GEGWHQJF # Adam Roberge
+            team: models
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+
   mixtral-8x7b:
     aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
     skus:

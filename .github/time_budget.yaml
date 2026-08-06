@@ -344,7 +344,7 @@ models:
     wh_n150: 30
     bh_p150: 26
     bh_p300: 42
-    bh_quietbox_2: 186
+    bh_quietbox_2: 196 # +10 moved from models.demo (Mistral-Small-3.1-24B e2e ported off blackhole_demo_tests)
   e2e_tier3:
     wh_llmbox_perf: 64
     wh_n150: 42
@@ -353,7 +353,7 @@ models:
     bh_p300: 8
     bh_quietbox_2: 30
   unit:
-    wh_llmbox: 100
+    wh_llmbox: 80 # -20 moved to models.unit_tier2 (Mistral-Small-3.1-24B vision ported off t3k_unit_tests)
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
@@ -368,7 +368,7 @@ models:
     bh_sc1: 75
     bh_sc4-mgd: 50
   unit_tier2:
-    wh_llmbox: 114
+    wh_llmbox: 134 # +20 moved from models.unit (Mistral-Small-3.1-24B vision ported off t3k_unit_tests)
     wh_llmbox_perf: 172
     wh_n150: 55
     bh_p150: 20
@@ -410,7 +410,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 280
+    bh_quietbox_2: 270 # -10 moved to models.e2e_tier2 (Mistral-Small-3.1-24B e2e ported off blackhole_demo_tests)
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30
