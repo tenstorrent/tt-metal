@@ -50,10 +50,11 @@
 // the TEN-4746 trap point. All other DPRINTs (pre-existing MMC* + got_in/acq/reload/mmpost) become no-ops.
 #undef DPRINT
 #define DPRINT(...) ((void)0)
-// [#48552] MMPRE masking DISABLED: the K-spill 0x10000 wait->pop hazard now has a REAL fix (the copy_tile
-// TDMA interpose in the mm_partials drains below), so the DPRINT mask is no longer needed. If this regresses,
-// the interpose missed a wait->pop site -- re-enable by restoring DEVICE_PRINT here to confirm.
-#define MMPRE(...) ((void)0)
+// [#48552] MMPRE masking RE-ENABLED: the copy_tile TDMA interpose in the mm_partials drains is a PARTIAL fix
+// (it covers the drain wait->pop, but conv2's FUSE_BIAS matmul hung with the mask off -> there are more bare
+// wait->pop sites, e.g. the bias epilogue + a per-subblock site from the bisection). Keep the DPRINT mask until
+// every wait->pop has a real interpose; the copy_tile interpose stays (harmless under the mask, real progress).
+#define MMPRE(...) DEVICE_PRINT(__VA_ARGS__)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
