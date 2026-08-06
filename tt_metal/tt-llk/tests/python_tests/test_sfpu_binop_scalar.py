@@ -29,14 +29,10 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-# The scalar is a swept axis, not one hard-coded value. It used to be a single 2.0 per op
-# (1/2 for div, see below), so the whole suite only ever verified one constant and the
-# interesting scalars -- zero, a sign flip, a large multiplier, a value small enough to
-# matter against the tolerance -- were never driven.
-#
-# Kept deliberately small: inputs are uniform(-1, 1), so |scalar| <= 8 keeps every op's
-# result inside the range where the default bf16 tolerance is meaningful. Wider scalars
-# belong with the edge-value work, not here.
+# The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
+# small enough to matter against the tolerance. Kept deliberately small -- inputs are
+# uniform(-1, 1), so |scalar| <= 8 keeps every op's result inside the range where the
+# default bf16 tolerance is meaningful.
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
 
 # ScalarDiv is the one op whose scalar is not the value the kernel sees: the host inverts the

@@ -2306,13 +2306,8 @@ class UnarySFPUGolden:
             return self._call_integer(operation, operand1, input_format, dimensions)
 
         # Quantize input to match what hardware actually sees after unpack from L1.
-        # This used to inline a partial copy of quantize_input_to_unpack_format that
-        # handled Bfp2_b/Bfp4_b/MX but skipped Bfp8_b, so for Bfp8_b inputs the golden
-        # ran on values the hardware never saw. Smooth ops absorbed that in tolerance,
-        # but discontinuous ops (floor/ceil/trunc/frac) turn a sub-ULP quantization
-        # step across an integer into a full 1.0 error. DataCopyGolden, TypecastGolden
-        # and UntilizeGolden already use the shared helper; this brings the SFPU unary
-        # golden in line with them.
+        # Matters most for discontinuous ops (floor/ceil/trunc/frac), where a sub-ULP
+        # quantization step across an integer becomes a full 1.0 error.
         operand1 = quantize_input_to_unpack_format(
             operand1, input_format, all_mx_formats=True
         )

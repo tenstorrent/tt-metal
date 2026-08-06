@@ -555,20 +555,12 @@ def passed_test(
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
     if output_data_format == DataFormat.Bfp8_b:
-        # Bfp8_b is a block format like its Bfp4_b/Bfp2_b siblings — 7 magnitude bits
-        # against an exponent shared by 16 elements — but it used to fall through to
-        # the flat isclose path below. That only held while outputs stayed in a narrow
-        # band: once a block spans a wide magnitude range, the elements far below the
-        # block max are unrepresentable and quantize toward zero, which a fixed atol
-        # reads as a mismatch even though the hardware produced the closest value the
-        # format can express.
-        #
-        # Unlike Bfp4_b/Bfp2_b, though, Bfp8_b's lattice is fine enough that a single
-        # step can be *tighter* than the SFPU's own approximation error, so the lattice
-        # check cannot simply replace the tolerance check either. The two criteria cover
-        # different regimes — quantization dominates for elements far below their block
-        # max, approximation error dominates near it — so accept a result that satisfies
-        # either one.
+        # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
+        # magnitude range the small elements quantize toward zero and a flat atol reads
+        # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
+        # tighter than the SFPU's own approximation error, so the lattice check cannot
+        # replace the tolerance check either. Quantization dominates far below the block
+        # max, approximation error near it — accept a result satisfying either one.
         is_close = torch.isclose(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
         )

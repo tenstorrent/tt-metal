@@ -45,17 +45,14 @@ def torch_equal_nan(a, b):
 def _ternary_default_specs(mathop, input_format):
     """Per-operand defaults for *mathop*: its registered domain, else the built-in one.
 
-    No ternary op has an _OP_DOMAIN_REGISTRY entry today, so in practice every op takes the
-    built-in branch and this changes nothing — the point is that there is now a single place
-    where a registered domain would take effect, and a caller-visible way to override it.
-    Without that, ternary edge stimuli cannot be injected at all: the divisor for addcdiv
-    and snake_beta is pinned to uniform(1, 2), which puts the c -> 0 pole (the interesting
-    boundary for both) permanently out of reach.
+    No ternary op has an _OP_DOMAIN_REGISTRY entry, so every op currently takes the
+    built-in branch. This is the single place a registered domain would take effect, and
+    callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
+    exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
     """
     if mathop in _OP_DOMAIN_REGISTRY:
-        # OperandSpecs carries only A and B; a registered ternary op would need a third
-        # operand there. Until one exists, reuse B for C and let the assertion below catch
-        # the day that stops being good enough.
+        # OperandSpecs carries only A and B, so a registered ternary op has no third
+        # operand to read; reuse B for C.
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
         return specs.spec_A, specs.spec_B, specs.spec_B
 
@@ -79,9 +76,8 @@ def _run_sfpu_ternary(
     spec_B=None,
     spec_C=None,
 ):
-    # Seeded for the same reason as the binary driver: the specs below carry no seed, so
-    # without this the stimuli are redrawn on every run and a variant sitting near its
-    # tolerance passes or fails by luck.
+    # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
+    # sitting near its tolerance pass or fail by luck. Same as the binary driver.
     torch.manual_seed(0)
 
     default_A, default_B, default_C = _ternary_default_specs(
