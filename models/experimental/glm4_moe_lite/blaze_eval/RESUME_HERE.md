@@ -34,6 +34,47 @@ where the activation arrives already replicated, reaches A = 36.5 µs for **1.30
 **Do not integrate this cluster as a drop-in.** That is a settled negative result, not a pending
 task.
 
+### ROOT CAUSE of the 80 µs boundary: a barrier inside the loop, in both micro-ops
+
+Neither boundary op is bandwidth-limited — both are latency-serialised:
+
+- `tile_row_replicate/kernels/op.hpp` reads a **whole 2 KB tile to extract 64 bytes** (one row),
+  and calls `noc_async_read_barrier()` **inside the per-tile loop**. At GLM's K=2048 that is
+  `num_tile_cols = 64` full DRAM round-trips, ~0.6 µs each → **~40 µs**, matching the measured
+  39.7 µs.
+- `gather_row_to_dram/kernels/op.hpp` has the same shape: `noc_async_write_page` followed by
+  `noc_async_write_barrier()` per page.
+
+**Batching is confirmed to work, on hardware.** Hoisting the barrier and reading only the two
+face lines took the fused op **117.3 → 81.3 µs (−36 µs)**, i.e. it removed essentially the whole
+input boundary.
+
+**But that version is WRONG — PCC 0.71, not 0.999.** Cause: each face line is 32 bytes, so
+successive destination addresses land at 32-mod-64, and Blackhole DRAM reads require 64-byte
+alignment. Roughly half the reads land misaligned. The gate caught it; the timing win was real
+and the correctness was not. Reverted — `blaze/ops/tile_row_replicate/` is byte-identical to the
+other agent's version, verified with `cmp` and `git diff`.
+
+The fix that should work is **chunked** rather than fully batched: keep the aligned full-page
+reads, give `scratch` depth ~8 instead of `num_pages=1`, issue 8 page reads, one barrier, then 8
+copies. That is 8 barriers instead of 64 at 16 KB of L1, and preserves page alignment throughout.
+
+### But fixing it does not rescue the cluster — it only reaches parity
+
+Even crediting both micro-ops a near-perfect fix (~7 µs each, better than the chunked estimate):
+
+    core 36.5 + input ~7 + output ~7  =  ~50 µs   vs ttnn 47.4 µs   ~0.95x
+
+So the ceiling for this cluster after all that kernel work is **parity, not a win**. And the
+unconditional floor is stronger still: variant A at 36.5 µs is the cluster with *both boundaries
+free*, which is 1.30x, worth ~0.5 ms of a 33.2 ms token (1.5%) — and only if the entire
+surrounding chain is converted so no boundary is ever crossed.
+
+**Combined with the already-proven result that op count is a 0.0 ms lever under trace** (removing
+23% of all ops changed nothing, commit 18479ed4ad0) **and that the step is weight-bandwidth-bound**
+— which blaze does not change, since it streams the same bf8 bytes — there is no measured path by
+which fusing this cluster improves end-to-end decode.
+
 ### Two measurement corrections that invalidate earlier numbers
 
 1. **0.53x is retracted.** The first boundary A/B rebuilt the `FusedProgram` and re-ran `emit()`

@@ -122,6 +122,26 @@ except Exception as e:
     ttnn.close_device(d)
     raise SystemExit
 
+
+# Correctness gate against the real ttnn path, not a torch golden: if blaze and the shipping
+# op agree on the same inputs, the fused op is a valid substitute for it.
+def _pcc(a, b):
+    a, b = a.flatten().float(), b.flatten().float()
+    a, b = a - a.mean(), b - b.mean()
+    return float((a @ b) / (a.norm() * b.norm() + 1e-12))
+
+
+try:
+    ttnn_out = ttnn.to_torch(ttnn_fn())[..., :1, :]
+    blaze_fn()
+    q_pcc = _pcc(ttnn_out[..., :NQ], ttnn.to_torch(tq)[..., :1, :NQ])
+    kv_pcc = _pcc(ttnn_out[..., NQ : NQ + NKV], ttnn.to_torch(tkv)[..., :1, :NKV])
+    print(f"RESULT PCC vs ttnn shipping path: q_a={q_pcc:.6f} kv_a={kv_pcc:.6f}", flush=True)
+    if min(q_pcc, kv_pcc) < 0.99:
+        print("RESULT GATE FAILED -- timings below are meaningless", flush=True)
+except Exception as e:
+    print("RESULT PCC-FAIL:", str(e).split(chr(10))[0][:150], flush=True)
+
 try:
     t_us, _ = ab_harness._measure(d, ttnn_fn, warmup=2, iters=5)
     b_us, _ = ab_harness._measure(d, blaze_fn, warmup=2, iters=5)
