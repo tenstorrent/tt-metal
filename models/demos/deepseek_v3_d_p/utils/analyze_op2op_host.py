@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
@@ -61,6 +62,12 @@ DETAIL_ZONES = (
     "TTNN Rotary indexed patch scalar runtime args",
     "TTNN RS copy reader runtime args",
     "TTNN RS copy writer runtime args",
+    # Nested inside EnqueueProgram.
+    "EnqueueProgram reserve kernel config",
+    "EnqueueProgram update prefetcher cache",
+    "EnqueueProgram update dispatch commands",
+    "EnqueueProgram write program commands",
+    "EnqueueProgram write unused-grid go signals",
 )
 
 SUPPORT_ZONES = (
@@ -83,6 +90,15 @@ class DeviceOp:
     global_call_count: str
     op2op_ns: float
     kernel_ns: float
+
+
+@dataclass(frozen=True)
+class WorkloadInfo:
+    programs: int
+    program_command_bytes: int
+
+
+WORKLOAD_MESSAGE_PATTERN = re.compile(r"EnqueueMeshWorkload programs=(\d+) program_cmd_bytes=(\d+)")
 
 
 def find_file(root: Path, filename: str) -> Path:
@@ -117,6 +133,31 @@ def require_signpost(signposts: dict[str, list[int]], name: str) -> int:
     if len(values) != 1:
         raise RuntimeError(f"expected one {name!r} signpost, found {len(values)}")
     return values[0]
+
+
+def read_workload_info(path: Path, start_ns: int, end_ns: int) -> list[WorkloadInfo]:
+    workloads: list[WorkloadInfo] = []
+    with path.open(encoding="utf-8", errors="replace") as file:
+        next(file, None)
+        for line in file:
+            message, separator, timestamp = line.rstrip().rpartition(";")
+            if not separator:
+                continue
+            match = WORKLOAD_MESSAGE_PATTERN.search(message)
+            if match is None:
+                continue
+            try:
+                timestamp_ns = int(timestamp)
+            except ValueError:
+                continue
+            if start_ns <= timestamp_ns <= end_ns:
+                workloads.append(
+                    WorkloadInfo(
+                        programs=int(match.group(1)),
+                        program_command_bytes=int(match.group(2)),
+                    )
+                )
+    return workloads
 
 
 def read_host_events(path: Path, start_ns: int, end_ns: int) -> dict[str, list[Event]]:
@@ -205,7 +246,7 @@ def print_stage_table(
 
 
 def print_detail_zones(events: dict[str, list[Event]]) -> None:
-    print("\nNested cached-workload detail (excluded from attribution total)")
+    print("\nNested host-stage detail (excluded from attribution total)")
     print(f"{'zone':42} {'count':>7} {'total ms':>11} {'mean us':>11} {'max ms':>10}")
     print("-" * 86)
     for zone in DETAIL_ZONES:
@@ -282,6 +323,7 @@ def main() -> None:
     layer_end = layer_ends[args.iteration]
 
     events = read_host_events(ops_times_path, iteration_start, iteration_end)
+    workloads = read_workload_info(ops_data_path, iteration_start, iteration_end)
     operations = read_device_ops(ops_report_path, iteration_start, iteration_end, args.device_id)
     if len(operations) < 2:
         raise RuntimeError(f"need at least two device operations in iteration, found {len(operations)}")
@@ -313,6 +355,17 @@ def main() -> None:
     print(f"  cache-hit-path operations:      {cache_hit_count:8d} / {len(operations)}")
     print(f"  CompileProgram zones:           {compile_count:8d}")
     print(f"  queue-finish zones in layer:    {in_layer_finishes:8d}")
+    if workloads:
+        average_programs = statistics.mean(workload.programs for workload in workloads)
+        average_command_bytes = statistics.mean(workload.program_command_bytes for workload in workloads)
+        print(f"  mesh workloads:                 {len(workloads):8d}")
+        print(f"  average programs/workload:      {average_programs:8.2f}")
+        print(
+            f"  average command bytes/workload: {average_command_bytes:8.1f} B "
+            f"({average_command_bytes / 1024.0:.2f} KiB)"
+        )
+    else:
+        print("  mesh workload command stats:     unavailable (trace predates instrumentation)")
 
     print_operation_table(operations, events, args.top)
     print_largest_operation(operations, events)

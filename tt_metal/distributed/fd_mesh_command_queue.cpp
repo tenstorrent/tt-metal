@@ -462,37 +462,46 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
     expected_num_workers_completed = updated_worker_counts.previous;
 
-    // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
-    program_dispatch::reserve_space_in_kernel_config_buffer(
-        this->get_config_buffer_mgr(*sub_device_id),
-        mesh_workload.impl().get_program_config_sizes(),
-        mesh_workload.impl().get_program_binary_status(mesh_device_id),
-        num_workers,
-        expected_num_workers_completed,
-        dispatch_metadata);
+    {
+        ZoneScopedN("EnqueueProgram reserve kernel config");
+        // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
+        program_dispatch::reserve_space_in_kernel_config_buffer(
+            this->get_config_buffer_mgr(*sub_device_id),
+            mesh_workload.impl().get_program_config_sizes(),
+            mesh_workload.impl().get_program_binary_status(mesh_device_id),
+            num_workers,
+            expected_num_workers_completed,
+            dispatch_metadata);
+    }
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
 
     auto max_program_kernels_sizeB = mesh_workload.impl().max_program_kernels_sizeB_;
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
-    if (use_prefetcher_cache) {
-        bool is_cached;
-        uint32_t cache_offset;
-        std::tie(is_cached, cache_offset) =
-            this->query_prefetcher_cache(mesh_workload.impl().get_id(), max_program_kernels_sizeB);
-        TT_ASSERT(
-            cache_offset + max_program_kernels_sizeB <= this->prefetcher_cache_sizeB_,
-            "Prefetcher cache offset: {}, max_program_kernels_sizeB: {}, prefetcher_cache_sizeB: {}",
-            cache_offset,
-            max_program_kernels_sizeB,
-            this->prefetcher_cache_sizeB_);
-        dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
-        dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
-        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = max_program_kernels_sizeB;
-    } else {
-        // prefetcher cache will be overwritten, reset for next workload
-        this->reset_prefetcher_cache_manager();
+    {
+        ZoneScopedN("EnqueueProgram update prefetcher cache");
+        if (use_prefetcher_cache) {
+            bool is_cached;
+            uint32_t cache_offset;
+            std::tie(is_cached, cache_offset) =
+                this->query_prefetcher_cache(mesh_workload.impl().get_id(), max_program_kernels_sizeB);
+            TT_ASSERT(
+                cache_offset + max_program_kernels_sizeB <= this->prefetcher_cache_sizeB_,
+                "Prefetcher cache offset: {}, max_program_kernels_sizeB: {}, prefetcher_cache_sizeB: {}",
+                cache_offset,
+                max_program_kernels_sizeB,
+                this->prefetcher_cache_sizeB_);
+            dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
+            dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
+            dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = max_program_kernels_sizeB;
+        } else {
+            // prefetcher cache will be overwritten, reset for next workload
+            this->reset_prefetcher_cache_manager();
+        }
     }
+
+    const auto workload_program_count = mesh_workload.get_programs().size();
+    uint64_t workload_program_command_bytes = 0;
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -503,28 +512,36 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
             use_prefetcher_cache,
             program_cmd_seq.prefetcher_cache_used);
-        program_dispatch::update_program_dispatch_commands(
-            program.impl(),
-            program_cmd_seq,
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
-            expected_num_workers_completed,
-            this->virtual_program_dispatch_core(),
-            this->dispatch_core_type_,
-            sub_device_id,
-            dispatch_metadata,
-            mesh_workload.impl().get_program_binary_status(mesh_device_id),
-            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
-            static_cast<uint8_t>(this->id()));
+        {
+            ZoneScopedN("EnqueueProgram update dispatch commands");
+            program_dispatch::update_program_dispatch_commands(
+                program.impl(),
+                program_cmd_seq,
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                expected_num_workers_completed,
+                this->virtual_program_dispatch_core(),
+                this->dispatch_core_type_,
+                sub_device_id,
+                dispatch_metadata,
+                mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
+                static_cast<uint8_t>(this->id()));
+        }
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
-        this->write_program_cmds_to_subgrid(
-            device_range,
-            program_cmd_seq,
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program,
-            chip_ids_in_workload);
+        workload_program_command_bytes += program_cmd_seq.get_one_shot_fetch_size(
+            dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, /*send_binary=*/true);
+        {
+            ZoneScopedN("EnqueueProgram write program commands");
+            this->write_program_cmds_to_subgrid(
+                device_range,
+                program_cmd_seq,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program,
+                chip_ids_in_workload);
+        }
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.
@@ -533,14 +550,24 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
     }
+    {
+        const std::string msg = fmt::format(
+            "EnqueueMeshWorkload programs={} program_cmd_bytes={}",
+            workload_program_count,
+            workload_program_command_bytes);
+        TracyMessage(msg.c_str(), msg.size());
+    }
     // Send go signals to devices not running a program to ensure consistent global state
-    this->write_go_signal_to_unused_sub_grids(
-        chip_ids_in_workload,
-        sub_device_id,
-        expected_num_workers_completed,
-        mcast_go_signals,
-        unicast_go_signals,
-        dispatch_metadata);
+    {
+        ZoneScopedN("EnqueueProgram write unused-grid go signals");
+        this->write_go_signal_to_unused_sub_grids(
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            unicast_go_signals,
+            dispatch_metadata);
+    }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_mcast_wptr(1);
