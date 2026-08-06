@@ -22,6 +22,7 @@ from typing import Optional
 
 from loguru import logger
 
+import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
