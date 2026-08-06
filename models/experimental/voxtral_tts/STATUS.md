@@ -2982,6 +2982,34 @@ it ADDS a split. Two of §6.24's subsidiary objections also dissolve: the 5-op f
 **bit-exact** against A (maxabs 0.000e+00), and the memory objection was only true if both weight
 forms are kept.
 
+**⚠ TWO CORRECTIONS TO THIS SECTION'S FIRST WRITE-UP.** It called the swiglu arm "2 ops, one
+FEWER than what ships" and reported its timing without ever checking its numerics — the probe's
+correctness branch was gated on `nops >= 3` and that arm was labelled 2, so it was the one arm
+that skipped verification. Re-measured properly:
+
+| rows | arm | out shape | µs | maxabs vs fp64 |
+|---|---|---|---|---|
+| 1 | shipped | `(1,1,9216)` | **197.9** | 1.619e-05 |
+| 1 | swiglu `[w3\|w1]`, no slice | `(1,1,32,9216)` | 231.1 | 1.619e-05 |
+| 1 | swiglu `[w3\|w1]` + slice | `(1,1,1,9216)` | 263.1 | 1.619e-05 |
+| 6 | shipped | `(1,6,9216)` | **213.1** | 1.362e-05 |
+| 6 | swiglu + slice | `(1,1,6,9216)` | 264.2 | 1.362e-05 |
+
+`ttnn.swiglu` computes **exactly the shipped answer** — so the unverified arm was in fact fine,
+but the claim had no support at the time. It is still rejected, and on firmer ground: 1.17x
+slower even without the slice, 1.33x with it. And §6.24's tile-row note is real, so the shippable
+form is **3 ops, not 2** — the output returns `[1,1,32,9216]` with 31 padding rows.
+
+**A third correction, to the inherited record.** ONBOARDING §8 (from §6.37) said `ttnn.swiglu`
+*"TT_THROWs on a concatenated pair"*. It does not here: `concat([w3out, w1out])` → `swiglu` ran
+and returned `(1,1,32,9216)`. Either the p150 differs or §6.37 was testing a different call shape.
+
+**And one thing this could NOT establish.** A `[w1|w3]`-ordered arm was included expecting it to
+be obviously wrong; it came back at 1.104e-04 / PCC 0.9996, i.e. nearly correct. That is not
+evidence the order is free — it is the inputs being too small. At `randn*0.02`, `silu(x) ≈ 0.5x`,
+so `silu(a)·b ≈ silu(b)·a` and the test has no power. **The `[w3|w1]` order rests on §6.24's
+documentation, not on this measurement.**
+
 ### 6.43 — p150: `_WO_PRG` deleted. Bit-exact, and no instrument can find a speed difference
 
 `wo` is the worst weight matmul in Block 1 by isolated bandwidth (§6.41), so it got the full
@@ -3216,6 +3244,68 @@ adds change the model with no error.**
 allocation (§6.47, ~12 µs) but it also **surrenders control of where the result lands**, and this
 port has spent real effort deciding exactly that (§6.10, [flow-02], [gpt-03]). Check the operand's
 memory config before assuming the rewrite is neutral.
+
+### 6.49 — p150: host dispatch is 3-4%, NOT 0%. Tracing is worth 4x what it was on the N150
+
+The measurement that validates the reasoning behind §6.41–§6.48. Every per-op number in those
+sections is `perf_counter` around `synchronize_device`, which INCLUDES host dispatch. §6.38
+answered that objection on the N150 — `_solve` eager 19.145 vs traced 19.230, dispatch 0% — but
+that was a different chip AND a different host, and this box has 8 shared cores.
+
+| | eager | traced | dispatch | N150 |
+|---|---|---|---|---|
+| Block 2 `_solve` (~600 ops) | 19.664 ms | 18.888 | **3.9%** (+0.776) | 0% (§6.38) |
+| Block 1 26-layer step (~470 ops) | 19.717 ms | 19.156 | **2.8%** (+0.561) | +0.17 ms (§6.26) |
+| **both** | **39.38** | **38.04** | **+1.34 ms/frame (3.4%)** | +0.35 ms |
+
+**THE OP-COUNT STRATEGY IS VALIDATED.** ~96% of the 67.7 µs per-op floor is genuine DEVICE time,
+so §6.41–§6.48 were not secretly measuring this host, and the six reversals stand.
+
+**But tracing is worth ~4x what §6.26 rejected** — 3.4% against 0.7%. §6.26's argument was about
+KIND, not size: *"0.7% is not worth converting four loud failure modes into three silent ones."*
+Those failure modes are unchanged and all still real — buffers held by pointer so a fresh upload
+is silently ignored; warm-up/capture writing the KV cache (decode PCC 0.9998 → 0.86, no error);
+a capture-order constraint across the two blocks; and trap #1, where an exception inside a
+capture wedges the card. **Not shipped**; the probe is kept.
+
+Two caveats on the 1.34 ms. It covers 39.4 of the pipeline's ~44 ms/frame — the host steps cannot
+be traced (§6.50). And `95dc26363f` measured that merely passing `trace_region_size` moves
+free-running trajectories (case 2: 458 → 464 frames with the trace OFF), so shipping it changes
+generated audio before the trace runs and needs the full multi-seed WER gate, not a frame-count
+check.
+
+**A SIDE FINDING WORTH MORE THAN THE VERDICT.** Traced spread is **0.003–0.004 ms** against
+eager's 0.134–0.800. Run-to-run variance here is almost entirely HOST-side — the first real lead
+on §6.43's unexplained 40x noise degradation, and it means a traced harness is a far better
+instrument for small effects than anything used this session, whether or not tracing ever ships.
+
+### 6.50 — p150: the three host steps stay on host. Device is 7-29x slower
+
+Asked whether `semantic_code`'s argmax, `embed_frame` and the FSQ quantise should move on device,
+partly to make the whole frame traceable (§6.49). No, emphatically:
+
+| step | host | device | |
+|---|---|---|---|
+| `embed_frame` (37-codebook gather + sum) | **57.3 µs** | 432.6 µs | device 7.5x slower |
+| FSQ quantise (clamp/scale/round on [B,36]) | **13.6 µs** | 230.7 µs | device 17x slower |
+| semantic mask + argmax over [1,8320] | **10.9 µs** | 321.1 µs | device 29x slower |
+
+Moving all three costs **+0.90 ms/frame**. §6.45's rule at its purest: each is 1–4 launches at
+~68–230 µs doing microseconds of actual work. §6.31 reached the same conclusion on the N150 for
+the argmax (device 1213.5 µs vs host 860.3) and the p150's higher per-op floor only widens it.
+
+The FSQ device form is CORRECT (0 of 36 codes differ), so this is purely a speed verdict. The
+bf16 embedding table injects rel **5.48e-04** against the fp32 host gather — small, but ahead of
+a 26-layer stack, which is the accuracy reason [pipe-01] gave for keeping it on host in the first
+place. So it would not be free even at speed parity.
+
+**THE HOST TAIL IS ALSO MUCH SMALLER THAN THIS FILE HAS BEEN CLAIMING: 81.8 µs/frame in total**,
+against [pipe-01]'s "~0.2 ms" for `embed_frame` alone and [flow-01]'s "~0.7 ms host tail". That is
+**0.19% of a 44 ms frame** — not worth attacking from either direction.
+
+It also removes the motivation for a full-frame trace: you would spend +0.90 ms of device ops to
+make the frame monolithic, in order to recover dispatch that §6.49's two-region trace already
+captures. **Trace the two device graphs or nothing; leave the 82 µs of host work alone.**
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

@@ -722,7 +722,9 @@ is the larger half):
     semantic_code                      1.25 ms [B,8320] masked argmax, now ON DEVICE in fp32.
                                                Was 2.74 ms of real host CPU. fp32 is mandatory --
                                                it produces an INDEX; see semantic_dev.
-    host tail (FSQ quantise etc)       0.7 ms
+    host tail (FSQ quantise etc)      0.08 ms  MEASURED 81.8 us on the p150 for all
+                                               THREE host steps (6.50); the 0.7 ms
+                                               here was an N150-era estimate
     ------------------------------------------
     Block 2 total                     ~22 ms   (42.5 before the row fold, sharded norm, qkv
                                                fusion, device semantic head, L1 interior and the
@@ -1712,7 +1714,8 @@ is 12 s of audio.
 
 WHAT RUNS WHERE. Blocks 1-3 all run on device. Three host steps remain, each deliberate:
   * the tekken tokenizer and prompt assembly (upstream of everything; see voxtral_tokenizer_ref)
-  * `embed_frame` -- a 37-way embedding gather + sum, per frame. ttnn.embedding needs a bf16 table
+  * `embed_frame` -- a 37-way embedding gather + sum, per frame; 57.3 us on the p150, and
+    7.5x SLOWER on device (6.50). ttnn.embedding needs a bf16 table
     and these tables are large-valued, the same reasoning as the codec's semantic gather.
   * Block 2's FSQ quantise -- clamp/scale/round on [B,36]; 36 values is not worth a dispatch.
     (Block 2's semantic argmax USED to be here too. It is on device now, in fp32 -- worth 1.49

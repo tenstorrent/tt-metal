@@ -307,6 +307,9 @@ here and are in §8 instead.**
 - **Block 2's 7 Euler steps → 5** — ~28% of Block 2, but a listening call, not a metric one.
 - **bf16 semantic head** — `§6.31` candidate E, 2.079× on `semantic_code`. Never re-measured here.
   Held back because it moves the *semantic* token, so one flip redirects the rest of the utterance.
+- **Tracing is worth +1.34 ms/frame (3.4%) here against the N150's 0.7%** (`§6.49`) and is NOT
+  shipped — §6.26's failure-profile argument, at 5x the stakes. The probe is kept, and its
+  0.003 ms spread makes it the best instrument available for small effects.
 - **Block 3 has never been touched on this chip.** It is 0.4% of wall (§6.10) so the prize is
   small, but every constant in it is a Wormhole number.
 - **Two upstream issues still unwritten**: the `halo_gather` out-of-range NOC write (`[pipe-02]`,
@@ -367,7 +370,8 @@ expensive, so deleting ops wins where `§6.6` wanted fewer, bigger kernels.**
 | permuting straight from `av` in the unfold | 1.77× faster and **returns garbage** |
 | project-then-duplicate in `_solve` | 0.785× isolated (`§6.34`) |
 | `ttnn.repeat` instead of `ttnn.concat` | 1.8× worse |
-| `ttnn.add_` / `ttnn.multiply_` in place | bit-exact, **+0.001 ms** whole-block over 6 rounds (`§6.37`) |
+| `ttnn.swiglu` `TT_THROW`s on a concatenated pair (`§6.37`) | **does not reproduce** — it ran and returned `(1,1,32,9216)` (`§6.42`) |
+| `ttnn.add_` / `ttnn.multiply_` in place, **+0.001 ms** (`§6.37`) | **reversed** — worth +0.929 ms/step in Block 1 and +0.790 ms/frame in Block 2; in-place removes an ALLOCATION, ~12 µs of a ~68 µs op (`§6.47`/`§6.48`) |
 | residual-as-bias | Block 1: w2's add is already free. Block 2: **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
 | `_solve` tensors moved into L1 | neutral-to-worse, monotonically (`§6.37`) |
 | **eliminating CFG** | costs only **1.8%** (0.322 ms/frame) — "CFG doubles the work" does not hold (`§6.35`) |
