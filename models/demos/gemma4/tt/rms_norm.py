@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
@@ -13,6 +15,57 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # and TT_FATALs (Out of Memory) with only ~607 KB free. seq=1024 fits
 # comfortably (~197 KB/bank). Longer prefill keeps the plain interleaved path.
 _SHARDED_NORM_MAX_HEIGHT = 1024
+
+
+def sharded_norm_enabled() -> bool:
+    """Width-sharded RMSNorm fast path. Default ON; ``GEMMA4_SHARDED_NORM=0``
+    forces the plain interleaved op (A/B for short-ISL: if the sharded path
+    always S2I's out, interleaved LN can be cheaper than I2S→norm→S2I)."""
+    return os.environ.get("GEMMA4_SHARDED_NORM", "1").lower() not in ("0", "false", "no")
+
+
+def norm_keep_sharded_enabled() -> bool:
+    """Leave RMSNorm output width-sharded in L1 when the caller asks.
+
+    Default ON. The layer's AR→LN→residual→pre-MLP island relies on this to
+    drop the post-LN ``sharded_to_interleaved``→DRAM that otherwise follows
+    every sharded norm. ``GEMMA4_NORM_KEEP_SHARDED=0`` restores S2I→DRAM out
+    (CCL L1-gather into the norm is then mostly wasted — pair with
+    ``GEMMA4_CCL_L1_GATHER=0`` / ``GEMMA4_SHARDED_NORM=0`` for the interleaved
+    experiment).
+    """
+    return os.environ.get("GEMMA4_NORM_KEEP_SHARDED", "1").lower() not in ("0", "false", "no")
+
+
+def maybe_interleave(tensor, memory_config=None):
+    """DRAM-interleaved view of ``tensor``; no-op when already interleaved."""
+    if tensor is None or not tensor.is_sharded():
+        return tensor
+    dest = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.sharded_to_interleaved(tensor, dest)
+    tensor.deallocate(True)
+    return out
+
+
+def align_to_sharded(tensor, sharded_ref):
+    """Reshard / I2S ``tensor`` onto ``sharded_ref``'s memory config.
+
+    Returns ``(aligned, owned)`` where ``owned`` is True when the caller must
+    deallocate ``aligned`` (it is a new tensor). No-op when layouts already
+    match or ``sharded_ref`` is not sharded.
+    """
+    if tensor is None or sharded_ref is None or not sharded_ref.is_sharded():
+        return tensor, False
+    return align_to_memcfg(tensor, sharded_ref.memory_config())
+
+
+def align_to_memcfg(tensor, memcfg):
+    """Reshard / I2S ``tensor`` onto ``memcfg``. Returns ``(aligned, owned)``."""
+    if tensor is None or memcfg is None or not memcfg.is_sharded():
+        return tensor, False
+    if tensor.is_sharded() and tensor.memory_config() == memcfg:
+        return tensor, False
+    return ttnn.to_memory_config(tensor, memcfg), True
 
 
 def decode_width_shard_spec(mesh_device, dim):
@@ -153,23 +206,19 @@ class RMSNorm(nn.Module):
         """
         return width_shard_spec(self.mesh_device, dim, height)
 
-    def _forward_sharded(self, x, already_sharded=False, return_sharded=False):
+    def _forward_sharded(self, x, already_sharded=False, keep_sharded=False):
         """Width-sharded RMSNorm: [I2S ->] sharded rms_norm [-> S2I].
 
         ``already_sharded`` means the producer handed us this exact layout (see
-        :func:`decode_width_shard_spec`), so the interleaved->sharded reshard is
-        skipped. ``return_sharded`` means the CONSUMER wants that layout too, so
-        the trailing sharded->interleaved is skipped as well.
+        :func:`width_shard_spec`), so the interleaved->sharded reshard is
+        skipped. The norm itself is unchanged, so the result is bit-identical --
+        verified with ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py
+        (17.7 -> 10.8 us for the norm + its reshards).
 
-        The norm itself is identical in all four combinations -- only the reshards
-        around it change -- so every variant is bit-exact. Verified with
-        ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py (17.7 -> 10.8 us for
-        the norm plus its reshards).
-
-        Callers must only pass ``return_sharded=True`` when the consumer really
-        does accept a width-sharded L1 tensor. A MATMUL does not: handing one a
-        sharded in0 changes its blocking and measured maxabs=12.0 vs the
-        interleaved result, so the norms feeding QKV / MLP keep their S2I."""
+        ``keep_sharded`` leaves the width-sharded L1 output in place so the next
+        consumer (residual add, another norm, gate_up) can stay in the sharded
+        domain. Default callers still S2I→DRAM for interleaved consumers.
+        """
         if already_sharded:
             x_sh = x
         else:
@@ -182,16 +231,13 @@ class RMSNorm(nn.Module):
         )
         if not already_sharded:
             x_sh.deallocate(True)
-        if return_sharded:
+        if keep_sharded:
             return out
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x, return_sharded=False):
-        """``return_sharded=True`` asks for the output left width-sharded in L1,
-        which only the width-sharded fast path can honour; every other path
-        ignores it and returns interleaved as before. See ``_forward_sharded``."""
+    def forward(self, x, keep_sharded=False):
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -236,9 +282,12 @@ class RMSNorm(nn.Module):
             # learned weight. Covers decode (height <= 32) and short prefill
             # (height <= _SHARDED_NORM_MAX_HEIGHT). The no-weight per-head norms
             # keep the plain path. Sharded config is (width, height)-specific.
+            # ``GEMMA4_SHARDED_NORM=0`` forces interleaved (short-ISL A/B).
+            keep = bool(keep_sharded) and norm_keep_sharded_enabled()
             padded_height = ((int(x.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             if (
-                self.with_scale
+                sharded_norm_enabled()
+                and self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
                 and 1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT
@@ -249,14 +298,20 @@ class RMSNorm(nn.Module):
                     self._sharded_height = padded_height
                     self._sharded_cfg = self._build_sharded_cfg(dim, padded_height)
                 if self._sharded_cfg:
-                    # Decode only: a producer may already have written the exact
-                    # layout we want (ccl_allreduce does). Prefill activations are
-                    # too large for the L1-gather path and always take I2S here.
-                    if x.is_sharded():
-                        if padded_height <= ttnn.TILE_SIZE and x.memory_config() == self._sharded_cfg[0]:
-                            return self._forward_sharded(x, already_sharded=True, return_sharded=return_sharded)
-                    else:
-                        return self._forward_sharded(x, return_sharded=return_sharded)
+                    # A producer may already have written the exact layout we want
+                    # (ccl_allreduce L1-gather does for decode and short prefill).
+                    if x.is_sharded() and x.memory_config() == self._sharded_cfg[0]:
+                        return self._forward_sharded(x, already_sharded=True, keep_sharded=keep)
+                    if not x.is_sharded():
+                        return self._forward_sharded(x, keep_sharded=keep)
+                    # Mismatched shard spec: reshard into the norm layout rather
+                    # than falling through to interleaved (which can't take a
+                    # sharded input cleanly without an S2I first).
+                    return self._forward_sharded(x, already_sharded=False, keep_sharded=keep)
+
+            # Interleaved path can't consume a sharded activation.
+            if x.is_sharded():
+                x = maybe_interleave(x)
 
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
