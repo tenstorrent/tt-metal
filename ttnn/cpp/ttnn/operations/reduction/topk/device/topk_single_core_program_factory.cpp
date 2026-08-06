@@ -94,11 +94,12 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     const uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // Intermediate TopK results (double-buffered)
     const uint32_t output_cb_tile_count = Ktiles;           // Final output buffer
 
-    // Program-scope resource names. Each name yields a generated kernel-side token:
-    // a DFBSpecName's accessor name becomes `dfb::<name>`, a TensorParamName's becomes
-    // `tensor::<name>`. The buffers carry the factory's own vocabulary, which is the
-    // authority when a kernel-side local happens to use a different word for the same
-    // buffer.
+    // Program-scope resource names. These identify resources within the ProgramSpec and never reach
+    // device code: the kernel-side token comes from each binding's accessor_name, which is local to
+    // the kernel declaring it. Renaming a name here therefore does not rename any `dfb::` or
+    // `tensor::` token. One buffer can be `dfb::values` in the writer and `dfb::output_val` in the
+    // compute kernel, and each kernel's `tensor::indices` resolves to whichever tensor parameter
+    // that kernel binds.
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -181,8 +182,12 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     });
 
     // Tensor Parameter Declarations:
-    // The optional input indices tensor is declared only when the caller supplies one, so
-    // the reader's `tensor::indices` token exists on exactly the builds that can read it.
+    // The optional input indices tensor is declared only when the caller supplies one, but no build
+    // reads it today: the reader's sole use sits behind `#if not GENERATE_INDICES` and that define is
+    // pinned on (GH issue #36329), so the host condition and the kernel condition do not track each
+    // other. The parameter, its binding and its run arg are provisioned for the fix rather than
+    // consumed, and the declared spec is still re-checked against the supplied tensor every
+    // dispatch.
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()});
     if (tensor_args.indices.has_value()) {
         spec.tensor_parameters.push_back(TensorParameter{
@@ -232,7 +237,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                  static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.mutable_device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device().arch()),
     };
 
     KernelSpec writer{
@@ -263,7 +268,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"total_number_of_cores", total_number_of_cores},  // Total number of cores
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.mutable_device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device().arch()),
     };
 
     // fp32 input: unpack the value-holding buffers straight to a 32-bit dest register so the sort's

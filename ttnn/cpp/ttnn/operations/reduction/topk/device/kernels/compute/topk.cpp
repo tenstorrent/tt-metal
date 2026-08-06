@@ -16,8 +16,8 @@
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
  *
- * @param input_dfb_index    Dataflow buffer handle for the tiles to transpose (source buffer)
- * @param dest_dfb_index     Dataflow buffer handle to store transposed tiles (destination buffer)
+ * @param input_dfb_index    Dataflow buffer id for the tiles to transpose (source buffer)
+ * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
 FORCE_INLINE void transpose_and_pack(
@@ -59,8 +59,8 @@ FORCE_INLINE void transpose_and_pack(
  * Pack two destination tiles (values and indices) to their respective dataflow buffers
  * Used after merge operation to store sorted results
  *
- * @param dfb0            Dataflow buffer handle for packing the first tile (values)
- * @param dfb1            Dataflow buffer handle for packing the second tile (indices)
+ * @param dfb0            Dataflow buffer id for packing the first tile (values)
+ * @param dfb1            Dataflow buffer id for packing the second tile (indices)
  * @param base_offset    Base offset in destination registers (first tile at base_offset, second at base_offset+1)
  */
 FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const uint32_t base_offset) {
@@ -79,7 +79,7 @@ FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const u
  * Read tile from dataflow buffer and transpose it to destination register
  * Used to prepare input tiles for sorting operations
  *
- * @param dfb               Dataflow buffer handle to read tile from
+ * @param dfb               Dataflow buffer id to read tile from
  * @param base_offset      Base offset in destination register where transposed tile will be stored
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_offset) {
@@ -94,7 +94,7 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_
  * Utility function: Wait for tiles and pop them from front of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer handle to operate on
+ * @param dfb      Dataflow buffer id to operate on
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
@@ -107,7 +107,7 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
  * Utility function: Reserve space and push tiles to back of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer handle to operate on
+ * @param dfb      Dataflow buffer id to operate on
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count) {
