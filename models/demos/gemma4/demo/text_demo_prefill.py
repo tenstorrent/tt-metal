@@ -1621,7 +1621,8 @@ def test_prefill_long_context_prefix_pcc(mesh_device, context_len, request, rese
 @torch.no_grad()
 @parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
 @pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
-def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, request):
+@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
+def test_prefill_long_context_traced(mesh_device, context_len, readback_all, reset_seeds, request):
     """Chunked prefill driven entirely by two captured traces.
 
     This is the deployment shape: warm the programs once, capture, then serve every
@@ -1718,12 +1719,15 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
         stage_breakdown["metadata"] += time.time() - _t
         _t = time.time()
-        # Probe: ring attention's CCL semaphores persist across replays. Eager dispatch
-        # may leave them in a state each call re-establishes; a replay re-runs identical
-        # commands against whatever the previous replay left behind.
-        if os.environ.get("GEMMA4_TRACE_SEM_RESET"):
-            for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
-                ttnn.reset_global_semaphore_value(_sem, 0)
+        # REQUIRED for liveness, not an optimization. Ring attention's global semaphores
+        # persist across replays, and back-to-back replays deadlock without this: 256k
+        # runs hung at chunk 54 and 59 of 64 (deep ring depth, no error, all threads in
+        # futex_wait). readback_all hides it because _cp_gather_torch issues an eager
+        # ttnn.all_gather between every replay, which drains the state this restores.
+        # Costs ~4ms/chunk. Belongs in the op — either resetting its own semaphores or
+        # having the reset captured inside the trace — rather than in every caller.
+        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+            ttnn.reset_global_semaphore_value(_sem, 0)
         # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
         # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
         # Absolute global positions for this chunk, CP-sharded the same way tokens are.
@@ -1820,17 +1824,22 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
             out = out_first if chunk_idx == 0 else out_ring
-            t_rb = time.time()
-            hidden = _cp_gather_torch(out, mesh_device, mesh_config)
-            assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
-            readback_s += time.time() - t_rb
-            if ref_hidden is not None:
-                ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(
-                    1, 1, chunk, model_args.hidden_size
-                )
-                _p, pcc = compare_tensors(hidden, ref_slice, pcc_threshold=0.0)
-                pccs.append(float(pcc))
-                bad_fracs.append(float((_per_token_pcc(hidden, ref_slice) < 0.80).float().mean()))
+            # Reading every chunk's hidden states to host is a test artifact — a prefill
+            # server leaves the KV cache on device and reads back only the last chunk,
+            # whose final row seeds the first decode step. readback="final" measures that
+            # shape; "all" keeps the per-chunk PCC that verifies the ring read.
+            if readback_all or chunk_idx == n_chunks - 1:
+                t_rb = time.time()
+                hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+                assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
+                readback_s += time.time() - t_rb
+                if ref_hidden is not None:
+                    ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(
+                        1, 1, chunk, model_args.hidden_size
+                    )
+                    _p, pcc = compare_tensors(hidden, ref_slice, pcc_threshold=0.0)
+                    pccs.append(float(pcc))
+                    bad_fracs.append(float((_per_token_pcc(hidden, ref_slice) < 0.80).float().mean()))
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
                 f"device={per_chunk[-1] * 1000:.1f}ms ({chunk / per_chunk[-1]:.0f} tok/s) | "
@@ -1885,8 +1894,11 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
             f"eager result, which points at a per-chunk scalar frozen at capture "
             f"(per-chunk: {', '.join(f'{p:.5f}' for p in pccs)})"
         )
-        assert max(bad_fracs[1:]) < 0.01, (
-            f"{100 * max(bad_fracs[1:]):.2f}% of token rows in a traced ring chunk fall below "
+        # With readback="final" there is a single entry and it is a ring chunk, so no
+        # chunk-0 control to drop.
+        ring_bad_fracs = bad_fracs[1:] if readback_all else bad_fracs
+        assert not ring_bad_fracs or max(ring_bad_fracs) < 0.01, (
+            f"{100 * max(ring_bad_fracs):.2f}% of token rows in a traced ring chunk fall below "
             f"per-token PCC 0.80 — misordering signatures are 9-11%, correct is under 0.2%"
         )
     else:
