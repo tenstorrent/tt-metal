@@ -48,10 +48,9 @@ import torch
 from loguru import logger
 from PIL import Image
 
-import ttnn
-
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....utils.test import ring_params_req_exact_devices
 from .common_av import check_audio_sanity, check_av_sync, check_spatial_seams
 from .test_pipeline_fl2va_minimax_h3 import create_fractal_image
 
@@ -74,11 +73,15 @@ PROMPT = "a slow push-in through a quiet room as afternoon light moves across th
 # including the audio decode STATE.md records 65536 for.
 _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
+# `ring_params_req_exact_devices`, exactly as the t2va and fl2va e2e gates use -- the DiT attends in a
+# ring on the SP axis, and a LINE fabric config fails its CCL ops outright with
+# `fabric.cpp:174 forwarding_direction.has_value()`. Only `l1_small_size` differs, and that difference
+# is measured (above).
 MESH_4X8 = [
     pytest.param(
         (4, 8),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL, "trace_region_size": 200000000},
-        id="blackhole-4x8",
+        {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL},
+        id="4x8",
     )
 ]
 

@@ -31,12 +31,11 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
-
 from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
 from ....pipelines.minimax_h3 import references as R
 from ....utils.check import assert_quality
+from ....utils.test import ring_params_req_exact_devices
 
 reference_before_encoder = pytest.importorskip(
     "diffusers.modular_pipelines.minimax_h3.before_encoder",
@@ -401,11 +400,14 @@ def _weights_dir() -> Path:
 # `MINIMAX_H3_L1_SMALL` overrides it, which is how that was measured -- one config per process.
 _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
+# The same ring fabric params the e2e gates use, so the encode is measured in the configuration it
+# will actually run in. A LINE config happens to work here -- the VAE encoders use no ring CCL -- but
+# "it passed under a config production does not use" is exactly how am. 124 and 125 got missed.
 MESH_4X8 = [
     pytest.param(
         (4, 8),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL, "trace_region_size": 200000000},
-        id="blackhole-4x8",
+        {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL},
+        id="4x8",
     )
 ]
 
