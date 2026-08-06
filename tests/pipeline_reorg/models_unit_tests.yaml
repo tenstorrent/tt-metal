@@ -1333,11 +1333,12 @@
   model: stable-diffusion-1-4
   model_family: Stable Diffusion
   skus:
+    # wh_n150 only. The legacy `stable_diffusion nightly` entry also ran on wh_n300,
+    # but this is the longest job of the ported set (~29 min measured) and N300
+    # capacity is scarce, so the N300 leg is intentionally dropped rather than
+    # carried over.
     wh_n150:
       timeout: 33
-      tier: 3
-    wh_n300:
-      timeout: 37
       tier: 3
   owner_id: U088DBNUKGR # Evan Smal
   team: models

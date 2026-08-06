@@ -1517,15 +1517,6 @@ targets:
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
-      wh_n300:
-        entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U0491KT8MNY # Mohamed Bahnas
-            team: models
   swin-s:
     aliases: ["Swin-S", "swin-s"]
     skus:

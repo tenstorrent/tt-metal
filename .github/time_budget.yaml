@@ -380,7 +380,7 @@ models:
   unit_tier3:
     wh_llmbox_perf: 58
     wh_n150: 149
-    wh_n300: 145
+    wh_n300: 108
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21

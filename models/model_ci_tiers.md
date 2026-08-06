@@ -108,7 +108,7 @@ it is classified differently on different systems.
 | MobileNetV2 | WH N150, WH N300 |
 | SegFormer | WH N150, WH N300 |
 | SentenceBERT | WH N150, WH N300, WH LLMBox, WH Galaxy |
-| Stable Diffusion 1.4 | WH N150, WH N300 |
+| Stable Diffusion 1.4 | WH N150 |
 | Swin-S | WH N150, WH N300 |
 | Swin-V2 | WH N150, WH N300 |
 | UFLD v2 | WH N150, WH N300 |
