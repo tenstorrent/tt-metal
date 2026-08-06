@@ -4,14 +4,16 @@
 
 """Shared wide nullable schema for LLK performance reports (v1).
 
-Two layers make up the published table:
+DB_SCHEMA is the one published table: every column, and the exact schema the
+Parquet is written with and handed to the data team. Each column declares its
+``origin`` — ``"test"`` (a perf test emits it) or ``"ci"`` (the publish layer
+stamps it). Two views derive from that single source of truth:
 
-  OUTPUT_SCHEMA  columns a perf test produces (config, timings, counters, code
-                 size, marker). Reports are validated against this.
-  PROVENANCE     run context (commit, arch, run id, ...) added by CI, not the test.
-  DB_SCHEMA      OUTPUT_SCHEMA + PROVENANCE, one row per test config per run.
+  OUTPUT_SCHEMA  the origin=="test" columns — what a report is validated against.
+  PROVENANCE     the origin=="ci" columns — run context (commit, arch, run id, ...).
 
-Every OUTPUT column is nullable: a test fills what it uses, the rest stay NULL.
+One row per test config per run. Every column except ``marker`` and the mandatory
+provenance keys is nullable: a test fills the columns it uses, the rest stay NULL.
 New columns are added later as nullable, so v1 need not be complete.
 
 Imports no device libraries, so it loads without hardware.
@@ -28,6 +30,7 @@ class Column:
     dtype: str  # int64 | float64 | bool | string
     nullable: bool
     category: str
+    origin: str = "test"  # who fills the column: "test" | "ci"
 
 
 # Timing columns are formula-driven: mean(<base>) for every run type, std(<base>)
@@ -48,10 +51,12 @@ _TIMING_COLUMNS = [
 ]
 
 
-# ── Output schema: columns a perf test produces (validate reports against this) ──
-# TODO: counters/metrics (counter-enabled runs) and Quasar columns join here as
-# nullable once captured.
-OUTPUT_SCHEMA = [
+# ── The one published table: every column, headers + provenance ─────────────
+# This IS the table handed to the data team; the Parquet is written with it. Each
+# column's `origin` says who fills it — "test" (default) or "ci".
+# TODO(counters/Quasar, deferred — see #51249): counter/metric and Quasar columns
+# join here as nullable once a counter/Quasar run captures their exact names.
+DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
     Column("formats.input_A", "string", True, "formats"),
@@ -121,21 +126,21 @@ OUTPUT_SCHEMA = [
     Column("TEXT_SIZE(MATH_ISOLATE)", "int64", True, "code_size"),
     Column("TEXT_SIZE(PACK_ISOLATE)", "int64", True, "code_size"),
     Column("TEXT_SIZE(UNPACK_ISOLATE)", "int64", True, "code_size"),
+    # ── provenance: stamped by the publish layer, never emitted by a test ──
+    Column("test_name", "string", False, "identity", origin="ci"),
+    Column("commit_sha", "string", False, "provenance", origin="ci"),
+    Column("arch", "string", False, "provenance", origin="ci"),
+    Column("run_id", "string", False, "provenance", origin="ci"),
+    Column("timestamp", "string", False, "provenance", origin="ci"),
+    Column("pipeline", "string", False, "provenance", origin="ci"),  # PR | nightly
+    Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
 ]
 
-# ── Provenance: run context added by CI/publish layer (NOT produced by tests) ──
-PROVENANCE = [
-    Column("test_name", "string", False, "identity"),
-    Column("commit_sha", "string", False, "provenance"),
-    Column("arch", "string", False, "provenance"),
-    Column("run_id", "string", False, "provenance"),
-    Column("timestamp", "string", False, "provenance"),
-    Column("pipeline", "string", False, "provenance"),  # PR | nightly
-    Column("pr_number", "string", True, "provenance"),  # NULL for nightly
-]
-
-# ── Published table = test output + provenance ──
-DB_SCHEMA = OUTPUT_SCHEMA + PROVENANCE
+# Views onto the one schema, by who fills each column. The converter validates a
+# test's report against OUTPUT_SCHEMA; the publish layer stamps PROVENANCE. Both
+# derive from DB_SCHEMA, so there is a single source of truth.
+OUTPUT_SCHEMA = [c for c in DB_SCHEMA if c.origin == "test"]
+PROVENANCE = [c for c in DB_SCHEMA if c.origin == "ci"]
 
 MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 
