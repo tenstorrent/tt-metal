@@ -23,8 +23,7 @@ duration of each task, so those events land in the capture. This test asserts th
 is the directly observable consequence of the fix. It also asserts the capture is balanced
 (no ``incomplete_operation`` rows), which is the symptom reported in ttnn-visualizer #1684.
 
-Runs on any single host with >= 2 devices; the ``mesh_device`` fixture skips automatically
-when fewer are present.
+Runs on any single host with >= 2 local devices, and skips otherwise.
 
     pytest tests/ttnn/distributed/test_singlehost_graph_report_ccl.py
 """
@@ -46,6 +45,24 @@ SHARD_WIDTH = 32  # one tile column per device
 # The collective is the subject of the test; the elementwise ops around it just keep the
 # capture representative of a real report.
 COLLECTIVE_OP = "ttnn.all_gather"
+
+
+@pytest.fixture(autouse=True)
+def require_two_local_devices():
+    """Skip before the ``mesh_device`` fixture tries to open the 1x2 mesh.
+
+    conftest only skips an oversized mesh request when ``using_distributed_env()`` is
+    false, since under multi-host MPI a mesh legitimately spans hosts. On a single-device
+    box that happens to have a multi-rank context initialized, that carve-out lets the
+    request through to ``open_mesh_device``, which raises TT_FATAL at setup instead of
+    skipping. This test is single-host by construction, so gate it on the local count.
+
+    Autouse so it is ordered ahead of ``mesh_device``, which fails during its own setup
+    and would leave no opportunity to skip from the test body.
+    """
+    available = ttnn.get_num_devices()
+    if available < 2:
+        pytest.skip(f"needs >= 2 local devices to build a 1x2 mesh, found {available}")
 
 
 @pytest.mark.parametrize(
