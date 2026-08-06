@@ -34,7 +34,7 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import LayerNorm
-from ...utils.tensor import bf16_tensor
+from ...utils.tensor import bf16_tensor, typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -532,26 +532,21 @@ class Qwen3VlVisionAttention(Module):
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         if self._p.sp:
-            # `seq_len` here is the LOCAL shard; the logical block spans the whole SP axis.
-            if not single_block:
-                msg = (
-                    f"sequence parallelism supports a single attention block, got {len(cu_seqlens) - 1}. "
-                    "Ring SDPA takes no cu_seqlens and an even row split does not align with block "
-                    "boundaries, so multiple images/frames need a block-interleaved SP layout (device d "
-                    "holds part d of every block) plus the inverse permutation after the output gather. "
-                    "Until that lands, use sp_factor=1 for ref2va and video; TP is unaffected."
-                )
-                raise NotImplementedError(msg)
+            # `seq_len` here is the LOCAL shard; the logical sequence spans the whole SP axis.
             # Ring SDPA rejects a non-tile-aligned shard deep in the device op ("Per-device Q seq
-            # length must be divisible by TILE_HEIGHT"); check it here so the constraint is legible.
-            # This is stricter than, and therefore subsumes, the merger's merge-group alignment.
+            # length must be divisible by TILE_HEIGHT"), and the windowed path offsets whole tiles;
+            # check it here so the constraint is legible. This is stricter than, and therefore
+            # subsumes, the merger's merge-group alignment.
             if seq_len % _TILE != 0:
                 msg = (
                     f"sequence-parallel shard has {seq_len} rows, which is not a multiple of {_TILE}; "
                     f"the patch count must be divisible by sp_factor * {_TILE}"
                 )
                 raise ValueError(msg)
-            attn = self._ring_attention(q, k, v, seq_len)
+            if single_block:
+                attn = self._ring_attention(q, k, v, seq_len)
+            else:
+                attn = self._windowed_sp_attention(q, k, v, seq_len, cu_seqlens)
         elif single_block:
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q,
@@ -626,6 +621,53 @@ class Qwen3VlVisionAttention(Module):
             use_column_major_ccl=True,
         )
         return attn
+
+    def _windowed_sp_attention(self, q, k, v, local_seq_len: int, cu_seqlens: Sequence[int]) -> ttnn.Tensor:
+        """Windowed (block-diagonal) attention over a sequence sharded on the SP axis.
+
+        Q stays the local shard -- the linear ops keep their full SP benefit and the output needs no
+        combine -- while K/V are all-gathered to the full sequence once. `cu_window_seqlens` is global,
+        so the op needs each shard's global origin to resolve its rows' windows: a 1-element-per-device
+        tensor sharded on the SP axis carries it. A scalar offset could not -- it is baked into the
+        program, and every device runs the SAME program; the tensor keeps the divergence in data.
+
+        A shard straddling a window boundary costs nothing here: each row's window is decided by the
+        on-device mask against the full gathered K, never by where the shard was cut.
+        """
+        sp_axis, ccl = self._p.sp_axis, self._p.ccl_manager
+        global_seq_len = local_seq_len * self._p.sp_factor
+        if cu_seqlens[0] != 0 or cu_seqlens[-1] != global_seq_len:
+            msg = f"cu_seqlens must span [0, {global_seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
+            raise ValueError(msg)
+        # Consecutive same-shape gathers land in the two halves of the ping-pong buffer pair, so the
+        # v gather does not clobber k.
+        k = ccl.all_gather_persistent_buffer(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        v = ccl.all_gather_persistent_buffer(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        cu_window = ttnn.from_torch(
+            torch.tensor(cu_seqlens, dtype=torch.int32),
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+        )
+        q_offsets = typed_tensor(
+            torch.arange(self._p.sp_factor, dtype=torch.int32) * local_seq_len,
+            ttnn.uint32,
+            device=self.mesh_device,
+            mesh_axis=sp_axis,
+            shard_dim=0,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        return ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            program_config=self._windowed_program_config(local_seq_len),
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+            cu_window_seqlens=cu_window,
+            windowed_q_token_offset_tensor=q_offsets,
+        )
 
 
 def _apply_vision_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int) -> ttnn.Tensor:
@@ -876,8 +918,8 @@ class Qwen3VlVisionModel(Module):
 
         The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
-        a plain concatenation only because a single attention block means device order equals token
-        order; the multi-block layout that `Qwen3VlVisionAttention` rejects would need a permutation.
+        a plain concatenation because SP shards rows contiguously (device `d` holds rows
+        `[d * S/sp, (d+1) * S/sp)`), so device order equals token order for any number of blocks.
 
         The `ttnn.clone` is load-bearing. Every CCL gather here writes into a persistent buffer that
         `CCLManager` caches by `(shape, dim, mesh_axis)`, and all four mergers emit the SAME
