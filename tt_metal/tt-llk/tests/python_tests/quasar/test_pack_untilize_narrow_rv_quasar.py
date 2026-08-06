@@ -1,27 +1,33 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# NARROW-ROW untilize via RV_PACR (Quasar) DEMO test — MULTI-TILE.
+# pack_untilize via RV_PACR (Quasar) — two modes in one test (see the CASES list).
 #
-# Validates that RV_PACR tile-mode-per-row produces a TIGHT untilized output with
-# a variable-width last tile per tile-row — the narrow_row capability the
-# pack-untilize config stride cannot express. Scope: one tile-row of NUM_TILES
-# 32x32 tiles, 16-bit formats. The first NUM_TILES-1 tiles are packed full (32
-# wide); the last tile is packed at a swept width in {8, 16, 24, 32}: 8/16 use only
-# col-group g=0 (faces 0,2), 24/32 also use g=1 (faces 1,3), and 32 == normal
-# untilize. Each op always writes a full 16-datum face-row; non-face-aligned widths
-# (8, 24) keep only the low datums, the spill being overwritten by the next tile row.
+# whole_tile mode: "normal" whole-tile untilize via one HW-streamed RV_PACR op per tile
+#   (untilize=1). Proof-of-life for the RISC-V-descriptor pack path. A single 32x32 tile
+#   must be byte-identical to the MOP/PACR_UNTILIZE golden.
 #
-# Golden = the first matrix_w columns of each of the 32 untilized rows, packed
-# tight and row-major (32 * matrix_w datums), where
-#   matrix_w = (NUM_TILES-1)*TILE_WIDTH + last_tile_width.
-# The device writes exactly that tight matrix_w-wide buffer; we read it back and
-# compare the first 32*matrix_w datums.
+# narrow mode: NARROW-ROW untilize — RV_PACR tile-mode, one op per DEST face-row. Produces
+#   a TIGHT untilized output whose LAST tile per tile-row is a swept width in {8,16,24,32}.
+#   This is the narrow_row capability the HW pack-untilize config stride cannot express.
+#   The first NUM_TILES-1 tiles are packed full (32 wide).
+#   8/16 widths of last tile use only col-group g=0 (faces 0,2), 24/32 also use g=1 (faces 1,3).
+#   Each op writes a full 16-datum face-row. Non-face-aligned widths (8, 24) keep only the low datums
+#   The spill that appears as a consequence of non-face-aligned widths gets overwritten by the next tile row.
+#
+# Golden (both modes) = the first matrix_w columns of each of the 32 untilized rows, packed
+# tight and row-major (32 * matrix_w datums), where matrix_w = (num_tiles-1)*TILE_WIDTH + last_tile_width
+# (whole_tile: num_tiles=1, last_tile_width=32 -> matrix_w=32 = full untilize).
+# The device writes exactly that tight matrix_w-wide buffer. We read back and compare the first 32*matrix_w datums.
 
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import UntilizeGolden, get_golden_generator
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    UntilizeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -41,6 +47,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     PERF_RUN_TYPE,
+    RV_WHOLE_TILE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -48,49 +55,29 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-
-def print_full_tile(data, data_format, label="result", tile_width=32):
-    """Dump a full buffer as tile_width-wide rows (same layout for result and golden),
-    so the device output and the golden can be compared line-by-line."""
-    t = (
-        data
-        if isinstance(data, torch.Tensor)
-        else torch.tensor(data, dtype=format_dict[data_format])
-    )
-    flat = t.flatten()
-    n = flat.numel()
-    nz = (flat != 0).nonzero().flatten().tolist()
-    print(f"\n[RV-narrow] {label} len={n}  nonzero_count={len(nz)}")
-    if nz:
-        print(f"[RV-narrow] {label} first 64 nonzero indices: {nz[:64]}")
-        print(f"[RV-narrow] {label} nonzero index range: [{nz[0]} .. {nz[-1]}]")
-    if n % tile_width == 0:
-        rows = flat.reshape(-1, tile_width)
-        for r in range(rows.shape[0]):
-            vals = " ".join(f"{v:5.2f}" for v in rows[r].tolist())
-            print(f"[RV-narrow] {label} row {r:2d}: {vals}")
-    else:
-        print(f"[RV-narrow] {label} flat: {flat.tolist()}")
-
-
-# Must match the C++ kernel. The last tile in each row is packed narrow via skip-face-1
-# (faces 0,2 => cols 0-15). The op always writes a full 16-datum face-row, but the kept
-# width is LAST_TILE_WIDTH (16 or 8) -- for 8 the upper half is spill overwritten by the
-# next row / tile 0, so only the low 8 columns of the last tile are meaningful.
-TILE_WIDTH = 32
-TILE_HEIGHT = 32
-# Kept widths of the last tile to sweep (must match the LAST_TILE_W_DATUMS the kernel is
-# built with; the matrix width / L1 stride follows from it). 8/16 use only col-group g=0
-# (faces 0,2); 24/32 also use g=1 (faces 1,3). 32 == normal (full) untilize; 8 and 24 are
-# non-face-aligned widths whose boundary-face spill is overwritten by the next tile row.
+TILE_WIDTH = TILE_DIMENSIONS[1]
+TILE_HEIGHT = TILE_DIMENSIONS[0]
+# Kept widths of the narrow last tile to sweep
+# (must match LAST_TILE_W_DATUMS in the kernel, the matrix width / L1 stride follows from it).
+# 8/16 widths use only col-group g=0 (faces 0,2), 24/32 also use g=1 (faces 1,3).
+# 8 and 24 are non-face-aligned widths whose boundary-face spill is overwritten by the next tile row.
 LAST_TILE_WIDTHS = [8, 16, 24, 32]
-# Number of tiles per tile-row (last one narrow). Must match FULL_CT_DIM in the kernel;
-# set the input to TILE_HEIGHT x (NUM_TILES*TILE_WIDTH) so MATH produces that many tiles.
-NUM_TILES = 4
-INPUT_DIMS = [TILE_HEIGHT, NUM_TILES * TILE_WIDTH]
+
+# Number of tiles per tile-row for the narrow mode (last one narrow). Must match FULL_CT_DIM
+# in the kernel; the input is TILE_HEIGHT x (num_tiles*TILE_WIDTH) so MATH produces that many
+# tiles. whole_tile mode is single-tile (num_tiles=1).
+NUM_TILES_NARROW_MODE = 4
+
+# Test cases: (whole_tile, num_tiles, last_tile_width).
+#   whole_tile=True  -> normal HW-streamed untilize, one 32x32 tile (last_tile_width=32).
+#   whole_tile=False -> narrow per-face-row untilize, NUM_TILES tiles, swept last-tile width.
+CASES = [(False, NUM_TILES_NARROW_MODE, w) for w in LAST_TILE_WIDTHS] + [
+    (True, 1, TILE_WIDTH)
+]
 
 # 16-bit formats only: RV_PACR tile-mode l1_addr is 16B-aligned == 8 datums for
 # 16-bit. Sub-16-bit formats cannot hit 8-datum granularity.
+# 32-bit formats can hit 4-datum granularity, but the RV_PACR pack loop is not yet wired up for 32-bit formats.
 NARROW_RV_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -102,24 +89,29 @@ NARROW_RV_FORMATS = input_output_formats(
 @pytest.mark.quasar
 @parametrize(
     formats=NARROW_RV_FORMATS,
-    last_tile_width=LAST_TILE_WIDTHS,
+    case=CASES,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_untilize_narrow_rv_quasar(
     formats,
-    last_tile_width,
+    case,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
+    # @parametrize may wrap a tuple-valued param in a 1-tuple; unwrap defensively.
+    if isinstance(case, tuple) and len(case) == 1 and isinstance(case[0], tuple):
+        case = case[0]
+    whole_tile, num_tiles, last_tile_width = case
+
     dest_acc = DestAccumulation.No
     dest_sync_mode = DestSync.Half
-    input_dimensions = INPUT_DIMS
+    input_dimensions = [TILE_HEIGHT, num_tiles * TILE_WIDTH]
     matrix_w = (
-        NUM_TILES - 1
+        num_tiles - 1
     ) * TILE_WIDTH + last_tile_width  # output row width (datums)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -135,7 +127,7 @@ def test_pack_untilize_narrow_rv_quasar(
         raise ValueError("perf_report must be provided when is_perf=True")
 
     # Shared config across the correctness (TestConfig) and perf (PerfConfig) paths.
-    # LOOP_FACTOR repeats the steady-state unpack/math/pack work; it is 1 for correctness
+    # LOOP_FACTOR repeats the steady-state unpack/math/pack work, it is 1 for correctness
     # (single untilized matrix, identical to the original behavior) and larger for perf.
     test_config_kwargs = {
         "test_name": "sources/quasar/pack_untilize_narrow_rv_quasar_test.cpp",
@@ -149,6 +141,7 @@ def test_pack_untilize_narrow_rv_quasar(
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
             LAST_TILE_W_DATUMS(last_tile_width),
+            RV_WHOLE_TILE(whole_tile),
             LOOP_FACTOR(loop_factor),
         ],
         "runtimes": [],
@@ -171,23 +164,16 @@ def test_pack_untilize_narrow_rv_quasar(
         PerfConfig(run_types=run_types, **test_config_kwargs).run(perf_report)
         return
 
-    # Full untilize of the NUM_TILES-wide input (32 rows x NUM_TILES*32 cols, row-major).
-    # The device output is the same row-major layout but the LAST tile keeps only its
-    # first LAST_TILE_WIDTH columns -> output row width = matrix_w. So the golden is the
-    # first matrix_w columns of each untilized row.
+    # Golden: untilize keeping the first matrix_w columns of each row (narrow_row_width).
+    # For whole_tile (num_tiles=1, width=32) matrix_w=32, i.e. the full untilize.
     generate_golden = get_golden_generator(UntilizeGolden)
-    full_untilized = generate_golden(
+    narrow_golden = generate_golden(
         src_A,
         formats.output_format,
         input_dimensions,
         input_format=formats.input_format,
-    )
-    full_w = NUM_TILES * TILE_WIDTH
-    narrow_golden = (
-        full_untilized.reshape(TILE_HEIGHT, full_w)[:, :matrix_w]
-        .flatten()
-        .to(format_dict[formats.output_format])
-    )
+        narrow_row_width=matrix_w,
+    ).to(format_dict[formats.output_format])
     narrow_len = TILE_HEIGHT * matrix_w
 
     configuration = TestConfig(
@@ -208,20 +194,8 @@ def test_pack_untilize_narrow_rv_quasar(
     # Device output is a tight matrix_w-wide row-major buffer (32 rows x matrix_w).
     res_narrow = res_full[:narrow_len]
 
-    # Raw full-buffer dump (matrix_w-wide rows) — shows per-tile column placement and
-    # any spill past matrix_w, so a mis-strided tile is easy to spot when NUM_TILES>1.
-    print_full_tile(
-        res_full, formats.output_format, label="result-raw", tile_width=matrix_w
-    )
-
-    # Dump golden vs result as matrix_w-wide rows for line-by-line comparison.
-    print_full_tile(
-        narrow_golden, formats.output_format, label="golden", tile_width=matrix_w
-    )
-    print_full_tile(
-        res_narrow, formats.output_format, label="result", tile_width=matrix_w
-    )
-
     assert passed_test(
-        narrow_golden, res_narrow, formats.output_format, print_errors=True
-    ), "Narrow RV_PACR multi-tile untilize output does not match golden"
+        narrow_golden,
+        res_narrow,
+        formats.output_format,
+    ), "RV_PACR untilize output does not match golden"

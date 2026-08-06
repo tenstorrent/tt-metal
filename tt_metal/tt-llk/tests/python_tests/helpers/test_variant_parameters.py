@@ -1169,6 +1169,22 @@ class LAST_TILE_W_DATUMS(TemplateParameter):
 
 
 @dataclass
+class RV_WHOLE_TILE(TemplateParameter):
+    """Select the RV_PACR pack mode in the pack_untilize_narrow_rv_quasar test.
+
+    True  -> whole-tile "normal" untilize: one HW-streamed RV_PACR untilize op per tile
+             (untilize=1, tile_dim=16x16x4, inc_mode=1). Single-tile scope.
+    False -> narrow per-face-row: one RV_PACR (untilize=0, tile_dim=16x1x1) per DEST
+             face-row with software addressing (enables narrow / custom-width rows).
+    """
+
+    whole_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RV_WHOLE_TILE = {str(self.whole_tile).lower()};"
+
+
+@dataclass
 class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
     configure_test_run_idx: int = 0
 

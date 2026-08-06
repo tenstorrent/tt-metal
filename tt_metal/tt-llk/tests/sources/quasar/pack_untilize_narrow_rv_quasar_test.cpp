@@ -2,23 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NARROW-ROW untilize via RV_PACR (Quasar) DEMO.
+// pack_untilize via RV_PACR (Quasar). Two PACK modes, selected by RV_WHOLE_TILE:
 //
-// Produces a tight, contiguous ROW_NUM_DATUMS-wide untilized output for one
-// 32x32 tile — the capability the pack-untilize config-stride path cannot express
-// (face-granular / 16-datum floor). It exploits RV_PACR *tile mode* (untilize=0,
-// tile_dim=16x1x1), whose GPR0.l1_addr is a 16-BYTE address: for a 16-bit format
-// that is 8-datum granularity, so consecutive rows can be placed 8 datums apart.
+// RV_WHOLE_TILE = true  -- "normal" whole-tile untilize. One HW-streamed RV_PACR op per
+//   tile (untilize=1, tile_dim=16x16x4, inc_mode=1) => byte-identical to the MOP/
+//   PACR_UNTILIZE path. Proof-of-life for the RISC-V-descriptor pack path. Single-tile scope.
 //
-// Scheme (overlap-overwrite), for a 16-bit format with ROW_NUM_DATUMS=8:
-//   - one RV_PACR (16x1x1) per output row reads a 16-datum DEST face-row and
-//     writes 16 datums to L1 at a 16B address advancing by 8 datums (16B) per row;
-//   - row r's wanted low-8 overwrites row (r-1)'s garbage upper-8 (write in order);
-//   - only the last row's upper-8 survive as tail (the full-tile result buffer has
-//     room, so no separate reservation needed here).
+// RV_WHOLE_TILE = false -- NARROW-ROW untilize. Produces a tight, densely-packed output whose
+//   LAST tile per tile-row may be NARROWER than a full tile — the narrow_row capability the HW
+//   pack-untilize config-stride path cannot express on Quasar (its output stride is face-
+//   granular / 16-datum, unlike WH/BH's 16-byte stride). It uses RV_PACR *tile mode*
+//   (untilize=0, tile_dim=16x1x1): each op reads one 16-datum DEST face-row and writes it to a
+//   16-BYTE-granular L1 address (= 8-datum granularity for a 16-bit format). Issuing one op per
+//   output face-row, with input_addr (DEST row) and l1_addr (output) computed per op, lets us
+//   place each face-row at an arbitrary offset -> face de-interleave + a custom row (matrix)
+//   width. Last-tile widths not a multiple of 16 (8, 24) write a full 16-datum face-row whose
+//   upper datums spill into the next output row; packing the narrow tile first lets the full
+//   tiles overwrite that spill (see the PACK thread). Scope: one tile-row of FULL_CT_DIM 32x32
+//   tiles, 16-bit formats, last-tile width in {8,16,24,32}.
 //
-// UNPACK/MATH threads are copied verbatim from pack_untilize_rv_quasar_test.cpp;
-// only the PACK thread differs (per-row tile-mode RV_PACR instead of one untilize).
+// See test_pack_untilize_narrow_rv_quasar.py. Only the PACK thread depends on RV_WHOLE_TILE;
+// the UNPACK (unary operand) and MATH (A2D datacopy) threads are shared by both modes.
 
 #include <algorithm>
 #include <cstdint>
@@ -75,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         buffer_descriptor_u bd_val = {0};
 
-        bd_val.f.l1_addr_16B = params.buffer_A[0] / 16;
+        bd_val.f.l1_addr_16B = params.buffer_A[0] >> 4;
         bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
         bd_val.f.x_dim       = TEST_FACE_C_DIM;
         bd_val.f.y_dim       = TEST_FACE_R_DIM;
@@ -199,10 +203,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// Narrow output row width in datums (< FACE_C_DIM). 16-bit format => 8 datums = 16B.
-constexpr std::uint32_t ROW_NUM_DATUMS = 8;
-
-// Verbatim rv-pack.cpp feed helper: noinline forces the 3 words into a0/a1/a2
+// Noinline forces the 3 words into a0/a1/a2
 // (x10/x11/x12); the opcode reads them by hardcoded indices 10/11/12.
 __attribute__((noinline)) static std::uint32_t do_rv_pacr(std::uint32_t a0, std::uint32_t a1, std::uint32_t a2)
 {
@@ -211,7 +212,7 @@ __attribute__((noinline)) static std::uint32_t do_rv_pacr(std::uint32_t a0, std:
     return a0 + a1 + a2;
 }
 
-// RV_PACR 3-GPR descriptor (confirmed layout). See pack_untilize_rv_quasar_test.cpp.
+// RV_PACR 3-GPR descriptor.
 struct rv_pacr_gpr0_t
 {
     std::uint32_t clr_dvalid       : 1;  // [0]
@@ -264,16 +265,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
-    // Single op, RAW addressing (inc_mode=0): input_addr = DEST row 0, l1_addr = first
-    // 16 datums of the result buffer (absolute 16B addr). buffer_addr unused in raw mode.
-    // Tests whether the raw input_addr/l1_addr path writes DEST row 0 -> L1 base.
-    // GPR descriptors + the pack_row lambda live at function scope so both the INIT config
-    // zone and the TILE_LOOP packing zone can see them (the profiler zone RAII objects only
-    // bound the measurement window, not variable lifetime).
+    // Whole-tile mode issues a single untilize op for one tile.
+    // the multi-tile walk is narrow-mode only.
+    static_assert(!(RV_WHOLE_TILE && FULL_CT_DIM != 1), "RV_WHOLE_TILE mode is single-tile only (use FULL_CT_DIM == 1 / input [32,32]).");
+
+    // RV_PACR base descriptor. g1 (formats/stride) and g2 (mode config) are constant across the
+    // whole tile-row. In narrow mode g0.input_addr / g0.l1_addr are placeholders, recomputed per
+    // op by pack_row (below). In whole-tile mode (inc_mode=1) input_addr is counter-driven and
+    // l1_addr is the 16-datum OFFSET from the buffer base -> it must be 0 for a single tile at base
+    // (the tile counter handles per-tile placement). It's kept at function scope so both the INIT config
+    // zone and the TILE_LOOP packing zone can see them.
     rv_pacr_gpr0_u g0     = {};
     g0.f.clr_dvalid       = 0;
-    g0.f.input_addr       = 0;                         // first DEST row (source)
-    g0.f.l1_addr          = params.buffer_Res[0] / 16; // first 16 datums of target L1 (absolute 16B addr)
+    g0.f.input_addr       = 0;
+    g0.f.l1_addr          = 0;
     g0.f.rows_to_untilize = 0;
 
     rv_pacr_gpr1_u g1    = {};
@@ -283,42 +288,51 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     rv_pacr_gpr2_u g2   = {};
     g2.f.packer_sel     = 0;
-    g2.f.buffer_addr    = params.buffer_Res[0] / 16;
-    g2.f.tile_dim       = 0b101; // 16x1x1
-    g2.f.untilize       = 0;
-    g2.f.inc_mode       = 0; // RAW: use GPR0.input_addr / GPR0.l1_addr directly
+    g2.f.buffer_addr    = params.buffer_Res[0] >> 4;
     g2.f.inc_input_idx  = 0;
     g2.f.inc_output_idx = 0;
+    if constexpr (RV_WHOLE_TILE)
+    {
+        // Whole-tile "normal" RV_PACR untilize: one HW-streamed untilize op for the full
+        // 32x32 tile, HW-computed addressing from buffer base + Z counters. Single-tile scope.
+        g2.f.tile_dim = 0b000; // 16x16x4 (full tile)
+        g2.f.untilize = 1;
+        g2.f.inc_mode = 1; // HW computes L1 addr from buffer_addr + Z counters
+    }
+    else
+    {
+        // Narrow per-face-row: tile mode, RAW addressing (input_addr/l1_addr from GPR0 per op).
+        g2.f.tile_dim = 0b101; // 16x1x1 (one face-row)
+        g2.f.untilize = 0;
+        g2.f.inc_mode = 0;
+    }
 
-    // Multi-tile, row-major. FULL_CT_DIM tiles per tile-row; tiles 0..N-2 are packed
-    // full-width (32 cols, all faces), the LAST tile is narrow (skip face 1 -> faces 0,2
-    // = cols 0-15). Each op writes one DEST face-row (16 datums) to the output, and the
-    // per-row advance is the MATRIX width W (not one tile), with tile t at column t*32.
-    //
+    // Narrow-mode layout (inert / unused in whole-tile mode).
+    // Multi-tile, row-major -> FULL_CT_DIM tiles per tile-row, tiles 0..N-2 are packed full-width (32 cols, all faces),
+    // the LAST tile is narrow. Each op writes one DEST face-row (16 datums). The per-row advance
+    // is the MATRIX width W (not one tile) with tile t at column t*32:
     //   output datum(tile t, out-row R, col-group g) = R*W + t*32 + g*16
-    //   W = (FULL_CT_DIM-1)*32 + LAST_TILE_W_DATUMS
-    //
-    // A Quasar tile is 32x32 = 4 faces of 16x16 -> 64 DEST rows; tile t starts at DEST
-    // row t*64 (src_z_stride). l1_addr is 16B-granular = 8 datums (bf16), so >>3.
-    // LAST_TILE_W_DATUMS (16 or 8) is build-injected.
-    constexpr std::uint32_t TILE_W_DATUMS = 32; // full tile width
-    const std::uint32_t matrix_w_datums   = (FULL_CT_DIM - 1) * TILE_W_DATUMS + LAST_TILE_W_DATUMS;
-    const std::uint32_t base_16B          = params.buffer_Res[0] / 16;
-    const std::uint32_t last_t            = FULL_CT_DIM - 1;
+    //   W = (FULL_CT_DIM-1)*32 + LAST_TILE_W_DATUMS   (LAST_TILE_W_DATUMS in {8,16,24,32})
+    // A Quasar tile is 32x32 = 4 faces of 16x16 -> 64 DEST rows; tile t starts at DEST row t*64.
+    // l1_addr is 16B-granular = 8 datums (16-bit format).
+    constexpr std::uint32_t TILE_W_DATUMS                = 32; // full tile width
+    [[maybe_unused]] const std::uint32_t matrix_w_datums = (FULL_CT_DIM - 1) * TILE_W_DATUMS + LAST_TILE_W_DATUMS;
+    [[maybe_unused]] const std::uint32_t base_16B        = params.buffer_Res[0] >> 4;
+    [[maybe_unused]] const std::uint32_t last_t          = FULL_CT_DIM - 1;
 
     // Pack one DEST face-row (16 datums) of tile t to its untilized output slot.
     //
     // Both input_addr and l1_addr are recomputed in software every op ON PURPOSE — the
     // RV_PACR HW auto-increment (inc_mode=1 + inc_input_idx/inc_output_idx) cannot express
-    // this mapping. Per the RTL (ws-tensix tt_pack_row.sv): inc_input/output_idx advance a
-    // tile-INDEX counter by a hardcoded +1 (l.987/993), and that index maps to addresses by
-    // fixed geometry only — source row = idx (l.565, 16x1x1) and output = idx<<tile_size (l.698,
-    // contiguous 16-datum steps). That yields a plain linear tilized->linear walk. It cannot do
+    // this mapping. inc_input/output_idx advance a tile-INDEX counter by a hardcoded +1, and that index maps to addresses by
+    // fixed geometry only — source row = idx and output = idx<<tile_size (contiguous 16-datum steps).
+    // That yields a plain linear tilized->linear walk. It cannot do:
     // (a) the face de-interleave (remap: output row order is a bit-permutation of input rows),
-    // (b) the custom matrix_w row stride (not a whole tile), or (c) the two-pass overwrite. HW
-    // untilize=1 would do the de-interleave but forces full-tile geometry + face-granular stride
+    // (b) the custom matrix_w row stride (not a whole tile),
+    // (c) the two-pass overwrite.
+    // HW untilize=1 would do the de-interleave but it forces full-tile geometry + face-granular stride
     // (the very thing this demo works around). So the software recompute is fundamental here.
-    auto pack_row = [&](std::uint32_t t, std::uint32_t row)
+    [[maybe_unused]] auto pack_row = [&](std::uint32_t t, std::uint32_t row)
     {
         g0.f.input_addr = t * 64 + row; // DEST row of tile t
 
@@ -351,7 +365,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         buffer_descriptor_u bd_val = {0};
 
-        bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
+        bd_val.f.l1_addr_16B = params.buffer_Res[0] >> 4;
         bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
         bd_val.f.x_dim       = TEST_FACE_C_DIM;
         bd_val.f.y_dim       = TEST_FACE_R_DIM;
@@ -362,7 +376,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
         _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
@@ -371,37 +385,51 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
-        // needed; column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
-        // exceeds 16. So skip faces 1,3 iff LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
-        // Each op writes a full 16-datum face-row; when the kept width is not a multiple of 16
-        // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
-        // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
-        // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned: no spill).
-        constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
-        constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        if constexpr (RV_WHOLE_TILE)
         {
-            for (std::uint32_t row = 0; row < last_row_end; row++)
+            // Whole-tile "normal" untilize: one HW-streamed RV_PACR untilize op per iteration
+            // (single 32x32 tile). Byte-identical to the MOP/PACR_UNTILIZE path.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                if (!last_needs_g1 && row == 16)
-                {
-                    row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
-                }
-                pack_row(last_t, row);
+                volatile std::uint32_t rv_res = do_rv_pacr(g0.val, g1.val, g2.val);
+                (void)rv_res;
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
-
-            // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
-            // the narrow tile left in the leading columns.
-            for (std::uint32_t t = 0; t < last_t; t++)
+        }
+        else
+        {
+            // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
+            // needed. Column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
+            // exceeds 16. So skip faces 1,3 if LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
+            // Each op writes a full 16-datum face-row. When the kept width is not a multiple of 16
+            // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
+            // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
+            // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned -> no spill).
+            constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
+            constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t row = 0; row < 64; row++)
+                for (std::uint32_t row = 0; row < last_row_end; row++)
                 {
-                    pack_row(t, row);
+                    if (!last_needs_g1 && row == 16)
+                    {
+                        row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
+                    }
+                    pack_row(last_t, row);
                 }
-            }
 
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
+                // the narrow tile left in the leading columns.
+                for (std::uint32_t t = 0; t < last_t; t++)
+                {
+                    for (std::uint32_t row = 0; row < 64; row++)
+                    {
+                        pack_row(t, row);
+                    }
+                }
+
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
         }
         PROFILER_SYNC();
     }
