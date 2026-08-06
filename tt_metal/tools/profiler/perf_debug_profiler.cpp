@@ -637,6 +637,29 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                     kPollProbe,
                     ctx.sockets[d]->is_using_hugepage() ? "YES (clflush+lfence)" : "no (mfence, host buffer)",
                     sink);
+                // ACK-WRITE PROBE. socket read() ends in notify_sender(), which PCIe-writes bytes_acked to
+                // the sender core -- one DEVICE write per read. This is the access the poll probe did NOT
+                // cover (that one reads host memory: 13 ns on every box measured). A fixed ~4 us/read
+                // overhead on one card is the right order for a dynamic-TLB reconfigure per access, so
+                // measure the write and say which TLB path it uses. Writing the current bytes_acked is
+                // idempotent -- it re-sends the value the socket already holds.
+                {
+                    const auto a0 = std::chrono::steady_clock::now();
+                    constexpr uint32_t kAckProbe = 500;
+                    for (uint32_t k = 0; k < kAckProbe; k++) {
+                        ctx.sockets[d]->probe_ack_write();
+                    }
+                    const double ack_ns =
+                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - a0).count() /
+                        kAckProbe;
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] ACK-WRITE probe: {:.0f} ns/write over {} device writes | TLB "
+                        "path: {}",
+                        ack_ns,
+                        kAckProbe,
+                        ctx.sockets[d]->has_static_tlb() ? "STATIC window" : "DYNAMIC (reconfigure per access)");
+                }
             }
             ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
             ctx.decode[d]->reset(ctx.nl);
