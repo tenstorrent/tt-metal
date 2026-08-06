@@ -117,19 +117,46 @@ struct DemotedCase {
 //
 // Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
 // are one row, since they produce the same program.
+// Rows whose Wt is 1 are here only because their total_Ht exceeds the core count, which puts them
+// outside the general Wt == 1 predicate below (that one is deliberately bounded to one tile-row per
+// core); every Wt == 1 case at or under the bound is covered there and is absent here.
 constexpr DemotedCase kUngeneralizedDemotedCases[] = {
+    // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row.
+    // DRAM only: the L1 pair cleared the gate on the ported kernel.
+    {1, 1, 2, DataType::UINT16, BufferType::DRAM},
+    // [1, 1, 64, 64] — NC 1, Ht 2, Wt 2. L1 only; DRAM cleared the gate on the ported kernel.
+    {1, 2, 2, DataType::UINT16, BufferType::L1},
+    // [1, 10, 64, 64] — NC 10, Ht 2, Wt 2.
+    {10, 2, 2, DataType::BFLOAT16, BufferType::DRAM},
     // [2, 12, 64, 96] — NC 24, Ht 2, Wt 3.
     {24, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
-    {24, 2, 3, DataType::BFLOAT16, BufferType::L1},
     // [3, 7, 64, 96] — NC 21, Ht 2, Wt 3.
     {21, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
     {21, 2, 3, DataType::BFLOAT16, BufferType::L1},
+    // [3, 8, 96, 32] and [4, 6, 96, 32] — NC 24, Ht 3, Wt 1, total_Ht 72.
+    {24, 3, 1, DataType::BFLOAT16, BufferType::DRAM},
+    {24, 3, 1, DataType::BFLOAT16, BufferType::L1},
     // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3.
     {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
     {48, 3, 3, DataType::BFLOAT16, BufferType::L1},
+    // [4, 224, 64] — NC 4, Ht 7, Wt 2. DRAM cleared the gate on the ported kernel; L1 did not.
+    {4, 7, 2, DataType::BFLOAT16, BufferType::L1},
+    // [4, 7, 32, 64] — NC 28, Ht 1, Wt 2. DRAM cleared the gate on the ported kernel.
+    {28, 1, 2, DataType::BFLOAT16, BufferType::L1},
+    // [4, 9, 64, 32] — NC 36, Ht 2, Wt 1, total_Ht 72.
+    {36, 2, 1, DataType::BFLOAT16, BufferType::DRAM},
+    {36, 2, 1, DataType::BFLOAT16, BufferType::L1},
+    // [5, 160, 96] — NC 5, Ht 5, Wt 3.
+    {5, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
+    // [5, 8, 64, 64] — NC 40, Ht 2, Wt 2.
+    {40, 2, 2, DataType::BFLOAT16, BufferType::L1},
     // [6, 10, 32, 64] — NC 60, Ht 1, Wt 2.
     {60, 1, 2, DataType::BFLOAT16, BufferType::DRAM},
     {60, 1, 2, DataType::BFLOAT16, BufferType::L1},
+    // [6, 224, 160] — NC 6, Ht 7, Wt 5. DRAM cleared the gate on the ported kernel; L1 did not.
+    {6, 7, 5, DataType::BFLOAT16, BufferType::L1},
+    // [6, 4, 96, 64] — NC 24, Ht 3, Wt 2.
+    {24, 3, 2, DataType::BFLOAT16, BufferType::L1},
     // [9, 160, 96] — NC 9, Ht 5, Wt 3.
     {9, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
     {9, 5, 3, DataType::BFLOAT16, BufferType::L1},
@@ -163,8 +190,8 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // is the winning side.
     //
     // Bounded by total_Ht <= core count: above it, each core owns several tile-rows instead of one,
-    // which is a different (and separately unresolved) same-kernel parity gap, not this one — do not
-    // widen this predicate to cover that regime.
+    // which is a different same-kernel parity gap, not this one — do not widen this predicate to
+    // cover that regime. The measured points from it sit in the table above instead.
     //
     // Needs the device for the core count. A host tensor is never routed here (the free function only
     // reaches this with a device tensor); skipping the check for one keeps this from dereferencing a
