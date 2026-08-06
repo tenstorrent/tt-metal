@@ -3435,12 +3435,18 @@ construction and the change goes to WER, which is where it is decided:
 
 | arm | long-form (the gate) | short | `[END_AUDIO]` | ms/frame | RTF |
 |---|---|---|---|---|---|
-| baseline | **1 wrong of 894** | 8 of 126 | 45/45 | 47.89 (47.50 / 47.94 / 48.24) | 0.759 |
-| decode configs | **1 wrong of 894** | 9 of 126 | 45/45 | **42.92** (42.91 / 42.71 / 43.14) | **0.694** |
+| baseline | **1 wrong of 894** | 8 of 126 | 45/45 | 44.19 (43.75 / 44.78 / 44.04) | 0.577 |
+| decode configs | **1 wrong of 894** | 9 of 126 | 45/45 | **39.14** (39.21 / 38.84 / 39.36) | **0.507** |
 
 **WER is identical**, every utterance terminates, and the short bucket's 8→9 is inside its
-documented seed noise (§6.7). End-to-end **−4.97 ms/frame, 1.116×** — slightly better than the
-block A/B's −4.24, the remainder being the trunk projections that also carry configs now.
+documented seed noise (§6.7). End-to-end **−5.06 ms/frame, 1.129×**.
+
+**TIMING EXCLUDES CASE 0, WER DOES NOT.** Case 0 is the first utterance in each process and pays
+one-time program-cache compilation: **3.3 s of non-generation time over 5.4 s of audio, an RTF of
+1.346**. Including it inflates the baseline to 47.89 / 0.759 and this change to 42.92 / 0.694 —
+the *delta* survives, because both arms pay it equally, but the absolute numbers are meaningless
+and do not reconcile with the 45.4 / 0.57 on record. **Any future RTF number from this harness
+must drop the first case**, or it will look like a 0.19 RTF regression that never happened.
 
 **Still unexplained, and flagged rather than papered over:** `wqkv` + `wo` + `w2` contribute
 **0.00 ms on their own** but a further **−1.8 ms once w1's silu is fused** (reproduced twice:
