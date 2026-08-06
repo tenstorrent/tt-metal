@@ -29,7 +29,8 @@ class Attention:
         ccl_manager,
         mesh_config: MeshConfig,
         program_config: ProgramConfig,
-        layer_idx,
+        global_layer_idx,
+        local_layer_idx=None,
         transformation_mats=None,
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
@@ -44,7 +45,9 @@ class Attention:
             ccl_manager: Communication manager
             mesh_config: Mesh parallelization config
             program_config: Model-specific program configurations
-            layer_idx: Layer index (for sliding window)
+            global_layer_idx: this layer's GLOBAL index in the full model (weights / per-layer config).
+            local_layer_idx: this layer's LOCAL index within the pipeline rank, used for the KV-cache
+                slot; None => single-rank, where local == global.
             transformation_mats: Optional transformation matrices for RoPE
             weight_dtype: Data type for weights (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
@@ -54,7 +57,9 @@ class Attention:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
-        self.layer_idx = layer_idx
+        self.global_layer_idx = global_layer_idx
+        # KV-cache slot uses the local (per-rank) layer index; None => single-rank, equal to global.
+        self.local_layer_idx = local_layer_idx if local_layer_idx is not None else global_layer_idx
         self.transformation_mats = transformation_mats
 
         # MiniMax-M3 has no sliding-window attention (dense layers full causal; sparse layers block-sparse MSA).
@@ -95,7 +100,7 @@ class Attention:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
-                cache slot, ``self.layer_idx`` the layer, ``cached_len`` the prior-prefix length.
+                cache slot, ``self.local_layer_idx`` the (local) layer, ``cached_len`` the prior-prefix length.
             user_id: User/batch index; also the cache slot index (default: 0).
 
         Returns:
@@ -117,7 +122,7 @@ class Attention:
             position_idx=position_idx,
             ccl_manager=self.ccl_manager,
             batch_size=batch_size,
-            layer_idx=self.layer_idx,
+            layer_idx=self.local_layer_idx,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
         )

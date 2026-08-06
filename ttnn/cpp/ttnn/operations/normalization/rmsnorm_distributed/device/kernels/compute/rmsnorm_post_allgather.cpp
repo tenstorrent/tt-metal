@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// rmsnorm_post_allgather_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 /*
  * This kernel computes rmsnorm, dependent on the RMSNORM define.
  * For rmsnorm we receive E(x**2) and compute the remaining normalization based on gamma, beta and epsilon.

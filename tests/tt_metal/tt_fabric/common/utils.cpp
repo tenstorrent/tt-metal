@@ -472,7 +472,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     int rank = *distributed_context->rank();
 
     std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::filesystem::path golden_dir = root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files";
 
     // Check this rank's generated file
@@ -565,7 +565,7 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
     int rank = *distributed_context->rank();
 
     std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path fabric_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path fabric_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
 
     // Each rank writes only its own local mesh's channels. Wait for every rank to finish before rank 0
     // aggregates the per-rank files into the complete, all-mesh assignment (mock runs place all ranks on one

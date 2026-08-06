@@ -45,6 +45,7 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
@@ -82,6 +83,7 @@
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -110,7 +112,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -119,7 +121,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    tt::CoreType dispatch_core_type =
+        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -129,12 +132,12 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, physical_chip_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
                 // Claimed service cores are permitted to run user kernels in FD mode.
-                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                if (service_claims.is_service_core(physical_chip_id, dispatch_core)) {
                     return false;
                 }
                 return kernel->is_on_logical_core(dispatch_core);
@@ -462,10 +465,19 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
+            experimental::blaze::process_named_args(*this, kernel_descriptor, kernel_handle);
+        } else {
+            ////////////////////////////////////////////////////////////
+            // Regular (non-Blaze) code path
+            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+                SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+            }
+            SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
-        SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
     }
 }
 
@@ -720,18 +732,12 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name,
-    const TensorSpec& spec,
-    bool dynamic_tensor_shape,
-    bool match_padded_shape_only,
-    bool enqueue_invariant) {
+    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name,
-        Metal2NameRegistry::RegisteredTensorParameter{
-            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, relaxations});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -746,37 +752,15 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-bool ProgramImpl::get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const {
+experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
-        return false;
+        return {};
     }
     auto it = metal2_registry_->tensor_parameter_layouts.find(name);
     if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
+        return {};
     }
-    return it->second.dynamic_tensor_shape;
-}
-
-bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string& name) const {
-    if (!metal2_registry_) {
-        return false;
-    }
-    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
-    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
-    }
-    return it->second.match_padded_shape_only;
-}
-
-bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
-    if (!metal2_registry_) {
-        return false;
-    }
-    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
-    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
-    }
-    return it->second.enqueue_invariant;
+    return it->second.relaxations;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -1221,6 +1205,12 @@ void detail::ProgramImpl::CircularBufferAllocator::mark_address(
 }
 
 CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
+    // Metal 2.0 programs use DataflowBuffers, never legacy circular buffers.
+    TT_FATAL(
+        !this->created_from_spec_,
+        "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
+        "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -1314,6 +1304,7 @@ std::shared_ptr<CircularBufferImpl> detail::ProgramImpl::get_circular_buffer(CBH
 std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_core(
     const CoreCoord& core) const {
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
+    cbs_on_core.reserve(circular_buffers_.size());
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_core(core)) {
             cbs_on_core.push_back(circular_buffer);
@@ -1325,6 +1316,7 @@ std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_b
 std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_corerange(
     const CoreRange& cr) const {
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
+    cbs_on_core.reserve(circular_buffers_.size());
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_corerange(cr)) {
             cbs_on_core.push_back(circular_buffer);
@@ -1335,6 +1327,12 @@ std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_b
 
 std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges() const {
     std::vector<CoreRange> core_ranges;
+    size_t max_core_ranges = 0;
+    for (const auto& circular_buffer : circular_buffers_) {
+        max_core_ranges += circular_buffer->core_ranges().ranges().size();
+    }
+    core_ranges.reserve(max_core_ranges);
+
     for (const auto& circular_buffer : circular_buffers_) {
         for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
@@ -1450,6 +1448,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
                 // an overlapping-but-different core range. Mark each such allocator exactly once.
                 std::vector<CircularBufferAllocator*> touched;
+                touched.reserve(this->dfb_allocators_.size());
                 for (CircularBufferAllocator& a : this->dfb_allocators_) {
                     for (const CoreRange& core_range : kernel_cores.ranges()) {
                         if (a.core_range.intersects(core_range)) {
@@ -1506,7 +1505,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
     if (mesh_device != nullptr) {
         // Mesh device: track all sub-devices
-        for (IDevice* sub_device : mesh_device->get_devices()) {
+        const auto sub_devices = mesh_device->get_devices();
+        devices_to_track.reserve(sub_devices.size());
+        for (IDevice* sub_device : sub_devices) {
             devices_to_track.push_back(sub_device);
         }
     } else {
@@ -1516,6 +1517,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     // Track which devices are NEW (not already tracked)
     std::vector<const IDevice*> new_devices;
+    new_devices.reserve(devices_to_track.size());
     for (const IDevice* dev : devices_to_track) {
         auto [iter, inserted] = this->cb_devices_.insert(dev);
         if (inserted) {
@@ -1680,7 +1682,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
+            const auto mesh_devices = mesh->get_devices();
+            physical_allocators.reserve(mesh_devices.size());
+            for (IDevice* dev : mesh_devices) {
                 physical_allocators.push_back(dev->allocator_impl().get());
             }
         } else {
@@ -1694,7 +1698,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
+            const auto mesh_devices = mesh->get_devices();
+            devices_for_svc_check.reserve(mesh_devices.size());
+            for (IDevice* dev : mesh_devices) {
                 devices_for_svc_check.push_back(dev);
             }
         } else {
@@ -1996,6 +2002,11 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+        size_t num_cores = 0;
+        for (const CoreRange& core_range : ranges) {
+            num_cores += core_range.size();
+        }
+        dst_noc_unicast_info.reserve(num_cores);
         for (const CoreRange& core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -2084,6 +2095,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
+                kernel_ids.reserve(kernel_group->kernel_ids.size());
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     kernel_ids.push_back(device_local_kernel_id);
@@ -2116,6 +2128,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 // No checks for max dispatch class
                 // Validated during CreateKernel if the requested processor is supported
                 std::vector<KernelHandle> kernel_ids;
+                kernel_ids.reserve(kernel_group->kernel_ids.size());
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
@@ -2422,9 +2435,16 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // succeeds (from the .d files left by the -E step).
         std::vector<std::shared_ptr<Kernel>> preprocessed_kernels;
 
+        size_t total_kernels = 0;
+        for (const auto& kernels : kernels_) {
+            total_kernels += kernels.size();
+        }
+        submitted_kernels.reserve(total_kernels);
+        preprocessed_kernels.reserve(total_kernels);
+
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -2460,7 +2480,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
@@ -2603,6 +2623,7 @@ void detail::ProgramImpl::release_buffers() { owned_buffer_pool = {}; }
 std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(
     const CoreCoord& core, CoreType core_type) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
+    semaphores.reserve(this->semaphores_.size());
     for (const Semaphore& s : this->semaphores_) {
         if (s.initialized_on_logical_core(core) && s.core_type() == core_type) {
             semaphores.emplace_back(std::cref(s));
@@ -2707,6 +2728,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
     // Collect dataflow buffers from all programs
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+    size_t total_dataflow_buffers = 0;
+    for (ProgramImpl* program : programs) {
+        total_dataflow_buffers += program->dataflow_buffers().size();
+    }
+    dataflow_buffers.reserve(total_dataflow_buffers);
+
     for (ProgramImpl* program : programs) {
         for (const auto& dfb : program->dataflow_buffers()) {
             dataflow_buffers.push_back(dfb);

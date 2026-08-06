@@ -24,6 +24,20 @@ struct RotaryEmbeddingDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // Decode mode (token_idx set) derives cos_sin_start_id / cos_sin_offset from token_idx and bakes
+    // them into static reader/writer runtime args, while token_idx is deliberately excluded from
+    // compute_program_hash so successive decode positions cache-hit the same program.  Those two
+    // scalars must therefore be re-applied on every cache hit -- otherwise the cached program keeps
+    // the first token's offsets and every later token reads the wrong cos/sin rows.  Declaring this
+    // hook also supersedes resolve_bindings, so it owns buffer-address re-application (runtime args and
+    // sharded CBs) too.  It patches those slots in place; it never rebuilds the descriptor.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

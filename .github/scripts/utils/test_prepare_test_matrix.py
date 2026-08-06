@@ -485,3 +485,69 @@ def test_pipeline_reorg_yamls_have_no_prio_sku_keys():
             if m:
                 leftovers.append(f"{path.name}:{i}:{m.group(2)}")
     assert leftovers == []
+
+
+def _run_matrix_raw(tests_yaml: Path, *extra: str) -> subprocess.CompletedProcess:
+    """Invoke the script without asserting success, for failure-path assertions."""
+    run_env = os.environ.copy()
+    run_env.pop("GITHUB_OUTPUT", None)
+    run_env.pop("MATRIX_EVENT_NAME", None)
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), str(tests_yaml), "ALL_SKUS_IN_TESTS", str(SKU_CONFIG), *extra],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=run_env,
+    )
+
+
+_COMMANDLESS_YAML = """\
+- name: commandless test
+  model: google/gemma-4-E2B-it
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: models
+  owner_id: U000
+"""
+
+
+def test_absent_cmd_is_allowed_with_flag(tmp_path: Path):
+    """--allow-missing-cmd lets vLLM-style entries omit `cmd` (impl builds it)."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(_COMMANDLESS_YAML)
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--allow-missing-cmd")
+    assert len(matrix) == 1
+    assert "cmd" not in matrix[0]
+
+
+def test_absent_cmd_rejected_by_default(tmp_path: Path):
+    """Without the flag the strict contract holds: a missing `cmd` is an error."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(_COMMANDLESS_YAML)
+    result = _run_matrix_raw(path)  # no --allow-missing-cmd
+    assert result.returncode != 0, result.stdout
+    assert "cmd is missing" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("empty_cmd", ['""', '"   "'])
+@pytest.mark.parametrize("extra", [(), ("--allow-missing-cmd",)])
+def test_present_but_empty_cmd_is_always_rejected(tmp_path: Path, empty_cmd: str, extra: tuple):
+    """An empty `cmd` runs nothing but reports success — rejected even with the flag."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(
+        textwrap.dedent(
+            f"""\
+            - name: empty cmd test
+              cmd: {empty_cmd}
+              skus:
+                wh_n150_civ2:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    result = _run_matrix_raw(path, *extra)
+    assert result.returncode != 0, result.stdout
+    assert "cmd is present but empty" in result.stdout + result.stderr
