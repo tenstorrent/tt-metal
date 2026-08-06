@@ -26,7 +26,6 @@ Run (craq-sim / emulator):
 import os
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
@@ -35,15 +34,6 @@ from models.demos.vision.classification.resnet50.quasar.tt import ttnn_functiona
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import _pcc
 
 PCC = 0.98
-
-
-def _torch_layer3_golden(torch_model, torch_input):
-    """Reference = torchvision resnet50 forward THROUGH layer3 (conv1->bn1->relu->maxpool->layer1..3),
-    reshaped to the device's [1, 1, NHW, C] NHWC-flat layout."""
-    with torch.no_grad():
-        z = torch_model.maxpool(torch_model.relu(torch_model.bn1(torch_model.conv1(torch_input))))
-        z = torch_model.layer3(torch_model.layer2(torch_model.layer1(z)))  # [B, 1024, 14, 14]
-    return z.permute(0, 2, 3, 1).reshape(1, 1, -1, z.shape[1]).float()
 
 
 @pytest.mark.timeout(14400)
@@ -85,7 +75,14 @@ def test_resnet50_layers_1_3(device, use_pretrained_weight, model_location_gener
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         dev_l3 = test_infra.run()  # with the gate set, run() returns the layer3 output [1,1,NHW,1024]
 
-        golden = _torch_layer3_golden(test_infra.torch_model, test_infra.torch_input_tensor)
+        # Golden = the torch layer3 output the infra already captured via its RESNET_PCC_LOG forward hooks
+        # (block .add hook on layer3's last module). This is the exact reference the model's own [GOLDENPCC]
+        # line for op "layer3_module6.add" used, so we assert on the same comparison.
+        golden = _rn._GOLDEN.get("layer3_module6.add")
+        assert golden is not None, (
+            "layer3 golden not captured -- RESNET_PCC_LOG must be '1' BEFORE create_test_infra so the infra "
+            "registers the torch forward hooks (set_golden_intermediates)."
+        )
         dev = ttnn.to_torch(dev_l3).float()
         pcc, finite_frac = _pcc(dev, golden)
         logger.info(f"[layers_1_3] layer3 output pcc={pcc:.6f} finite_frac={finite_frac:.6f} dev={tuple(dev.shape)}")
