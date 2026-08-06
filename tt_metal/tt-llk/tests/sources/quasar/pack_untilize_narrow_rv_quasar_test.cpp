@@ -24,9 +24,7 @@
 // See test_pack_untilize_narrow_rv_quasar.py. Only the PACK thread depends on RV_WHOLE_TILE;
 // the UNPACK (unary operand) and MATH (A2D datacopy) threads are shared by both modes.
 
-#include <algorithm>
 #include <cstdint>
-#include <cstdio>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -379,27 +377,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
-            // needed. Column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
-            // exceeds 16. So skip faces 1,3 if LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
-            // Each op writes a full 16-datum face-row. When the kept width is not a multiple of 16
-            // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
+            // PASS 1: narrow last tile FIRST. Column-group g=0 (faces 0 and 2 -> cols 0-15) is always
+            // packed; g=1 (faces 1 and 3 -> cols 16-31) only when the kept width exceeds one face
+            // (FACE_C_DIM). Each op writes a full 16-datum face-row, when the kept width is not a
+            // multiple of 16 (8 or 24) the boundary face-row's upper datums spill into the next output
             // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
-            // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned -> no spill).
-            // g=1 (cols 16-31 = faces 1,3) is only needed when the kept width exceeds one face
-            // (FACE_C_DIM); otherwise read faces 0,2 only -> loop through face 2 (< 3*FACE_R_DIM)
-            // and skip face 1. When g=1 is needed, read all faces (< ROWS_PER_TILE).
-            const bool last_needs_g1         = (LAST_TILE_W_DATUMS > FACE_C_DIM);
-            const std::uint32_t last_row_end = last_needs_g1 ? ROWS_PER_TILE : 3u * FACE_R_DIM;
+            // overwrite that spill (widths 16/32 are face-aligned: no spill). Packing order within the
+            // narrow tile doesn't matter: each DEST row maps to its own remapped output slot, g=0/g=1
+            // write disjoint columns, and any g=1 spill lands in a full-tile column fixed by PASS 2.
+            const bool last_needs_g1 = (LAST_TILE_W_DATUMS > FACE_C_DIM);
+            // Pack all FACE_R_DIM rows of one DEST face (face f occupies DEST rows [f*FACE_R_DIM ..)).
+            auto pack_face = [&](std::uint32_t face)
+            {
+                for (std::uint32_t r = 0; r < FACE_R_DIM; r++)
+                {
+                    pack_row(last_t, face * FACE_R_DIM + r);
+                }
+            };
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t row = 0; row < last_row_end; row++)
+                pack_face(0); // g=0: cols 0-15
+                pack_face(2);
+                if (last_needs_g1)
                 {
-                    if (!last_needs_g1 && row == FACE_R_DIM)
-                    {
-                        row += FACE_R_DIM; // g=0 only -> skip face 1 (rows FACE_R_DIM..2*FACE_R_DIM-1) -> jump to face 2
-                    }
-                    pack_row(last_t, row);
+                    pack_face(1); // g=1: cols 16-31
+                    pack_face(3);
                 }
 
                 // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
