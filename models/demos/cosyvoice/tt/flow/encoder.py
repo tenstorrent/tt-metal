@@ -306,7 +306,7 @@ class TtRelPosAttention:
         out, _ = self.forward_cached(x, pos_emb, mask=mask, cache=None)
         return out
 
-    def forward_cached(self, x, pos_emb, mask=None, cache=None, return_cache=False, cache_free=False):
+    def forward_cached(self, x, pos_emb, mask=None, cache=None, return_cache=False, cache_free=False, bd_offset=None):
         """The same attention, with an optional `(k, v)` cache prepended.
 
         `cache` is a pair of `[B, h, cache_t, d_k]` tensors, kept unpacked rather
@@ -387,7 +387,23 @@ class TtRelPosAttention:
         # `if matrix_ac.shape != matrix_bd.shape` upstream. With a KV cache the
         # comparison is against the *attention key size*, not the chunk length --
         # a one-token decode step still needs the skew.
-        if bd.shape[-1] != ac.shape[-1]:
+        if bd_offset is not None:
+            # An explicit window into the positional scores, for a cache whose query
+            # does **not** sit at the last slot. `rel_shift`'s `T = 1` fast path takes
+            # `bd[..., :key_w]`, which is the special case `bd_offset == 0` -- correct
+            # only when the query is the last key position.
+            #
+            # A cache written in place (F41) puts the query at row `256 + i` at
+            # sub-step `i`, so a key at row `j` is at relative distance `256 + i - j`,
+            # and the column for relative distance `r` is `(N-1) - r`. The needed
+            # window therefore starts at `31 - i`. Passing it explicitly keeps that
+            # arithmetic at the one call site that knows `i`, rather than hiding an
+            # assumption about alignment inside the attention.
+            key_w = ac.shape[-1]
+            sliced = ttnn.slice(bd, [0, 0, 0, bd_offset], [b, self.h, t, bd_offset + key_w])
+            ttnn.deallocate(bd)
+            bd = sliced
+        elif bd.shape[-1] != ac.shape[-1]:
             bd = self.rel_shift(bd, b, self.h, t, tp)
 
         raw = ttnn.add(ac, bd)
