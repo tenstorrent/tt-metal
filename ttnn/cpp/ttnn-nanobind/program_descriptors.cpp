@@ -722,58 +722,9 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::Defines defines,
                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
-               const nb::list& named_common_runtime_args,
-               const nb::list& named_per_core_runtime_args,
-               const nb::list& named_common_runtime_arg_arrays,
-               const nb::list& named_per_core_runtime_arg_arrays,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
-                tt::tt_metal::experimental::blaze::NamedKernelArgs named_args;
-                for (auto item : named_common_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    named_args.named_common_runtime_args.push_back(
-                        {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
-                }
-                for (auto item : named_per_core_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, uint32_t>> core_values;
-                    core_values.reserve(dict.size());
-                    for (const auto& [core, value] : dict) {
-                        core_values.emplace_back(nb::cast<CoreCoord>(core), nb::cast<uint32_t>(value));
-                    }
-                    named_args.named_per_core_runtime_args.push_back(
-                        {nb::cast<std::string>(tup[0]), std::move(core_values)});
-                }
-                for (auto item : named_common_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto values_list = nb::cast<nb::list>(tup[1]);
-                    std::vector<uint32_t> values;
-                    values.reserve(values_list.size());
-                    for (auto value : values_list) {
-                        values.push_back(nb::cast<uint32_t>(value));
-                    }
-                    named_args.named_common_runtime_arg_arrays.push_back(
-                        {nb::cast<std::string>(tup[0]), std::move(values)});
-                }
-                for (auto item : named_per_core_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
-                    core_values.reserve(dict.size());
-                    for (const auto& [core, array] : dict) {
-                        auto values_list = nb::cast<nb::list>(array);
-                        std::vector<uint32_t> values;
-                        values.reserve(values_list.size());
-                        for (auto value : values_list) {
-                            values.push_back(nb::cast<uint32_t>(value));
-                        }
-                        core_values.emplace_back(nb::cast<CoreCoord>(core), std::move(values));
-                    }
-                    named_args.named_per_core_runtime_arg_arrays.push_back(
-                        {nb::cast<std::string>(tup[0]), std::move(core_values)});
-                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -786,7 +737,10 @@ void py_module_types(nb::module_& mod) {
                     ////////////////////////////////////////////////////////////
                     // Blaze-only experimental named args
                     // Removal is tracked by issue #50953
-                    std::move(named_args),
+                    // Deliberately constructed EMPTY here: the Blaze named-arg surface is kept
+                    // OUT of the Python __init__ signature. It is settable ONLY post-construction
+                    // via the blaze_named_* def_prop_rw setters below (experimental / temporary).
+                    tt::tt_metal::experimental::blaze::NamedKernelArgs{},
                     ////////////////////////////////////////////////////////////
                     opt_level,
                     std::move(config),
@@ -801,10 +755,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("defines") = nb::cast(tt::tt_metal::KernelDescriptor::Defines()),
             nb::arg("runtime_args") = nb::cast(tt::tt_metal::KernelDescriptor::RuntimeArgs()),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
-            nb::arg("named_common_runtime_args") = nb::list(),
-            nb::arg("named_per_core_runtime_args") = nb::list(),
-            nb::arg("named_common_runtime_arg_arrays") = nb::list(),
-            nb::arg("named_per_core_runtime_arg_arrays") = nb::list(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
