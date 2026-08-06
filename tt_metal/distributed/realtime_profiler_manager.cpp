@@ -1388,7 +1388,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         dev_state.first_timestamp = static_cast<uint64_t>(intercept);
         dev_state.sync_host_start = host_start_time;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "[Real-time profiler] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
             "device_time_at_sync={} cycles",
