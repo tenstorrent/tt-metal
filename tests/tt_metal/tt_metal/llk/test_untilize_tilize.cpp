@@ -445,16 +445,15 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 // Gen1-only single-core helper for the `unpack_tilizeA_B` + eltwise binary add compute kernel.
 // On Quasar, llk_unpack_tilizeA_B is only compatible with the math reduce kernel, not eltwise
 // binary add, so the caller (`TensixComputeUnpackTilizeA_B`) skips on Quasar.
-void run_single_core_unpack_tilizeA_B_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_single_core_unpack_tilizeA_B_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device.get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -935,7 +934,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_tilize_w_elwadd};
-        unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_program(*this->devices_.at(0), test_config);
     }
 }
 
@@ -1226,7 +1225,7 @@ static void run_quasar_tilize_untilize_test(
 }
 
 // Pack Untilize (via pack_untilize_block)
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1236,7 +1235,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilize) {
                         continue;  // Int16 + 32-bit dest mode is not supported on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->device(),
+                        *this->devices_.at(0),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE,
@@ -1251,7 +1250,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilize) {
 }
 
 // Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDst) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1261,7 +1260,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDst) {
                         continue;  // Int16 + 32-bit dest mode is not supported on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->device(),
+                        *this->devices_.at(0),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE_DST,
@@ -1277,14 +1276,14 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDst) {
 
 // Pack Untilize tiny tile (1x32, 2x32) via pack_untilize_block (unpack in the loop).
 // {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeTinyTile) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->device(),
+                    *this->devices_.at(0),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::UNTILIZE,
@@ -1301,14 +1300,14 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeTinyTile) {
 
 // Pack Untilize Dst tiny tile (1x32, 2x32): tiles pre-loaded into dest via copy_tile.
 // {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDstTinyTile) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->device(),
+                    *this->devices_.at(0),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::UNTILIZE_DST,
@@ -1351,14 +1350,14 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeUnpackTilize) {
 
 // Unpack Tilize tiny tile (1x32, 2x32) via tilize_block.
 // {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeUnpackTilizeTinyTile) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->device(),
+                    *this->devices_.at(0),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::TILIZE,
@@ -1376,14 +1375,14 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeUnpackTilizeTinyTile) {
 // Unpack Tilize tiny tiles (via tilize_block) with a nonzero input_tile_index per tile-row
 // (tilize_across_tile_rows.cpp), so the cross-tile-row stride in llk_unpack_tilize_block is
 // exercised, like the Blackhole TensixComputeUnpackTilizeTinyTile16x32 test.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeUnpackTilizeTinyTileCrossTileRows) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCrossTileRows) {
     std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
     std::vector<vector<std::uint32_t>> test_configs = {{2, 1}, {2, 2}};
     for (auto& geometry : geometries) {
         for (auto& cfg : test_configs) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->device(),
+                    *this->devices_.at(0),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::TILIZE,
@@ -1428,12 +1427,12 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeUnpackTilizeA_B) {
 }
 
 // Pack Untilize Int8 -> Int32 dest -> Int32 (via pack_untilize_block)
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             run_quasar_tilize_untilize_test(
-                this->device(),
+                *this->devices_.at(0),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE,
@@ -1446,12 +1445,12 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeInt32) {
 }
 
 // Pack Untilize Dst Int8 -> Int32 dest -> Int32 (tiles pre-loaded into dest via copy_tile)
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDstInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             run_quasar_tilize_untilize_test(
-                this->device(),
+                *this->devices_.at(0),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE_DST,
@@ -1466,7 +1465,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputePackUntilizeDstInt32) {
 // Quasar fast untilize: no dedicated fast-untilize LLK on Quasar, so fast_untilize_* (api/compute/experimental/
 // fast_untilize.h) forwards to the plain pack_untilize path -- this exercises that forwarding on real Quasar
 // single-card CI.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastUntilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
@@ -1480,13 +1479,13 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastUntilize) {
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
     }
 }
 
 // Quasar fast tilize: no dedicated fast-tilize LLK on Quasar, so fast_tilize_* forwards to the plain
 // unpack_tilize path (tilize.h) -- this exercises that forwarding on real Quasar single-card CI.
-TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastTilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
@@ -1502,7 +1501,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastTilize) {
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
     }

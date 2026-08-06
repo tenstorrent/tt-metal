@@ -297,8 +297,9 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
-void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
+void run_single_core_reduce_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
@@ -317,9 +318,9 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
     const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
     auto in_tensor =
-        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
     auto out_tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
@@ -374,7 +375,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     }
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -405,7 +406,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -424,7 +425,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fpu_math_fidelity = test_config.math_fidelity,
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
@@ -484,7 +485,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -615,7 +616,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -648,7 +649,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -690,7 +691,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -733,7 +734,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -772,7 +773,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -815,7 +816,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -854,7 +855,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(*this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -866,7 +867,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarUnitMeshFixture, TensixComputeReduceColumnMxFp4X2) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
@@ -885,7 +886,7 @@ TEST_F(LLKQuasarUnitMeshFixture, TensixComputeReduceColumnMxFp4X2) {
         .input_format = tt::DataFormat::MxFp4,
         .enable_2x_src_format = true,
     };
-    run_single_core_reduce_program(this->device(), test_config);
+    run_single_core_reduce_program(this->devices_.at(0), test_config);
 }
 
 }  // namespace tt::tt_metal

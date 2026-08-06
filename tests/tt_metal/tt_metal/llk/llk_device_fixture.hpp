@@ -28,10 +28,12 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-// Per-fixture-chain shared MeshDevice state. Distinct instances exist for
-// LLKMeshDeviceFixture (all chips), LLKMeshDeviceSingleCardFixture (MMIO chips),
-// and LLKQuasarUnitMeshFixture (single unit-mesh). Derived variants
-// that do not override shared_state() reuse their base class's handles.
+// Per-fixture-chain shared MeshDevice state. Two distinct instances exist across
+// the file — one for LLKMeshDeviceFixture (all chips), one for
+// LLKMeshDeviceSingleCardFixture (MMIO chips only). Derived variants
+// (LLKMeshDeviceFixtureSlowDispatchOnly, LLKBlackholeSingleCardFixture,
+// LLKQuasarMeshDeviceSingleCardFixture) inherit shared_state() without
+// overriding it, so they reuse their base class's handles.
 struct LLKSharedDevices {
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
     tt::ARCH arch{tt::ARCH::Invalid};
@@ -210,43 +212,21 @@ protected:
     }
 };
 
-// Quasar-only UnitMesh fixture with suite-shared single unit-mesh device.
-// Inherits device()/RunProgram/WriteBuffer/ReadBuffer from UnitMeshFixture
-// (via QuasarUnitMeshFixture) while keeping SetUpTestSuite sharing
-// so TopologyDiscovery is not repeated per test.
-class LLKQuasarUnitMeshFixture : public QuasarUnitMeshFixture {
+class LLKQuasarMeshDeviceSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
-    template <class F>
-    friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
-
-    static detail::LLKSharedDevices& shared_state() { return detail::shared_state_storage<LLKQuasarUnitMeshFixture>(); }
-
     static void SetUpTestSuite() {
-        if (detail::detect_arch() != tt::ARCH::QUASAR) {
+        const auto arch = detail::detect_arch();
+        if (arch != tt::ARCH::QUASAR) {
             return;
         }
-        auto& s = shared_state();
-        if (s.initialized) {
-            return;
-        }
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        detail::populate_shared_state(s, {mmio_device_id});
+        LLKMeshDeviceSingleCardFixture::SetUpTestSuite();
     }
-
-    static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
         if (!shared_state().initialized) {
             GTEST_SKIP() << "Not a Quasar device";
         }
-        detail::apply_shared_state(*this, shared_state());
-        device_ = devices_.front();
-    }
-
-    void TearDown() override {
-        // Devices are owned by the suite-shared state; just drop the per-test references.
-        this->devices_.clear();
-        this->device_.reset();
+        LLKMeshDeviceSingleCardFixture::SetUp();
     }
 };
 
