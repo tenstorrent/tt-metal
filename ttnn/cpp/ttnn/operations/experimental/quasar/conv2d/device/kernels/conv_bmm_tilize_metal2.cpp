@@ -724,21 +724,33 @@ void kernel_main() {
 #else
                             // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
                             // two constituent steps (identical reconfig + copy init) on Quasar.
+                            MATH(
+                                DPRINT("RL reconfA i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            MATH(
+                                DPRINT("RL cpyinit i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             copy_tile_to_dst_init_short(matmul_partials_cb);
 #endif
+                            UNPACK(DPRINT("RL wf i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
+                            MATH(DPRINT("RL acq i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             tile_regs_acquire();
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
+                            MATH(DPRINT("RL cpyblk i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
+                            UNPACK(DPRINT("RL pf i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                            MATH(
+                                DPRINT("RL reconfB i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            MATH(DPRINT("RL mminit i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             matmul_block_init(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
+                            MATH(DPRINT("NR acq i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                             tile_regs_acquire();
                         }
 
@@ -821,6 +833,7 @@ void kernel_main() {
                             }
                         }
 #endif
+                        MATH(DPRINT("MMcommit i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         tile_regs_commit();
                         {
                             DataflowBuffer curr_out_cb =
@@ -834,11 +847,13 @@ void kernel_main() {
                                 PACK(DPRINT("PKrsv i0={}\n", (uint32_t)in0_subblock_i));
                             }
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
+                            PACK(DPRINT("PKwait i0={}\n", (uint32_t)in0_subblock_i));
                             tile_regs_wait();
                             if (in0_block_h_i == 0) {
                                 PACK(DPRINT("PKgot i0={}\n", (uint32_t)in0_subblock_i));
                             }
 
+                            PACK(DPRINT("PKl1acc i0={}\n", (uint32_t)in0_subblock_i));
                             if constexpr (packer_l1_acc) {
                                 if (in0_block_w_i == 0) {
                                     pack_reconfig_l1_acc(0);
@@ -867,13 +882,16 @@ void kernel_main() {
                             // subblock reserve_back(osnt)/push_back(osnt) advances wr_entry_idx by osnt, so the
                             // relative 0..osnt-1 lands in the correct sequential OUT/partials slot for every
                             // (height-block, subblock), identical to the pre-Quasar pack_block behavior.
+                            PACK(DPRINT("PKtile i0={}\n", (uint32_t)in0_subblock_i));
                             for (uint32_t t = 0; t < out_subblock_num_tiles; ++t) {
                                 pack_tile<true /*out_of_order_output*/>(start_dst_index + t, curr_matmul_out_cb, t);
                             }
 #else
+                            PACK(DPRINT("PKtile i0={}\n", (uint32_t)in0_subblock_i));
                             pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 #endif
 
+                            PACK(DPRINT("PKrel i0={}\n", (uint32_t)in0_subblock_i));
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
                             if (in0_block_h_i == 0) {
