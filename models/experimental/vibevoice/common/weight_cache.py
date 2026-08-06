@@ -56,7 +56,10 @@ def resolve_weight_cache(
     if os.environ.get("VV_DISABLE_WEIGHT_CACHE", "").lower() in ("1", "true", "yes"):
         return WeightCache(None, enabled=False)
     cache_dir = weight_cache_dir or os.environ.get("VV_WEIGHT_CACHE_DIR") or default_weight_cache_root()
-    rope = 1 if os.environ.get("VV_FUSED_ROPE", "0") == "1" else 0
+    # Must track _FUSED_ROPE's default in tt/ttnn_vibevoice_lm.py: the flag permutes wq/wk at load,
+    # so keying a fused-RoPE run as rope0 would reuse unpermuted cached weights and silently produce
+    # wrong output.
+    rope = 1 if os.environ.get("VV_FUSED_ROPE", "1") == "1" else 0
     fold = 1 if os.environ.get("VV_POST_SCALE_FOLD", "") == "1" else 0
     wc = WeightCache.for_checkpoint(cache_dir, model_path, enabled=True, variant=f"rope{rope}_fold{fold}")
     return wc.child(submodule) if submodule else wc

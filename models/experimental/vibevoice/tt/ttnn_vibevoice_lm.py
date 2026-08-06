@@ -406,7 +406,20 @@ def preprocess_lm_weights(
 # is bit-exact for a given table; it shifts only by the device table's 1.2e-07 deviation from numpy
 # (measured: prefill hidden PCC 0.999946).  The decode paths take the kernel's bf16 RoPE, which
 # leaves greedy tokens unchanged over a synthetic 8-step check but is not bit-exact.
-_FUSED_ROPE = os.environ.get("VV_FUSED_ROPE", "0") == "1"
+#
+# Default ON.  It was shipped off after a 100-min acceptance run showed the speaking rate
+# accelerating (median 208 wpm vs 153) with every energy/spectral gate passing.  Re-validated on the
+# current frame (batched RoPE + bf8b FFN + depthwise mul-reduce + tile-row modulation): a full
+# 4p_climate_100min render holds 42,498 AR tokens — the same count as the pacing-safe reference —
+# and 93.04 min against its 93.17, with whisper pacing 169/173/195 wpm early/mid/late (median 173,
+# natural 150-190) versus the regression's 208.  Clipping 0.000000%, DC 4.8e-04, longest near-silent
+# run 9 frames.  Listened through and clean.  ISL 23038 decode 37.90 -> 36.43 ms/tok, rtf_decode
+# 0.2842 -> 0.2732, e2e rtf 0.3763 -> 0.3491.  VV_FUSED_ROPE=0 restores the fp32 RoPE rows.
+#
+# NOTE: this default must stay in lockstep with resolve_weight_cache's rope{0,1} variant key in
+# common/weight_cache.py — the flag PERMUTES wq/wk at load, so a mismatched key would load
+# unpermuted weights from a stale cache directory and silently produce wrong output.
+_FUSED_ROPE = os.environ.get("VV_FUSED_ROPE", "1") == "1"
 
 
 def _interleave_perm(head_dim: int) -> np.ndarray:
