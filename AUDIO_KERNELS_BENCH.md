@@ -128,6 +128,25 @@ The wrapper-to-work ratio on the FIR is still ~6:1, and concat is now the single
 is arithmetic. Both die if `Activation1d` becomes one fused band that keeps the 2x-upsampled tensor in
 L1 -- today it is written to DRAM and re-read about ten times.
 
+## Levers closed by measurement — do not re-walk these
+
+Each of these looked promising and was killed by a number. The scripts that killed them are in this
+directory, so any of them can be re-opened with evidence rather than argument.
+
+| lever | verdict | measurement |
+|---|---|---|
+| **Trace** | dead | vocoder 1.2214 s untraced vs 1.2191 s traced. Not dispatch-bound. |
+| **conv1d L1_FULL** | worth ~nothing | `verify` mode: 1 of 42 production shapes fits L1. The 1.2–2.3x from a per-shape sweep was at B=1; production is B=2 and longer. Also returns a *wrong answer* at C=16 (tile width — padding C to 32 is bit-exact). |
+| **Depthwise operand split** | harmful | plateaus ~6e-04 at 2.5–6x cost; after the SFPU fix the unsplit path is 5.4e-08, so splitting is strictly worse. |
+| **Algebraic band fusion** | exact, neutral | rel_rmse 8.5e-08, but removing the 2x tensor doubles the band's op count. e2e inside the noise. |
+| **L1-sharded intermediates** | impossible | `to_layout(TILE)`, `snake_beta`, `add` all reject sharded tensors; `concat` accepts and spills to DRAM. |
+| **Cheaper replicate pad** | ~2–6 % at best | `ttnn.pad` beats the 12-piece concat 2.1x at s4 but only 1.11x at s6 — the cost is the full-tensor copy, which no primitive avoids, and `pad` is zeros so replicate needs a correction that adds the ops back. |
+
+The common thread: every one of them is limited by a full-tensor DRAM round trip that op-level work
+cannot remove. Padding, interleaving and the activation's layout changes are all free *inside* a
+kernel that has the rows in L1 already, and all unavoidable outside one. That is the case for K5, and
+it is now made by measurement rather than by inference.
+
 ## Env knobs for the audio path
 
 | var | values | default | effect |
