@@ -18,7 +18,7 @@ The two passes between a request and the packed layout, mirroring the reference'
    run before the layout, unlike ``fl2va`` where a keyframe's geometry is the
    target's by construction.
 
-Three recipes, and they are not the same one:
+Three recipes, one per modality:
 
 ============  ==========================  ====================================
 modality      posterior                   then
@@ -28,10 +28,10 @@ video         **sampled**, seed 42        fp16 round trip, video normalization
 soundtrack    **mean** (``mode()``)       audio normalization, channel-major
 ============  ==========================  ====================================
 
-The visual rows are then noise-augmented to ``t = 0.999``; the audio rows are
-**not**, and run at a literal ``t = 1.0`` for every denoising step (campaign
-am. 115). Nothing downstream would catch getting that backwards -- it produces a
-plausible soundtrack that ignores its reference.
+The visual rows are then noise-augmented to ``t = 0.999``; the audio rows are **not**,
+and run at a literal ``t = 1.0`` for every denoising step (am. 115). Getting that
+backwards produces a plausible soundtrack that ignores its reference, and no downstream
+check would catch it.
 
 The encoders are injected as callables, as in :mod:`conditioning`, so the whole
 module is host-testable and the device VAEs plug straight in.
@@ -191,13 +191,12 @@ def normalize_reference_pixels(frames: np.ndarray, device: torch.device | str | 
 
 
 def pad_waveform_to_hop(waveform: torch.Tensor) -> torch.Tensor:
-    """Right-pad a waveform with **zeros** up to a whole 800-sample hop.
+    """Right-pad a waveform with zeros up to a whole 800-sample hop.
 
     The reference audio VAE's ``encode`` does this internally
-    (``autoencoder_kl_minimax_h3_audio.py:607``); our device encoder instead asserts
-    the length is already a multiple of the hop, so the padding has to happen here.
-    Without it a 5.1667 s soundtrack -- 165333 samples, not a multiple of 800 --
-    fails the assert rather than producing the 207 latents the reference produces.
+    (``autoencoder_kl_minimax_h3_audio.py:607``); the device encoder asserts the length
+    is already a multiple of the hop instead. Load-bearing, not defensive: a 5.1667 s
+    soundtrack is 165333 samples, which is not a multiple of 800.
     """
     samples = waveform.shape[-1]
     padded = math.ceil(samples / MINIMAX_H3_AUDIO_HOP) * MINIMAX_H3_AUDIO_HOP
@@ -253,15 +252,13 @@ def encode_references(
                 # Snapped DOWN to a 17n + 5 the VAE encodes without padding.
                 frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
             pixels = normalize_reference_pixels(frames, device=device)
-            # A single frame goes through the spatial encoder alone; a video goes
-            # through the temporal chunking, which is what turns 17n + 5 frames into
-            # 5n + 2 latent frames.
+            # A single frame takes the spatial encoder alone; a video takes the temporal
+            # chunking that turns 17n + 5 frames into 5n + 2 latent frames.
             moments = encode_clip(pixels) if reference.kind == "image" else encode_video(pixels)
             latents = sample_posterior(moments)
             reference.num_latent_frames = latents.shape[2]
             reference.latent_height, reference.latent_width = latents.shape[3], latents.shape[4]
-            # The fp16 round trip and the normalization, shared with the fl2va
-            # keyframe path so the two cannot drift apart.
+            # fp16 round trip and normalization, shared with the fl2va keyframe path.
             video_rows.append(keyframe_condition_rows(latents, latents_mean, latents_std, patch_size))
 
         if reference.has_audio:
@@ -284,9 +281,8 @@ def reference_condition_shapes(
 ) -> tuple[tuple[int, int, int], ...]:
     """The ``(frames, height, width)`` of every **visual** reference, in packed order.
 
-    What the conditioning noise is drawn at -- one draw per visual reference, and
-    audio references contribute none. Only valid after :func:`encode_references`,
-    which is what resolves the geometry.
+    What the conditioning noise is drawn at: one draw per visual reference, none for
+    audio. Only valid after :func:`encode_references` has resolved the geometry.
     """
     return tuple(
         (reference.num_latent_frames, reference.latent_height, reference.latent_width)
@@ -302,16 +298,12 @@ def split_condition_blocks(
 ) -> list[tuple[torch.Tensor, str]]:
     """The reference region as typed blocks, **in packed order**.
 
-    ``video_rows`` and ``audio_rows`` arrive as two per-modality concatenations, in
-    packed order within each modality, which is how the reference carries them and
-    how the denoising loop's write mask slices them. The packed *sequence* however
-    interleaves the two -- a video reference's soundtrack rows sit immediately
-    before its own video rows -- so this walks the references once and cuts both
-    tensors as it goes.
-
-    One walk, one direction, one frame of reference: the block list, the layout's
-    row indices and the presentation are all produced by iterating the same list the
-    same way, so there is no second ordering to keep in step.
+    ``video_rows`` and ``audio_rows`` arrive as two per-modality concatenations, which
+    is how the reference carries them and how the denoising loop's write mask slices
+    them. The packed sequence interleaves the two -- a video reference's soundtrack rows
+    sit immediately before its own video rows -- so this walks the references once,
+    cutting both tensors as it goes. The layout's row indices and the presentation come
+    from the same walk, so there is no second ordering to keep in step.
     """
     blocks: list[tuple[torch.Tensor, str]] = []
     video_cursor = audio_cursor = 0
@@ -329,8 +321,8 @@ def split_condition_blocks(
             blocks.append((video_rows[video_cursor : video_cursor + rows], "video"))
             video_cursor += rows
 
-    # The reference region is exactly the rows encoded for it: a leftover means a
-    # reference was skipped or double-counted, which would shift every row after it.
+    # A leftover row means a reference was skipped or double-counted, which shifts
+    # every row after it.
     if video_rows is not None and video_cursor != video_rows.shape[0]:
         raise ValueError(f"consumed {video_cursor} of {video_rows.shape[0]} reference video rows")
     if audio_rows is not None and audio_cursor != audio_rows.shape[0]:

@@ -97,7 +97,7 @@ class DeviceTileStitcher:
         """Device mirror of `stitch_tiles`, in the same order and with the same trims.
 
         Note `tiles[i - 1][j]` and `row[j - 1]` are the **original** tiles, not previously blended
-        ones. That asymmetry is the reference's, and reproducing it is the whole point.
+        ones. That asymmetry is the reference's and is reproduced here.
         """
         result_rows = []
         for i, row in enumerate(tiles):

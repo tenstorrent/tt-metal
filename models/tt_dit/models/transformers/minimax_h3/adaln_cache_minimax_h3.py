@@ -4,7 +4,7 @@
 
 """Device-resident AdaLN modulation tables, precomputed on host for a fixed sampling schedule.
 
-The whole point is that the AdaLN projections never reach the device. `adaln_proj` across 50 blocks
+The AdaLN projections never reach the device. `adaln_proj` across 50 blocks
 is 26 GB of the checkpoint (6.50 GB per device at TP=4); the table that replaces it is 1.416 GB
 (0.354 GB per device). It is built on host by
 `pipelines/minimax_h3/adaln_precompute.precompute_adaln_table`, which reads the safetensors directly
@@ -39,8 +39,8 @@ from ....parallel.config import DiTParallelConfig
 from ....utils.tensor import bf16_tensor
 from .transformer_block_minimax_h3 import _SCALE_MLP, _SCALE_MSA, NUM_MODULATION_PARAMS
 
-# The host-side table type lives in `pipelines/minimax_h3/adaln_precompute`. It is deliberately *not*
-# imported here: a model importing from pipelines inverts the layering and risks an import cycle. The
+# The host-side table type lives in `pipelines/minimax_h3/adaln_precompute` and is *not* imported
+# here: a model importing from pipelines inverts the layering and risks an import cycle. The
 # table is consumed structurally (`block_params`, `final_shift`, `final_scale`, `step_offsets`,
 # `num_layers`, `hidden_size`, `num_steps`), so any object with that surface works -- which is also
 # what lets a test drive this with a hand-built table.

@@ -21,7 +21,7 @@ from .attention_minimax_h3 import MiniMaxH3Attention
 class MiniMaxH3TokenRefinerBlock(Module):
     """Plain pre-norm transformer block over the projected text stream.
 
-    Deliberately much simpler than `MiniMaxH3TransformerBlock`: no AdaLN modulation, no rotary
+    Much simpler than `MiniMaxH3TransformerBlock`: no AdaLN modulation, no rotary
     embedding and no attention mask. The residual updates are unconditional
     (`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`).
 

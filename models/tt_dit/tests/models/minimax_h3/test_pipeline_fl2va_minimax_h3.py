@@ -10,7 +10,7 @@ Three cases, the three tasks the reference's `_workflow_map` names:
     last             `last_image=`              -> fl2va_last_frame
     first_and_last   both                       -> fl2va with two anchors
 
-Deliberately a separate file from `test_pipeline_minimax_h3.py` rather than more cases in it, so the
+A separate file from `test_pipeline_minimax_h3.py` rather than more cases in it, so the
 two e2e gates default to separate processes. One process holding the 50-block DiT's programs *and*
 its CCL persistent buffers at several different padded sequence lengths (37888 for t2va, 39424 and
 40448 for the two fl2va layouts) is a memory risk nobody has measured.
@@ -40,9 +40,8 @@ the same prompt still applies, and the anchor check is maximally meaningful beca
 in-distribution for the model. It also means this file needs the t2va gate to have run; it skips
 rather than inventing content when the artifact is absent.
 
-Tier 6 was recorded and not gated on the first run, then gated from what that measured. CLIP came out
-at 36.63 / 37.30 / 37.00 across the three cases against t2va's 37.37, so the t2va bar of 33.0 does
-transfer -- which is a measurement, not the assumption it would have been if copied across blind.
+Tier 6 was recorded before it was gated. CLIP measures 36.63 / 37.30 / 37.00 across the three cases
+against t2va's 37.37, so the t2va bar of 33.0 transfers by measurement rather than by assumption.
 """
 
 from __future__ import annotations
@@ -71,9 +70,8 @@ from .common_av import (
 )
 
 # The artifact and metric helpers are imported from the t2va gate rather than moved into `common_av`.
-# The plan called for the move; it is deferred deliberately -- they are pure functions with no import
-# side effects, and churning a green e2e gate mid-campaign to relocate them buys nothing this file
-# needs. Recorded in STATE.md as a deviation so it is a decision rather than an oversight.
+# They are pure functions with no import side effects, so relocating them would churn a green e2e gate
+# for no gain here. Recorded in STATE.md as a deviation.
 from .test_pipeline_minimax_h3 import (
     _clip_prompt_alignment,
     _decoded_frames,
@@ -99,7 +97,7 @@ WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 # Where the *calibrated t2va* artifact lives, which is where the gated keyframe comes from. Separate
-# from ARTIFACT_ENV on purpose: that one says where fl2va *writes*, and pointing it at a fresh
+# from ARTIFACT_ENV: that one says where fl2va *writes*, and pointing it at a fresh
 # directory must not silently turn the keyframe source into a missing file.
 T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
@@ -124,7 +122,7 @@ MESH_4X8 = [
 #   first_and_last   frame  0 / frame -1    0.9971 / 0.9946
 #
 # 0.95 keeps ~9x margin on `1 - PCC` against the worst of those, which is the same convention amendment
-# 74 used for the conditioner. It is deliberately not tighter: the anchors go through a VAE round trip
+# 74 used for the conditioner. Not tighter: the anchors go through a VAE round trip
 # and 49 denoising steps of a *neighbouring* frame's influence, so some spread is expected, and a
 # genuinely broken conditioning path scores near zero rather than 0.9.
 ANCHOR_PCC_FLOOR = 0.95
@@ -160,7 +158,7 @@ def _gated_keyframe() -> Image.Image:
 
     Read from the t2va gate's artifact rather than generated here: a second generation would cost
     another 90 s of Galaxy time to produce content this file only needs to *read*, and reusing the
-    calibrated one is the whole point (see the module docstring on tier 6).
+    calibrated one is what makes the thresholds applicable (see the module docstring on tier 6).
     """
     source_dir = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts")
     artifact = source_dir / "t2va.mp4"
@@ -346,7 +344,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     3. the tail of the clip has left the fractal behind. A pipeline that pinned every frame rather than
        just the anchor would also pass 1 and 2, and would not be generating a video at all.
 
-    The prompt deliberately still describes the fox. The keyframe and the prompt disagree, which is the
+    The prompt still describes the fox, so the keyframe and the prompt disagree, which is the
     sharpest possible test of whether the conditioning rows are actually reaching the DiT: a no-op
     keyframe leaves the prompt to win outright.
     """

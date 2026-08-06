@@ -28,9 +28,8 @@ a child called ``decoder``, matching ``decoder.conv_pre`` / ``decoder.ups.N`` /
 is ``dec_in_proj``. The ``ups.{i}.0 -> ups.{i}`` and ``activations -> acts1/acts2`` remaps,
 and the weight-norm fusion, all happen in ``convert_minimax_h3_audio.py``.
 
-fp32 throughout, and that is not a default worth changing: ``vocoder_ltx``'s docstring
-records that bf16 accumulation measurably degrades spectral metrics through its 108-conv
-chain, and H3's is longer still.
+fp32 throughout: ``vocoder_ltx``'s docstring records that bf16 accumulation measurably
+degrades spectral metrics through its 108-conv chain, and H3's is longer still.
 """
 
 from __future__ import annotations

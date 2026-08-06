@@ -82,7 +82,7 @@ TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 def _packed_sizes(duration_s: float) -> dict:
     """Token counts for `duration_s` seconds of 768P video, from the pipeline's own helpers.
 
-    Deliberately derived rather than hardcoded: frame alignment (`17n + 5`), the VAE's `5n + 2` latent
+    Derived rather than hardcoded: frame alignment (`17n + 5`), the VAE's `5n + 2` latent
     frame count, the 40 Hz audio latent grid and the canvas area cap all come from `packing.py`, so
     these stay correct if the pipeline's constants change.
     """

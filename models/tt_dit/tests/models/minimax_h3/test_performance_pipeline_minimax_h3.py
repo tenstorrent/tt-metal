@@ -50,7 +50,7 @@ DURATIONS = [
     pytest.param(362, id="15s"),
 ]
 
-# Dialogue-heavy on purpose: t2va generates a soundtrack, so a prompt with a spoken line exercises the
+# Dialogue-heavy: t2va generates a soundtrack, so a prompt with a spoken line exercises the
 # audio path rather than leaving it to ambience.
 PROMPT = (
     "Jerry, George, Elaine and Kramer are crowded into a red vinyl booth at a bright New York diner, "
@@ -60,7 +60,8 @@ PROMPT = (
     "her coffee, Jerry shrugs with both palms up, and Kramer bursts through the door behind them."
 )
 
-# ref2va runs at the 5 s working point only: the campaign gated its three shapes there, and a perf
+# ref2va runs at the 5 s working point only: the correctness gate covers its three shapes there,
+# and a perf
 # row at a duration no correctness gate covers would be a number about an unverified request.
 NUM_FRAMES_REF2VA = 124
 
@@ -160,7 +161,7 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
     """Fully-warm `fl2va` latency, by the same method as the t2va row so the two are comparable.
 
     Three things have to be right or the number means nothing, and each has bitten a measurement in
-    this campaign or its sibling:
+    this model's bringup or its sibling's:
 
     1. **The warmup must be fl2va-shaped, keyframe included.** `padded_len` goes 37888 (t2va) to 39936
        (one anchor), and every program in the 50-block stack is keyed on it, so a t2va warmup warms
@@ -243,7 +244,7 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
 
 # `l1_small_size` 16384, not the 65536 the t2va and fl2va rows use. Measured, not chosen: a video
 # reference goes through the video VAE's taps=3 encoder, whose static circular buffers clash with L1
-# above 16384 (campaign am. 124/126). The mesh and every other device parameter are unchanged, so the
+# above 16384 (am. 124/126). The mesh and every other device parameter are unchanged, so the
 # ref2va row stays comparable to the other two on everything that affects the denoise loop.
 REF2VA_MESH_4X8 = [
     pytest.param(
@@ -253,7 +254,7 @@ REF2VA_MESH_4X8 = [
     )
 ]
 
-# The three shapes the campaign gated end to end, by their measured padded packed length. `padded_len`
+# The three shapes gated end to end, by their measured padded packed length. `padded_len`
 # is what every program in the 50-block stack is keyed on, so it is the identity of a perf row here.
 REF2VA_CASES = [
     pytest.param("one_image", 46080, id="one_image_s46080"),
@@ -265,10 +266,10 @@ REF2VA_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
 
 
 def _ref2va_references(case: str):
-    """The campaign's own reference sets, imported rather than restated.
+    """The correctness gate's own reference sets, imported rather than restated.
 
-    Sharing them with the correctness gate is the point: a perf row measured on a different request
-    than the one that was gated is a number about nothing.
+    A perf row measured on a different request than the one that was gated is a number about
+    nothing.
     """
     from .test_pipeline_ref2va_minimax_h3 import _references
 
@@ -281,24 +282,21 @@ def _ref2va_references(case: str):
 def test_ref2va_warm_latency(mesh_device, case, expected_padded_len, reset_seeds):
     """Fully-warm `ref2va` latency, by the same method as the t2va and fl2va rows.
 
-    Every ref2va number the campaign recorded before this one is **cold** -- it includes kernel
-    compilation, and at 81664 padded rows the shape probe measured a cold forward of 114 s against a
-    warm 3.26 s (am. 123). So a cold total says almost nothing about the loop.
+    A cold total says almost nothing about the loop: at 81664 padded rows the shape probe measured
+    a cold forward of 114 s against a warm 3.26 s (am. 123), the difference being kernel
+    compilation.
 
-    The same three things have to be right as for fl2va, and ref2va makes each of them sharper:
+    The same three conditions as for fl2va apply:
 
-    1. **The warmup must be ref2va-shaped, with the same references.** `padded_len` runs 46080 to 89856
-       across the three cases against t2va's 37888, and it depends on the number *and resolution* of the
-       references -- so warming with different references warms nothing even at the same prompt. The
-       expected value is asserted per case, so a request that silently changed shape cannot be reported
-       as warm.
-    2. **The warmup must run at the same prompt length**, which for ref2va means the same presentation:
-       a 2048 px image reference contributes ~4096 vision tokens to the text stream and a video
+    1. **The warmup must be ref2va-shaped, with the same references.** `padded_len` runs 46080 to
+       89856 across the three cases against t2va's 37888, and depends on the number and resolution
+       of the references, so warming with different references warms nothing. Asserted per case.
+    2. **The warmup must run at the same prompt length**, which for ref2va means the same
+       presentation: a 2048 px image reference contributes ~4096 vision tokens and a video
        reference ~1008 per merged frame pair.
-    3. **The embedding cache must be populated.** `warmup` runs with `use_prompt_cache=False`, so the
-       priming call below is what makes the Encoder row mean the same thing it means for t2va -- and for
-       ref2va that row is the conditioner *plus* the vision tower over up to 7168 patches per reference,
-       which is the largest single non-denoise cost in the cold numbers.
+    3. **The embedding cache must be populated.** `warmup` runs with `use_prompt_cache=False`,
+       so the priming call below is what makes the Encoder row comparable to t2va's. For ref2va
+       that row is the conditioner plus the vision tower over up to 7168 patches per reference.
     """
     base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
     missing = [p for p in ("transformer_ref", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]

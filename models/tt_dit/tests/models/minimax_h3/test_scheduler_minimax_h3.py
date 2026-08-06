@@ -77,7 +77,7 @@ def test_video_and_audio_schedules_differ():
 
 
 def test_step_uses_data_ward_velocity():
-    """``x0 = x_t + sigma*v`` -- the plus is the whole point.
+    """``x0 = x_t + sigma*v`` -- the sign of the sigma term is what is under test.
 
     With ``ratio = sigma_next/sigma``, a single step is
     ``r*x_t + (1-r)*(x_t + sigma*v)``, so a positive velocity must move the

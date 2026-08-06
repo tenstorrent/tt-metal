@@ -135,7 +135,7 @@ def keyframe_condition_noise(
     return torch.cat(rows)
 
 
-# Noise augmentation is deliberately not implemented here. It is the rectified-flow
+# Noise augmentation is not implemented here. It is the rectified-flow
 # forward process at t = noise_aug, which is exactly MiniMaxH3Scheduler.scale_noise,
 # and the reference calls that same method -- so callers must use it:
 #

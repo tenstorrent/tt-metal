@@ -204,14 +204,13 @@ def request_step_timesteps(
 
     ``audio_condition_timestep`` adds a **fourth** level, and only ``ref2va`` needs it:
     a reference soundtrack's rows are clean and run at a literal ``t = 1.0`` at every
-    step (campaign am. 115). Left out for ``t2va`` and ``fl2va``, which have no audio
+    step (am. 115). Left out for ``t2va`` and ``fl2va``, which have no audio
     conditioning rows -- so their tables are unchanged, and the pipeline's table cache
     key already separates the two partitions.
 
-    Getting this wrong is not subtle, which is worth noting given how much of this
-    campaign was: the table is addressed by matching a row's timestep *by value*, so a
-    level the table does not carry raises ``IndexError`` in the pipeline's lookup rather
-    than silently modulating with the wrong row. That is how the gap was found.
+    A missing level fails loudly: the table is addressed by matching a row's timestep
+    *by value*, so a level it does not carry raises ``IndexError`` in the caller's lookup
+    rather than silently modulating with a neighbouring row.
     """
     video = 1.0 - video_sigmas[:-1].to(torch.float32)
     audio = 1.0 - audio_sigmas[:-1].to(torch.float32)

@@ -90,10 +90,9 @@ _PATTERNS = [f"{_SUBFOLDER}/*"]
 #   1344x768  16:9, max area   grid [1, 48, 84]   4032 patches   1008 image tokens
 #    768x768  1:1              grid [1, 48, 48]   2304 patches    576 image tokens
 #
-# 448x448 used to appear here and is gone: it is not a canvas `resolve_canvas_size` yields, so by
-# amendment 76's rule it was evidence about 448x448 alone. It was chosen to keep the 64-layer CPU
-# reference affordable, and that turned out not to be the binding cost -- the full 1008-token
-# presentation runs in a few minutes.
+# 448x448 is absent because it is not a canvas `resolve_canvas_size` yields, so by amendment 76 it
+# would be evidence about 448x448 alone. The full 1008-token presentation runs in a few minutes, so
+# the smaller shape buys nothing.
 KEYFRAME_IMAGE = (1344, 768)
 SQUARE_CANVAS = (768, 768)
 
@@ -102,7 +101,7 @@ T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
 # Bars for the fused conditioner, all set from the production measurement below.
 #
-# Whole-tensor PCC is deliberately NOT one of them, and that is the main thing this gate learned. The
+# Whole-tensor PCC is NOT one of them, which is the main thing this gate learned. The
 # tap's row norms span 177 to 20612 -- a 79x spread, because a handful of rows carry massive activations
 # -- so a single flattened correlation over all 5.2 M elements is dominated by those few rows and says
 # almost nothing about the other 1011. Measured at production shape and content: whole-tensor PCC
@@ -127,10 +126,10 @@ def _test_image(size):
     dominated by the small inter-row differences, which is exactly where bf16 noise lives. That makes
     the metric content-sensitive in a way that has nothing to do with correctness.
 
-    This used to be `torch.rand` uniform noise, which is invented content and *also* degenerate in the
-    relevant sense: every patch is statistically identical, so the rows are near-identical for the same
-    reason a flat colour's are, despite the image being high-frequency. A natural photograph has
-    spatially correlated structure and genuinely distinct patches, which is what production feeds.
+    `torch.rand` uniform noise is unsuitable for the same reason: every patch is statistically
+    identical, so the rows are near-identical exactly as a flat colour's are, despite the image being
+    high-frequency. A natural photograph has spatially correlated structure and genuinely distinct
+    patches, which is what production feeds.
 
     Frame 0 of the t2va artifact specifically, rather than any photograph, because it is the content
     the tier-6 thresholds were calibrated on and the exact keyframe
@@ -143,9 +142,9 @@ def _test_image(size):
 
     from ....pipelines.minimax_h3.packing import prepare_keyframe_image
 
-    # Diagnostic escape hatch, not for gating: `MINIMAX_H3_TEST_CONTENT=noise` restores the uniform-noise
-    # image this test used to carry, which is what separates "the port regressed" from "the metric is
-    # content-sensitive" when a number moves after a content change. Default is the production content.
+    # Diagnostic escape hatch, not for gating: `MINIMAX_H3_TEST_CONTENT=noise` selects a uniform-noise
+    # image, which separates "the port regressed" from "the metric is content-sensitive" when a number
+    # moves after a content change. Default is the production content.
     if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
         generator = torch.Generator().manual_seed(0)
         pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
@@ -282,8 +281,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
 def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
     """The `fl2va` conditioner with an image, on released weights, at the production canvas and tap.
 
-    Three things about this gate were wrong when it arrived and are fixed here, all of them named in the
-    `xfail` reason it used to carry (STATE.md amendments 90 and 95):
+    Three properties this gate depends on, all named in STATE.md amendments 90 and 95:
 
     - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so by amendment 76 it was
       evidence about 448x448 alone. Production is 1344x768 -> 1008 image tokens, seq 1028.
