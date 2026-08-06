@@ -325,6 +325,18 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # against a recorded number.
 ```
 
+**Grid and blocking: the sweep, and why the core count has a MINIMUM at 32**
+
+```text
+ Grid and blocking for the sharded norm. NOTES.md [gpt-04] has the sweep; the short version is
+ that `block_w` is NOT a free knob (it is DIM // cores // TILE, so it only moves when the core
+ count does), `subblock_w` IS free but inert (1/2/3/4 within 0.02 ms, and >=6 will not build), and
+ and the core count has a MINIMUM AT 32, not a monotone trend: 2/4/8/16/24/32/48 cores measure
+ 25.53/24.84/24.56/24.45/24.42/24.41/24.44 ms/step. The count must DIVIDE the 96 width-tiles of a
+ 32x3072 tensor, since block_w is tiles-per-core and a tile is indivisible -- so 40, 56 and 64 do
+ not build at all (96/64 = 1.5), while 48 is legal and simply loses.
+```
+
 ### [gpt-05] `module level` — Decode runs in ttnn's DECODE-NATIVE head layout, [1,...
 
 ```text
@@ -366,6 +378,16 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # ANTI-CORRELATED with end-to-end: 32 cores is the slowest norm in isolation and the fastest step
 # overall. The real contrast is narrower than it looked -- both grids are nearly free; the norm's
 # spread end to end is 0.16 ms and this one's is 0.02.
+```
+
+**`_QKV_GRID_X` — one number used twice, and the core count is inert**
+
+```text
+The core count is inert for speed -- 6 to 48 all land inside a 0.020 ms spread.
+
+One number, used twice: the literal 8 used to appear in BOTH the shard width and the grid, and
+changing one without the other yields a silently wrong shard rather than an error. Hence the
+single named constant rather than two literals.
 ```
 
 ### [gpt-06] `module level` — WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
@@ -797,6 +819,15 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
 # same [1, B*3, 3072], tile-padded to 32 rows.
 ```
 
+**Grid and blocking for Block 2's norm**
+
+```text
+ Grid and blocking: swept, see NOTES.md [gpt-04] for the Block 1 version of the same experiment.
+ More cores is monotonically faster end to end here too -- 8x1/8x2/8x4 measure 24.628/24.572/24.465
+ ms/frame -- and `subblock_w` is INERT: 4 and 1 measure byte-identical at 8x1. 32 cores is the most
+ that divides evenly (3072/32 = 96 tiles; 96/64 is not an integer).
+```
+
 ### [flow-08] `__init__` — SEMANTIC HEAD, ON DEVICE AND IN FP32. This used to be a...
 
 ```text
@@ -951,6 +982,30 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
         # with torch.equal), but an L1-resident operand makes the downstream matmul pick a different
         # program config, hence a different accumulation order. Velocity PCC 0.99998522 ->
         # 0.99998164. Gated on codes and the 15-case run, not on PCC.
+```
+
+**The slice offsets, and why they are named constants**
+
+```text
+_Q_WIDTH  = 32 q  heads x 128 = 4096   -> q is columns    0 .. 4095  = tiles   0..127
+_KV_WIDTH =  8 kv heads x 128 = 1024   -> k is columns 4096 .. 5119  = tiles 128..159
+                                          v is columns 5120 .. 6143  = tiles 160..191
+
+Every boundary is a multiple of 32, so all three slices land EXACTLY on tile boundaries and copy
+whole tiles -- no row ever moves inside a tile. That is why these are named constants rather than
+inlined literals: they are the head split's cut points, and a width that is not a multiple of 32
+would silently make the slices expensive instead of raising.
+```
+
+**Why k gets a different permute**
+
+```text
+q and v are permuted (0,2,1,3) -> [B, heads, tokens, HD].
+k is permuted (0,2,3,1)        -> [B, heads, HD, tokens].
+
+That emits k ALREADY TRANSPOSED for the scores matmul, which is what the fused op's
+transpose_k_heads=True did. It costs nothing extra -- it is the same op with a different
+permutation -- and it saves the separate ttnn.transpose the scores matmul would otherwise need.
 ```
 
 ### [flow-11] `_block` — GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the...
@@ -1680,3 +1735,120 @@ STATUS.md 6.5 has the setup and the two findings it did corroborate.
         # prefill_last so the loop below does not care which one is running.
 ```
 
+### [gpt-19] `_V_SHARD` — V's parking space, and why V and not K
+
+```text
+ V's parking space, core (1,0). paged_fused_update_cache writes both caches in one kernel but
+ refuses K and V on the same core, and nlp_create_qkv_heads_decode puts q, k and v all on (0,0), so
+ ONE of them has to move. MOVE V, NOT K -- the choice matters more than it looks:
+   * moving K is what overlap_qk_coregrid=False does. It is 0.047 ms/frame faster, and it costs two
+     coupling hazards: it asserts a whole head per core (pinning _QKV_SHARD to 48 cores, load-bearing
+     and non-obvious), and K then goes through RoPE on a core whose cos/sin table is elsewhere --
+     which does NOT raise, it returns 3.4e38 from uninitialised L1.
+   * V never touches RoPE and imposes nothing on the shard width. One reshard per layer, 26 a frame,
+     ~2.1 us each because it is an 8 KB hop between adjacent cores.
+ 0.405 vs 0.452 ms/frame -- 0.09% of a frame to delete a silent-garbage failure mode. Taken from
+ lserbedzija/xtts-gpt-ttnn, which does the same thing in xtts_v2/tt/ttnn_xtts_gpt.py.
+```
+
+### [gpt-20] `_WO_PRG` — wo's decode program config, and the `in0_block_w` sweep
+
+```text
+ wo's DECODE program config, and it is the only linear that needs one. Each decode linear splits
+ into bytes/ceiling plus overhead, and only wo carried any: 85.9 us against a 68.9 floor, 20% of its
+ time, where wqkv/w1/w3/w2 all sit at 98-103% of the ceiling with nothing to reclaim.
+
+ THE KNOB IS in0_block_w, i.e. how many of K's 128 tiles are loaded per inner iteration. The default
+ picks something that runs at 162 GB/s; 4 runs at 196, which is the ceiling. Both directions lose:
+
+     in0_block_w    1      2      4      8     16     32
+     us           152.0   83.2   68.1   73.7   80.5   89.4
+     GB/s           88    161    196    182    166    150
+
+ THE BIT-EXACT ONE SHIPS. in0_block_w=2 at 8x4 is 74.7 us (1.102x, +0.196 ms/frame) and byte-identical
+ to the default on all six decode-gate columns. in0_block_w=4 is faster still -- 68.1 us, 1.209x,
+ +0.370 -- but not bit-exact: mean/p90 worst-sample +0.02/+0.01 pp and max 3.05% -> 4.76%, which is
+ 0.054 pp of mean per ms, the same ballpark as the w2 trade rejected in STATUS.md 6.16. Change the two
+ numbers below to take it. The core count barely matters either way (8x8 68.2, 8x6 68.1, 8x4 68.5);
+ my original theory was that N=3072 splitting 1.5 tiles per core over 64 cores was the problem, and
+ the sweep says otherwise.
+
+ DECODE ONLY. per_core_M=1 assumes M is a single tile, which is true of one decode position and false
+ of prefill's S rows -- see _layer, which deliberately has no program config.
+
+ The earlier "hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s)" finding stands: it
+ was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
+```
+
+### [gpt-21] `_SDPA_PRG` — sdpa_decode's program config, and why only a position sweep is safe
+
+```text
+ sdpa_decode's program config. The shipped call passed none, and the default spends almost all its
+ time on setup rather than on the cache: at pos=312 it reads 1.22 MB (a 6.6 us floor) in 68.6 us, and a
+ 31x bigger cache costs only 21% more time -- ~62 us of the 68.6 is FIXED. So it was never a bandwidth
+ problem, and k_chunk/grid reach it:
+
+     default            68.6 us          k=512 8x2   42.2 us  1.63x  <- this
+     k=256 8x2  38.7 us (1.77x)          k=512 8x1   40.2 us  1.72x
+
+ THE FASTER ONES ARE NOT SAFE, and only a position sweep shows it. Bit-exact vs the default at 11
+ positions from 64 to 1000, spanning the k_chunk boundary at 511/512/513:
+
+     k=512 8x2   11/11 exact   0 worse than default vs fp32   0.673 ms/frame   <- ships
+     k=512 8x1    6/11         0 worse                        0.706 ms/frame
+     k=256 8x2    3/11         3 WORSE than default vs fp32   0.825 ms/frame
+
+ k=256 looks fine at pos=312 and degrades at 480, 511 and 700. The decode gate pins ONE position per
+ case, so it would not have caught that -- ship a config only if it is exact at every position.
+
+ DECODE ONLY: prefill computes attention with explicit matmuls in _attend, not sdpa.
+```
+
+### [gpt-22] `_mlp` — w1 and w3 stay separate; matmul bandwidth collapses past N~9216
+
+```text
+ w1 and w3 stay SEPARATE. Fusing them into one 3072x18432 weight is 4x SLOWER, not the
+ small loss on record: identical 57.4 MB either way, but 48 GB/s fused against 192 separate.
+ Matmul bandwidth collapses between 9216 and 18432 output columns -- 3072, 6144 and 9216 all
+ hold the ceiling. Assume any fusion past N~9216 collapses. STATUS.md 6.24.
+```
+
+### [gpt-23] `_layer_step` — two rope calls, not ttnn's fused q+k rope
+
+```text
+ Two calls, not ttnn's fused q+k rope: that one implements the INTERLEAVED convention via a
+ trans_mat, and our wq/wk are permuted to HALF-SPLIT at load. Measured 0.236 ms/frame for
+ reverting that permute, disjoint q/k cores and losing bit-exactness -- STATUS.md 6.23.
+```
+
+### [gpt-24] `_layer_step` — one fused KV write instead of two
+
+```text
+ ONE fused write, not two: 26 launches a frame instead of 52, worth 0.405 ms and
+ bit-identical. V is moved to core (1,0) first because the op refuses an overlap -- see
+ _V_SHARD for why V and not K.
+```
+
+### [gpt-03b] `_layer_step` — no memory_config move on sdpa's output
+
+```text
+ No memory_config move here: sdpa_decode already emits o as interleaved DRAM, which is what
+ the wo matmul wants. Routing it to L1 instead is NOT the win it looks like -- 0.999x, and
+ the reason is worth reading before trying it: NOTES.md [gpt-03].
+```
+
+### [flow-21] `_solve` — project and reshape the llm conditioning once per frame, not per step
+
+```text
+ llm conditioning is constant across the solve, so project it ONCE rather than per step
+ (it was n_steps identical 3072x3072 matmuls). Reshaped once here for the same reason:
+ _trunk wants [B,1,3072] and p2 changes once a frame, not once a step -- NOTES.md [flow-19].
+```
+
+### [codec-20] attention bias — ALiBi + causal + sliding window as one additive term
+
+```text
+ Attention bias: ALiBi + causal + sliding window as ONE additive term.
+ [1,H,S,S] on the unchunked path; [1,H,slab,slab] once chunking applies, which is the
+ normal case and is why it stays small (4.2 MB) at any utterance length.
+```

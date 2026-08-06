@@ -34,8 +34,7 @@ N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
 # Query heads per KV head (GQA 32/8). See the row fold in _block.
 REP = FM_N_HEADS // FM_N_KV_HEADS
-# Width of the fused q++k++v projection, GQA-aware: 32 q heads + 2 x 8 kv heads. The q and kv
-# sub-widths are the slice offsets the hand-rolled head split cuts on -- see NOTES.md [flow-10].
+# Fused q++k++v width, GQA-aware; the sub-widths are the head split's slice offsets, [flow-10].
 _Q_WIDTH = FM_N_HEADS * FM_HEAD_DIM
 _KV_WIDTH = FM_N_KV_HEADS * FM_HEAD_DIM
 _QKV_WIDTH = _Q_WIDTH + 2 * _KV_WIDTH
@@ -58,10 +57,6 @@ WEIGHT_DTYPE = ttnn.bfloat8_b
 SEMANTIC_DTYPE = ttnn.float32
 
 # NOTES.md [flow-07] -- RMSNORM, WIDTH-SHARDED. Same finding as Block 1's...
-# Grid and blocking: swept, see NOTES.md [gpt-04] for the Block 1 version of the same experiment.
-# More cores is monotonically faster end to end here too -- 8x1/8x2/8x4 measure 24.628/24.572/24.465
-# ms/frame -- and `subblock_w` is INERT: 4 and 1 measure byte-identical at 8x1. 32 cores is the most
-# that divides evenly (3072/32 = 96 tiles; 96/64 is not an integer).
 _NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
 _NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
 _NORM_SHARD = ttnn.create_sharded_memory_config(
@@ -97,8 +92,7 @@ class TtVoxtralFlow:
         _mask = torch.zeros(1, 1, _vocab)
         _mask[:, :, EMPTY_AUDIO_ID] = -1e9
         _mask[:, :, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -1e9
-        # HOST, not device: the mask add and the argmax both moved to the host -- NOTES.md
-        # [flow-08a]. It is the same fp32 arithmetic either way, and it is 1.439x faster.
+        # HOST, not device -- the mask add and the reduce both moved off chip, NOTES.md [flow-08a].
         self.semantic_mask_host = _mask.reshape(-1).float()
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
@@ -142,7 +136,6 @@ class TtVoxtralFlow:
         _cut = lambda a, b: ttnn.slice(qkv, [0, 0, a], [1, B * 3, b], memory_config=_L1)
         qh = ttnn.permute(ttnn.reshape(_cut(0, _Q_WIDTH), [B, 3, FM_N_HEADS, FM_HEAD_DIM]),
                           (0, 2, 1, 3), memory_config=_L1)
-        # k comes out already transposed for the scores matmul, as transpose_k_heads=True used to do
         kh = ttnn.permute(ttnn.reshape(_cut(_Q_WIDTH, _Q_WIDTH + _KV_WIDTH),
                                        [B, 3, FM_N_KV_HEADS, FM_HEAD_DIM]),
                           (0, 2, 3, 1), memory_config=_L1)
@@ -176,11 +169,8 @@ class TtVoxtralFlow:
     def _trunk(self, p0, p1, p2, B):
         """three [B,1,3072] projections -> velocity [B,1,36]. The 3-token sequence, reference order.
 
-        B here is the CFG-doubled batch: decode_frame passes 2*batch.
-
-        CALLER SUPPLIES [B,1,3072], not [B,3072] -- see NOTES.md [flow-19]. The reshapes used to live
-        here and cost 10.1 us a step for nothing: p0 arrives in that shape already, and p1 and p2
-        change far less often than this runs."""
+        B is the CFG-doubled batch; the caller supplies [B,1,3072]. See NOTES.md [flow-19].
+        """
         seq = ttnn.concat([p0, p1, p2], dim=1)
         # NOTES.md [flow-13] -- FOLD THE CFG BATCH INTO ROWS -- worth 2.23x...
         seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
@@ -213,8 +203,7 @@ class TtVoxtralFlow:
         if key not in self._sched:
             ts = torch.linspace(0, 1, n_steps + 1)
             self._sched[key] = (
-                # already [B,1,3072]: _trunk wants that shape and these are constant for the life of
-                # the model, so the reshape is paid once here instead of n_steps times per frame.
+                # already [B,1,3072]; constant for the model's life, so reshaped once here.
                 [ttnn.reshape(
                     ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1),
                                                         self.inv_freq)),
@@ -246,13 +235,9 @@ class TtVoxtralFlow:
     # Semantic code (host) and the Euler solve (device velocity)
     # ----------------------------------------------------------------------------------
     def semantic_code(self, llm_hidden):
-        """h [B,3072] -> [B,1]. Greedy argmax; the fp32 matmul is on device, the mask and the
-        argmax are on the HOST -- see NOTES.md [flow-08a] and self.semantic_dev.
-
-        The argmax used to run on device and cost 490 us to reduce 33 KB, which is 0.07 GB/s, i.e.
-        entirely launch overhead. This call already ended in a device->host copy, so moving the
-        reduce out does not add a round trip -- it only makes that copy 8320 values instead of 1.
-        Exactly the same fp32 arithmetic, verified 0 changed ids on real Block 1 hidden states."""
+        """h [B,3072] -> [B,1]. Greedy argmax: the fp32 matmul on device, the mask and the reduce
+        on the HOST. See NOTES.md [flow-08a].
+        """
         B = llm_hidden.shape[0]
         h = ttnn.from_torch(llm_hidden.reshape(1, B, -1).float().contiguous(),
                             dtype=SEMANTIC_DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
@@ -266,9 +251,7 @@ class TtVoxtralFlow:
         See NOTES.md [flow-17].
         """
         B2 = 2 * B
-        # llm conditioning is constant across the solve, so project it ONCE rather than per step
-        # (it was n_steps identical 3072x3072 matmuls). Reshaped once here for the same reason:
-        # _trunk wants [B,1,3072] and p2 changes once a frame, not once a step -- NOTES.md [flow-19].
+        # NOTES.md [flow-21] -- project AND reshape p2 once per frame, not once per step...
         p2 = ttnn.reshape(ttnn.linear(h, self.proj["llm_projection"],
                                       compute_kernel_config=COMPUTE_CONFIG),
                           [B2, 1, FM_INPUT_DIM])

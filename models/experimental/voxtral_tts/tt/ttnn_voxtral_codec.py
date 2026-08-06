@@ -182,9 +182,7 @@ class TtVoxtralCodecDecoder:
         )
 
     # ----------------------------------------------------------------------------------
-    # Attention bias: ALiBi + causal + sliding window as ONE additive term.
-    # [1,H,S,S] on the unchunked path; [1,H,slab,slab] once chunking applies, which is the
-    # normal case and is why it stays small (4.2 MB) at any utterance length.
+    # NOTES.md [codec-20] -- ALiBi + causal + sliding window as ONE additive term, [1,H,slab,slab]...
     # ----------------------------------------------------------------------------------
     def _attn_bias(self, S, window):
         key = (S, window, ATTN_DTYPE)
