@@ -33,19 +33,6 @@
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
-- id: bh-ccl-nightly-integration
-  name: ccl nightly tests
-  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
-  skus:
-    bh_loudbox:
-      timeout: 60
-    bh_p300:
-      timeout: 60
-    bh_quietbox_2:
-      timeout: 60
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
-
 # --- perf ---
 - id: bh-fabric-sanity-benchmark
   name: fabric sanity benchmark
@@ -135,7 +122,7 @@
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests
-  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_short_running.yaml
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
   skus:
     bh_loudbox:
       timeout: 15

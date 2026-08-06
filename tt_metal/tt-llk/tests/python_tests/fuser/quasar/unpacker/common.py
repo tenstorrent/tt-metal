@@ -14,12 +14,24 @@ def is_unary_unpacker(compute_node: FpuNode) -> bool:
     return isinstance(compute_node.unpacker, (UnpackerA, UnpackerTilizeA))
 
 
+def _is_unary_broadcast_unpacker(compute_node: FpuNode) -> bool:
+    from fuser.quasar.unpacker.unary_broadcast import UnaryBroadcastUnpacker
+
+    return isinstance(compute_node.unpacker, UnaryBroadcastUnpacker)
+
+
 def _emit_configure(
     compute_node: FpuNode,
     dest_acc: str,
     unpack_A_dst: DataFormat,
     unpack_B_dst: DataFormat,
 ) -> str:
+    if _is_unary_broadcast_unpacker(compute_node):
+        desc_b = compute_node.src_b.cpp_desc_name
+        code = f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({desc_b});\n"
+        return code
+
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
     unpack_to_dest = compute_node.unpack_to_dest.value
