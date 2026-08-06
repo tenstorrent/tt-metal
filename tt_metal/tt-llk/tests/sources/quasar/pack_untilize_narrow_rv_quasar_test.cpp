@@ -56,35 +56,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
 #endif
-    const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    // This test always runs the FPU (non-unpack-to-dest) path, so unpack goes to SrcA.
+    const std::uint32_t SELECTED_UNPACKER = p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-            }
-        }
-        else
-        {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-        }
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val = {0};
 
@@ -99,46 +79,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-        if constexpr (unpack_to_dest)
+        if constexpr (is_fp32_dest_acc_en)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, BLOCK_CT_DIM);
+            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
         }
         else
         {
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
-            }
-            else
-            {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
-            }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
+            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
         }
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (unpack_to_dest)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
-                {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-                }
-            }
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
-            }
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         PROFILER_SYNC();
     }
@@ -164,46 +121,42 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
-    if constexpr (!unpack_to_dest)
     {
+        ZONE_SCOPED("INIT")
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+
+        DataFormat math_format     = static_cast<DataFormat>(formats.math);
+        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
         {
-            ZONE_SCOPED("INIT")
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-
-            DataFormat math_format     = static_cast<DataFormat>(formats.math);
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
-                num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-            PROFILER_SYNC();
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
         }
+        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
         {
-            ZONE_SCOPED("TILE_LOOP")
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        }
+
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        {
+            for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
             {
-                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                 {
-                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
-                    {
-                        _llk_math_eltwise_unary_datacopy_(block_ct);
-                    }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    _llk_math_eltwise_unary_datacopy_(block_ct);
                 }
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
     }
 }
 
@@ -375,14 +328,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-        }
-        else
-        {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-        }
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         tdma_descriptor_t tdma_desc;
         std::uint32_t const buf_desc_id = 31;
