@@ -58,6 +58,13 @@ bool supported_by_codegen(const PadCodegenParams& operation_attributes, const Pa
         const auto& in_shape = input.logical_shape();
         const uint32_t H = in_shape[2];
         const uint32_t W = in_shape[3];
+        // The input's own last tile must be whole too. A tile-page copy moves a partial input tile
+        // verbatim, remainder lanes and all, and nothing downstream of it writes the pad value into
+        // those lanes -- ops/pad/spec.py reaches this path for a partial input only by first running
+        // build_fill_partial_tile, which is not part of this port's kernel set.
+        if (H % TILE_HEIGHT != 0 || W % TILE_WIDTH != 0) {
+            return false;
+        }
         const uint32_t back_h = operation_attributes.H_out - operation_attributes.front_h - H;
         const uint32_t back_w = operation_attributes.W_out - operation_attributes.front_w - W;
         return (back_h % TILE_HEIGHT == 0) && (back_w % TILE_WIDTH == 0);
