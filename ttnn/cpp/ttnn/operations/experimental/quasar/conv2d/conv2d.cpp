@@ -1050,11 +1050,17 @@ Result conv2d_L1(
                     // (Blocker B) entirely -- no cross-core K-reduction (all K stays on one core, just streamed).
                     // Small-K convs (layers 1-3, weights well under L1) KEEP the full-K single block (no spill, no
                     // dependence on the K-spill accumulate), so they are unaffected.
+                    // Boundary: a single-buffered weights block up to 512 tiles (1 MB / 65536 ring units) fits on
+                    // the emulator (the passing 1x1 1024->512 sits exactly there); above it, silent overflow. So
+                    // K-spill when full-K weights EXCEED 512 tiles, and when spilling keep the resident block well
+                    // under (<=256 tiles) by picking the largest divisor of full_K with in0_block_w*N <= 256.
                     uint32_t in0_blk_w_mm = full_k_ntiles_mm;
-                    constexpr uint32_t kMaxSingleBlockWeightTiles = 1024;  // ~2 MB; above this, stream (K-spill)
-                    if (n_ntiles_mm * full_k_ntiles_mm > kMaxSingleBlockWeightTiles) {
-                        uint32_t k_blk = 8;
-                        while (k_blk > 1 && (full_k_ntiles_mm % k_blk) != 0) {
+                    constexpr uint32_t kSingleBlockFitTiles = 512;
+                    constexpr uint32_t kSpillTargetTiles = 256;
+                    if (n_ntiles_mm * full_k_ntiles_mm > kSingleBlockFitTiles) {
+                        uint32_t k_blk = full_k_ntiles_mm;
+                        while (k_blk > 1 &&
+                               ((full_k_ntiles_mm % k_blk) != 0 || k_blk * n_ntiles_mm > kSpillTargetTiles)) {
                             k_blk--;
                         }
                         in0_blk_w_mm = k_blk;
@@ -1149,6 +1155,38 @@ Result conv2d_L1(
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
             num_cores_c);
         mm_output_memory_config = conv_out_memory_config;
+        // [#48552] K-spill this 1x1-conv matmul exactly like the split path's Program B: when the full-K single
+        // weights block exceeds 512 tiles (1 MB / 65536 ring units) it silently overflows the resident block on
+        // the emulator (the observed ~0.35-PCC conv1 2048->512 K=64 and conv3 512->2048 N=64, both 1024 tiles).
+        // Stream weights from DRAM per K-block (in0_block_w < full_K) so only in0_block_w*N tiles are resident.
+        // This is the plain matmul (no fused conv_bmm, no 0x19); its DRAM-weights K-spill accumulate is the
+        // Blocker-A capability (DPRINT-masked). Small 1x1 (<=512t, e.g. 1024->512 at 512t) keep the full-K single
+        // block, unchanged and still passing.
+        if (kernel_size[0] == 1 && kernel_size[1] == 1) {
+            const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
+            auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
+                constexpr uint32_t kSingleBlockFitTiles = 512;
+                constexpr uint32_t kSpillTargetTiles = 256;
+                if (per_core_n == 0 || per_core_n * full_k_mm <= kSingleBlockFitTiles) {
+                    return full_k_mm;
+                }
+                uint32_t k_blk = full_k_mm;
+                while (k_blk > 1 && ((full_k_mm % k_blk) != 0 || k_blk * per_core_n > kSpillTargetTiles)) {
+                    k_blk--;
+                }
+                return k_blk;
+            };
+            if (auto* c1 = std::get_if<
+                    ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                    &program_config.value())) {
+                c1->in0_block_w = kspill_in0_bw(c1->per_core_N);
+            } else if (
+                auto* c2 = std::get_if<
+                    ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                    &program_config.value())) {
+                c2->in0_block_w = kspill_in0_bw(c2->per_core_N);
+            }
+        }
     }
 
     ttnn::Tensor matmul_output = ttnn::operations::experimental::quasar::matmul::linear(
