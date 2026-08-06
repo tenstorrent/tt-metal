@@ -1318,3 +1318,87 @@ Whatever differs about the DRISC path itself, not the rate it runs at:
 **The symmetric test: amplify the DRISC at a safe delay.** If ~19 GB/s from a DRAM core hangs the card where
 the same rate from a Tensix does not, the trigger is the core/NIU path and not the load — the sharpest available
 result. Budget a cold power cycle for it, since a positive result means a hung card.
+
+### The symmetric arm: the amplified DRISC DOES hang — so it is the path, not the load
+
+Same amplifier, same kernel, same knobs, on the DRISC at the most relaxed producer setting (delay 500):
+
+| repeat | shipped | egress while busy | max occ | notes |
+|---|---|---|---|---|
+| 1 | 31.0 MB | 15.49 GB/s | 92 | clean (this config has run dozens of times today) |
+| 2 | 38.2 MB | **18.37 GB/s** | 192 | clean |
+| 4 | 39.4 MB | 18.36 GB/s | 372 | clean, 16 credit timeouts |
+| 8 | 45.1 MB | 17.43 GB/s | 510 | clean single run, 17 credit timeouts |
+
+Then sustained at repeat=8: **7 clean runs, HUNG on run 8.** `tt-smi` "Error in detecting devices",
+`current_link_speed=Unknown`, `current_link_width=63`, AER clean — the documented endpoint-internal wedge. The
+box stayed up (no freeze this time).
+
+| | rate | runs | outcome |
+|---|---|---|---|
+| **Tensix**, repeat=8, delay 0 | **19.32 GB/s** | 20 | all clean, card healthy after |
+| **DRISC**, repeat=8, delay **500** | **17.43 GB/s** | 12 | 7 clean, **HUNG on run 8** |
+
+**The Tensix was run HARDER and survived; the DRISC hung.** So the trigger belongs to the DRISC path, not to
+the load — and it needs neither a low delay (500 is the most relaxed setting) nor record bandwidth. Within the
+DRISC path load still aggravates it (15.5 GB/s clean all day, 17.4 GB/s dies on the 8th run), but load cannot
+be *the* cause when a Tensix sits at 19.3 GB/s untouched.
+
+### The one missing cell — the experiment to run next
+
+The DRISC ran under FAST dispatch and the Tensix under SLOW, so "the DRISC path" still bundles two things: the
+**DRAM-core NIU** posting into the PCIe tile, and the **fast-dispatch environment** (dispatch cores contending
+on the same NoC). The DRISC can also run under slow dispatch (`force_slow_dispatch`), which completes the 2x2:
+
+| | fast dispatch | slow dispatch |
+|---|---|---|
+| DRISC | **HANGS** (17.4 GB/s, run 8) | **← the missing cell** |
+| Tensix | impossible (resident program) | clean at 19.3 GB/s x20 |
+
+Amplified DRISC in slow dispatch: still hangs ⇒ the DRAM-core NIU is the trigger. Survives ⇒ fast dispatch is.
+Either way it halves the hypothesis space in one run. Budget a cold power cycle.
+
+## §N+5 — The 2x2 cannot be completed yet: the DRISC WEDGES under slow dispatch (bh-05, 2026-08-06)
+
+Attempting the missing cell (amplified DRISC under slow dispatch) does not produce a hang or a clean run — the
+drainer never starts. The `phase` word says exactly where:
+
+```
+drainer 0 FAILED TO START (heartbeat 1 -> 1). State: done=0x0 hb=1 phase=11 stop=0
+```
+
+`phase=11` = `kPhBar1`, the sweep-body write barrier. So the kernel booted, completed sweep 1 (hb=1), shipped a
+frame, and wedged in the barrier that must flush before staging is reused. `stop=0`, so it was not commanded to
+stop; `done=0x0`, so it never exited.
+
+**PRE-EXISTING, not caused by the amplifier.** Reverting the kernel and host module to the pre-amplifier commit
+reproduces it identically (`heartbeat 1 -> 1`). It also reproduces with the static-TLB change disabled
+(`TT_METAL_PERF_DEBUG_NO_STATIC_TLB=1`), on both paths, and with a forced JIT rebuild (0/18 cache hits).
+
+**The core is stuck INSIDE the NIU register read.** `write_barrier_bounded` had a 50 ms cycle deadline that never
+fired. Adding a 4M-iteration cap did not free it either. Neither bound can fire if control never returns from
+`ncrisc_noc_nonposted_writes_flushed()`, so that is where it is: a DRAM-core NIU stalling on a register read,
+not a software liveness bug. No software bound can rescue this — the cap stays anyway, because a barrier bounded
+two ways beats one bounded by a clock the core must be running to read.
+
+**It poisons the card for later runs.** The wedged DRISC is resident and survives process exit, so the NEXT run
+— even under fast dispatch — reports FAILED TO START. `tt-smi -r` clears it and fast dispatch returns to its
+exact baseline (31.2 MB, busy 29 @ 68.9 us). The card is NOT PCIe-hung in this state: probes read 171-179 ns and
+tt-smi is happy. So this is a third distinct failure state, alongside HUNG and DEGRADED: **WEDGED DRISC**,
+recoverable by reset.
+
+### Why slow dispatch, and the experiment that would confirm it
+
+Leading hypothesis: under slow dispatch the producer worker cores are **held in reset** until the workload
+launches, and the drainer starts sweeping before that. Its first-sweep head write-backs therefore target cores
+in reset; a nonposted write to a core in reset never acks, and querying the NIU about it stalls. Under fast
+dispatch those cores are already running dispatch firmware, so the writes ack. The heartbeat check runs before
+the workload launch, which is exactly the window where this bites.
+
+To confirm: launch the drainer AFTER the workload's cores are out of reset (or have the first sweep skip head
+write-backs until it sees a live producer). If the wedge disappears, reset-state writes are the cause.
+
+**This is also a lead on the main question.** The DRAM-core NIU is the same unit implicated in the PCIe hang
+(§N+4), and here it stalls on a register read with NO PCIe pressure at all. Whether the two are the same fault
+is unknown, but a reproducible, reset-recoverable NIU stall is a far cheaper thing to study than a hang that
+costs a cold power cycle.

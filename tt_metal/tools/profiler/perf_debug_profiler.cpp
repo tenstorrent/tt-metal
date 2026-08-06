@@ -784,6 +784,16 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 sizeof(zero3),
                 tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
                 ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+            // ALSO the stop word -- teardown leaves it at 1 (quiesce) or 2 (free the NIU), and the drain loop
+            // is `while (... && *stop == 0 ...)`, so a stale value would make the next kernel exit after ONE
+            // sweep while the host reports FAILED TO START. (Not the cause of the slow-dispatch wedge below --
+            // that reproduces with stop=0 -- but the same class of stale-state bug as the hb/phase words.)
+            uint32_t zero1 = 0;
+            cluster.write_core(
+                &zero1,
+                sizeof(zero1),
+                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
+                ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
             // Same reason, for the results block: it is published only on kernel exit, so a drainer that is
             // still running at teardown leaves the PREVIOUS run's numbers there and they read as this run's.
             // That is how a 42 s run reported "495.7 ms, credit-wait 0.1%" and hid its own credit timeouts.
@@ -850,20 +860,46 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
+                // Poll for ADVANCE rather than sampling once 2 ms later: a single short sample cannot tell a
+                // dead drainer from a slow one. 200 ms is ~6000 idle sweeps of headroom at 30 us/sweep.
                 if (hb0 != 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                    cluster.read_core(&hb1, sizeof(hb1), core, hb_addr);
+                    const auto adv_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+                    do {
+                        cluster.read_core(&hb1, sizeof(hb1), core, hb_addr);
+                        if (hb1 != hb0) {
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    } while (std::chrono::steady_clock::now() < adv_deadline);
                 }
                 if (hb0 == 0 || hb1 == hb0) {
+                    // Report WHERE it stopped, not just that it did. `phase` is the kernel's own progress
+                    // marker; without it this warning sent me chasing a stale stop word and a TLB change,
+                    // when phase=11 says plainly that it is wedged in the sweep-body write barrier.
+                    uint32_t st[3] = {0, 0, 0};
+                    cluster.read_core(
+                        st, sizeof(st), core, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+                    uint32_t stopw = 0;
+                    cluster.read_core(
+                        &stopw,
+                        sizeof(stopw),
+                        core,
+                        ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
                     log_warning(
                         tt::LogMetal,
                         "[perf-debug profiler] Device {}: drainer {} FAILED TO START (heartbeat {} -> {} after "
                         "launch). The producers would block forever on a full ring and wedge the workload, so "
-                        "capture is disabled for this run instead.",
+                        "capture is disabled for this run instead. State: done=0x{:x} hb={} phase={} stop={} "
+                        "(phase: 1=INIT 2=POLL 3=RESERVE 4=WRITE 5=EXIT 6-9=write-substeps 11-13=barriers "
+                        "14=socket-barrier)",
                         device_id,
                         d,
                         hb0,
-                        hb1);
+                        hb1,
+                        st[0],
+                        st[1],
+                        st[2],
+                        stopw);
                     ctx.drain_program[d].reset();
                     ctx.sockets[d].reset();
                     disarm_producers(mesh_device, device_id);
