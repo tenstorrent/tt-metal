@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <span>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
@@ -24,12 +23,6 @@ class TlbWindow;
 namespace tt::tt_metal {
 
 class IDevice;
-
-struct ClockProbe {
-    std::chrono::steady_clock::time_point host_time;  // taken immediately before the counter read
-    std::chrono::nanoseconds bracket{};
-    uint64_t device_ticks = 0;
-};
 
 // Reads the profiler core's cycle counter and keeps the probes a record needs to be interpolated between. Nothing
 // runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
@@ -108,11 +101,11 @@ public:
         std::chrono::nanoseconds bracket{};
     };
 
-    // A rate measured across the whole retained history rather than across one chord.
+    // A rate measured across the whole retained history rather than across one chord. Its uncertainty is not carried:
+    // sync_error describes where a record starts, and placement rides the chord's slope, not this one. What this rate's
+    // uncertainty would bound is duration(), which no field reports.
     struct BaselineRate {
         double rate = 0.0;
-        // Uncertainty in `rate`, as a fraction: the two probes' brackets over the span they were measured across.
-        double noise = 0.0;
     };
 
     // The rate across the retained probe history, or nullopt while it is too narrow to beat a single chord. Receiver
@@ -222,9 +215,10 @@ private:
     [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
 
     void configure_clock_read_path();
-    ClockProbe probe();
+    // Placed at the midpoint of its read's bracket, which is where the counter could have been read.
+    Anchor probe();
     // Ranked, not thresholded: under record load the whole bracket distribution shifts.
-    ClockProbe best_of(int probes);
+    Anchor best_of(int probes);
 
     ContextId context_id_;
     uint32_t chip_id_ = 0;

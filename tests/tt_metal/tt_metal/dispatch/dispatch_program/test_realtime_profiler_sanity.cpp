@@ -438,7 +438,7 @@ TEST(RealtimeProfilerChordMapping, PublishedRateComesFromTheBaselineNotTheChord)
     auto closing = chord_close(open);
     // Well inside what two 700ns brackets over this span can produce.
     closing.ticks += static_cast<uint64_t>(0.3 * chord_rate_noise() * kNominalRate * chord_span_ns());
-    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate, .noise = 0.0005};
+    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate};
 
     const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, {});
 
@@ -456,7 +456,7 @@ TEST(RealtimeProfilerChordMapping, RecordLandsOnTheChordWhateverRateIsPublished)
     const auto closing = chord_close(open);
     // A baseline 1% away from this chord: far more than any real DVFS step, so if placement were carried at the
     // published rate this would land a record ~500ns off.
-    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate * 1.01, .noise = 0.0005};
+    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate * 1.01};
 
     const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, {});
 

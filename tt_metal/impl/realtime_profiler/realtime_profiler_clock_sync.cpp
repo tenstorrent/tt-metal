@@ -9,15 +9,11 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
-#include <mutex>
 #include <optional>
 #include <thread>
-#include <unordered_map>
-#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/indestructible.hpp>
 
 #include <tt-metalium/device.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
@@ -126,10 +122,7 @@ std::optional<RealtimeProfilerClockSync::BaselineRate> RealtimeProfilerClockSync
     if (newest.host - oldest.host < kRateBaseline / 4) {
         return std::nullopt;
     }
-    return BaselineRate{
-        .rate = static_cast<double>(newest.ticks - oldest.ticks) / span_ns,
-        .noise = static_cast<double>((oldest.bracket + newest.bracket).count()) / span_ns,
-    };
+    return BaselineRate{.rate = static_cast<double>(newest.ticks - oldest.ticks) / span_ns};
 }
 
 uint64_t RealtimeProfilerClockSync::first_probe_at_or_past(uint64_t ticks) const {
@@ -263,7 +256,7 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     };
 }
 
-ClockProbe RealtimeProfilerClockSync::probe() {
+RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
     TTZoneScopedDN(RT_PROFILER, "Probe");
     // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a gap
     // long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low word
@@ -292,14 +285,13 @@ ClockProbe RealtimeProfilerClockSync::probe() {
     ++cost_.clock_reads;
     const auto bracket = host_after - host_before;
     TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
-    return ClockProbe{
-        host_before,
-        std::chrono::duration_cast<std::chrono::nanoseconds>(bracket),
-        (static_cast<uint64_t>(cached_clock_hi_) << 32) | lo};
+    const auto bracket_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(bracket);
+    return Anchor{
+        host_before + placement_error(bracket_ns), (static_cast<uint64_t>(cached_clock_hi_) << 32) | lo, bracket_ns};
 }
 
-ClockProbe RealtimeProfilerClockSync::best_of(int probes) {
-    ClockProbe best = probe();
+RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::best_of(int probes) {
+    Anchor best = probe();
     for (int i = 1; i < probes; i++) {
         // Each read blocks the calling thread on PCIe, so the remaining ones are only worth taking while they might
         // still tighten the bracket. A read already at the recent typical width leaves them nothing to improve; the
@@ -308,7 +300,7 @@ ClockProbe RealtimeProfilerClockSync::best_of(int probes) {
             best.bracket <= typical_bracket_ + typical_bracket_ / 2) {
             break;
         }
-        const ClockProbe p = probe();
+        const Anchor p = probe();
         if (p.bracket < best.bracket) {
             best = p;
         }
@@ -338,10 +330,8 @@ void RealtimeProfilerClockSync::warm_up() {
 void RealtimeProfilerClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
     const auto started_at = std::chrono::steady_clock::now();
-    const ClockProbe p = best_of(kResyncProbes);
     ++cost_.resyncs;
-    probe_history_[probes_end_ % kProbeHistoryCapacity] =
-        Anchor{p.host_time + placement_error(p.bracket), p.device_ticks, p.bracket};
+    probe_history_[probes_end_ % kProbeHistoryCapacity] = best_of(kResyncProbes);
     ++probes_end_;
     cost_.busy += std::chrono::steady_clock::now() - started_at;
 }
