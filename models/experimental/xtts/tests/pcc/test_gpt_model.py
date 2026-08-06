@@ -14,7 +14,7 @@ Run:
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
     # first run downloads ~1.9 GB of XTTS-v2 weights to the HF cache
-    pytest models/experimental/xtts/tests/test_gpt_model.py -s
+    pytest models/experimental/xtts/tests/pcc/test_gpt_model.py -s
 """
 
 import pytest

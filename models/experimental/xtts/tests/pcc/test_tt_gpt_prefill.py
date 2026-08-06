@@ -23,7 +23,7 @@ Run:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/test_tt_gpt_prefill.py -s
+    pytest models/experimental/xtts/tests/pcc/test_tt_gpt_prefill.py -s
 """
 
 import pytest

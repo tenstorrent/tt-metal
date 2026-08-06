@@ -381,7 +381,53 @@ def _global_mean(x, hw, ncores):
 
     A height that is not a whole number of tiles (layer3's 16x201 at mel_len=801, and whichever
     stages a given mel length lands unaligned) is zero-padded up to one first. That divides by
-    the padded height, so the result is scaled back by ``hw_pad/hw``."""
+    the padded height, so the result is scaled back by ``hw_pad/hw``.
+
+    **Tried and rejected: ``ttnn.avg_pool2d``** in place of this whole function. Its global-pool
+    fast path (kernel == input spatial -> one ``pool_sum``, generic_pools.cpp:1031-1150) looks
+    like a strict win -- five ops become one, and the pad/rescale stop existing. Measured, the
+    naive ``batch_size=1`` form is **1781 -> 3846us/pass (2.16x)**: ``pool_sum`` has exactly the
+    un-batched parallelization problem described above, landing on ``C/32`` cores (1 at layer1).
+    ``batch_size=N`` does recover the batching -- the fast path's own canonicalization *is* the
+    ``[1, N, B, C]`` reshape (generic_pools.cpp:1104-1121), and ``ReduceDeviceOperation`` then
+    costs **171.0us either way, identical** -- but the whole pass is still **2139us/pass (+20%),
+    305 ops against 288**, because ``avg_pool2d`` cannot fuse away the two support jobs this
+    chain does and re-implements both on worse primitives (per layer1 block): the *gather* of the
+    N partials, ``ttnn.transpose`` 2.1us on 89 cores against its ``reshape`` 15.6us on 3
+    (batch_size != 1 forces ``[N,1,1,C] -> [1,1,N,C]``, generic_pools.cpp:1140, on the generic
+    tile-reshape path pinned to the 3 *output* tiles); and the *pad-zeroing*, one 4.5us FillPad
+    against a 12.3us ROW_MAJOR untilize/tilize round trip. PCC is unaffected throughout
+    (0.9987-0.9993 across mel_len 32-1601), so this is purely a speed verdict.
+
+    **Tried and rejected: ``ttnn.experimental.fast_reduce_nc(y, dims=[1])``** for the second
+    reduce, which consumes ``[1, N, 1, C]`` directly and so appears to delete the transpose *and*
+    the FillPad in one op (a tile-wise add leaves each tile's garbage rows 1..31 in the output's
+    pad rows, and logical row 0 stays exact). It is **3-8x slower**: 8.66 -> 27.03us at layer1,
+    14.32 -> 119.80us at layer2, 10.48 -> 30.78us at layer3, i.e. 146 -> 745us a pass. The
+    transpose above is not bookkeeping, it is a **compaction** -- stage 1 leaves each partial
+    mean alone in row 0 of its own tile, and the transpose packs N sparse tiles into
+    ``ceil(N/32)`` dense ones (89->3, 401->13, 101->4), so the reduce that follows reads 32x
+    less. ``fast_reduce_nc`` skips that and reads all N *full* tiles, on the ``C/32`` = 1/2/4
+    cores its output tile count buys. Skipping the FillPad is real but worth 4.5us, against a
+    32x read amplification. (It also returns logical ``[1,1,32,C]``, not ``[1,1,1,C]`` -- its
+    output spec comes from ``padded_shape``, fast_reduce_nc_device_operation.cpp:84 -- which
+    breaks the broadcast/diag multiply below; the preallocated ``output=`` arg is the way round
+    that, since ``compute_output_specs`` then returns the preallocated spec.)
+
+    **Also tried and reverted: replacing the second reduce (transpose+[FillPad]+reduce) with a
+    matmul** against a constant ``[1, N]`` averaging vector (mirroring :func:`_scale_channels`'s
+    diagonal-matmul trick). Per-call it looked reasonable and PCC was unaffected, but
+    whole-forward traced replay was not monotonic in mel_len: every point <= ~875 won (-0.9% to
+    -3.6%) and every point >= ~880 lost (+2.1% to +6.3%), and neither ``N`` nor any per-op FW
+    duration explains the flip (a profiler diff at a win and a loss mel_len shows this path's
+    own ops -- the new matmul, the reshape it needs -- costing about the same, or less, at the
+    losing mel_len; only the replayed metric moves). That means the regression is a scheduling/
+    dispatch interaction with the rest of the forward pass, not a cost in the ops this touches,
+    and it was not root-caused before deciding it was not worth the added state (a per-shape
+    weight cache) and the conditional-correctness risk of shipping something with an unexplained
+    failure mode. If revisited, a mel_len-gated version (matmul below ~875, this chain above)
+    reproduced the original's exact numbers on the fallback side -- the sweep to redo that:
+    ``for mel_len in range(700, 1200, 25): compare traced replay, both variants``."""
     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)  # de-shard: reduce needs a plain view
     tiles = -(-hw // TILE)
     if tiles < _MEAN_BATCH_MIN_TILES:
@@ -391,8 +437,13 @@ def _global_mean(x, hw, ncores):
         x = ttnn.pad(x, [(0, 0), (0, 0), (0, hw_pad - hw), (0, 0)], value=0.0)
     block = _mean_block(tiles, ncores)
     mean = ttnn.mean(ttnn.reshape(x, [1, hw_pad // block, block, x.shape[-1]]), dim=2, keepdim=True)
-    mean = ttnn.mean(ttnn.transpose(mean, 1, -2), dim=2, keepdim=True)
-    return mean if hw_pad == hw else ttnn.multiply(mean, hw_pad / hw)
+    # ``scalar`` rides the ``hw_pad/hw`` correction on the reduce that already runs, rather than
+    # spending a separate op on it: ttnn.mean's scaler is ``scalar / reduced_volume``, and
+    # reduced_volume here is exactly the ``N`` this stage divides by, so the two compose to the
+    # same arithmetic. A standalone ttnn.multiply cost 3.05us on 110 cores for a one-tile
+    # operand, 18.3us a pass over layer3's six blocks -- the only stage where hw is not
+    # tile-aligned at mel_len=801. At an aligned hw the ratio is 1.0 and this is a no-op.
+    return ttnn.mean(ttnn.transpose(mean, 1, -2), dim=2, keepdim=True, scalar=hw_pad / hw)
 
 
 def _se_core_grid(out_channels, grid):
@@ -637,7 +688,7 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # both normalize the last dim, with no affine. One op instead of a mean/var chain,
         # and it handles the tile padding of a non-tile-aligned T.
         # The log rides on the +1e-6 as a fused activation, so the pair costs one op.
-        x = ttnn.layer_norm(ttnn.add(mel, 1e-6, activations=[LOG]), epsilon=INSTANCENORM_EPS)
+        x = ttnn.layer_norm(ttnn.add(mel, 1e-6, activations=[LOG], dtype=TAIL_DTYPE), epsilon=INSTANCENORM_EPS)
         # -> the conv's flat channels-last form [1, 1, H*W, C] with C=1, straight into L1 for
         # the whole body: every conv then takes ttnn.conv2d's L1 path, which (unlike the DRAM
         # path) doesn't bracket each conv with a 4D unflatten/re-flatten. Asking reshape for that
@@ -659,7 +710,7 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # 801/401/201, so the same halos shrink 3.4x/4.8x/6.7x. Measured conv2d end to end
         # (halo+conv, one stride-1 3x3 per stage): layer1 31.8->28.1us, layer2 28.9->22.9us,
         # layer3 58.1->27.1us, layer4 46.0->46.3us (block-sharded, so its halo was already 2.5us).
-        x = ttnn.transpose(ttnn.typecast(x, BODY_DTYPE), -2, -1)  # [1, T, 64]
+        x = ttnn.transpose(x, -2, -1)  # [1, T, 64]
         x = ttnn.reshape(x, [1, 1, time * freq, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x, h, w = self.conv1(x, time, freq)  # relu fused; h is the time extent from here on
@@ -688,7 +739,6 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # fp32 *after* the relayout, not before: the ASP variance below needs it, but widening
         # first doubles the bytes the reshape/permute/reshape trio moves (63us of them) for a
         # cast that is lossless whenever it runs.
-        x = ttnn.typecast(x, TAIL_DTYPE)
 
         # Attention weights over time. The BatchNorm between the two matmuls is folded into
         # the second one's weight and bias (see __init__), so nothing here applies it.
