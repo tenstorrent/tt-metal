@@ -479,17 +479,26 @@ def depthwise_split_mode() -> str:
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
-    """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
+    """Valid depthwise filter on padded ``(B, T_pad, C)`` ROW_MAJOR.
+
+    ``taps`` is either a flat length-K vector shared by every channel, or a per-channel ``(C, K)``
+    nested sequence. The per-channel form exists so one conv can carry several different filters over
+    the same rows, by stacking their inputs along C -- see the polyphase upsampler.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
     ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``, or via the exact
     shift-multiply-add form when `depthwise_mac_preferred`.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
-    K = len(taps)
+    per_channel_taps = len(taps) > 0 and isinstance(taps[0], (list, tuple))
+    K = len(taps[0]) if per_channel_taps else len(taps)
     T_out = (T_pad - K) // stride + 1
 
     if depthwise_mac_preferred():
+        # The MAC form scales a whole slice by one scalar per tap, so it cannot express a filter that
+        # differs per channel. Callers using per-channel taps are the fused ones, which exist to avoid
+        # extra ops -- falling back to the op-heaviest path would defeat them.
+        assert not per_channel_taps, "MAC fallback does not support per-channel taps"
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
 
     if "cc" not in cache:
@@ -515,11 +524,23 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
         # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors, and on
         # the path, because conv1d hands back a weight laid out for whichever route prepared it.
-        wkey = ("w", path, c_eff, stride, K, tuple(taps_v))
+        # Nested per-channel taps are unhashable as-is; flatten for the cache key.
+        tap_key = tuple(tuple(t) for t in taps_v) if per_channel_taps else tuple(taps_v)
+        wkey = ("w", path, c_eff, stride, K, tap_key)
         weight = cache.get(wkey)
         prepared = weight is not None
         if weight is None:
-            wt = torch.tensor(taps_v, dtype=torch.float32).reshape(1, 1, K).expand(c_eff, 1, K).contiguous()
+            # `taps_v` is either one tap vector shared by every channel, or one per channel. The
+            # per-channel form is what lets a caller run several different filters over the same rows
+            # in a single conv, by stacking their inputs along C -- the upsampler's two polyphase
+            # phases being the case that matters. Two calls become one, at double the channel width,
+            # and by `audio_perf/row_cost.py` a wider row costs barely more than a narrow one.
+            tv = torch.tensor(taps_v, dtype=torch.float32)
+            if tv.dim() == 1:
+                wt = tv.reshape(1, 1, K).expand(c_eff, 1, K).contiguous()
+            else:
+                assert tv.shape == (c_eff, K), f"per-channel taps {tuple(tv.shape)} != ({c_eff}, {K})"
+                wt = tv.reshape(c_eff, 1, K).contiguous()
             weight = ttnn.from_torch(
                 wt,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
