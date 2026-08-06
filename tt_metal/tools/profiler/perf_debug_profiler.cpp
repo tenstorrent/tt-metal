@@ -876,7 +876,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                     // Report WHERE it stopped, not just that it did. `phase` is the kernel's own progress
                     // marker; without it this warning sent me chasing a stale stop word and a TLB change,
                     // when phase=11 says plainly that it is wedged in the sweep-body write barrier.
-                    uint32_t st[3] = {0, 0, 0};
+                    uint32_t st[5] = {0, 0, 0, 0, 0};
                     cluster.read_core(
                         st, sizeof(st), core, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
                     uint32_t stopw = 0;
@@ -890,8 +890,10 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         "[perf-debug profiler] Device {}: drainer {} FAILED TO START (heartbeat {} -> {} after "
                         "launch). The producers would block forever on a full ring and wedge the workload, so "
                         "capture is disabled for this run instead. State: done=0x{:x} hb={} phase={} stop={} "
+                        "| write-barrier predicate: HW_ACK_RECEIVED={} vs SW_acked={} (equal => flushed; "
+                        "unequal and FROZEN => the software mirror is out of sync, not a stalled NoC) "
                         "(phase: 1=INIT 2=POLL 3=RESERVE 4=WRITE 5=EXIT 6-9=write-substeps 11-13=barriers "
-                        "14=socket-barrier)",
+                        "14=socket-barrier 15=tail-barrier)",
                         device_id,
                         d,
                         hb0,
@@ -899,7 +901,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         st[0],
                         st[1],
                         st[2],
-                        stopw);
+                        stopw,
+                        st[3],
+                        st[4]);
                     ctx.drain_program[d].reset();
                     ctx.sockets[d].reset();
                     disarm_producers(mesh_device, device_id);

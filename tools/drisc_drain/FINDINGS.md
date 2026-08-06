@@ -1358,47 +1358,56 @@ on the same NoC). The DRISC can also run under slow dispatch (`force_slow_dispat
 Amplified DRISC in slow dispatch: still hangs ⇒ the DRAM-core NIU is the trigger. Survives ⇒ fast dispatch is.
 Either way it halves the hypothesis space in one run. Budget a cold power cycle.
 
-## §N+5 — The 2x2 cannot be completed yet: the DRISC WEDGES under slow dispatch (bh-05, 2026-08-06)
+## §N+5 — The slow-dispatch DRISC wedge: an UNSATISFIABLE write barrier (bh-05, 2026-08-06)
 
-Attempting the missing cell (amplified DRISC under slow dispatch) does not produce a hang or a clean run — the
-drainer never starts. The `phase` word says exactly where:
+Under slow dispatch the DRISC drainer wedges on sweep 1 and the host reports FAILED TO START with
+`done=0x0 hb=1 phase=11 stop=0`. phase=11 is the sweep-body write barrier.
+
+**ROOT CAUSE (measured, not inferred): the barrier's predicate can never become true.**
+`ncrisc_noc_nonposted_writes_flushed` is
+`NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc]` — a HARDWARE ack counter
+against a SOFTWARE mirror incremented at ISSUE time. Publishing both sides from inside the spin (kernel writes
+them to the liveness pad at `done+12` / `done+16`; the host prints them on failure):
 
 ```
-drainer 0 FAILED TO START (heartbeat 1 -> 1). State: done=0x0 hb=1 phase=11 stop=0
+HW_ACK_RECEIVED=7309  vs  SW_acked=7311      frozen, identical across runs
 ```
 
-`phase=11` = `kPhBar1`, the sweep-body write barrier. So the kernel booted, completed sweep 1 (hb=1), shipped a
-frame, and wedged in the barrier that must flush before staging is reused. `stop=0`, so it was not commanded to
-stop; `done=0x0`, so it never exited.
+**Exactly +2, every time.** Two nonposted writes were issued and their acks never arrived, so the equality is
+unsatisfiable and the loop spins forever. This is NOT a stalled NoC and NOT a hung core — the core is running,
+reading the register, and comparing. Both of the earlier explanations in this file were wrong:
 
-**PRE-EXISTING, not caused by the amplifier.** Reverting the kernel and host module to the pre-amplifier commit
-reproduces it identically (`heartbeat 1 -> 1`). It also reproduces with the static-TLB change disabled
-(`TT_METAL_PERF_DEBUG_NO_STATIC_TLB=1`), on both paths, and with a forced JIT rebuild (0/18 cache hits).
+- ~~"the core is stuck inside the NIU register read"~~ — it is a plain register read that always returns. That
+  claim came from "neither the cycle deadline nor a 4M-iteration cap fires", which is equally explained by a
+  predicate that is simply never true. **Also: the run that appeared to prove the iteration cap useless had its
+  diagnostic TRUNCATED by my own `sed` — I never saw its phase.**
+- ~~"pre-existing, reproduces on the pre-amplifier commit"~~ — that test ran against an ALREADY-WEDGED core.
+  A wedged DRISC spins forever, so a new `LaunchProgram` cannot take the core over; the host then reads the OLD
+  kernel's liveness words and reports FAILED TO START no matter what code was just built. Every "reproduces
+  with X disabled" result in that window is void for the same reason.
 
-**The core is stuck INSIDE the NIU register read.** `write_barrier_bounded` had a 50 ms cycle deadline that never
-fired. Adding a 4M-iteration cap did not free it either. Neither bound can fire if control never returns from
-`ncrisc_noc_nonposted_writes_flushed()`, so that is where it is: a DRAM-core NIU stalling on a register read,
-not a software liveness bug. No software bound can rescue this — the cap stays anyway, because a barrier bounded
-two ways beats one bounded by a clock the core must be running to read.
+**THE RELIABLE PATTERN, after a `tt-smi -r`: run 1 SUCCEEDS, run 2 onward wedge, always +2.** So a single
+slow-dispatch DRISC run per reset is usable — which is enough to measure the missing 2x2 cell, at the cost of one
+`tt-smi -r` (~20 s) per data point.
 
-**It poisons the card for later runs.** The wedged DRISC is resident and survives process exit, so the NEXT run
-— even under fast dispatch — reports FAILED TO START. `tt-smi -r` clears it and fast dispatch returns to its
-exact baseline (31.2 MB, busy 29 @ 68.9 us). The card is NOT PCIe-hung in this state: probes read 171-179 ns and
-tt-smi is happy. So this is a third distinct failure state, alongside HUNG and DEGRADED: **WEDGED DRISC**,
-recoverable by reset.
+A start-of-kernel `noc_local_state_init()` on both NoCs (resyncing the mirrors from hardware) does NOT fix it —
+verified with a forced JIT rebuild. That rules out pure inheritance: the two non-acking writes are issued WITHIN
+the failing run. It is kept anyway: the mirrors persist across launches on a resident core that is never reset,
+so resyncing at entry is correct regardless, and the Tensix build already needed it for the read NoC (a stale
+read counter makes `noc_async_read_barrier()` return EARLY — silent corruption rather than a wedge).
 
-### Why slow dispatch, and the experiment that would confirm it
+### Next step, and it is one run
 
-Leading hypothesis: under slow dispatch the producer worker cores are **held in reset** until the workload
-launches, and the drainer starts sweeping before that. Its first-sweep head write-backs therefore target cores
-in reset; a nonposted write to a core in reset never acks, and querying the NIU about it stalls. Under fast
-dispatch those cores are already running dispatch firmware, so the writes ack. The heartbeat check runs before
-the workload launch, which is exactly the window where this bites.
+Publish `NIU_MST_NONPOSTED_WR_REQ_SENT` alongside the ack counters and snapshot all three around each distinct
+write site in sweep 1 — the head write-backs, `socket_push_pages`, `socket_notify_receiver`. Whichever site
+leaves issued-minus-acked at 2 is the leak. Prime suspect: under slow dispatch the producer workers are held in
+RESET until the workload launches, and the drainer sweeps before that, so a write to a core in reset may never
+ack; fast dispatch has dispatch firmware running on those cores. Two is a suspiciously specific count, though,
+so measure rather than assume.
 
-To confirm: launch the drainer AFTER the workload's cores are out of reset (or have the first sweep skip head
-write-backs until it sees a live producer). If the wedge disappears, reset-state writes are the cause.
+### It also poisons later runs, which is a trap
 
-**This is also a lead on the main question.** The DRAM-core NIU is the same unit implicated in the PCIe hang
-(§N+4), and here it stalls on a register read with NO PCIe pressure at all. Whether the two are the same fault
-is unknown, but a reproducible, reset-recoverable NIU stall is a far cheaper thing to study than a hang that
-costs a cold power cycle.
+The wedged DRISC is resident and spins forever, so the NEXT run — even under fast dispatch — reports FAILED TO
+START while the card itself is perfectly healthy (probes 170-183 ns, tt-smi fine). `tt-smi -r` clears it. Three
+distinct states now: **WEDGED DRISC** (reset clears it), **DEGRADED** (cold power cycle), **HUNG** (cold power
+cycle). Check which one you have before debugging anything, and reset before trusting any negative result.
