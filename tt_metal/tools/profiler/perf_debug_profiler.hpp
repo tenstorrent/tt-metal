@@ -214,6 +214,13 @@ private:
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
+    // PRODUCER STAGGER PROBE. first_ts_[lane] = device timestamp of the first marker seen on that lane.
+    // The SPREAD across lanes says whether the 110 cores start together or staggered -- which is the open
+    // question behind the "degraded" batching difference (12 vs 57 cores with data per drainer sweep).
+    // Indexed by the record's lane field; 0 = not yet seen. Written only by the decode threads, one lane
+    // belongs to exactly one socket, so no locking is needed.
+    std::vector<uint64_t> first_ts_;
+    void report_lane_spread();
     // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.

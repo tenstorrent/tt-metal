@@ -206,6 +206,13 @@ public:
     uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
+     * @brief True when the flow-control counter lives in a hugepage mapping (read via clflush+lfence)
+     *        rather than the IOMMU-mapped host buffer (read via mfence). The two paths have very
+     *        different per-poll costs, so which one is in use matters when comparing machines.
+     */
+    bool is_using_hugepage() const { return using_hugepage_; }
+
+    /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
      *
      * This address should be passed to the device kernel (typically as a compile-time

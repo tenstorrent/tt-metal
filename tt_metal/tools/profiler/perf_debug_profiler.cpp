@@ -495,6 +495,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
     ctx.nl = static_cast<uint32_t>(num_cores) * kNRisc;
+    if (first_ts_.size() < ctx.nl) {
+        first_ts_.assign(ctx.nl, 0);  // stagger probe (see header); 0 = lane not seen yet
+    }
     ctx.core_virt.resize(num_cores);
 
     // Pre-zero every core's profiler control vector (heads and tails start clean) and build the maps the
@@ -555,20 +558,6 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // -- take the allocator's base instead and run to the top of L1. Safe to carve raw here because
             // the drainer core is outside the producer grid and this workload allocates no L1 buffers; a
             // workload that did would need a real sharded allocation on this core.
-            // ZERO THE DRAINER CORE'S OWN PROFILER RING. The drain kernel is built with PROFILE_KERNEL=1
-            // like any Tensix kernel, so BRISC firmware writes ~7 words of its own zone markers per launch
-            // into this core's profiler ring -- and this core is deliberately NOT in the drained core set,
-            // so nothing ever empties it. The ring is 512 words (PROFILER_L1_VECTOR_SIZE), and the SPSC
-            // backend BLOCKS on a full ring rather than dropping, so after ~74 launches (512/7) BRISC
-            // wedges in firmware init BEFORE kernel_main and the drainer never starts -- silently, because
-            // a fire-and-forget launch has nothing to report it. Measured exactly: 6 for 6 at launch 74,
-            // across two hosts and two cards. Zeroing the control vector here resets head/tail so each run
-            // starts with an empty ring; one run's own FW markers are nowhere near 512 words.
-            cluster.write_core(
-                zero_ctrl.data(),
-                (uint32_t)zero_ctrl.size(),
-                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
-                prof_l1);
             ctx.drisc_l1_base[d] = ctx.device->allocator()->get_base_allocator_addr(HalMemType::L1);
             ctx.drisc_l1_noc[d] = ctx.drisc_l1_base[d];  // worker L1 is addressed directly, no DRAM-view offset
             region = ctx.device->l1_size_per_core() - static_cast<uint32_t>(ctx.drisc_l1_base[d]);
@@ -626,6 +615,29 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
                 distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = !tensix_drain});
             ctx.sockets[d]->set_page_size(kPageSize);
+            // MEASURE the flow-control poll directly. The per-poll cost derived from the rounded "poll X%"
+            // log line differed ~10x between a fast and a degraded card, but that figure is too indirect to
+            // build a diagnosis on -- and the non-hugepage path reads HOST memory, not MMIO, so a ~1 us cost
+            // would not make sense there. Time the actual call and report which path it takes.
+            {
+                const auto t0 = std::chrono::steady_clock::now();
+                constexpr uint32_t kPollProbe = 2000;
+                uint32_t sink = 0;
+                for (uint32_t k = 0; k < kPollProbe; k++) {
+                    sink += ctx.sockets[d]->pages_available();
+                }
+                const double ns_per =
+                    std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() /
+                    kPollProbe;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] flow-control poll probe: {:.0f} ns/call over {} calls | hugepage "
+                    "path: {} | (sink {})",
+                    ns_per,
+                    kPollProbe,
+                    ctx.sockets[d]->is_using_hugepage() ? "YES (clflush+lfence)" : "no (mfence, host buffer)",
+                    sink);
+            }
             ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
             ctx.decode[d]->reset(ctx.nl);
             for (uint32_t c = 0; c < num_cores; c++) {
@@ -635,6 +647,28 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // Zero done AND the heartbeat/phase words behind it. Zeroing only `done` leaves the PREVIOUS
             // run's hb/phase in L1, so a drainer that never starts reads as the last run's final state --
             // which is exactly how a failed start got misread as "exited and wedged in the socket tail".
+            // ZERO THE DRAINER CORE'S OWN PROFILER RING -- for BOTH core types.
+            //
+            // The drain kernel is built with PROFILE_KERNEL=1 whichever core it lands on, so the firmware
+            // writes its own zone markers (BRISC-KERNEL / DRISC-KERNEL, ~7 words) into THIS core's profiler
+            // ring on every launch -- and this core is deliberately excluded from the drained core set, so
+            // nothing ever empties it. The ring is 512 words and the SPSC backend BLOCKS on a full ring
+            // rather than dropping, so after ~74 launches the RISC wedges in firmware init before
+            // kernel_main and the drainer silently never starts.
+            //
+            // Measured and fixed on Tensix (6/6 at launch 74; 600 clean runs after). The DRAM path has the
+            // SAME exposure -- bh_hal_dram.cpp gives DRAM cores a PROFILER region of sizeof(profiler_msg_t)
+            // and drisck.cc emits DRISC-KERNEL zones -- it just was never run 74 times inside one
+            // card-reset window. Zero it here for both rather than wait to rediscover it on the DRISC.
+            const uint64_t drainer_prof_l1 =
+                tensix_drain ? prof_l1
+                             : hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER);
+            cluster.write_core(
+                zero_ctrl.data(),
+                (uint32_t)zero_ctrl.size(),
+                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
+                drainer_prof_l1);
+
             uint32_t zero3[3] = {0, 0, 0};
             cluster.write_core(
                 zero3,
@@ -883,6 +917,15 @@ void PerfDebugProfiler::decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, st
 
     const size_t bn = static_cast<size_t>(bcur - ss.batch.data());
     w_recs_ += bn;
+    // Stagger probe: remember each lane's FIRST marker timestamp (cheap: one compare per record).
+    if (!first_ts_.empty()) {
+        for (size_t k = 0; k < bn; k++) {
+            const uint32_t lane = ss.batch[k].lane & 0x00FFFFFFu;
+            if (lane < first_ts_.size() && first_ts_[lane] == 0) {
+                first_ts_[lane] = ss.batch[k].ts;
+            }
+        }
+    }
     if (bn != 0 && ring_) {
         ZoneScopedNC("publish", 0xE67E22);  // orange: publish this read's records to the BroadcastRing
         const auto t_p0 = std::chrono::steady_clock::now();
@@ -1328,6 +1371,44 @@ void PerfDebugProfiler::consumer_thread() {
     dropped_.fetch_add(rd.dropped());
 }
 
+// Report how tightly the producer cores started, straight out of the capture: per-lane FIRST marker
+// timestamp. If the cores start together the spread is small and many cores have data in the same drainer
+// sweep; if they are staggered the drainer keeps finding a few cores at a time. That is exactly the
+// difference between the "fast" and "degraded" profiles (57 vs 12 frames per busy sweep), and this measures
+// it without any new silicon experiment.
+void PerfDebugProfiler::report_lane_spread() {
+    std::vector<uint64_t> seen;
+    seen.reserve(first_ts_.size());
+    for (uint64_t t : first_ts_) {
+        if (t != 0) {
+            seen.push_back(t);
+        }
+    }
+    if (seen.size() < 2) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] lane-spread probe: only {} lanes had markers -- nothing to compare "
+            "(decode must be ON for this probe)",
+            seen.size());
+        return;
+    }
+    std::sort(seen.begin(), seen.end());
+    const uint64_t lo = seen.front(), hi = seen.back();
+    const double kCycPerUs = 1.35e3;
+    auto us = [&](uint64_t c) { return static_cast<double>(c) / kCycPerUs; };
+    const uint64_t med = seen[seen.size() / 2];
+    const uint64_t p90 = seen[(seen.size() * 9) / 10];
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] lane-spread probe: {} lanes started | first-marker spread {:.1f} us "
+        "(median +{:.1f} us, p90 +{:.1f} us from first) | {:.2f} us mean gap between consecutive lane starts",
+        seen.size(),
+        us(hi - lo),
+        us(med - lo),
+        us(p90 - lo),
+        us(hi - lo) / static_cast<double>(seen.size() - 1));
+}
+
 void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why) {
     if (ctx.drain_program[d] == nullptr) {
         return;
@@ -1588,6 +1669,8 @@ void PerfDebugProfiler::stop() {
             q_dropped,
             kMaxPooledBufs);
     }
+    // After the decode threads are joined, so every lane's first marker has been seen.
+    report_lane_spread();
     log_info(tt::LogMetal, "[perf-debug profiler] decode queues: max depth {} buffers", q_depth);
     writer_done_.store(true, std::memory_order_release);
     // Why the host is the wall. The egress-only benchmark moved bytes with a copy and no interpretation;
