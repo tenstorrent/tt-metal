@@ -35,6 +35,12 @@ def _deepseek_kvdbg_enabled() -> bool:
 class GemmaMultimodalGenerator(Generator):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         super().__init__(model, model_args, mesh_device, processor, tokenizer)
+        # Demand-driven prefill warmup state (see warmup_model_prefill): which padded buckets have
+        # actually been warmed, whether the sampling-parameter sweep has run, and the re-entrancy
+        # latch that stops the warmup's own prefill_forward_text calls recursing back in.
+        self._warmed_prefill_seq_lens = set()
+        self._prefill_sampling_swept = False
+        self._warmup_prefill_active = False
 
     def encode_vision_for_prefill(self, pixel_values: list):
         if not hasattr(self.model[0], "encode_vision_embeddings_from_pixels"):
@@ -144,10 +150,19 @@ class GemmaMultimodalGenerator(Generator):
                 and getattr(self.model[0], "sampling", None) is not None
             )
 
+            # DEMAND-DRIVEN WARMUP. `tokens` is right here, so the warmup does not have to guess
+            # which padded bucket the caller is about to dispatch to -- it can be told. Warming
+            # every bucket up to the KV window runs a COMPLETE n_layers forward per bucket, and
+            # every bucket except the covering one is then never dispatched to again: at ISL=128
+            # with a 1024 window that is one whole 48-layer pass at M=1024 (124 ms, 34% of this
+            # model's device time) compiling programs nothing ever runs. Pass the imminent length
+            # down; warmup_model_prefill warms the covering bucket and remembers what it warmed,
+            # so a later, longer prompt still warms its own.
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
+                imminent_seq_len=get_padded_prefill_len(int(tokens.shape[1])),
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -568,18 +583,47 @@ class GemmaMultimodalGenerator(Generator):
         else:
             return output_tensor
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
-        if self.already_warmed_up_prefill:
+    def warmup_model_prefill(
+        self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False, imminent_seq_len=None
+    ):
+        # RE-ENTRANCY, not "done". The loop below calls prefill_forward_text, which calls back in
+        # here, so a flag has to stop the recursion -- but `already_warmed_up_prefill` was ALSO
+        # doing duty as "this generator is warm", which is what forced the warmup to be
+        # all-buckets-at-once: a second call could never warm anything. Split the two jobs so the
+        # bucket set can be demand-driven and still grow.
+        if self._warmup_prefill_active:
             return
-        self.already_warmed_up_prefill = True
+        already_warmed = self._warmed_prefill_seq_lens
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
+        if imminent_seq_len is not None:
+            # Only the SMALLEST bucket that covers the imminent prompt gets dispatched to; the rest
+            # would compile programs this run never uses. Falling back to the largest bucket when
+            # nothing covers the prompt keeps the old behaviour for an over-long prompt.
+            covering = [n for n in sequence_lengths_to_warmup if n >= imminent_seq_len]
+            sequence_lengths_to_warmup = [min(covering)] if covering else sequence_lengths_to_warmup[-1:]
+            # OPT-IN, because it moves a cost rather than deleting one. When the covering bucket IS
+            # the imminent length, the caller's own prefill -- which runs the moment this returns --
+            # compiles exactly these programs itself, so the warmup pass is a duplicate n_layers
+            # forward. A caller that measures steady state (a server past its first request, this
+            # repo's perf pipeline) is strictly better off without it; a caller whose timed region
+            # is FIRST-token latency must leave the flag alone, because the compile then lands
+            # inside that region. Mark the bucket warmed either way: the real pass warms it.
+            if getattr(self, "skip_redundant_prefill_warmup", False) and sequence_lengths_to_warmup == [
+                imminent_seq_len
+            ]:
+                already_warmed.add(imminent_seq_len)
+                sequence_lengths_to_warmup = []
+        sequence_lengths_to_warmup = [n for n in sequence_lengths_to_warmup if n not in already_warmed]
+        if not sequence_lengths_to_warmup and self.already_warmed_up_prefill:
+            return
+        self._warmup_prefill_active = True
         warmup_batch_sizes = (1,)
 
         skip_sequence_lengths = False
 
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
-        sampling_parameters_sweeped = False
+        sampling_parameters_sweeped = self._prefill_sampling_swept
 
         if enable_trace:
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
@@ -635,9 +679,19 @@ class GemmaMultimodalGenerator(Generator):
                         )
 
                     sampling_parameters_sweeped = True
+                    self._prefill_sampling_swept = True
+
+                already_warmed.add(supported_length)
 
                 if skip_sequence_lengths:
                     break
+
+        self._warmup_prefill_active = False
+        # The one-shot tail (vision compile) must not re-run when a later, longer prompt comes back
+        # for its own bucket -- that is what `already_warmed_up_prefill` now means.
+        if self.already_warmed_up_prefill:
+            return
+        self.already_warmed_up_prefill = True
 
         # Vision compile for multimodal models
         if getattr(self.model_args[0], "is_multimodal", False) and hasattr(
