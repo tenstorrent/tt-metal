@@ -167,6 +167,91 @@ def test_upfront_capture_flag_defaults_on(monkeypatch):
     assert TD.upfront_capture_enabled() is True
 
 
+@pytest.mark.parametrize(("value", "expected"), [("0", False), ("1", True), ("true", True), ("off", False)])
+def test_lazy_prefill_recapture_flag_is_explicit_opt_in(monkeypatch, value, expected):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_UPFRONT_LAZY_PREFILL_RECAPTURE", value)
+    assert generator_vllm._lazy_prefill_recapture_enabled() is expected
+
+
+def test_lazy_prefill_recapture_defaults_off(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.delenv("DG_UPFRONT_LAZY_PREFILL_RECAPTURE", raising=False)
+    assert generator_vllm._lazy_prefill_recapture_enabled() is False
+
+
+def test_coarse_prefill_buckets_cover_every_power_of_two_through_256k(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    expected = tuple(1 << exponent for exponent in range(7, 19))
+    assert generator_vllm.PREFILL_BUCKETS == expected
+
+    monkeypatch.setenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "1")
+    for bucket in expected:
+        assert (
+            generator_vllm._resolve_prefill_execution_len(bucket, max_model_len=262144) == bucket
+        )
+        if bucket > expected[0]:
+            assert (
+                generator_vllm._resolve_prefill_execution_len(bucket // 2 + 1, max_model_len=262144)
+                == bucket
+            )
+
+
+def test_coarse_prefill_buckets_are_opt_in_and_capacity_bounded(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.delenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", raising=False)
+    assert generator_vllm._coarse_prefill_buckets_enabled() is False
+    assert generator_vllm._resolve_prefill_execution_len(129, max_model_len=4096) == 160
+
+    monkeypatch.setenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "1")
+    assert generator_vllm._resolve_prefill_execution_len(129, max_model_len=4096) == 256
+    with expect_error(ValueError, match="no power-of-two prefill bucket"):
+        generator_vllm._resolve_prefill_execution_len(4000, max_model_len=4090)
+
+
+def test_model_owned_hybrid_kv_advertises_full_scheduler_capacity(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_MODEL_OWNED_HYBRID_KV", "1")
+    assert (
+        generator_vllm.DiffusionGemmaForCausalLM.get_max_tokens_all_users(
+            max_model_len=262144,
+            max_num_seqs=1,
+        )
+        == 262144
+    )
+
+    with expect_error(ValueError, match="max_num_seqs=1"):
+        generator_vllm.DiffusionGemmaForCausalLM.get_max_tokens_all_users(
+            max_model_len=262144,
+            max_num_seqs=2,
+        )
+
+
+def test_scheduler_capacity_falls_back_when_model_owned_hybrid_kv_is_disabled(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_MODEL_OWNED_HYBRID_KV", "0")
+    monkeypatch.delenv("GEMMA4_MAX_TOKENS_ALL_USERS", raising=False)
+    assert (
+        generator_vllm.DiffusionGemmaForCausalLM.get_max_tokens_all_users(
+            max_model_len=262144,
+            max_num_seqs=1,
+        )
+        == 131072
+    )
+
+
 # --- controller lifecycle ----------------------------------------------------
 
 
@@ -439,6 +524,22 @@ def test_traced_denoise_reveal_pmax_default_registration(monkeypatch, expect_err
         TD.set_default_reveal_pmax(None)
 
 
+def test_traced_denoise_uses_hybrid_logical_capacity_not_physical_block_axis(monkeypatch):
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
+    TD.set_default_reveal_pmax(131072)
+    try:
+        paged_cache = SimpleNamespace(shape=[16, 2, 64, 256])
+        tt_model = SimpleNamespace(
+            tt_kv_cache=[(paged_cache, paged_cache)],
+            _dg_model_owned_hybrid_kv=True,
+            _dg_hybrid_max_seq_len=131072,
+        )
+        adapter = SimpleNamespace(tt_model=tt_model)
+        assert TD._resolve_reveal_pmax(adapter) == 131072
+    finally:
+        TD.set_default_reveal_pmax(None)
+
+
 # --- adapter rebind ----------------------------------------------------------
 
 
@@ -510,6 +611,7 @@ def test_session_reset_detaches_borrowed_persistent_adapter_without_releasing_it
 
 def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatch):
     rebound = []
+    prefill_calls = []
     # rebind_prompt now also takes the request's TRUE prompt length, so the reveal mask can hide
     # that request's prefill pad slots instead of carrying the previous request's span.
     adapter = SimpleNamespace(rebind_prompt=lambda n, *, true_prompt_len=None: rebound.append(n))
@@ -517,6 +619,7 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     session.tt_model = SimpleNamespace()
     session.page_table = None
     session.page_tables_per_layer = None
+    session.prefill_execution_len = 128
     session.prefill_reused = False
     session.prefill_time_s = 0.0
     session._persistent_adapter = adapter
@@ -530,12 +633,15 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     monkeypatch.setattr(
         serving,
         "prefill_prompt_tokens",
-        lambda *args, **kwargs: SimpleNamespace(prompt_len=3, cache_len=32),
+        lambda *args, **kwargs: (
+            prefill_calls.append(kwargs) or SimpleNamespace(prompt_len=3, cache_len=32)
+        ),
     )
 
     assert session.prefill(torch.tensor([[1, 2, 3]], dtype=torch.long)) == 32
     assert rebound == [32]
     assert session._logits_fn is adapter
+    assert prefill_calls == [{"page_table": None, "page_tables_per_layer": None, "execution_len": 128}]
 
 
 # --- vLLM startup contract ---------------------------------------------------
@@ -725,13 +831,18 @@ def test_vllm_warmup_captures_48_traces_and_detaches_persistent_adapter(monkeypa
     assert metrics[0][1]["trace_stats"] == [{"capture_events": 1, "traces_captured": 48}]
 
 
-def test_vllm_upfront_warmup_defers_capture_until_trace_phase():
+def test_vllm_upfront_warmup_defers_capture_until_trace_phase(monkeypatch):
     pytest.importorskip("vllm")
+    import ttnn
+
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
+    compiled = []
+    monkeypatch.setattr(generator_vllm, "prefill_prompt_tokens", lambda model, toks: compiled.append(toks.shape[1]))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_a, **_k: None)
     wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
     wrapper.data_parallel = 1
-    wrapper.model = []
+    wrapper.model = [SimpleNamespace(mesh_device=object())]
     wrapper._upfront = True
     wrapper._persistent_adapter = None
     wrapper._make_session = lambda: pytest.fail("compile-only warmup must not build a capture session")
@@ -741,6 +852,7 @@ def test_vllm_upfront_warmup_defers_capture_until_trace_phase():
 
     assert wrapper._upfront_compile_phase_seen is True
     assert wrapper._persistent_adapter is None
+    assert compiled == [32]
 
 
 def test_vllm_upfront_warmup_always_includes_one_tile(monkeypatch):
@@ -773,6 +885,31 @@ def test_vllm_upfront_warmup_always_includes_one_tile(monkeypatch):
     assert sorted(compiled) == [32, 128, 160], "every warmed length must actually be compiled"
 
 
+def test_vllm_upfront_warmup_deduplicates_lengths_by_coarse_bucket(monkeypatch):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    compiled = []
+    monkeypatch.setattr(generator_vllm, "prefill_prompt_tokens", lambda model, toks: compiled.append(toks.shape[1]))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_a, **_k: None)
+    monkeypatch.setenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "1")
+    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "128,160,192,224,256,2432")
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper._upfront = True
+    wrapper.canvas_length = 256
+    wrapper._upfront_pmax = 4096
+    wrapper._max_model_len = 4096
+    wrapper.model = [SimpleNamespace(mesh_device=object())]
+
+    wrapper.warmup_model_prefill(None, enable_trace=False, can_sample_on_device=False)
+
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 128, 256, 4096})
+    assert compiled == [32, 128, 256, 4096]
+
+
 def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
@@ -784,8 +921,139 @@ def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
     wrapper._upfront_compile_phase_seen = True
     wrapper._upfront_prefill_warmup_lens = frozenset()
 
-    with expect_error(RuntimeError, match="requires a compile-only warmup"):
+    with expect_error(RuntimeError, match="requires its compile-only prefill warmup"):
         wrapper.warmup_model_prefill(None, True, True)
+
+
+def test_vllm_cold_prefill_rebuild_releases_trace_before_compile(monkeypatch):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    events = []
+    adapter = SimpleNamespace(use_reveal_mask=True)
+    emission = SimpleNamespace(tokens=torch.zeros((1, 256), dtype=torch.long))
+
+    class _Session:
+        def __init__(self):
+            self._logits_fn = None
+            self._persistent_adapter = None
+
+        def prefill(self, prompt_tokens):
+            assert events == ["release", "sync"], "compile must start only after trace release and CQ drain"
+            events.append("compile")
+            self._logits_fn = adapter
+            return 128
+
+    session = _Session()
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.model = [SimpleNamespace(mesh_device="mesh")]
+    wrapper._sessions = {}
+    wrapper._persistent_adapter = SimpleNamespace()
+    wrapper._upfront_prefill_warmup_lens = frozenset({32})
+    wrapper._upfront_rebuild_in_progress = False
+    wrapper._upfront_rebuilds = 0
+
+    def release_resident():
+        events.append("release")
+        wrapper._persistent_adapter = None
+
+    def capture_prefilled(captured_session):
+        assert captured_session is session
+        events.append("capture")
+        return emission, adapter, [{"traces_captured": 48}]
+
+    wrapper.release_persistent_capture = release_resident
+    wrapper._capture_prefilled_session = capture_prefilled
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append("sync"))
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(generator_vllm, "_dram_snapshot", lambda *args, **kwargs: {})
+
+    cache_len, actual_emission = wrapper._rebuild_for_cold_prefill(
+        session,
+        torch.zeros((1, 97), dtype=torch.long),
+        expected_cache_len=128,
+    )
+
+    assert events == ["release", "sync", "compile", "sync", "capture"]
+    assert cache_len == 128
+    assert actual_emission is emission
+    assert wrapper._persistent_adapter is adapter
+    assert session._persistent_adapter is adapter
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 128})
+    assert wrapper._upfront_rebuilds == 1
+    assert wrapper._upfront_rebuild_in_progress is False
+
+
+def test_vllm_failed_cold_prefill_capture_releases_unpublished_state(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    events = []
+    controller = SimpleNamespace(release=lambda: events.append("controller_release"))
+    adapter = SimpleNamespace(
+        _upfront_traced_denoise_controller=controller,
+        reset=lambda: events.append("adapter_reset"),
+    )
+
+    class _Session:
+        def __init__(self):
+            self._logits_fn = None
+            self._persistent_adapter = None
+
+        def prefill(self, prompt_tokens):
+            events.append("compile")
+            self._logits_fn = adapter
+            return 128
+
+    session = _Session()
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.model = [SimpleNamespace(mesh_device="mesh")]
+    wrapper._sessions = {}
+    wrapper._persistent_adapter = SimpleNamespace()
+    wrapper._upfront_prefill_warmup_lens = frozenset({32})
+    wrapper._upfront_rebuild_in_progress = False
+    wrapper._upfront_rebuilds = 0
+
+    def release_resident():
+        events.append("release")
+        wrapper._persistent_adapter = None
+
+    def fail_capture(captured_session):
+        events.append("capture")
+        raise RuntimeError("injected recapture failure")
+
+    wrapper.release_persistent_capture = release_resident
+    wrapper._capture_prefilled_session = fail_capture
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append("sync"))
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+
+    with expect_error(RuntimeError, match="injected recapture failure"):
+        wrapper._rebuild_for_cold_prefill(
+            session,
+            torch.zeros((1, 97), dtype=torch.long),
+            expected_cache_len=128,
+        )
+
+    assert events == [
+        "release",
+        "sync",
+        "compile",
+        "sync",
+        "capture",
+        "controller_release",
+        "adapter_reset",
+        "sync",
+    ]
+    assert not hasattr(adapter, "_upfront_traced_denoise_controller")
+    assert session._logits_fn is None
+    assert session._persistent_adapter is None
+    assert wrapper._persistent_adapter is None
+    assert wrapper._upfront_rebuilds == 0
+    assert wrapper._upfront_rebuild_in_progress is False
 
 
 # --- vLLM unwarmed-length rejection ------------------------------------------

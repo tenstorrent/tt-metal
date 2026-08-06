@@ -50,7 +50,7 @@ python -m vllm.entrypoints.openai.api_server \
   --generation-config vllm --max-model-len <served-limit> \
   --max-num-batched-tokens <at-least-largest-whole-prompt> \
   --max-num-seqs 1 --block-size 64 \
-  --additional-config '{"tt": {"sample_on_device_mode": "all", "enable_model_warmup": false}}'
+  --additional-config '{"tt": {"sample_on_device_mode": "all", "enable_model_warmup": true, "trace_mode": "all"}}'
 ```
 
 - `--block-size 64` is **required**: `get_num_available_blocks_tt` multiplies by
@@ -61,12 +61,15 @@ python -m vllm.entrypoints.openai.api_server \
 - `--max-num-batched-tokens` must cover the whole prompt: the TT scheduler provides no
   chunked-prefill admission, so an over-budget prompt sits in `Waiting` with no model execution (the
   2026-07-10 3072-token prefill needed `--max-num-batched-tokens 4096` for exactly this).
-- `enable_model_warmup: false` skips the AR two-phase trace warmup; block diffusion warms lazily.
+- `enable_model_warmup: true` and `trace_mode: all` are required with
+  `DG_UPFRONT_CAPTURE=1`: startup compiles every admitted prefill bucket before capturing the
+  persistent denoise trace. Use `enable_model_warmup: false` only with the eager diagnostic path
+  (`DG_UPFRONT_CAPTURE=0`).
 - `VLLM_ENABLE_V1_MULTIPROCESSING=0` gives single-process V1 so tracebacks surface in the log.
 - Request `temperature` / `top_p` / `top_k` / seed are ignored by the DG adapter; process-level DG
   sampling config is authoritative.
-- `--max-num-seqs 1`: one contiguous model cache backs one active sequence. Concurrency needs #47488
-  paged-cache ownership + #47557 batched canvas decode ([plan](vllm_native_plan.md)).
+- `--max-num-seqs 1`: one model-owned hybrid paged cache backs one active sequence. Concurrency
+  still needs #47557 batched canvas decode ([plan](vllm_native_plan.md)).
 - Datatype served: bf16 weights + bf16 KV + bf16 CCL, self-conditioning softmax / soft-embedding in
   fp32, matching the gemma4 vLLM bridge. bfp8 experts were measured and rejected:
   [datatype sweep](../datatype_sweep/README.md).

@@ -74,8 +74,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from time import monotonic
 
 import torch
+from loguru import logger
 
 import ttnn
 import models.demos.gemma4.tt.attention as _gemma4_attn
@@ -117,7 +119,8 @@ class _SlidingWindowState:
 @dataclass
 class _ChunkContext:
     chunk_start_idx: int  # absolute start position of the active chunk
-    chunk_page_table: object  # ttnn.Tensor: this chunk's blocks (fill target)
+    chunk_page_table: object  # ttnn.Tensor: this chunk's full-attention blocks
+    sliding_chunk_page_table: object | None  # bounded circular table (persistent)
     sliding_state: _SlidingWindowState  # per-sliding-layer rolling K/V window buffers
 
 
@@ -363,12 +366,35 @@ def chunked_prefill_attention_forward(
         paged_modulo_kwargs = (
             {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
         )
+        fill_page_table = (
+            ctx.sliding_chunk_page_table
+            if config.is_sliding and ctx.sliding_chunk_page_table is not None
+            else ctx.chunk_page_table
+        )
+        k_fill, v_fill = tt_k, tt_v
+        if config.cache_position_modulo is not None and valid_seq_len is not None:
+            fill_len = ((min(int(valid_seq_len), int(tt_k.shape[-2])) + eff_bs - 1) // eff_bs) * eff_bs
+            if 0 < fill_len < int(tt_k.shape[-2]):
+                k_fill = ttnn.slice(
+                    tt_k,
+                    [0, 0, 0, 0],
+                    [tt_k.shape[0], tt_k.shape[1], fill_len, tt_k.shape[3]],
+                )
+                v_fill = ttnn.slice(
+                    tt_v,
+                    [0, 0, 0, 0],
+                    [tt_v.shape[0], tt_v.shape[1], fill_len, tt_v.shape[3]],
+                )
         ttnn.experimental.paged_fill_cache(
-            k_cache, tt_k, ctx.chunk_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+            k_cache, k_fill, fill_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
         )
         ttnn.experimental.paged_fill_cache(
-            v_cache, tt_v, ctx.chunk_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+            v_cache, v_fill, fill_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
         )
+        if k_fill is not tt_k:
+            k_fill.deallocate(True)
+        if v_fill is not tt_v:
+            v_fill.deallocate(True)
 
     # ── FIX 3: attend the correct prefix under each layer's mask ─────────────
     #   full-attention: the ENTIRE KV prefix (all prior chunks) via the paged
@@ -514,16 +540,20 @@ def _chunk_rope_mats(model, chunk_start_idx: int, chunk_len: int):
 
 def chunked_prefill(
     model,
-    prompt_embeds,
+    prompt_embeds=None,
     *,
     input_ids_torch,
     embeds_torch,
     kv_cache,
-    page_table_torch,
+    page_table_torch=None,
+    page_tables_torch_per_layer=None,
+    page_tables_per_layer=None,
+    embed_chunk_fn=None,
     block_size: int,
     chunk_size: int | None = None,
     user_id: int = 0,
     return_last_logits: bool = True,
+    valid_prompt_len: int | None = None,
 ):
     """Prefill ``prompt_embeds`` in bounded-memory chunks over a paged KV cache.
 
@@ -552,13 +582,47 @@ def chunked_prefill(
     if chunk_size % block_size != 0:
         raise ValueError(f"chunk_size {chunk_size} must be a multiple of block_size {block_size}")
 
-    seq_len = prompt_embeds.shape[-2]
-    hidden = prompt_embeds.shape[-1]
+    seq_len = int(input_ids_torch.shape[1])
+    hidden = int(model.hidden_size)
+    if prompt_embeds is None:
+        if embed_chunk_fn is None:
+            raise ValueError("chunked prefill needs prompt_embeds or embed_chunk_fn")
+    else:
+        if embed_chunk_fn is not None:
+            raise ValueError("pass prompt_embeds or embed_chunk_fn, not both")
+        if int(prompt_embeds.shape[-2]) != seq_len:
+            raise ValueError(
+                f"prompt embedding length {prompt_embeds.shape[-2]} does not match token length {seq_len}"
+            )
     if seq_len % chunk_size != 0:
         raise ValueError(f"prompt seq_len {seq_len} must be a multiple of chunk_size {chunk_size} (pad the caller)")
     num_chunks = seq_len // chunk_size
+    valid_prompt_len = seq_len if valid_prompt_len is None else int(valid_prompt_len)
+    if valid_prompt_len <= 0 or valid_prompt_len > seq_len:
+        raise ValueError(f"valid_prompt_len must be in [1, {seq_len}], got {valid_prompt_len}")
 
-    full_pt_dev = _to_device_page_table(page_table_torch, model.mesh_device)
+    hybrid_tables = page_tables_per_layer is not None or page_tables_torch_per_layer is not None
+    if hybrid_tables:
+        if page_tables_per_layer is None or page_tables_torch_per_layer is None:
+            raise ValueError("hybrid chunked prefill needs both host and device page_tables_per_layer")
+        if len(page_tables_per_layer) != len(model.layers) or len(page_tables_torch_per_layer) != len(model.layers):
+            raise ValueError("hybrid page-table count must match model layer count")
+        text_config = getattr(model.hf_config, "text_config", model.hf_config)
+        layer_types = list(text_config.layer_types)[: len(model.layers)]
+        full_indices = [i for i, layer_type in enumerate(layer_types) if layer_type == "full_attention"]
+        sliding_indices = [i for i, layer_type in enumerate(layer_types) if layer_type == "sliding_attention"]
+        if not full_indices or not sliding_indices:
+            raise ValueError("hybrid chunked prefill requires full and sliding layer page tables")
+        sliding_window = int(text_config.sliding_window)
+        if chunk_size % sliding_window != 0:
+            raise ValueError(
+                f"hybrid chunk_size {chunk_size} must be a multiple of sliding_window={sliding_window}"
+            )
+        full_pt_dev = None
+    else:
+        if page_table_torch is None:
+            raise ValueError("chunked prefill requires page_table_torch")
+        full_pt_dev = _to_device_page_table(page_table_torch, model.mesh_device)
 
     # Rolling K/V window buffers for sliding-window layers, threaded across all
     # chunks (one per sliding layer). Built here so it lives for the whole prefill
@@ -566,32 +630,60 @@ def chunked_prefill(
     sliding_state = _SlidingWindowState(buffers={})
 
     logits = None
+    prefill_started_at = monotonic()
     for c in range(num_chunks):
         start = c * chunk_size
         end = start + chunk_size
         is_last = c == num_chunks - 1
+        chunk_started_at = monotonic()
+        logger.info(
+            "DG_PREFILL_CHUNK begin chunk={}/{} start={} end={} valid_prompt_len={}",
+            c + 1,
+            num_chunks,
+            start,
+            end,
+            valid_prompt_len,
+        )
 
         # This chunk's blocks: page_table[:, start_block:end_block].
         start_block = start // block_size
         end_block = _blocks_in(end, block_size)
-        chunk_pt_torch = page_table_torch[:, start_block:end_block]
-        chunk_pt_dev = _to_device_page_table(chunk_pt_torch, model.mesh_device)
+        if hybrid_tables:
+            full_pt_torch = page_tables_torch_per_layer[full_indices[0]]
+            chunk_pt_torch = full_pt_torch[:, start_block:end_block]
+            chunk_pt_dev = _to_device_page_table(chunk_pt_torch, model.mesh_device)
+            sliding_chunk_pt_dev = page_tables_per_layer[sliding_indices[0]]
+            model_page_table = None
+            model_page_tables_per_layer = page_tables_per_layer
+        else:
+            chunk_pt_torch = page_table_torch[:, start_block:end_block]
+            chunk_pt_dev = _to_device_page_table(chunk_pt_torch, model.mesh_device)
+            sliding_chunk_pt_dev = None
+            model_page_table = full_pt_dev
+            model_page_tables_per_layer = None
 
         # This chunk's embeddings [1,1,chunk_size,hidden] (bounded: only one chunk resident).
-        chunk_embeds = ttnn.slice(prompt_embeds, [0, 0, start, 0], [1, 1, end, hidden])
+        if prompt_embeds is None:
+            chunk_embeds = embed_chunk_fn(model, input_ids_torch[:, start:end])
+        else:
+            chunk_embeds = ttnn.slice(prompt_embeds, [0, 0, start, 0], [1, 1, end, hidden])
 
         rope = _chunk_rope_mats(model, start, chunk_size)
 
-        # Only the final chunk needs full logits (lm_head over the whole chunk).
-        # Earlier chunks write KV only; get_last_token=0 slices a single 32-row
-        # tile before lm_head (get_last_token=None would crash the last-token
-        # slice), keeping the vocab matmul cheap. (get_last_token != -1 both here
-        # and there — the None sentinel is never passed to the backbone.)
+        # Only the final chunk needs full logits. The valid length also caps the
+        # bounded sliding-cache fill so right padding cannot overwrite the live
+        # circular window.
         want_logits = is_last and return_last_logits
-        get_last = -1 if want_logits else 0
+        chunk_valid_len = min(chunk_size, max(0, valid_prompt_len - start))
+        get_last = -1 if want_logits else chunk_valid_len - 1
 
         global _CHUNK_CTX
-        _CHUNK_CTX = _ChunkContext(chunk_start_idx=start, chunk_page_table=chunk_pt_dev, sliding_state=sliding_state)
+        _CHUNK_CTX = _ChunkContext(
+            chunk_start_idx=start,
+            chunk_page_table=chunk_pt_dev,
+            sliding_chunk_page_table=sliding_chunk_pt_dev,
+            sliding_state=sliding_state,
+        )
         try:
             from models.experimental.diffusion_gemma.tt.prefill_logits import discard_prefill_logits
             from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
@@ -604,7 +696,8 @@ def chunked_prefill(
                     chunk_embeds,
                     rope_mats=rope,
                     is_decode=False,
-                    page_table=full_pt_dev,
+                    page_table=model_page_table,
+                    page_tables_per_layer=model_page_tables_per_layer,
                     kv_caches=kv_cache,
                     input_ids_torch=input_ids_torch[:, start:end],
                     embeds_torch=embeds_torch[:, start:end, :] if embeds_torch is not None else None,
@@ -621,7 +714,17 @@ def chunked_prefill(
             logits = out
         elif out is not None:
             out.deallocate(True)
+        logger.info(
+            "DG_PREFILL_CHUNK end chunk={}/{} start={} end={} chunk_s={:.3f} total_s={:.3f}",
+            c + 1,
+            num_chunks,
+            start,
+            end,
+            monotonic() - chunk_started_at,
+            monotonic() - prefill_started_at,
+        )
 
     sliding_state.release()
-    full_pt_dev.deallocate(True)
+    if full_pt_dev is not None:
+        full_pt_dev.deallocate(True)
     return logits

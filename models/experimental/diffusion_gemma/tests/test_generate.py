@@ -1763,6 +1763,7 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     calls = {}
 
     class _FakeTtnn:
+        TILE_SIZE = 32
         ROW_MAJOR_LAYOUT = "row-major"
         uint32 = "uint32"
 
@@ -1901,6 +1902,7 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
             self.deallocated = force
 
     class _FakeTtnn:
+        TILE_SIZE = 32
         ROW_MAJOR_LAYOUT = "row-major"
         TILE_LAYOUT = "tile"
         uint32 = "uint32"
@@ -1968,6 +1970,61 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
     # prefill writes the prompt KV via stock Gemma4 defaults (no diffusion kv_phase kwarg).
     assert "kv_phase" not in kwargs
     assert kwargs["page_tables_per_layer"] == ["pages"]
+
+    bucketed = prefill_prompt_tokens(
+        _FakeModel(),
+        prompt_tokens,
+        page_tables_per_layer=["pages"],
+        execution_len=128,
+    )
+    assert bucketed == PromptPrefill(prompt_len=3, cache_len=32), "compute padding must not move canvas start"
+    assert calls["reshape"][1] == (1, 1, 128, 16)
+    assert calls["model"][1]["input_ids_torch"].shape == (1, 128)
+    assert torch.equal(calls["model"][1]["input_ids_torch"][:, :3], prompt_tokens)
+    assert torch.count_nonzero(calls["model"][1]["input_ids_torch"][:, 3:]) == 0
+
+
+def test_prefill_execution_len_rejects_shape_smaller_than_logical_cache(expect_error):
+    with expect_error(ValueError, match="cannot cover cache_len 64"):
+        prefill_prompt_tokens(object(), torch.ones((1, 33), dtype=torch.long), execution_len=32)
+
+
+def test_prefill_bucket_above_32k_uses_fixed_bounded_chunks(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import chunked_prefill as CP
+
+    calls = []
+    model = SimpleNamespace(
+        _dg_model_owned_hybrid_kv=True,
+        _dg_hybrid_host_page_tables_per_layer=["host-pages"],
+        _dg_hybrid_page_tables_per_layer=["device-pages"],
+        _dg_hybrid_block_size=64,
+        tt_kv_cache=["kv"],
+    )
+    monkeypatch.setenv("DG_PREFILL_CHUNK_SIZE", "4096")
+    monkeypatch.setattr(
+        CP,
+        "chunked_prefill",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    prompt = torch.ones((1, 32769), dtype=torch.long)
+    result = prefill_prompt_tokens(
+        model,
+        prompt,
+        page_tables_per_layer=["device-pages"],
+        execution_len=65536,
+    )
+
+    assert result == PromptPrefill(prompt_len=32769, cache_len=32800)
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == (model,)
+    assert kwargs["input_ids_torch"].shape == (1, 36864)
+    assert kwargs["valid_prompt_len"] == 32769
+    assert kwargs["chunk_size"] == 4096
+    assert kwargs["return_last_logits"] is False
+    assert kwargs["page_tables_torch_per_layer"] == ["host-pages"]
+    assert kwargs["page_tables_per_layer"] == ["device-pages"]
 
 
 # --- device generation hook factories -------------------------------------------------------

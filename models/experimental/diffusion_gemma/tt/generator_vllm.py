@@ -43,14 +43,13 @@ this adapter is written to that block contract so it works once #47488 lands.
 Cache ownership
 ---------------
 The diffusion denoise-read path reads the frozen prompt prefix from the
-**model-owned contiguous** ``tt_model.tt_kv_cache`` via ``ttnn.slice`` (not from a
-vLLM paged block pool). Serving therefore runs in the generator/standalone
-cache-ownership mode: the model owns its ``max_model_len`` cache and is driven with
-``page_table=None``; :meth:`allocate_kv_cache` returns those existing handles (no
-double allocation). Routing the frozen-prefix read through a vLLM paged cache +
-per-request block tables (for concurrent batched serving) is part of #47488 and
-the batched-canvas-decode work (#47557). Until then one contiguous cache backs one
-active sequence.
+**model-owned paged hybrid** ``tt_model.tt_kv_cache``. Sliding layers retain a
+1024-token circular window while full-attention layers retain ``max_model_len``;
+deterministic identity page tables keep the existing one-cache/one-active-sequence
+ownership contract. :meth:`allocate_kv_cache` returns those existing handles (no
+double allocation). This is not vLLM block-pool ownership: routing arbitrary
+per-request block tables for concurrent batched serving remains #47488/#47557.
+Set ``DG_MODEL_OWNED_HYBRID_KV=0`` only as the contiguous-cache rollback.
 
 **Do not edit ``models/demos/gemma4/``.** The backbone is imported and reused
 unchanged; the ``get_kv_cache_spec`` hybrid layer-type logic is copied (not
@@ -70,6 +69,11 @@ import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
+from models.experimental.diffusion_gemma.tt.hybrid_kv import (
+    attach_model_owned_hybrid_kv,
+    model_owned_hybrid_kv_enabled,
+    model_owned_hybrid_kv_model_kwargs,
+)
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     UPFRONT_DENOISE_STEPS,
@@ -83,6 +87,7 @@ from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 # Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
 # Requires the Blackhole ttnn.rand kernel fix; without it this default corrupts generated text.
 DEFAULT_VLLM_GUMBEL_MODE = "device"
+PREFILL_BUCKETS = tuple(1 << exponent for exponent in range(7, 19))  # 128 ... 262144
 
 
 def _resolve_checkpoint_dir(hf_config):
@@ -203,6 +208,52 @@ def _strict_prefill_lens() -> bool:
     return os.environ.get("DG_UPFRONT_STRICT_PREFILL_LENS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _lazy_prefill_recapture_enabled() -> bool:
+    """Whether a cold prefill shape may rebuild the resident denoise trace.
+
+    The rebuild is deliberately release-before-compile: no TT program-cache miss
+    is allowed while a Metal trace is resident. Set
+    ``DG_UPFRONT_LAZY_PREFILL_RECAPTURE=0`` to restore the legacy per-request
+    rejection path.
+    """
+    return os.environ.get("DG_UPFRONT_LAZY_PREFILL_RECAPTURE", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _coarse_prefill_buckets_enabled() -> bool:
+    """Whether prefill compute shapes use 128..256K power-of-two buckets."""
+    return os.environ.get("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _aligned_prefill_len(prompt_len: int) -> int:
+    return ((int(prompt_len) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def _resolve_prefill_execution_len(prompt_len: int, *, max_model_len: int | None) -> int:
+    """Map a logical prompt to its exact or coarse prefill compute shape."""
+    aligned = _aligned_prefill_len(prompt_len)
+    capacity = PREFILL_BUCKETS[-1] if max_model_len is None else int(max_model_len)
+    if aligned > capacity:
+        raise ValueError(f"aligned prefill length {aligned} exceeds max_model_len={capacity}")
+    if not _coarse_prefill_buckets_enabled():
+        return aligned
+    for bucket in PREFILL_BUCKETS:
+        if aligned <= bucket <= capacity:
+            return bucket
+    raise ValueError(
+        f"no power-of-two prefill bucket can cover aligned length {aligned} within max_model_len={capacity}"
+    )
+
+
 def _committed_ids(tokens) -> list:
     """Flat python ids for one committed block, for the DG_VLLM_METRIC block_ids audit line.
 
@@ -258,6 +309,29 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(cls, *, max_model_len=None, max_num_seqs=1, **kwargs) -> int:
+        """Advertise the capacity of DG's model-owned hybrid cache to vLLM.
+
+        The generic TT fallback is 131K tokens, which leaves a 256K DG model
+        permanently WAITING in the scheduler even though its physical full-layer
+        cache was constructed for ``max_model_len``. This path owns one identity-
+        mapped cache and supports one active sequence, so scheduler bookkeeping
+        must cover that full served length.
+        """
+        if model_owned_hybrid_kv_enabled() and max_model_len is not None:
+            if int(max_num_seqs) != 1:
+                raise ValueError(
+                    "DG model-owned hybrid KV supports max_num_seqs=1; "
+                    f"got {max_num_seqs}"
+                )
+            return int(max_model_len)
+        return super().get_max_tokens_all_users(
+            max_model_len=max_model_len,
+            max_num_seqs=max_num_seqs,
+            **kwargs,
+        )
+
     def __init__(
         self,
         *args,
@@ -266,6 +340,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         config=None,
         gumbel_mode=DEFAULT_VLLM_GUMBEL_MODE,
         max_model_len=None,
+        page_tables_per_layer=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -276,6 +351,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # The served bound, used to derive the fixed reveal span when the operator does not
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
+        self._model_owned_page_tables_per_layer = page_tables_per_layer
         # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
         # host RNG and the ~256 MiB/step replicated PCIe DMA that the deleted per-step host-torch
         # Gumbel mode paid, measured here at ~53.6 vs ~36.3 tokens/block/s steady (~1.48x).
@@ -312,7 +388,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # carries a known QB2 1024-wide RNG distribution bias; "argmax" is the fast deterministic
         # RUN control.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
-        # One active session per batch row. A single contiguous model cache backs
+        # One active session per batch row. A single model-owned hybrid cache backs
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
@@ -324,6 +400,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         self._persistent_adapter = None
         self._upfront_compile_phase_seen = False
         self._upfront_prefill_warmup_lens = frozenset()
+        self._upfront_rebuild_in_progress = False
+        self._upfront_rebuilds = 0
         self._upfront_pmax = (
             _validate_upfront_capture_configuration(
                 canvas_length=self.canvas_length,
@@ -370,19 +448,37 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             dtype=ttnn.bfloat16,  # full-model policy: bf16 weights + bf16 KV cache
-            create_kv_cache=True,  # model owns its contiguous KV cache (see docstring)
+            create_kv_cache=True,  # overridden below with bounded paged KV by default
         )
+        hybrid_kv = model_owned_hybrid_kv_enabled()
+        if hybrid_kv:
+            model_kwargs.update(
+                model_owned_hybrid_kv_model_kwargs(
+                    max_seq_len=max_seq_len,
+                    max_batch_size=max_batch_size,
+                )
+            )
         if n_layers is not None:
             model_kwargs["num_layers"] = n_layers
 
         build_t0 = time.perf_counter()
         bundle = build_tt_model_from_checkpoint_dir(mesh_device, checkpoint_dir, **model_kwargs)
+        page_tables_per_layer = (
+            attach_model_owned_hybrid_kv(
+                bundle.tt_model,
+                max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
+            )
+            if hybrid_kv
+            else None
+        )
         ttnn.synchronize_device(mesh_device)
         model_build_s = time.perf_counter() - build_t0
         dram = _dram_snapshot(mesh_device, synchronize=False)
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
             f"n_layers={n_layers or 'full'} "
+            f"model_owned_hybrid_kv={hybrid_kv} "
             f"gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', DEFAULT_VLLM_GUMBEL_MODE)}"
         )
         _metric(
@@ -392,6 +488,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             model_build_s=round(model_build_s, 6),
             gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", DEFAULT_VLLM_GUMBEL_MODE),
             max_denoise_steps=diffusion_config.max_denoise_steps,
+            model_owned_hybrid_kv=hybrid_kv,
             trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
             selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
             selfcond_logits_l1=os.environ.get("DG_SELFCOND_LOGITS_L1", "chain"),
@@ -405,6 +502,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             tokenizer=bundle.tokenizer,
             config=diffusion_config,
             max_model_len=max_seq_len,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
     @property
@@ -436,9 +534,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         a ``FullAttentionSpec`` (uniform type) so vLLM merges them into ONE KV-cache
         group backed by the whole block pool — hybrid groups are disabled
         (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``) and the diffusion forward uses
-        the non-hybrid single-page-table path, so a per-type spec would instead split
+        the non-hybrid single-page-table bookkeeping path, so a per-type spec would instead split
         into 6 groups sharing the pool and cap prefill admission at ~21824 tokens (see
-        the sliding branch). The diffusion forward reads the model-owned contiguous
+        the sliding branch). The diffusion forward reads the model-owned hybrid
         cache, so this spec is the manager's bookkeeping, not the physical cache
         (#47488).
         """
@@ -509,9 +607,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         return spec_per_layer
 
     def _model_owned_kv_handles(self):
-        """``[submesh][layer][k_or_v]`` handles into the model's own contiguous cache.
+        """``[submesh][layer][k_or_v]`` handles into the model's own hybrid cache.
 
-        Serving runs on the model-owned contiguous cache the model allocated at
+        Serving runs on the model-owned cache the model allocated at
         build time (`create_kv_cache=True`); both allocator entry points return
         those existing handles so vLLM's `kv_cache` arg points at the physical
         cache the diffusion forward actually reads/writes — no fresh DRAM, no
@@ -542,8 +640,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             # defer here so later runner warmups cannot allocate buffers after an active trace.
             self._upfront_compile_phase_seen = True
             raw_warmup_lens = os.environ.get("DG_UPFRONT_PREFILL_WARMUP_LENS", "").strip()
+            # Keep the exact one-tile shape for the BOS capture session. Coarse
+            # buckets apply to real requests, whose minimum execution shape is 128.
+            warmup_lens = {ttnn.TILE_SIZE}
             if raw_warmup_lens:
-                warmup_lens = set()
                 for value in raw_warmup_lens.split(","):
                     prompt_len = int(value.strip())
                     if prompt_len <= 0 or prompt_len % ttnn.TILE_SIZE != 0:
@@ -551,24 +651,27 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             "DG_UPFRONT_PREFILL_WARMUP_LENS values must be positive "
                             f"{ttnn.TILE_SIZE}-token multiples, got {prompt_len}"
                         )
-                    if prompt_len + self.canvas_length > self._upfront_pmax:
+                    if prompt_len > self._upfront_pmax:
                         raise RuntimeError(
-                            f"prefill warmup length {prompt_len} leaves no canvas within p_max={self._upfront_pmax}"
+                            f"prefill warmup length {prompt_len} exceeds p_max={self._upfront_pmax}"
                         )
-                    warmup_lens.add(prompt_len)
-                # One tile is always warmed, whether or not the caller listed it. The capture phase
-                # below prefills a single BOS token to build its adapter, so the 32-aligned prefill
-                # program is compiled on every startup regardless -- listing it costs nothing and no
-                # extra bytes. Leaving it out is what let a 21-token out-of-band request (a `curl`
-                # smoke test against a live server) reach the rejection below and kill the engine
-                # 56 minutes into a 198-question eval.
-                warmup_lens.add(ttnn.TILE_SIZE)
-                self._upfront_prefill_warmup_lens = frozenset(warmup_lens)
-                for prompt_len in sorted(self._upfront_prefill_warmup_lens):
-                    logger.info(f"[DiffusionGemma vLLM] warming prefill shape {prompt_len} before trace capture")
-                    mock_tokens = torch.zeros((1, prompt_len), dtype=torch.long)
-                    prefill_prompt_tokens(self.model[0], mock_tokens)
-                ttnn.synchronize_device(self.model[0].mesh_device)
+                    warmup_lens.add(
+                        _resolve_prefill_execution_len(
+                            prompt_len,
+                            max_model_len=getattr(self, "_max_model_len", None),
+                        )
+                    )
+            # One tile is always warmed, whether or not the caller listed it. It is the
+            # only startup shape needed for the BOS capture session; every other cold
+            # shape can now use the release-before-compile rebuild below.
+            self._upfront_prefill_warmup_lens = frozenset(warmup_lens)
+            for prompt_len in sorted(self._upfront_prefill_warmup_lens):
+                logger.info(f"[DiffusionGemma vLLM] warming prefill shape {prompt_len} before trace capture")
+                mock_tokens = torch.zeros((1, prompt_len), dtype=torch.long)
+                page_tables = getattr(self, "_model_owned_page_tables_per_layer", None)
+                page_table_kwargs = {"page_tables_per_layer": page_tables} if page_tables is not None else {}
+                prefill_prompt_tokens(self.model[0], mock_tokens, **page_table_kwargs)
+            ttnn.synchronize_device(self.model[0].mesh_device)
             logger.info("[DiffusionGemma vLLM] deferring up-front denoise capture to trace warmup phase")
             return
         if not self._upfront_compile_phase_seen:
@@ -579,9 +682,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             )
         if not getattr(self, "_upfront_prefill_warmup_lens", ()):
             raise RuntimeError(
-                "DG_UPFRONT_CAPTURE requires a compile-only warmup with DG_UPFRONT_PREFILL_WARMUP_LENS; "
-                "executing an unseen prefill shape after trace capture can corrupt active traces. "
-                "List every aligned prompt length the server will admit, "
+                "DG_UPFRONT_CAPTURE requires its compile-only prefill warmup before trace capture; "
+                "executing a program-cache miss while a trace is resident can corrupt active traces. "
+                "Keep the default one-tile startup warmup, "
                 "or set DG_UPFRONT_CAPTURE=0 to run the eager loop"
             )
         if self._persistent_adapter is not None:
@@ -594,7 +697,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             max_model_len=self._max_model_len,
         )
-        cache_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
+        cache_span = (
+            int(self._max_model_len)
+            if bool(getattr(self.model[0], "_dg_model_owned_hybrid_kv", False))
+            else min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
+        )
         if p_max > cache_span:
             raise RuntimeError(
                 f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span {cache_span}"
@@ -624,19 +731,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         adapter = None
         try:
             cache_len = session.prefill(mock_tokens)
-            adapter = session._logits_fn
-            adapter._upfront_capture_phase = True
-            try:
-                emission = session.decode_block()
-            finally:
-                delattr(adapter, "_upfront_capture_phase")
-            controller = getattr(adapter, "_upfront_traced_denoise_controller", None)
-            if controller is None or not getattr(controller, "captured", False):
-                raise RuntimeError("startup denoise did not leave a fully captured up-front controller")
-            if not getattr(adapter, "use_reveal_mask", False):
-                raise RuntimeError("startup denoise trace was not captured with a persistent reveal mask")
-
-            trace_stats = session.trace_stats()
+            emission, adapter, trace_stats = self._capture_prefilled_session(session)
             # Detach before resetting the throwaway shell: the wrapper now owns the adapter.
             session._logits_fn = None
             session.reset()
@@ -674,6 +769,134 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             f"(mock_cache_len={cache_len}, p_max={p_max})"
         )
 
+    def _capture_prefilled_session(self, session):
+        """Capture denoise on an already-prefilled session without publishing it."""
+        adapter = session._logits_fn
+        if adapter is None:
+            raise RuntimeError("cannot capture an up-front controller before session prefill")
+        adapter._upfront_capture_phase = True
+        try:
+            emission = session.decode_block()
+        finally:
+            if hasattr(adapter, "_upfront_capture_phase"):
+                delattr(adapter, "_upfront_capture_phase")
+        controller = getattr(adapter, "_upfront_traced_denoise_controller", None)
+        if controller is None or not getattr(controller, "captured", False):
+            raise RuntimeError("denoise did not leave a fully captured up-front controller")
+        if not getattr(adapter, "use_reveal_mask", False):
+            raise RuntimeError("denoise trace was not captured with a persistent reveal mask")
+        return emission, adapter, session.trace_stats()
+
+    @staticmethod
+    def _release_unpublished_adapter(adapter, *, label: str) -> None:
+        """Best-effort cleanup for a capture that was never made model-resident."""
+        if adapter is None:
+            return
+        attr = "_upfront_traced_denoise_controller"
+        controller = getattr(adapter, attr, None)
+        if controller is not None:
+            try:
+                controller.release()
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release {label} controller: {cleanup_error}")
+            finally:
+                if hasattr(adapter, attr):
+                    delattr(adapter, attr)
+        if hasattr(adapter, "reset"):
+            try:
+                adapter.reset()
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release {label} adapter: {cleanup_error}")
+
+    def _rebuild_for_cold_prefill(
+        self,
+        session,
+        prompt_tokens,
+        *,
+        expected_cache_len: int,
+        execution_len: int | None = None,
+    ):
+        """Release the active trace, compile one cold prefill shape, and recapture.
+
+        Returning only after the new 48-trace set is complete makes publication
+        atomic from the serving wrapper's point of view. The old trace cannot be
+        retained while compiling: that ordering reproduced a multi-device CCL hang.
+        """
+        if getattr(self, "_upfront_rebuild_in_progress", False):
+            raise RuntimeError("concurrent up-front cold-shape rebuild is unsupported")
+        if getattr(self, "_sessions", {}):
+            raise RuntimeError("cold-shape rebuild requires no active serving sessions")
+
+        self._upfront_rebuild_in_progress = True
+        execution_len = expected_cache_len if execution_len is None else int(execution_len)
+        _metric(
+            "cold_prefill_rebuild_begin",
+            cache_len=expected_cache_len,
+            execution_len=execution_len,
+            warmed=sorted(getattr(self, "_upfront_prefill_warmup_lens", ())),
+            rebuild_index=int(getattr(self, "_upfront_rebuilds", 0)) + 1,
+        )
+        try:
+            # HARD SAFETY ORDER: release every resident trace/buffer, drain CQ0,
+            # and only then execute the prefill program that may miss the cache.
+            self.release_persistent_capture()
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            _metric(
+                "cold_prefill_trace_released",
+                cache_len=expected_cache_len,
+                execution_len=execution_len,
+            )
+
+            cache_len = session.prefill(prompt_tokens)
+            if cache_len != expected_cache_len:
+                raise RuntimeError(
+                    f"cold prefill aligned to {cache_len}, expected {expected_cache_len}; "
+                    "refusing to publish a mismatched trace"
+                )
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            _metric("cold_prefill_compiled", cache_len=cache_len, execution_len=execution_len)
+
+            emission, adapter, trace_stats = self._capture_prefilled_session(session)
+            # The live request and wrapper now co-own the model-lifetime adapter.
+            # Marking it persistent keeps session.reset from releasing it.
+            session._persistent_adapter = adapter
+            self._persistent_adapter = adapter
+            warmed = set(getattr(self, "_upfront_prefill_warmup_lens", ()))
+            warmed.add(execution_len)
+            self._upfront_prefill_warmup_lens = frozenset(warmed)
+            self._upfront_rebuilds = int(getattr(self, "_upfront_rebuilds", 0)) + 1
+            _metric(
+                "cold_prefill_rebuild_complete",
+                cache_len=cache_len,
+                execution_len=execution_len,
+                rebuilds=self._upfront_rebuilds,
+                warmed=sorted(warmed),
+                trace_stats=trace_stats,
+                dram=_dram_snapshot(self.model[0].mesh_device),
+            )
+            return cache_len, emission
+        except BaseException as rebuild_error:
+            adapter = getattr(session, "_logits_fn", None)
+            self._persistent_adapter = None
+            self._release_unpublished_adapter(adapter, label="failed cold-prefill")
+            # Prevent BlockDiffusionServingSession.reset from resetting the same
+            # adapter twice; the outer prefill failure path still clears the shell.
+            session._logits_fn = None
+            session._persistent_adapter = None
+            try:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+            except BaseException as cleanup_error:
+                logger.error(f"failed to synchronize after cold-prefill rebuild error: {cleanup_error}")
+            _metric(
+                "cold_prefill_rebuild_failed",
+                cache_len=expected_cache_len,
+                execution_len=execution_len,
+                error=repr(rebuild_error),
+            )
+            raise
+        finally:
+            self._upfront_rebuild_in_progress = False
+
     def warmup_model_decode(self, *args, **kwargs):
         """No-op: model-level denoise needs no separate decode warmup."""
         del args, kwargs
@@ -688,7 +911,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         ids = tokens[row, :length].reshape(1, length).to(torch.long)
         return ids
 
-    def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
+    def _make_session(self, seed: int = 0, *, prefill_execution_len: int | None = None) -> BlockDiffusionServingSession:
         # Serving contract: vLLM owns the stop decision (EOS / stop strings /
         # max_tokens / ignore_eos), not the model. Disable the session's internal
         # EOS stop (``stop_token_ids=[]``) so a committed block that happens to
@@ -712,6 +935,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             canvas_length=self.canvas_length,
             max_denoise_steps=self._config.max_denoise_steps,
             seed=seed,
+            prefill_execution_len=prefill_execution_len,
         )
         return BlockDiffusionServingSession(
             self.model[0],
@@ -721,6 +945,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             seed=seed,
             stop_token_ids=[],
+            page_tables_per_layer=getattr(self, "_model_owned_page_tables_per_layer", None),
+            prefill_execution_len=prefill_execution_len,
             denoise_block_fn=denoise_block_fn,
         )
 
@@ -764,18 +990,52 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 # Defensive cleanup if a runner does not deliver its finished-request
                 # callback before reusing the single active row.
                 self.release_request(row)
-            session = self._make_session()
-            if getattr(self, "_upfront", False):
+            prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
+            upfront = bool(getattr(self, "_upfront", False))
+            if upfront:
+                cache_len = _aligned_prefill_len(prompt_tokens.shape[1])
+                coarse_buckets = _coarse_prefill_buckets_enabled()
+                execution_len = (
+                    _resolve_prefill_execution_len(
+                        prompt_tokens.shape[1],
+                        max_model_len=getattr(self, "_max_model_len", None),
+                    )
+                    if coarse_buckets
+                    else cache_len
+                )
+                session = (
+                    self._make_session(prefill_execution_len=execution_len)
+                    if coarse_buckets
+                    else self._make_session()
+                )
+            else:
+                cache_len = None
+                execution_len = None
+                session = self._make_session()
+            cold_rebuild = False
+            if upfront:
                 if self._persistent_adapter is None:
                     raise RuntimeError(
                         "DG_UPFRONT_CAPTURE is enabled but warmup_model_prefill has not completed successfully"
                     )
-                session.attach_persistent_adapter(self._persistent_adapter)
-            prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
-            if getattr(self, "_upfront_compile_phase_seen", False):
-                cache_len = ((int(prompt_tokens.shape[1]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if upfront and getattr(self, "_upfront_compile_phase_seen", False):
+                p_max = getattr(self, "_upfront_pmax", None)
+                if p_max is not None and cache_len + self.canvas_length > int(p_max):
+                    session.reset()
+                    raise ValueError(
+                        f"aligned prefill plus canvas exceeds fixed reveal span: "
+                        f"{cache_len} + {self.canvas_length} > {p_max}"
+                    )
                 warmed = getattr(self, "_upfront_prefill_warmup_lens", frozenset())
-                if cache_len not in warmed:
+                if execution_len not in warmed:
+                    if _lazy_prefill_recapture_enabled():
+                        cold_rebuild = True
+                        logger.info(
+                            f"[DiffusionGemma vLLM] cold prefill shape execution_len={execution_len} "
+                            f"(cache_len={cache_len}); "
+                            "releasing the resident trace before compile and recapture"
+                        )
+                    else:
                     # FAIL THIS REQUEST, NOT THE SERVER.
                     #
                     # This used to `raise`, and in vLLM V1 an exception out of ``execute_model`` is
@@ -801,39 +1061,55 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     # needs its own measurement (the mask hides the pads from the CANVAS; prefill still
                     # writes their K/V, and the commit path is not the denoise path), so it is recorded
                     # here rather than assumed.
-                    logger.error(
-                        f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
-                        f"length {cache_len} was not warmed before trace capture "
-                        f"(warmed={sorted(warmed)}). Ending this request with an empty answer; the "
-                        f"server stays up. Add {cache_len} to DG_UPFRONT_PREFILL_WARMUP_LENS to "
-                        f"serve prompts of this length."
-                    )
-                    _metric("prefill_rejected", row=row, cache_len=cache_len, warmed=sorted(warmed))
-                    if _strict_prefill_lens():
+                        logger.error(
+                            f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
+                            f"execution length {execution_len} (cache_len={cache_len}) was not warmed before trace capture "
+                            f"(warmed={sorted(warmed)}). Ending this request with an empty answer; the "
+                            f"server stays up. Enable DG_UPFRONT_LAZY_PREFILL_RECAPTURE or add {cache_len} "
+                            "to DG_UPFRONT_PREFILL_WARMUP_LENS."
+                        )
+                        _metric(
+                            "prefill_rejected",
+                            row=row,
+                            cache_len=cache_len,
+                            execution_len=execution_len,
+                            warmed=sorted(warmed),
+                        )
+                        if _strict_prefill_lens():
                         # Bit-exactness gates want the run to stop rather than silently lose a
                         # sample, since an unwarmed shape invalidates the comparison.
-                        session.reset()
-                        raise RuntimeError(
-                            f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
-                            f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
-                            f"(configured={sorted(warmed)}). This raise is FATAL to the vLLM engine "
-                            f"and is enabled by DG_UPFRONT_STRICT_PREFILL_LENS=1; unset it to reject "
-                            f"the request instead."
-                        )
+                            session.reset()
+                            raise RuntimeError(
+                                f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
+                                f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
+                                f"(configured={sorted(warmed)}). This raise is FATAL to the vLLM engine "
+                                f"and is enabled by DG_UPFRONT_STRICT_PREFILL_LENS=1; unset it to reject "
+                                f"the request instead."
+                            )
                     # Register the row as an ALREADY-FINISHED session rather than dropping it.
                     # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
                     # as engine-fatal as the one being replaced here -- so a dropped row would move
                     # the crash one step later instead of removing it. A finished session takes
                     # decode_forward's existing stop-id branch, and release_request cleans it up and
                     # emits the usual request_release line.
-                    session.finished = True
-                    self._sessions[row] = session
-                    blocks.append(self._stop_block(session))
-                    continue
+                        session.finished = True
+                        self._sessions[row] = session
+                        blocks.append(self._stop_block(session))
+                        continue
+            if upfront and not cold_rebuild:
+                session.attach_persistent_adapter(self._persistent_adapter)
             ttft_t0 = time.perf_counter()
             try:
-                cache_len = session.prefill(prompt_tokens)
-                emission = session.decode_block()
+                if cold_rebuild:
+                    cache_len, emission = self._rebuild_for_cold_prefill(
+                        session,
+                        prompt_tokens,
+                        expected_cache_len=cache_len,
+                        execution_len=execution_len,
+                    )
+                else:
+                    cache_len = session.prefill(prompt_tokens)
+                    emission = session.decode_block()
             except BaseException:
                 # The row is not registered in ``_sessions`` until block 0 succeeds, so
                 # request-finished callbacks cannot clean this partially built session.
@@ -851,6 +1127,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 row=row,
                 prompt_len=session.prompt_len,
                 cache_len=cache_len,
+                execution_len=getattr(session, "prefill_execution_len", None) or cache_len,
                 prefill_s=round(session.prefill_time_s, 6),
                 ttft_s=round(ttft_s, 6),
                 block_idx=emission.block_idx,

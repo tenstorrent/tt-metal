@@ -104,9 +104,14 @@ def _resolve_reveal_pmax(adapter) -> int:
     if p_max <= 0 or p_max % ttnn.TILE_SIZE:
         raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be a positive 32-token multiple")
 
-    caches = getattr(getattr(adapter, "tt_model", None), "tt_kv_cache", None)
+    tt_model = getattr(adapter, "tt_model", None)
+    caches = getattr(tt_model, "tt_kv_cache", None)
     if caches:
-        allocated_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in caches)
+        allocated_span = (
+            int(tt_model._dg_hybrid_max_seq_len)
+            if bool(getattr(tt_model, "_dg_model_owned_hybrid_kv", False))
+            else min(int(k_cache.shape[-2]) for k_cache, _v_cache in caches)
+        )
         if p_max > allocated_span:
             raise RuntimeError(
                 f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span " f"{allocated_span}"
@@ -355,6 +360,7 @@ class UpfrontTracedDenoiseController:
         self.canvas_buf = None
         self.committed_buf = None
         self.gumbel_buf = None
+        self._gumbel_refresh_reserve = None
         self.noise_buf = None
         self.halt_bufs: HaltBuffers | None = None
 
@@ -510,6 +516,14 @@ class UpfrontTracedDenoiseController:
         start_pos = int(getattr(adapter, "q_rope_offset", 0) or 0)
         self._prepare_adapter_for_capture(adapter, start_pos=start_pos)
         self._initialize_gumbel(gumbel_noise_fn)
+        # Long-context traces heavily fragment DRAM during capture. Preserve the
+        # contiguous 256 MiB hole left by the initial materialized Gumbel draw so
+        # every replay can allocate its fresh RNG tensor, copy into gumbel_buf,
+        # and return that same hole. Without this reservation 256K capture
+        # succeeds but the first refresh fails with only ~26 MiB as the largest
+        # per-bank free block (the draw needs 32 MiB).
+        if int(self.reveal_pmax or 0) >= 65536:
+            self._gumbel_refresh_reserve = ttnn.clone(self.gumbel_buf)
         self._initialize_noise(noise_tokens_fn)
         if self.consts is None:
             self.consts = make_denoise_constants(
@@ -559,6 +573,8 @@ class UpfrontTracedDenoiseController:
                 set_cache_misses_allowed(True)
 
         ttnn.synchronize_device(self.mesh)
+        _deallocate_tensor(self._gumbel_refresh_reserve)
+        self._gumbel_refresh_reserve = None
         self.captured = True
         self.captured_prompt_len = int(getattr(adapter, "prompt_len", 0) or 0)
         self._last_prompt_len = self.captured_prompt_len
@@ -681,6 +697,7 @@ class UpfrontTracedDenoiseController:
                 ("canvas_buf", self.canvas_buf),
                 ("committed_buf", self.committed_buf),
                 ("gumbel_buf", self.gumbel_buf),
+                ("gumbel_refresh_reserve", self._gumbel_refresh_reserve),
                 ("noise_buf", self.noise_buf),
             ]
             if self.halt_bufs is not None:
@@ -699,6 +716,7 @@ class UpfrontTracedDenoiseController:
             self.canvas_buf = None
             self.committed_buf = None
             self.gumbel_buf = None
+            self._gumbel_refresh_reserve = None
             self.noise_buf = None
             self.halt_bufs = None
             if self._owns_consts:

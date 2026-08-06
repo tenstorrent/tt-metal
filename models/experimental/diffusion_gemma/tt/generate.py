@@ -300,6 +300,12 @@ def _embed_tokens_dg(tt_model, tt_tokens):
         from models.experimental.diffusion_gemma.tt.ccl import ccl_allgather
 
         embeds = ttnn.unsqueeze_to_4D(embeds)
+        # all_gather_async silently falls back to composite_all_gather for
+        # ROW_MAJOR inputs.  That composite is implemented with all_broadcast,
+        # ignores our pre-created semaphores, and can deadlock once persistent
+        # denoise traces exist.  Hidden size is tile-aligned, so tilizing first
+        # keeps this on the semaphore-passing MINIMAL_DEFAULT implementation.
+        embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
         embeds = ccl_allgather(embeds, tt_model.mesh_config, tt_model.ccl_manager)
     return embeds
 
@@ -322,20 +328,80 @@ def _pad_prompt_tokens_for_prefill(prompt_tokens: torch.Tensor, *, multiple: int
 
 
 def prefill_prompt_tokens(
-    tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None
+    tt_model,
+    prompt_tokens: torch.Tensor,
+    *,
+    page_table=None,
+    page_tables_per_layer=None,
+    execution_len: int | None = None,
 ) -> PromptPrefill:
     """Write prompt token K/V into the frozen cache.
 
     The Gemma4 prefill path pads device tokens to tile multiples before writing
     K/V. Denoise must read that same aligned frozen-prefix span, while host text
     I/O keeps the natural prompt length.
+
+    ``execution_len`` optionally pads only the *compute* shape farther (for
+    coarse compile buckets). The returned ``cache_len`` remains the nearest
+    tile-aligned logical prefix. Causal prefill means the right-padding tail
+    cannot affect any real prompt token; denoise hides everything after
+    ``cache_len`` as uncommitted, and bounded sliding layers use
+    ``get_last_token`` to avoid writing the bucket tail into their circular
+    cache. Thus compile-shape bucketing does not move the canvas start position.
     """
     _validate_prompt_tokens(prompt_tokens)
     if prompt_tokens.shape[0] != 1:
         raise NotImplementedError("prefill_prompt_tokens currently supports batch=1")
     prompt_len = prompt_tokens.shape[1]
-    prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
-    cache_len = prefill_tokens.shape[1]
+    cache_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
+    cache_len = cache_tokens.shape[1]
+    chunk_size = int(os.environ.get("DG_PREFILL_CHUNK_SIZE", "4096"))
+    use_bounded_chunks = execution_len is not None and int(execution_len) > 32768
+    if execution_len is None:
+        prefill_tokens = cache_tokens
+    else:
+        execution_len = int(execution_len)
+        if execution_len <= 0 or execution_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"prefill execution_len must be a positive {ttnn.TILE_SIZE}-token multiple")
+        if execution_len < cache_len:
+            raise ValueError(f"prefill execution_len {execution_len} cannot cover cache_len {cache_len}")
+        padding_multiple = chunk_size if use_bounded_chunks else execution_len
+        prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens, multiple=padding_multiple)
+        if not use_bounded_chunks and int(prefill_tokens.shape[1]) != execution_len:
+            raise RuntimeError(
+                f"prefill execution padding produced length {prefill_tokens.shape[1]}, expected {execution_len}"
+            )
+    if use_bounded_chunks:
+        if chunk_size <= 0 or chunk_size % 128 != 0:
+            raise ValueError("DG_PREFILL_CHUNK_SIZE must be a positive 128-token multiple")
+        if not getattr(tt_model, "_dg_model_owned_hybrid_kv", False):
+            raise RuntimeError("prefill buckets above 32K require DG model-owned hybrid KV")
+        host_page_tables = getattr(tt_model, "_dg_hybrid_host_page_tables_per_layer", None)
+        device_page_tables = page_tables_per_layer or getattr(
+            tt_model, "_dg_hybrid_page_tables_per_layer", None
+        )
+        if host_page_tables is None or device_page_tables is None:
+            raise RuntimeError("bounded chunked prefill requires attached hybrid page tables")
+
+        from models.experimental.diffusion_gemma.tt.chunked_prefill import chunked_prefill
+
+        discarded = chunked_prefill(
+            tt_model,
+            input_ids_torch=prefill_tokens,
+            embeds_torch=None,
+            kv_cache=tt_model.tt_kv_cache,
+            page_tables_torch_per_layer=host_page_tables,
+            page_tables_per_layer=device_page_tables,
+            embed_chunk_fn=embed_host_tokens,
+            block_size=int(tt_model._dg_hybrid_block_size),
+            chunk_size=chunk_size,
+            return_last_logits=False,
+            valid_prompt_len=prompt_len,
+        )
+        if discarded is not None:
+            discarded.deallocate(True)
+        return PromptPrefill(prompt_len=prompt_len, cache_len=cache_len)
+
     prompt_embeds = embed_host_tokens(tt_model, prefill_tokens)
     from models.experimental.diffusion_gemma.tt.prefill_logits import discard_prefill_logits
     from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
@@ -843,18 +909,19 @@ def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -
 
 
 def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> Callable[..., None]:
-    """Pick the commit path: batched single-prefill (default) unless paged.
+    """Pick the commit path: batched single-prefill for contiguous or DG hybrid KV.
 
     The batched commit (``tt.commit_batched``, now the torch-verified-correct
-    default) supports only the contiguous model-owned cache; for a paged / vLLM
-    hybrid cache it raises, so force the sequential path when a page table is
-    present. Imported lazily so the sequential path keeps no import dependency on
-    ``tt.commit_batched`` (which imports helpers from this module).
+    default) supports the contiguous cache and DG's identity-mapped model-owned
+    per-layer hybrid cache.  A legacy/shared page table can carry arbitrary vLLM
+    block ownership, so it still uses the sequential path. Imported lazily so
+    that path keeps no import dependency on ``tt.commit_batched`` (which imports
+    helpers from this module).
     """
     from models.experimental.diffusion_gemma.tt.commit_batched import select_commit_fn
 
-    if page_table is not None or page_tables_per_layer is not None:
-        return commit_canvas_tokens  # batched unsupported for paged caches (#47488)
+    if page_table is not None:
+        return commit_canvas_tokens
     return select_commit_fn()
 
 

@@ -36,6 +36,12 @@ register copy) means cross-layer **KV-sharing** is handled for free: a shared
 layer skips its own K/V write, and its earlier source layer has already written
 the canvas K/V into the shared cache tensor by the time the shared layer runs.
 
+The model-owned hybrid paged path preserves the same algebra with two necessary
+ordering changes: sliding layers read their old circular window and attend before
+the bulk write can evict history, while full layers bulk-write complete pages and
+then use paged chunked SDPA. Partial 64-token pages are staged with their untouched
+rows because prompt prefill guarantees 32-token, not 64-token, alignment.
+
 This path is the **default**
 — it is both faster and more correct than the sequential decode-append commit, whose
 decode-MoE kernel is defective. It never edits shared ``models/demos/gemma4`` code — it
@@ -58,13 +64,19 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_per_head_norm,
     apply_qkv_projection,
     concat_heads,
+    effective_block_size,
     split_qkv_heads_prefill,
 )
 from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
+from models.experimental.diffusion_gemma.tt.chunked_prefill import (
+    _chunked_sdpa_program_config,
+    _sliding_window_square_sdpa,
+)
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     _chunked_norm_forward,
     _denoise_moe_forward,
+    _read_hybrid_sliding_cache,
 )
 from models.experimental.diffusion_gemma.tt.diffusion_attention import (
     TILE_SIZE,
@@ -147,7 +159,9 @@ def build_device_commit_causal_mask(
 
 
 def _layer_type_for_commit(tt_model, layer_idx: int) -> str | None:
-    layer_types = getattr(getattr(tt_model, "hf_config", None), "layer_types", None)
+    hf_config = getattr(tt_model, "hf_config", None)
+    text_config = getattr(hf_config, "text_config", hf_config)
+    layer_types = getattr(text_config, "layer_types", None)
     if layer_types is not None:
         return layer_types[layer_idx]
     attn_config = getattr(getattr(tt_model.layers[layer_idx], "self_attn", None), "config", None)
@@ -159,7 +173,9 @@ def _sliding_window_for_commit(tt_model, layer_idx: int) -> int | None:
     window = getattr(attn_config, "sliding_window", None)
     if window is not None:
         return window
-    return getattr(getattr(tt_model, "hf_config", None), "sliding_window", None)
+    hf_config = getattr(tt_model, "hf_config", None)
+    text_config = getattr(hf_config, "text_config", hf_config)
+    return getattr(text_config, "sliding_window", None)
 
 
 def _read_cache_kv(kv_cache, *, end_pos: int):
@@ -411,6 +427,306 @@ def _write_canvas_kv_contiguous(
     v_perm.deallocate(True)
 
 
+def _paged_write_plan(
+    *,
+    start_pos: int,
+    canvas_len: int,
+    block_size: int,
+    num_blocks: int,
+    circular: bool,
+) -> tuple[tuple[int, ...], int, int]:
+    """Plan an offset paged fill without a per-token update loop.
+
+    ``paged_fill_cache`` always treats input row zero as the beginning of a
+    logical block; it has no absolute ``start_pos`` argument.  A commit can start
+    half way through a cache block because prompt prefill is only 32-token
+    aligned while the model-owned hybrid cache uses 64-token pages.  The caller
+    therefore stages the untouched leading/trailing rows around the canvas and
+    fills the complete physical blocks listed here.
+
+    Returns ``(physical_block_ids, leading_rows, trailing_rows)``.  Sliding
+    layers wrap block ids through their bounded physical pool; full-attention
+    layers retain the ordinary identity mapping.
+    """
+
+    for name, value in (
+        ("start_pos", start_pos),
+        ("canvas_len", canvas_len),
+        ("block_size", block_size),
+        ("num_blocks", num_blocks),
+    ):
+        if int(value) < 0:
+            raise ValueError(f"{name} must be non-negative, got {value}")
+    if canvas_len <= 0 or block_size <= 0 or num_blocks <= 0:
+        raise ValueError(
+            f"canvas_len, block_size, and num_blocks must be positive, got "
+            f"{canvas_len}, {block_size}, {num_blocks}"
+        )
+    if start_pos % TILE_SIZE != 0 or canvas_len % TILE_SIZE != 0 or block_size % TILE_SIZE != 0:
+        raise ValueError(
+            f"paged commit geometry must be {TILE_SIZE}-token aligned: "
+            f"start_pos={start_pos}, canvas_len={canvas_len}, block_size={block_size}"
+        )
+
+    leading = start_pos % block_size
+    staged_len = ((leading + canvas_len + block_size - 1) // block_size) * block_size
+    trailing = staged_len - leading - canvas_len
+    first_block = start_pos // block_size
+    block_count = staged_len // block_size
+    absolute_ids = tuple(range(first_block, first_block + block_count))
+    if circular:
+        physical_ids = tuple(block_id % num_blocks for block_id in absolute_ids)
+    else:
+        if absolute_ids[-1] >= num_blocks:
+            raise ValueError(
+                f"paged commit block span [{absolute_ids[0]}, {absolute_ids[-1]}] "
+                f"exceeds the full-attention pool with {num_blocks} blocks"
+            )
+        physical_ids = absolute_ids
+    return physical_ids, leading, trailing
+
+
+def _to_device_page_table(mesh_device, block_ids: tuple[int, ...]):
+    host = torch.tensor(block_ids, dtype=torch.int32).reshape(1, -1)
+    return ttnn.from_torch(
+        host,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
+def _stage_paged_canvas(cache, canvas, *, block_ids: tuple[int, ...], leading: int, trailing: int):
+    """Add untouched rows around ``canvas`` so paged_fill_cache can write whole pages."""
+
+    if not block_ids:
+        raise ValueError("paged canvas staging needs at least one physical block id")
+    parts = []
+    owned = []
+    if leading:
+        prefix = ttnn.slice(
+            cache,
+            [block_ids[0], 0, 0, 0],
+            [block_ids[0] + 1, cache.shape[1], leading, cache.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        parts.append(prefix)
+        owned.append(prefix)
+    parts.append(canvas)
+    if trailing:
+        suffix_start = int(cache.shape[2]) - trailing
+        suffix = ttnn.slice(
+            cache,
+            [block_ids[-1], 0, suffix_start, 0],
+            [block_ids[-1] + 1, cache.shape[1], cache.shape[2], cache.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        parts.append(suffix)
+        owned.append(suffix)
+    if len(parts) == 1:
+        return canvas, False
+    staged = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for tensor in owned:
+        tensor.deallocate(True)
+    return staged, True
+
+
+def _write_canvas_kv_paged(
+    k_cache,
+    v_cache,
+    canvas_k,
+    canvas_v,
+    *,
+    page_table,
+    block_ids: tuple[int, ...],
+    leading: int,
+    trailing: int,
+    block_size: int,
+    head_dim: int,
+    num_kv_heads: int,
+):
+    """Write one canvas into identity-mapped model-owned paged K/V in two fills."""
+
+    effective = effective_block_size(k_cache, head_dim, num_kv_heads)
+    if effective != block_size:
+        raise ValueError(
+            f"model-owned hybrid commit expected effective block_size={block_size}, got {effective}; "
+            "the cache is not in the attached per-layer view"
+        )
+    k_staged, owns_k = _stage_paged_canvas(
+        k_cache, canvas_k, block_ids=block_ids, leading=leading, trailing=trailing
+    )
+    v_staged, owns_v = _stage_paged_canvas(
+        v_cache, canvas_v, block_ids=block_ids, leading=leading, trailing=trailing
+    )
+    try:
+        ttnn.experimental.paged_fill_cache(
+            k_cache,
+            k_staged,
+            page_table,
+            batch_idx=0,
+            block_size=effective,
+        )
+        ttnn.experimental.paged_fill_cache(
+            v_cache,
+            v_staged,
+            page_table,
+            batch_idx=0,
+            block_size=effective,
+        )
+    finally:
+        if owns_k:
+            k_staged.deallocate(True)
+        if owns_v:
+            v_staged.deallocate(True)
+
+
+def _sliding_commit_attention_paged(
+    tt_q,
+    tt_k,
+    tt_v,
+    *,
+    kv_cache,
+    start_pos: int,
+    sliding_window: int,
+    head_dim: int,
+):
+    """Attend one canvas before its circular-cache write evicts needed history.
+
+    A 256-row bulk write can overwrite prefix rows that the earliest canvas
+    queries still need.  Read the previous bounded window first, concatenate the
+    current K/V in registers, run the same square causal+sliding SDPA used by
+    chunked prefill, and only then let the caller update the circular cache.
+    """
+
+    prefix_len = min(start_pos, sliding_window)
+    if prefix_len:
+        seq_len_start = start_pos - prefix_len
+        prefix_k = _read_hybrid_sliding_cache(
+            kv_cache[0],
+            prompt_len=prefix_len,
+            seq_len_start=seq_len_start,
+            capacity=sliding_window,
+        )
+        prefix_v = _read_hybrid_sliding_cache(
+            kv_cache[1],
+            prompt_len=prefix_len,
+            seq_len_start=seq_len_start,
+            capacity=sliding_window,
+        )
+        all_k = ttnn.concat([prefix_k, tt_k], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        all_v = ttnn.concat([prefix_v, tt_v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        prefix_k.deallocate(True)
+        prefix_v.deallocate(True)
+
+        zeros_q = ttnn.zeros(
+            [1, tt_q.shape[1], prefix_len, head_dim],
+            dtype=tt_q.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_q.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q_square = ttnn.concat([zeros_q, tt_q], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        zeros_q.deallocate(True)
+    else:
+        all_k, all_v, q_square = tt_k, tt_v, tt_q
+
+    full_out = _sliding_window_square_sdpa(q_square, all_k, all_v, sliding_window, scale=1.0)
+    if prefix_len:
+        out = ttnn.slice(
+            full_out,
+            [0, 0, prefix_len, 0],
+            [full_out.shape[0], full_out.shape[1], full_out.shape[2], full_out.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        full_out.deallocate(True)
+        q_square.deallocate(True)
+        all_k.deallocate(True)
+        all_v.deallocate(True)
+        return out
+    return full_out
+
+
+def _full_commit_attention_paged(tt_q, *, kv_cache, page_table, start_pos: int, head_dim: int):
+    """Paged causal attention with a 128-aligned chunk start.
+
+    The chunked SDPA kernel requires ``chunk_start_idx`` to be divisible by both
+    its 128-row Q and K chunks, while prompt prefill only guarantees a 32-aligned
+    commit position.  Front-pad Q back to the previous 128 boundary (and pad the
+    tail to a whole Q chunk), then discard those synthetic output rows.  Real
+    query row ``i`` still lands at absolute position ``start_pos + i`` under the
+    kernel's causal mask, without reducing K chunk size for long contexts.
+    """
+
+    q_chunk = 128
+    front = start_pos % q_chunk
+    aligned_start = start_pos - front
+    real_len = int(tt_q.shape[-2])
+    tail = (-(front + real_len)) % q_chunk
+    parts = []
+    owned = []
+    if front:
+        zeros_front = ttnn.zeros(
+            [1, tt_q.shape[1], front, head_dim],
+            dtype=tt_q.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_q.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        parts.append(zeros_front)
+        owned.append(zeros_front)
+    parts.append(tt_q)
+    if tail:
+        zeros_tail = ttnn.zeros(
+            [1, tt_q.shape[1], tail, head_dim],
+            dtype=tt_q.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_q.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        parts.append(zeros_tail)
+        owned.append(zeros_tail)
+    if len(parts) == 1:
+        q_in = tt_q
+        owns_q_in = False
+    else:
+        q_in = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        owns_q_in = True
+        for tensor in owned:
+            tensor.deallocate(True)
+
+    k_cache, v_cache = kv_cache
+    out_full = ttnn.transformer.chunked_scaled_dot_product_attention(
+        q_in,
+        k_cache,
+        v_cache,
+        page_table,
+        chunk_start_idx=aligned_start,
+        scale=1.0,
+        program_config=_chunked_sdpa_program_config(head_dim),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+    )
+    if not owns_q_in:
+        return out_full
+
+    q_in.deallocate(True)
+    out = ttnn.slice(
+        out_full,
+        [0, 0, front, 0],
+        [out_full.shape[0], out_full.shape[1], front + real_len, out_full.shape[3]],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_full.deallocate(True)
+    return out
+
+
 def _manual_gqa_attention_masked(tt_q, tt_k, tt_v, attn_mask):
     """Staged GQA fallback that honors an additive ``[1, 1, Cq, K]`` mask.
 
@@ -552,6 +868,7 @@ def _commit_attention_batched(
     is_kv_shared: bool,
     mesh_device,
     page_table=None,
+    paged_write=None,
     write_mode: str | None = None,
 ):
     """Causal masked prefix+canvas attention for one commit layer (writes K/V).
@@ -563,15 +880,8 @@ def _commit_attention_batched(
     and (per-token) commit paths use.
     """
     validate_q_rope_offset(start_pos)
-    if page_table is not None:
-        # Reject before any device work so we never leave a half-written cache: the
-        # paged commit (offset chunk write + SDPA prefix read from the paged pool) is
-        # not wired. The standalone / serving RUN path uses the contiguous model-owned
-        # cache (page_table=None).
-        raise NotImplementedError(
-            "batched commit does not support paged caches yet (SDPA prefix read from the paged "
-            "pool is unwired); use the sequential commit for paged/vLLM caches (#47557/#47488)"
-        )
+    if (page_table is None) != (paged_write is None):
+        raise ValueError("paged commit needs both the layer page table and its offset-write plan")
     weights = attn.weights
     config = attn.config
     mesh_config = attn.mesh_config
@@ -588,6 +898,7 @@ def _commit_attention_batched(
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
     tt_q = _apply_rope_chunked(tt_q, cos_cache, sin_cache, start_offset=start_pos)
 
+    paged_sdpa = None
     if is_kv_shared:
         # KV-shared layer: the source layer already wrote the canvas K/V into this
         # (shared) cache tensor earlier in the layer loop; do not recompute/write.
@@ -598,18 +909,62 @@ def _commit_attention_batched(
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
         tt_k = _apply_rope_chunked(tt_k, cos_cache, sin_cache, start_offset=start_pos)
         k_cache, v_cache = kv_cache
-        _write_canvas_kv_contiguous(
-            k_cache,
-            v_cache,
-            tt_k,
-            tt_v,
-            start_pos=start_pos,
-            canvas_len=canvas_len,
-            mesh_device=mesh_device,
-            write_mode=write_mode,
-        )
+        if page_table is None:
+            _write_canvas_kv_contiguous(
+                k_cache,
+                v_cache,
+                tt_k,
+                tt_v,
+                start_pos=start_pos,
+                canvas_len=canvas_len,
+                mesh_device=mesh_device,
+                write_mode=write_mode,
+            )
+        else:
+            if config.is_sliding and config.sliding_window is not None:
+                # Read/attend before the circular bulk write can evict history
+                # needed by early queries in this canvas.
+                paged_sdpa = _sliding_commit_attention_paged(
+                    tt_q,
+                    tt_k,
+                    tt_v,
+                    kv_cache=kv_cache,
+                    start_pos=start_pos,
+                    sliding_window=config.sliding_window,
+                    head_dim=config.head_dim,
+                )
+            _write_canvas_kv_paged(
+                k_cache,
+                v_cache,
+                tt_k,
+                tt_v,
+                page_table=paged_write["page_table"],
+                block_ids=paged_write["block_ids"],
+                leading=paged_write["leading"],
+                trailing=paged_write["trailing"],
+                block_size=paged_write["block_size"],
+                head_dim=config.head_dim,
+                num_kv_heads=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            )
+            if paged_sdpa is None:
+                # Full-attention layers can write first: their pool is append-only,
+                # and the paged chunked op reads prefix + fresh canvas directly.
+                paged_sdpa = _full_commit_attention_paged(
+                    tt_q,
+                    kv_cache=kv_cache,
+                    page_table=page_table,
+                    start_pos=start_pos,
+                    head_dim=config.head_dim,
+                )
         tt_k.deallocate(True)
         tt_v.deallocate(True)
+
+    if paged_sdpa is not None:
+        tt_q.deallocate(True)
+        tt_out = concat_heads(paged_sdpa, is_decode_mode=False)
+        paged_sdpa.deallocate(True)
+        tt_out = apply_output_projection(tt_out, weights)
+        return apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     # Read the frozen prefix ++ freshly-written canvas out of the cache and run the
     # causal-masked SDPA. Reading from the cache (rather than a register concat)
@@ -647,6 +1002,7 @@ def _commit_layer_forward_batched(
     canvas_len: int,
     is_kv_shared: bool,
     page_table=None,
+    paged_write=None,
     write_mode: str | None = None,
 ):
     """One commit layer: causal attention (writes K/V) + the denoise MLP/MoE tail.
@@ -669,6 +1025,7 @@ def _commit_layer_forward_batched(
         is_kv_shared=is_kv_shared,
         mesh_device=tt_model.mesh_device,
         page_table=page_table,
+        paged_write=paged_write,
         write_mode=write_mode,
     )
     normed.deallocate(True)
@@ -715,6 +1072,8 @@ def commit_hidden_forward_batched(
     start_pos: int,
     kv_caches=None,
     page_table=None,
+    page_tables_per_layer=None,
+    paged_writes=None,
     write_mode: str | None = None,
 ):
     """Run the full batched commit backbone: append every layer's canvas K/V.
@@ -741,13 +1100,17 @@ def commit_hidden_forward_batched(
     for layer_idx in range(len(tt_model.layers)):
         layer_type = _layer_type_for_commit(tt_model, layer_idx)
         sliding_window = _sliding_window_for_commit(tt_model, layer_idx) if layer_type == "sliding_attention" else None
-        attn_mask = build_device_commit_causal_mask(
-            tt_model.mesh_device,
-            prefix_len=start_pos,
-            canvas_len=canvas_len,
-            layer_type=layer_type,
-            sliding_window=sliding_window,
-        )
+        layer_page_table = page_tables_per_layer[layer_idx] if page_tables_per_layer is not None else page_table
+        paged_write = paged_writes.get(layer_type) if paged_writes is not None else None
+        attn_mask = None
+        if layer_page_table is None:
+            attn_mask = build_device_commit_causal_mask(
+                tt_model.mesh_device,
+                prefix_len=start_pos,
+                canvas_len=canvas_len,
+                layer_type=layer_type,
+                sliding_window=sliding_window,
+            )
         try:
             hidden_states = _commit_layer_forward_batched(
                 tt_model,
@@ -758,11 +1121,13 @@ def commit_hidden_forward_batched(
                 start_pos=start_pos,
                 canvas_len=canvas_len,
                 is_kv_shared=layer_idx in kv_shared_map,
-                page_table=page_table,
+                page_table=layer_page_table,
+                paged_write=paged_write,
                 write_mode=write_mode,
             )
         finally:
-            attn_mask.deallocate(True)
+            if attn_mask is not None:
+                attn_mask.deallocate(True)
     return hidden_states
 
 
@@ -783,10 +1148,12 @@ def commit_canvas_tokens_batched(
     embeds all ``canvas_len`` committed tokens and runs one causal masked prefill
     that writes every layer's K/V at positions ``start_pos .. start_pos+C-1``.
 
-    Each layer's K/V append is one ``ttnn.fill_cache`` per K/V by default; pass
-    ``write_mode="position"`` (or ``DG_COMMIT_KV_WRITE=position``) for the per-position
-    reference write. See the module docstring and ``doc/optimize_perf/commit_batching.md``
-    for the equivalence argument and the device verify harnesses.
+    A contiguous append is one ``ttnn.fill_cache`` per K/V by default; pass
+    ``write_mode="position"`` (or ``DG_COMMIT_KV_WRITE=position``) for its
+    per-position reference. Model-owned hybrid KV uses offset-staged
+    ``paged_fill_cache`` writes plus paged attention. See the module docstring and
+    ``doc/optimize_perf/commit_batching.md`` for the equivalence argument and
+    device evidence.
     """
     # Local imports to avoid an import cycle (generate imports this module lazily).
     from models.experimental.diffusion_gemma.tt.generate import (
@@ -819,27 +1186,74 @@ def commit_canvas_tokens_batched(
             f"batched commit requires canvas_len ({canvas_len}) to be a multiple of {TILE_SIZE}; "
             "the standard canvas is 256"
         )
-    if page_table is not None or page_tables_per_layer is not None:
+    if page_table is not None:
         raise NotImplementedError(
-            "batched commit supports only the contiguous model-owned cache (page_table=None); "
-            "use the sequential commit for paged / vLLM hybrid-cache paths (#47557/#47488)"
+            "batched commit does not support a legacy/shared page_table; use the sequential "
+            "commit unless DG model-owned per-layer hybrid page tables are attached"
         )
+    paged_writes = None
+    if page_tables_per_layer is not None:
+        if not getattr(tt_model, "_dg_model_owned_hybrid_kv", False):
+            raise NotImplementedError(
+                "batched paged commit currently requires DG's identity-mapped model-owned hybrid cache"
+            )
+        if len(page_tables_per_layer) != len(tt_model.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(tt_model.layers)} layers"
+            )
+        if getattr(tt_model, "kv_shared_layer_map", {}):
+            raise NotImplementedError("batched model-owned hybrid commit does not yet support KV-shared layers")
+
+        block_size = int(getattr(tt_model, "_dg_hybrid_block_size", 0))
+        sliding_window = int(getattr(tt_model, "_dg_hybrid_sliding_window", 0))
+        max_seq_len = int(getattr(tt_model, "_dg_hybrid_max_seq_len", 0))
+        if not block_size or not sliding_window or not max_seq_len:
+            raise RuntimeError("model-owned hybrid cache metadata is incomplete")
+
+        paged_writes = {}
+        for layer_type, span, circular in (
+            ("sliding_attention", sliding_window, True),
+            ("full_attention", max_seq_len, False),
+        ):
+            num_blocks = span // block_size
+            block_ids, leading, trailing = _paged_write_plan(
+                start_pos=start_pos,
+                canvas_len=canvas_len,
+                block_size=block_size,
+                num_blocks=num_blocks,
+                circular=circular,
+            )
+            paged_writes[layer_type] = {
+                "page_table": _to_device_page_table(tt_model.mesh_device, block_ids),
+                "block_ids": block_ids,
+                "leading": leading,
+                "trailing": trailing,
+                "block_size": block_size,
+            }
 
     # commit_hidden_forward_batched consumes canvas_hidden through the layer stack
     # (layer 0's residual add deallocates it), so the caller does not free it.
-    canvas_hidden = embed_host_tokens(tt_model, canvas_tokens)
-    hidden = commit_hidden_forward_batched(
-        tt_model,
-        canvas_hidden,
-        start_pos=start_pos,
-        page_table=page_table,
-        write_mode=write_mode,
-    )
-    hidden.deallocate(True)
+    try:
+        canvas_hidden = embed_host_tokens(tt_model, canvas_tokens)
+        hidden = commit_hidden_forward_batched(
+            tt_model,
+            canvas_hidden,
+            start_pos=start_pos,
+            page_table=page_table,
+            page_tables_per_layer=page_tables_per_layer,
+            paged_writes=paged_writes,
+            write_mode=write_mode,
+        )
+        hidden.deallocate(True)
+    finally:
+        if paged_writes is not None:
+            for write in paged_writes.values():
+                write["page_table"].deallocate(True)
 
 
 def select_commit_fn(batched: bool | None = None):
-    """Return the commit callable: batched (default) unless forced off / paged.
+    """Return the commit callable: batched by default.
 
     ``batched=None`` means batched. Kept here (not in ``generate``) so the commit dispatch lives
     with the batched implementation. The ``DG_COMMIT_BATCHED`` env override was deleted
