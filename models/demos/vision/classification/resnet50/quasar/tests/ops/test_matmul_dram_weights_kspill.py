@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Option-A validation (#48552): does a Quasar matmul with WEIGHTS IN DRAM, K-SPILLED, run correctly on the 2-core
-emulator without hanging?
+Option-A validation (#48552): does a Quasar matmul with WEIGHTS IN DRAM, K-SPILLED, run correctly without hanging?
 
 This is the capability the layer4 L1-fit plan depends on. Layer4 conv2 (512->512 3x3) can't fit HEIGHT_SHARDED
 (full-N x full-K weights ~4.6 MB > 3.7 MB L1) and block-sharded on 2 cores hits the fused conv_bmm 0x19. The
@@ -12,26 +11,25 @@ proposed fix (option A) is: on the SPLIT path, keep the weights DRAM-resident an
 (in0_block_w < K, num K-blocks > 1) so only one K-block of weights is L1-resident at a time, accumulating partials.
 
 This test exercises the underlying matmul DIRECTLY (bypassing the conv, whose split path does not K-spill yet):
-it replicates the exact program config the height-sharded conv-as-matmul uses
+it replicates the program config the height-sharded conv-as-matmul uses
 (determine_matmul_op_config_from_conv_op_config_qsr, conv2d.cpp:275):
     MatmulMultiCoreReuseMultiCast1DProgramConfig(mcast_in0=False, in0_block_w=<K-block>, per_core_M, per_core_N, ...)
 with the activation HEIGHT_SHARDED over M and the weights in DRAM interleaved, at layer4 GEMM dims.
 
-  * mcast_in0=False -> weights (in1) are broadcast to the M-sharded cores (the height-sharded conv pattern),
-    read from DRAM; in0_block_w < K forces the K-spill (weight streaming) that makes it fit.
+Two variants:
+  * test_quasar_matmul_dram_weights_kspill              -> M height-sharded across ALL available cores (2 on the
+    emulator): exercises the in0/in1 mcast sender/receiver handshake, as the real conv would.
+  * test_quasar_matmul_dram_weights_kspill_single_core  -> pinned to a SINGLE core (grid 1x1). With one core the
+    1D-mcast degenerates (num_dests=0, no sender/receiver, no mcast traffic), so this ISOLATES the
+    TILE_COUNTERS 0x0f00 / index 0x00010000 fault from the mcast:
+      - STILL faults on 1 core  -> the wrong-Neo tile-counter is in the single-core compute path, mcast-independent.
+      - PASSES on 1 core        -> the fault needs the 2-core mcast setup.
 
-Outcomes:
-  * PASS (PCC ok, no hang) -> option A is viable; wire the split Program B to keep weights in DRAM + K-spill.
-  * HANG / FATAL -> the weights-in-DRAM mcast_in1 + K-spill matmul has its own issue (e.g. the in1-sender
-    async_full_barrier / partials-accumulate path) and option A needs that fixed first.
-
-The fc test (test_linear.py) already validates the mcast_in0=TRUE (width-sharded) weights-in-DRAM K-spill path;
-this validates the mcast_in0=FALSE (height-sharded) path that layer4 conv2 would actually use.
-
-Run (craq-sim / emulator, forced JIT):
+Run (forced JIT):
   TT_METAL_FORCE_JIT_COMPILE=1 \
   TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}' \
   pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_matmul_dram_weights_kspill.py
+  -k single_core   # just the no-mcast single-core variant
 """
 
 import pytest
@@ -53,30 +51,23 @@ _GEMMS = [
 # fmt: on
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("in0_block_w", [4, 8], ids=["kblk4", "kblk8"])
-@pytest.mark.parametrize("name, m_tiles, k_tiles, n_tiles", _GEMMS, ids=[g[0] for g in _GEMMS])
-def test_quasar_matmul_dram_weights_kspill(mesh_device, name, m_tiles, k_tiles, n_tiles, in0_block_w):
-    device = mesh_device
+def _run_kspill(device, name, m_tiles, k_tiles, n_tiles, in0_block_w, num_cores):
+    """Weights-in-DRAM + K-spill matmul at (m_tiles x k_tiles x n_tiles), M height-sharded over `num_cores`.
+    num_cores==1 -> single core / no mcast."""
     torch.manual_seed(0)
 
     assert k_tiles % in0_block_w == 0, f"in0_block_w={in0_block_w} must divide K_tiles={k_tiles}"
     num_k_blocks = k_tiles // in0_block_w
     if num_k_blocks < 2:
         pytest.skip(f"in0_block_w={in0_block_w} does not spill K_tiles={k_tiles} (need >=2 blocks)")
+    assert m_tiles % num_cores == 0, f"m_tiles={m_tiles} must be divisible by num_cores={num_cores}"
 
     M = m_tiles * TILE
     K = k_tiles * TILE
     N = n_tiles * TILE
 
-    # Height-shard M across cores (mirrors the height-sharded conv: 1 M-tile/core on the 2-core part).
-    grid = device.compute_with_storage_grid_size()
-    max_cores = grid.x * grid.y
-    num_cores = max(c for c in range(1, min(max_cores, m_tiles) + 1) if m_tiles % c == 0)
     per_core_M = m_tiles // num_cores
     per_core_N = n_tiles  # mcast_in0=False -> weights broadcast, each core computes full N for its M rows
-    # out_subblock: per_core_M(=1 on 2-core) rows; widest w that divides N and keeps h*w <= 8 DEST tiles.
     out_subblock_h = 1
     out_subblock_w = max(w for w in range(1, 9) if per_core_N % w == 0 and out_subblock_h * w <= 8)
     mm_grid = (num_cores, 1)
@@ -135,4 +126,27 @@ def test_quasar_matmul_dram_weights_kspill(mesh_device, name, m_tiles, k_tiles, 
     got = ttnn.to_torch(ttnn.from_device(out)).float().reshape(1, 1, M, N)
     # bf16 + LoFi over K up to 4608 is noisy -> 0.98 (raise once the path is trusted).
     assert_with_pcc(golden, got, pcc=0.98)
-    print(f"  {name} kblk{in0_block_w} PASSED (weights-in-DRAM K-spill matmul, {num_k_blocks} K-blocks)")
+    print(f"  {name} kblk{in0_block_w} cores={num_cores} PASSED (weights-in-DRAM K-spill, {num_k_blocks} K-blocks)")
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("in0_block_w", [4, 8], ids=["kblk4", "kblk8"])
+@pytest.mark.parametrize("name, m_tiles, k_tiles, n_tiles", _GEMMS, ids=[g[0] for g in _GEMMS])
+def test_quasar_matmul_dram_weights_kspill(mesh_device, name, m_tiles, k_tiles, n_tiles, in0_block_w):
+    """M height-sharded across all available cores (2 on the emulator) -> exercises the in0/in1 mcast handshake."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    num_cores = max(c for c in range(1, min(max_cores, m_tiles) + 1) if m_tiles % c == 0)
+    _run_kspill(mesh_device, name, m_tiles, k_tiles, n_tiles, in0_block_w, num_cores)
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("in0_block_w", [4, 8], ids=["kblk4", "kblk8"])
+@pytest.mark.parametrize("name, m_tiles, k_tiles, n_tiles", _GEMMS, ids=[g[0] for g in _GEMMS])
+def test_quasar_matmul_dram_weights_kspill_single_core(mesh_device, name, m_tiles, k_tiles, n_tiles, in0_block_w):
+    """SINGLE core (grid 1x1): the 1D-mcast degenerates (num_dests=0, no sender/receiver, no mcast traffic), so
+    the TILE_COUNTERS 0x0f00 / 0x00010000 fault is isolated from the mcast. Still faults -> mcast-independent
+    (single-core compute tile-counter path); passes -> the fault needs the 2-core mcast setup."""
+    _run_kspill(mesh_device, name, m_tiles, k_tiles, n_tiles, in0_block_w, num_cores=1)
