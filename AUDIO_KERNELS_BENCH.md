@@ -108,6 +108,26 @@ The end-to-end PSNR gates (`test_decode`, `test_encode`, `test_roundtrip`,
 and no longer exports `AutoencoderKLMiniMaxH3Audio`, which the H3 weights want at `0.36.0.dev0`.
 Restoring them needs that class back, ideally in a venv of its own rather than in `python_env`.
 
+## Current profile — start the next round of fusion here
+
+`PROFILE_2026_08_06.txt`, produced by `analyze_csv.py` over the signposted Tracy window on the code as
+committed. **1401 ms device FW over 6955 ops.** `tt-perf-report` is not installed on this box, so
+`analyze_csv.py` groups the CSV directly (it also finds the signpost rows itself, which is the step
+that silently returns "No device operations found" when done wrong).
+
+| role | ms | % | made of |
+|---|---|---|---|
+| **FIR scaffolding** | **~514** | **37** | Untilize 138.9, PaddedSlice 112.3, ReshapeView 110.5, Slice 53.2, Halo 39.8, I2S+S2I 36.4, SliceWrite 19.1, Move 4.8 |
+| **Concat** | **285.3** | **20** | 469 calls: replicate/zero T-pad, polyphase merge, channel-align pad, C-chunk reassembly |
+| Conv3d | 210.9 | 15 | 136 calls, the AMP resblocks |
+| Snake (ternary) | 140.3 | 10 | was 235.9 before the tile-fold |
+| **FIR compute (Conv2d)** | **81.3** | **6** | 870 calls -- the actual convolution |
+| BinaryNg / Permute | 138.1 | 10 | residual adds; 57 BCT<->BTC permutes |
+
+The wrapper-to-work ratio on the FIR is still ~6:1, and concat is now the single largest op. Neither
+is arithmetic. Both die if `Activation1d` becomes one fused band that keeps the 2x-upsampled tensor in
+L1 -- today it is written to DRAM and re-read about ten times.
+
 ## Env knobs for the audio path
 
 | var | values | default | effect |
