@@ -536,6 +536,22 @@ class OptimizedDecoder(LightweightModule):
         if _dec_mc != "":
             _dec_kwargs["max_cores_per_head_batch"] = int(_dec_mc)
         self._sdpa_pc_decode = ttnn.SDPAProgramConfig(**_dec_kwargs)
+        # Spec-decode VERIFY SDPA. ACCURACY FIX (2026-08-06): the verify historically used _sdpa_pc (k128) —
+        # the SAME config proven LOSSY on normal decode (teacher top1 0.95->0.58 from last-partial-chunk
+        # masking at non-128-aligned cur_pos). Since committed spec tokens ARE the verify's argmax, a k128
+        # verify makes spec-decode inherit that lossy trajectory (an accuracy regression vs k64 serving).
+        # TT_LAGUNA_VERIFY_K selects the verify k_chunk (A/B k64 vs k128 on device without a source edit).
+        # DEFAULT 64: aligns spec-verify with the accurate normal-decode SDPA (teacher top1 0.95 vs k128's
+        # 0.58), so committed spec tokens are drawn from the same numerics as non-spec decode. Validated on
+        # device (2026-08-05): served HumanEval-164 k64==k128 (83/164, 0 pass/fail flips) and throughput
+        # identical (1099s vs 1102s) — Pareto win (more accurate config, zero HumanEval/throughput cost).
+        self._verify_k = int(os.environ.get("TT_LAGUNA_VERIFY_K", "64"))
+        self._sdpa_pc_verify = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+            q_chunk_size=32,
+            k_chunk_size=self._verify_k,
+            exp_approx_mode=False,
+        )
         # Chunked prefix-cache read (suffix prefill, start_pos>0): chunk_start_idx
         # must be a multiple of q_chunk_size AND k_chunk_size. start_pos is only
         # guaranteed a multiple of block_size (64), so keep both <= 64 divisors of
@@ -1155,8 +1171,8 @@ class OptimizedDecoder(LightweightModule):
         }
         if cfg.is_sliding:
             sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
-        if sequential_kv_write:  # spec-decode verify REQUIRES k_chunk=128 (consecutive positions share chunk path)
-            sdpa_kwargs["program_config"] = self._sdpa_pc
+        if sequential_kv_write:  # spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64 = accurate SDPA)
+            sdpa_kwargs["program_config"] = self._sdpa_pc_verify
             sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
         elif self._decode_use_sdpa_pc:  # Stage 2: accuracy-safe fast normal-decode config (k64, max_cores=16)
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
