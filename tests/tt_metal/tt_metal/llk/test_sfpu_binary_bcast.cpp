@@ -364,8 +364,8 @@ TEST_P(SfpuBinaryBcastFixture, TensixSfpuBinaryBcast) {
         binop_name.at(cfg.binop),
         unit_tests::compute::sfpu_binary_bcast::df_name.at(cfg.df));
 
-    for (unsigned int id = 0; id < this->num_devices_; ++id) {
-        ASSERT_TRUE(unit_tests::compute::sfpu_binary_bcast::run_sfpu_binary_bcast(this->devices_.at(id), cfg));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::sfpu_binary_bcast::run_sfpu_binary_bcast(device, cfg));
     }
 }
 

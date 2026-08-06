@@ -7,6 +7,9 @@
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #include "risc_common.h"
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/error_handling.h"
+#endif
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -41,17 +44,27 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             v->line_num = mepc;  // mepc is the instruction address that caused the fault
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
-            uint32_t error_code =
-                RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+            // Layout constants and block IDs both come from error_handling.h, shared with the
+            // host decoder so the two can't drift.
+            //
+            // Grab the register once. It's volatile, so a read per field is extra MMIO and can
+            // end up mixing fields from different samples if another error shows up.
+            uint32_t error_reg = RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX];
+            uint32_t neo_id = (error_reg >> kQuasarErrNeoShift) & kQuasarErrNeoMask;
+            uint32_t block_id = (error_reg >> kQuasarErrBlockShift) & kQuasarErrBlockMask;
             v->hw_fault_info =
-                (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) |
-                static_cast<uint64_t>(RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX]);
-            // use error code to get the TRISC ID for errors 0-3 and 32-35.
-            // NOTE: for errors 32-35, the TRISC order is reversed, so we need to subtract the error code from 35.
-            uint32_t trisc_id = error_code < 4 ? error_code : error_code > 32 ? 35 - error_code : 0;
-            v->which = (RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 30) *
-                           NUM_TRISC_CORES +
-                       trisc_id + NUM_DM_CORES;
+                (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) | static_cast<uint64_t>(error_reg);
+            // Only the per-TRISC blocks name a thread. The illegal-instruction ones count
+            // backwards, so subtract. Everything else is Neo-level, put those on TRISC 0.
+            uint32_t trisc_id = 0;
+            if (block_id <= static_cast<uint32_t>(TriscErrors::ERROR_TRISC3)) {
+                trisc_id = block_id;
+            } else if (
+                block_id >= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC3) &&
+                block_id <= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0)) {
+                trisc_id = static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0) - block_id;
+            }
+            v->which = neo_id * NUM_TRISC_CORES + trisc_id + NUM_DM_CORES;
 #endif
         }
         v->tripped = assert_type;

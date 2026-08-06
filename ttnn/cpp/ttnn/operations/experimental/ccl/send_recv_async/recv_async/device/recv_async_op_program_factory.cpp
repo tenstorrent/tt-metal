@@ -57,9 +57,13 @@ RecvAsyncMeshWorkloadFactory::create_at(
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
     std::vector<CoreCoord> receiver_core_coords;
+    receiver_core_coords.reserve(socket_connection_config.size());
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
+    sender_fabric_node_ids.reserve(socket_connection_config.size());
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+    receiver_fabric_node_ids.reserve(socket_connection_config.size());
     std::vector<uint32_t> connection_indices;
+    connection_indices.reserve(socket_connection_config.size());
 
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {

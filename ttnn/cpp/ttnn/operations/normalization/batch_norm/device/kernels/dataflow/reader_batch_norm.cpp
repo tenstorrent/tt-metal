@@ -9,33 +9,30 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    const auto eps = get_arg_val<uint32_t>(0);
-    uint32_t src_addr = get_arg_val<uint32_t>(1);  // input tensor
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
-    uint32_t n_stride = get_arg_val<uint32_t>(5);
-    uint32_t c_stride = get_arg_val<uint32_t>(6);
-    uint32_t N = get_arg_val<uint32_t>(7);
-    uint32_t C = get_arg_val<uint32_t>(8);
+    const auto eps = get_arg(args::eps);
+    uint32_t start_tile_id = get_arg(args::start_tile_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
 
-    constexpr auto dfb_id_src = get_compile_time_arg_val(0);
-    constexpr auto dfb_id_eps = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr bool fill_eps_fp32 = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
+    constexpr bool fill_eps_fp32 = get_arg(args::fill_eps_fp32) == 1;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
     Noc noc;
-    DataflowBuffer dfb_src(dfb_id_src);
-    DataflowBuffer dfb_eps(dfb_id_eps);
+    DataflowBuffer dfb_src(dfb::src);  // input tiles, streamed on to the compute kernel
+    DataflowBuffer dfb_eps(dfb::eps);  // a single tile of eps, held for the whole kernel
 
     const uint32_t src_tile_bytes = dfb_src.get_entry_size();
-    const auto src = TensorAccessor(src_args, src_addr);
+    const auto src = TensorAccessor(tensor::input);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
