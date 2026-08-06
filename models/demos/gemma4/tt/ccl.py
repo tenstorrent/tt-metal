@@ -322,7 +322,7 @@ def ccl_l1_gather_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_L1_GATHER", "1").lower() not in ("0", "false", "no")
 
 
-def _decode_l1_gather_memcfg(tensor, ccl_manager):
+def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
     """Width-sharded L1 memory config for the all-gather output, or None to keep DRAM.
 
     Every ``ccl_allreduce`` call site in the decode path feeds its result straight
@@ -332,16 +332,11 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
     InterleavedToSharded per all-reduce -- measured 47.2 -> 43.5 us
     (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
 
-    Extended to short prefill (tile-aligned height <= ``_SHARDED_NORM_MAX_HEIGHT``,
-    typically ISL <= 1024): same layout as ``RMSNorm._build_sharded_cfg`` so
-    ``post_feedforward_layernorm`` skips I2S after the MLP all-reduce (~6 us/layer).
-    Disabled automatically when ``GEMMA4_SHARDED_NORM=0`` (interleaved-LN A/B),
-    since an AG→width_shard that the norm immediately abandons is wasted.
-
-    The layout comes from ``rms_norm.width_shard_input_memcfg``, the same function
-    the norm uses, so the two provably agree; ``RMSNorm.forward`` compares
-    ``memory_config()`` and only takes the input in place on an exact match, so a
-    mismatch degrades to today's behaviour rather than corrupting anything.
+    Decode: tile-aligned height <= ``TILE_SIZE``. Short prefill (height <=
+    ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn / post-MLP LN when the
+    following norm S2I's to DRAM (prefill ``keep_sharded=False``). Do *not* pair
+    with a prefill keep-sharded island through gate_up — that clashes with tuned
+    matmul CBs on Wormhole.
     """
     if not ccl_l1_gather_enabled():
         return None
@@ -356,9 +351,6 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
             width_shard_input_memcfg,
         )
 
-        # AG→width_shard only helps when the following LN keeps (or at least
-        # consumes) that layout. With ``GEMMA4_SHARDED_NORM=0`` the norm is
-        # interleaved and would immediately S2I the gather — skip it.
         if not sharded_norm_enabled():
             return None
         if not (1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT):
@@ -367,6 +359,20 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
     except Exception as e:  # never let a layout optimization break the model
         logger.debug(f"ccl L1 gather memcfg unavailable ({e}); keeping DRAM")
         return None
+
+
+def _decode_l1_gather_memcfg(tensor, ccl_manager):
+    """Decode-only alias — see ``_short_seq_l1_gather_memcfg``."""
+    try:
+        shape = tensor.shape
+        if len(shape) != 4:
+            return None
+        padded_height = ((int(shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if not (1 <= padded_height <= ttnn.TILE_SIZE):
+            return None
+    except Exception:
+        return None
+    return _short_seq_l1_gather_memcfg(tensor, ccl_manager)
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
@@ -395,7 +401,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     # before the all-gather runs.
     gather_memory_config = memory_config
     if caller_memory_config is None:
-        gather_memory_config = _decode_l1_gather_memcfg(tensor, ccl_manager) or memory_config
+        gather_memory_config = _short_seq_l1_gather_memcfg(tensor, ccl_manager) or memory_config
 
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()

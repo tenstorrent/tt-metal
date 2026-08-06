@@ -27,11 +27,8 @@ _L1_MAX_BYTES = 1_572_864
 _L1_HEADROOM_BYTES = 64_000
 # Cap decode in0_block_w: unbounded divisors (e.g. 6) blow L1 on 31B gate_up bf16.
 _DECODE_IN0_BLOCK_W_MAX = 2
-# Tuned attention o_proj prefill matmul: in0 L1 interleaved, in1 DRAM interleaved,
-# output L1 block-sharded. Opt-in (GEMMA4_OPROJ_TUNED=1) — the matmul itself is a
-# wash-to-slight-win but the block-sharded output forces a sharded_to_interleaved
-# before the CCL allreduce that costs more than the matmul gains. Measured numbers
-# in interleaved_o_proj_prefill_config / test_o_proj_wired_config_vs_auto.
+# Opt-in tuned attention o_proj prefill matmul; default off because it loses to
+# auto end-to-end (see interleaved_o_proj_prefill_config).
 _OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 
 
@@ -91,6 +88,14 @@ def prefill_max_cols_default(mesh_device=None):
 # This keeps per_core_M tiny AND avoids the memory blow-up of a chunk+concat
 # (which would need source chunks + a full-size destination simultaneously).
 _PREFILL_CUTOFF = 512 if is_blackhole() else 1024
+
+
+def in_prefill_l1_matmul_band(m: int) -> bool:
+    """True for short prefill row counts where L1 in0 hoists are wired (32 < M <= cutoff)."""
+    m = int(m)
+    return TILE_SIZE < m <= _PREFILL_CUTOFF
+
+
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
@@ -372,11 +377,13 @@ def interleaved_prefill_config(m, k, n):
     config at long context would blow L1. Above the cutoff (and for decode,
     M<=32) we return ``(None, None)`` and the caller behaves exactly as before.
 
-    Output is L1 *interleaved* (not block-sharded). The QKV sweep's block-sharded
-    out was ~1.40x vs auto *as a matmul*, but ``nlp_create_qkv_heads`` cannot
-    consume it — the forced ``sharded_to_interleaved`` (~5–6 µs) makes the
-    end-to-end package a wash-to-loss (same lesson as ``GEMMA4_OPROJ_TUNED``).
-    L1 interleaved out skips that S2I; heads split reads it directly.
+    Output is DRAM interleaved. L1 interleaved out was a matmul-local win and
+    skipped a DRAM bounce before ``nlp_create_qkv_heads``, but the fused QKV
+    buffer (or any L1 residue from the head-split path) then sits under prefill
+    SDPA — whose static CBs already fill Wormhole L1 to the brim on the 8x8
+    sliding grid (demo batch-1 ISL 1024 clash). DRAM out + DRAM heads leave SDPA
+    a clean L1. in0 may still be hoisted to L1 for the matmul itself
+    (``hoist_prefill_matmul_in0_if_needed``) and freed immediately after.
 
     Deliberately *not* included: a width-sharded weight measured slightly
     faster again, but the same weight tensor also serves decode, and decode's
@@ -399,7 +406,19 @@ def interleaved_prefill_config(m, k, n):
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    return prefill_progcfg(m, k, n), ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+    return prefill_progcfg(m, k, n), ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config
+
+
+# Conservative interleaved-L1 budget for a *single* short-lived matmul output.
+# Mirrors ``operations._DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES`` (avoid circular import).
+_PREFILL_L1_OUT_MAX_BYTES = 4 * 1024 * 1024
+
+
+def prefill_l1_out_memcfg(m: int, n: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
+    """L1 interleaved out when ``m*n*dtype_bytes`` fits the prefill budget, else DRAM."""
+    if int(m) * int(n) * int(dtype_bytes) <= _PREFILL_L1_OUT_MAX_BYTES:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
 
 
 def _out_subblock_hw(per_core_n, per_core_m):
@@ -518,7 +537,7 @@ def interleaved_gate_up_prefill_config(m, k, n):
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+    return program_config, prefill_l1_out_memcfg(m, n), compute_kernel_config
 
 
 def interleaved_down_proj_prefill_config(m, k, n):
@@ -547,7 +566,7 @@ def interleaved_down_proj_prefill_config(m, k, n):
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+    return program_config, prefill_l1_out_memcfg(m, n), compute_kernel_config
 
 
 def _progcfg_grid_xy(program_config):
@@ -661,21 +680,12 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     wired, DRAM in0 + hoist        184.9     0.42x
     ==========================  ========  ========
 
-    Two separate losses. The matmul itself is a wash at best (a noisier 32x6 run had
-    it at 1.05x; the longer run says 0.93x — treat it as within noise of auto). And
-    the CCL allreduce cannot consume a block-sharded input, so ``apply_allreduce``
-    must add a ``sharded_to_interleaved`` back to DRAM, which costs ~55 µs on top —
-    far more than anything the matmul could win. Hoisting in0 from DRAM instead of
-    landing concat_heads in L1 costs another ~45 µs, which is why
-    ``o_proj_input_memcfg`` exists.
-
-    Earlier data agrees on the ranking: in ``/tmp/o_proj.csv``
-    (``GEMMA4_SWEEP_FULL=1``) this combo measures ~139 µs against ~89 µs for the
-    interleaved-out winner (``1d_c28_bw4`` + L1 in0 + DRAM out). Note the absolute
-    host micros swing ~2x run to run (auto measured 78-146 µs across runs); the
-    *ranking* is what has been stable. The full-model 1x8 profile has auto at
-    ~65-84 µs device / 56 cores, so a profile with the flag on is the only evidence
-    that should flip the default.
+    Two separate losses. The matmul itself is within noise of auto. And the CCL
+    allreduce cannot consume a block-sharded input, so ``apply_allreduce`` must add
+    a ``sharded_to_interleaved`` back to DRAM (~55 µs) — more than the matmul could
+    win. Hoisting in0 from DRAM instead of landing concat_heads in L1 costs another
+    ~45 µs, which is why ``o_proj_input_memcfg`` exists. Absolute host micros swing
+    ~2x run to run; the ranking is what has been stable.
 
     Same ``_PREFILL_CUTOFF`` band as the other tuned prefill configs: decode
     (``M<=32``) and long context return all-``None`` and keep the prior auto path.

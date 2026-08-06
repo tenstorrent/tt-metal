@@ -234,12 +234,10 @@ def test_o_proj_tuned_path_is_opt_in(monkeypatch):
 
 
 def test_o_proj_input_memcfg_prefers_l1_in_tuned_band(monkeypatch):
-    """concat_heads lands in L1 exactly when the tuned o_proj config will read it."""
+    """concat_heads lands in L1 when short prefill o_proj can keep in0 on L1."""
     import ttnn
-    from models.demos.gemma4.tt import dram_sharded
     from models.demos.gemma4.tt.attention.operations import o_proj_input_memcfg
 
-    monkeypatch.setattr(dram_sharded, "_OPROJ_TUNED", True)
     monkeypatch.delenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", raising=False)
     # SDPA output [1, num_local_heads=4, seq, head_dim=256] → concat K=1024.
     assert o_proj_input_memcfg(_FakeTensor([1, 4, 128, 256]), 5376) == ttnn.L1_MEMORY_CONFIG
@@ -252,6 +250,21 @@ def test_o_proj_input_memcfg_prefers_l1_in_tuned_band(monkeypatch):
     assert o_proj_input_memcfg(_FakeTensor([8, 4, 512, 256]), 5376, ttnn.DRAM_MEMORY_CONFIG) == (
         ttnn.DRAM_MEMORY_CONFIG
     )
+
+
+def test_should_hoist_prefill_matmul_in0_band_and_budget(monkeypatch):
+    from models.demos.gemma4.tt.attention.operations import should_hoist_prefill_matmul_in0
+    from models.demos.gemma4.tt.dram_sharded import in_prefill_l1_matmul_band
+
+    monkeypatch.delenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", raising=False)
+    assert in_prefill_l1_matmul_band(128)
+    assert not in_prefill_l1_matmul_band(32)
+    assert should_hoist_prefill_matmul_in0(128, 5376, object())
+    assert should_hoist_prefill_matmul_in0(128, 1024, None)
+    assert should_hoist_prefill_matmul_in0(32, 5376, object())  # lm_head decode / last-token
+    assert not should_hoist_prefill_matmul_in0(32, 5376, None)
+    monkeypatch.setenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", "0")
+    assert not should_hoist_prefill_matmul_in0(128, 5376, object())
 
 
 def test_lm_head_decode_config_matches_sweep_winner():
