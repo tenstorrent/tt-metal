@@ -653,8 +653,28 @@ class TPGatedDeltaNet:
         # chunk sizes it was tuned for; on WH it OOMs the allocator mid-prefill. Keep the L1 fast path
         # for short chunks (unchanged behaviour, incl. all of Blackhole) and spill to DRAM past that.
         _L1 = ttnn.L1_MEMORY_CONFIG
+        # NOTE: _elem/_norm_mc are deliberately computed from the PRE-cast dtype (see the bf16 cast
+        # below). In bf16 the [1,Nv,T,Dv] norm tensor is exactly 8MB at T=2048, which lands precisely
+        # on this threshold and would flip the choice to L1; keeping the fp32-based decision leaves the
+        # L1/DRAM split byte-identical to before.
         _elem = 4 if o.dtype == ttnn.float32 else 2
         _norm_mc = _L1 if (tpc.is_blackhole() or Nv * T * Dv * _elem <= (8 << 20)) else ttnn.DRAM_MEMORY_CONFIG
+        # Wormhole: run the OUTPUT path in bf16 rather than the chunk kernel's fp32. Everything
+        # downstream inherits the dtype — rms_norm -> nlp_concat_heads -> z-gate -> o_proj -> the
+        # reduce-scatter — so this halves the bytes through the layer's largest data-movement op (the
+        # fp32 RS is 1,804us of 21,668 in the single-layer profile).
+        #
+        # Only `o` (the per-token output) is cast. `final_state` stays fp32, so the recurrence carried
+        # across chunks and into decode is untouched and nothing compounds.
+        #
+        # Blackhole stays fp32: there o_proj's row-parallel RS sums 4 per-device partials (TP=4), where
+        # bf16 measured PCC ~0.69 even at ISL 2048 (test_oproj_dtype_isl). An N300 is TP=2 and sums 2
+        # partials, so that result does not carry over — measured separately here.
+        # QWEN35_GDN_OUT_FP32=1 forces the old fp32 path back on Wormhole.
+        if not tpc.is_blackhole() and o.dtype == ttnn.float32 and os.environ.get("QWEN35_GDN_OUT_FP32") != "1":
+            _o_fp32 = o
+            o = ttnn.typecast(o, ttnn.bfloat16)
+            ttnn.deallocate(_o_fp32)
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the

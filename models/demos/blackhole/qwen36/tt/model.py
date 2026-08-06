@@ -984,6 +984,11 @@ class Qwen36Model:
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
+        if self.num_devices > 1:
+            # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac] (same reshape as
+            # _forward_decode). Without it DistributedNorm's all_gather(dim=3) gets a rank-3
+            # tensor and TT_FATALs "Dimension input should be in between -3 and 2, but has 3".
+            x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
 
         # RoPE position is offset by rope_delta for a multimodal request (image tokens compress the
         # position space); the KV/cache position (cur_pos_tensor below) stays the true sequence pos.
@@ -3053,12 +3058,20 @@ class Qwen36Model:
         assert all(v <= bucket for v in vlens), "every valid_len must fit the single-pass bucket"
 
         # The fused chunk_gated_delta_rule op caps the group by its SCAN, which maps one (head,
-        # v-block) row per core: BH = B*Nv_tp must stay <= the compute grid (~96-104 cores on P150).
-        # With Nv_tp=12 that's B <= 8, and — unlike the old gated_delta_attn_seq kernel — it is
-        # bucket-independent (SCAN L1 is state-sized, not chunk-count-sized). Validated bit-exact vs
-        # per-user at B=8 for bucket 128 and 256 (test_gdn_fused_batch: ceiling + large-group). Buckets
-        # >256 aren't produced here (callers route T>256 to per-user), so cap them at 1 defensively.
-        gdn_max_bg = 8 if bucket <= 2 * gdn_chunk else 1
+        # v-block) row per core: BH = B*Nv_tp must stay <= the compute grid. Unlike the old
+        # gated_delta_attn_seq kernel this is bucket-independent (SCAN L1 is state-sized, not
+        # chunk-count-sized). Validated bit-exact vs per-user at B=8 for bucket 128 and 256
+        # (test_gdn_fused_batch: ceiling + large-group). Buckets >256 aren't produced here (callers
+        # route T>256 to per-user), so cap them at 1 defensively.
+        #
+        # Derive the ceiling from the ACTUAL grid and Nv_tp instead of hardcoding 8. A P150 at TP=4
+        # has Nv_tp=8 against ~140 cores, so 8 was always safe there; an N300 at TP=2 has Nv_tp=16
+        # against a 64-core (8x8) grid, where a group of 8 means BH=128 and the kernel aborts with
+        # "num_heads 128 exceeds compute cores 64" (chunk_gdn_phased_program_factory.cpp:137). 8 stays
+        # the validated ceiling -- this only lowers it where the grid actually demands it (N300 -> 4).
+        _g = self.device.compute_with_storage_grid_size()
+        _bh_max_bg = max(1, (_g.x * _g.y) // max(1, self.args.gdn_nv_tp))
+        gdn_max_bg = min(8, _bh_max_bg) if bucket <= 2 * gdn_chunk else 1
         group_size = max(1, min(group_size, gdn_max_bg))
 
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -3284,6 +3297,11 @@ class Qwen36Model:
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
+        if self.num_devices > 1:
+            # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac] (same reshape as
+            # _forward_decode). Without it DistributedNorm's all_gather(dim=3) gets a rank-3
+            # tensor and TT_FATALs "Dimension input should be in between -3 and 2, but has 3".
+            x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
 
         # RoPE position offset by rope_delta for multimodal (KV position stays the true seq pos).
         position_ids = torch.full((B, 1), current_pos + self.rope.rope_delta, dtype=torch.long)
