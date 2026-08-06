@@ -689,51 +689,65 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     // compute_program_hash: one cached program is reused across chunked-prefill chunks and decode steps that
     // differ only in these), so on a program-cache HIT the WorkloadDescriptor fast path above leaves them
     // frozen at the FIRST dispatch's values -- a stale causal offset (chunk_start_tiles/straddle) and valid
-    // length (kv_len_tiles), which silently corrupts every chunk after the first (the classic Program-model
-    // factory re-applies them in its own override; the descriptor fast path does not). Re-derive them per
-    // coord by rebuilding the CONSUMER kernels only (consumers_only=true skips the AG helper -- its per-hit
-    // fabric-worker setup is not needed here and this drops any dependence on it being alloc-free) and copy
-    // ONLY the scalar slots back. Rebuilding via the same builder as create() keeps the scalar values/slots
-    // byte-identical between the two paths (the invariant the historical stale-scalar bug violated), while the
-    // buffers stay owned by the fast path above; the schedule + band-visit permutation are geometry-only
-    // (independent of chunk_start/kv_len), so they are stable across dispatches and need no re-patch.
+    // length (kv_len_tiles), which silently corrupts every chunk after the first. Patch the fields directly
+    // into the cached programs, as the classic Program-model factory does. Rebuilding the descriptor here was
+    // correct but expensive: it reconstructed geometry, schedules, descriptors and consumer runtime args for
+    // every mesh coordinate even though only these scalar fields vary between cache hits.
     using tt::tt_metal::GetRuntimeArgs;
-    const auto patch_scalars = [](tt::tt_metal::Program& program,
-                                  const ProgramDescriptor& desc,
-                                  uint32_t kernel_idx,
-                                  std::initializer_list<uint32_t> slots) {
-        for (const auto& [core, src] : desc.kernels[kernel_idx].runtime_args) {
-            auto& dst = GetRuntimeArgs(program, kernel_idx, core);
-            for (uint32_t s : slots) {
-                // Guard the literal slot indices (matching the classic factory's patch_arg) so a future
-                // arg-layout drift fails loudly here instead of silently reading/writing past the arg vector.
-                TT_FATAL(
-                    s < dst.size() && s < src.size(),
-                    "indexer_score fused override: scalar slot {} out of range (dst {}, src {}) for kernel {}",
-                    s,
-                    dst.size(),
-                    src.size(),
-                    kernel_idx);
-                dst[s] = src[s];
-            }
-        }
-    };
+
+    const auto& q = tensors.q;
+    const auto& k = tensors.k;
+    const auto& k_local = *tensors.k_local;
+    const auto pcache = persistent_cache_args(args, k);
+    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    const auto& k_local_shape = k_local.logical_shape();
+    const uint32_t local_slot_pages =
+        (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
+    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto desc =
-            build_ring_program_descriptor(args, tensors, out, range.start_coord(), /*consumers_only=*/true);
+        const uint32_t device_index = device_index_for(args, range.start_coord(), q);
+        const uint32_t tp_index =
+            (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
+                : 0u;
+        const auto geom = device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
+
+        const auto patch_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    TT_FATAL(
+                        slot < core_args.size(),
+                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
+                        slot,
+                        core_args.size(),
+                        kernel_idx);
+                    core_args[slot] = value;
+                }
+            }
+        };
+
         // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
-        // Slots are literals (matching the file-local rt_arg static_assert: reader_k_batch_offset==25,
-        // reader_kv_len_tiles==26) -- rt_arg is in an anonymous namespace not visible here.
-        patch_scalars(program, desc, 0, {25u, 26u, 34u});  // gathered offset, kv_len, local selected-slot offset
+        // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
+        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert.
+        patch_field(0, 25u, k_batch_page_offset);
+        patch_field(0, 26u, pcache.kv_len_tiles);
+        patch_field(0, 34u, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
-        patch_scalars(program, desc, 2, {6u, 7u, 8u, 9u});
+        patch_field(2, 6u, pcache.kv_len_tiles);
+        patch_field(2, 7u, geom.chunk_start_tiles);
+        patch_field(2, 8u, geom.straddle_q_tile);
+        patch_field(2, 9u, geom.straddle_jump_tiles);
         // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
-        patch_scalars(program, desc, 1, {7u, 8u, 9u, 10u});
+        patch_field(1, 7u, pcache.kv_len_tiles);
+        patch_field(1, 8u, geom.chunk_start_tiles);
+        patch_field(1, 9u, geom.straddle_q_tile);
+        patch_field(1, 10u, geom.straddle_jump_tiles);
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
         // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
-        const auto& k_local = *tensors.k_local;
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
