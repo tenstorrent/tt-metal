@@ -225,6 +225,47 @@ def _safe_half_out_block_w(per_core_N, out_subblock_w):
     return best
 
 
+def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
+    """Smallest width >= n whose TILE count minimises the prefill matmul's K-pass count.
+
+    A 2D prefill matmul walks its per-core output in ceil(per_core_N / out_block_w) N-blocks and
+    re-traverses K once per block -- re-reading a DRAM-resident in0 each time. MEASURED on N300
+    (M=2048, K=4096, HiFi2 BF16 x BFP8, 8x8 grid) the cost tracks that pass count almost exactly and
+    is NOT explained by the output subblock:
+
+        N=6176 (193 tiles, prime) per_core_N=25 out_block_w=5   5 passes  2631us
+        N=6528 (204 tiles)        per_core_N=26 out_block_w=2  13 passes  4194us  +59%
+        N=6912 (216 tiles)        per_core_N=27 out_block_w=9   3 passes  1906us  -28%
+        N=7168 (224 tiles)        per_core_N=28 out_block_w=4   7 passes  2938us  +12%
+
+    The trap is that out_block_w must be a MULTIPLE of out_subblock_w, so _get_out_subblock_w's greedy
+    "widest subblock" can force a narrow block and MORE passes -- N=7168 gets the ideal 1x4 subblock
+    and is still slower than N=6912's 1x3. A prime tile count (193) is worst of all: its only divisors
+    are 1/5/25, and 25 (one pass) overflows L1.
+
+    So: pad the width until the tile count factors well. Candidates are multiples of grid_size[0] (so
+    per_core_N divides exactly and every column of the grid is used), within max_waste extra tiles.
+    Scored by (passes, waste) -- fewest K passes, then least padding. Returns n unchanged when nothing
+    beats it, so callers can use it unconditionally."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    cols = grid_size[0]
+    n_tiles = math.ceil(n / TILE_SIZE)
+
+    def passes_for(tiles):
+        per_core_N = math.ceil(tiles / cols)
+        sub_w = _get_out_subblock_w(per_core_N, 1)
+        blk_w = _safe_half_out_block_w(per_core_N, sub_w)
+        return math.ceil(per_core_N / blk_w)
+
+    best = (passes_for(n_tiles), 0, n_tiles)
+    for tiles in range(_roundup(n_tiles, cols), int(n_tiles * (1 + max_waste)) + 1, cols):
+        cand = (passes_for(tiles), tiles - n_tiles, tiles)
+        if cand < best:
+            best = cand
+    return best[2] * TILE_SIZE
+
+
 def create_prefill_matmul_program_config(
     m, k, n, grid_size=None, fused_activation=None, tuning=None, out_block_w=None, halve_out_block=False
 ):
@@ -591,7 +632,24 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
     GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives).
+
+    BH-ONLY. Porting this to Wormhole was tried and reverted (N300, 2026-08). It looks like the one CCL
+    fusion that should port, because this op takes an explicit reduce_scatter_core_grid_offset, so WH's
+    8-row grid is expressible as matmul (8,6) on rows 0-5 + RS workers at (0,6) on rows 6-7 — the exact
+    disjoint split build_mmrs_decode_state already uses for the DECODE out-proj. It HANGS anyway: the
+    op never returns and the hang wedges the ethernet cores, after which the next device open fails
+    with "Timed out waiting for ETH heartbeat ... Stuck at 0xaabb0001". Recovery is
+    `tt-topology -l mesh` — note this host's layout is MESH; the tool's default is linear and flashing
+    that breaks device discovery entirely.
+
+    Reproduced twice, so it is not the link count: first at num_links=2, then at num_links=1 after
+    finding that an N300 (1,2) submesh reports get_num_links() == 1 on every axis while the value below
+    is hardcoded to 2 (a P150x4 number). Same symptom both times. Likely the same class of defect as
+    the all-gather fusion (see mlp_gateup_agmm_enabled) — the fused-CCL program factories assume a
+    taller grid than WH has, and a decode config that works at M=1 does not carry to a prefill M that
+    fills the matmul grid. Needs C++ investigation, not a config change. Cost of leaving it off: the
+    two reduce-scatters are ~1,060us + ~995us of an 18,644us single-layer GDN prefill at seq 2048."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)

@@ -80,21 +80,22 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Fold a/b into qkvz → one matmul outputs [qkv|z|a|b] (default when DRAM-sharded)
     fuse_ab = qkvz_sharded
     if fuse_ab:
-        fused = torch.cat(
-            [
-                torch.cat(
-                    [
-                        qkv_re[d * qkv_per : (d + 1) * qkv_per],
-                        z_w[d * z_per : (d + 1) * z_per],
-                        a_w[d * nv_per : (d + 1) * nv_per],
-                        b_w[d * nv_per : (d + 1) * nv_per],
-                    ],
-                    dim=0,
-                )
-                for d in range(tp)
-            ],
-            dim=0,
-        )
+        # Optional trailing zero rows per device so the fused width's TILE COUNT factors well for the
+        # prefill matmul (see gdn_qkvzab_pad_tiles in model_config.py). The pad sits AFTER b, past every
+        # slice offset in _project_qkvzab, so it is never read — it only changes the matmul's N.
+        _pad_rows = getattr(args, "gdn_qkvzab_pad_tiles", 0) * 32
+        _blocks = []
+        for d in range(tp):
+            _parts = [
+                qkv_re[d * qkv_per : (d + 1) * qkv_per],
+                z_w[d * z_per : (d + 1) * z_per],
+                a_w[d * nv_per : (d + 1) * nv_per],
+                b_w[d * nv_per : (d + 1) * nv_per],
+            ]
+            if _pad_rows:
+                _parts.append(torch.zeros(_pad_rows, qkv_re.shape[-1], dtype=qkv_re.dtype))
+            _blocks.append(torch.cat(_parts, dim=0))
+        fused = torch.cat(_blocks, dim=0)
         # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
         # bit-identical on interleaved). Distinct cache suffix.
         _proj1d = getattr(args, "proj_1d_decode", False)
@@ -103,7 +104,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
-            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
+            # Padded and unpadded weights have different shapes, and as_tensor reloads a cache file
+            # as-is — so the pad MUST qualify the cache key or a stale file silently wins.
+            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard") + (f".pad{_pad_rows}" if _pad_rows else "")),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -233,11 +236,22 @@ class TPGatedDeltaNet:
         # iterations, and the accumulated L1 residency makes the conv's L1-pinned CBs clash
         # ("...clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 809856 and
         # static circular buffer region ends at 892160") at B=8 and B=32 — test_gdn_tp_peruser_state
-        # and test_gdn_tp_write_slot_and_remap both fail. act_block_h_override does NOT help (the CB
-        # region end is byte-identical at 32/64), so the fix has to shrink a different CB or unpin the
-        # conv from L1 (Conv2dL1FullSliceConfig); the DRAM-slicing alternative does host reads that
-        # trace capture rejects. Single-sequence prefill (prefill_tp, the profile test) is unaffected
-        # and passes at seq 128/2048. QWEN35_GDN_CONV1D=1 opts in for measurement.
+        # and test_gdn_tp_write_slot_and_remap both fail. Single-sequence prefill (prefill_tp, the
+        # profile test) is unaffected and passes at seq 128/2048. QWEN35_GDN_CONV1D=1 opts in.
+        #
+        # Conv1dConfig knobs tried against the clash, BOTH rejected (N300, 2026-08):
+        #   act_block_h_override=32/64  -> CB region end byte-IDENTICAL (892160), so the dominant CB is
+        #                                  not the activation block.
+        #   config_tensors_in_dram=True -> HANGS the op outright (confirmed on a freshly reset device,
+        #                                  so not a leftover-state artifact) and wedges the ETH cores.
+        # So this is not reachable from Conv1dConfig: the fix has to unpin the conv from L1 (the
+        # slice_config=Conv2dL1FullSliceConfig below), and the DRAM-slicing alternative does host reads
+        # that trace capture rejects. That is a ttnn conv change, i.e. outside this model.
+        #
+        # CAUTION when experimenting here: a mid-flight program failure inside the per-user prefill
+        # loop leaves the CCL fabric inconsistent, so the NEXT process hangs on its first collective and
+        # reports a misleading result. Recover with `tt-topology -l mesh` (this host is MESH; the tool's
+        # default is linear and flashing it breaks device discovery) and test one variant per reset.
         _conv1d_env = os.environ.get("QWEN35_GDN_CONV1D")
         self._gdn_conv1d = tpc.is_blackhole() if _conv1d_env is None else (_conv1d_env == "1")
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
@@ -344,9 +358,15 @@ class TPGatedDeltaNet:
             # collapse to 1. MEASURED: routing this through the subblock-maximizing
             # create_prefill_mlp_matmul_program_config picks 7 columns -> per_core_N=28 -> subblock 1x4,
             # out_block_w=4, and is SLOWER (2,263us): losing 8 of 64 cores costs more than the wider
-            # subblock wins. Keeping the full-grid config. The remaining lead is to make the width a
-            # non-prime tile count (e.g. pad to 224 tiles => per_core_N=28 with all 64 cores), which
-            # trades ~16% more matmul FLOPs and weight bytes for the wider subblock — unmeasured.
+            # subblock wins — which also says this matmul is not actually subblock-limited.
+            # out_block_w is closed too: 25's only divisors are 1/5/25, so _safe_half_out_block_w
+            # already picks the best available (5). Dropping halve_out_block to reach out_block_w=25
+            # (one K pass instead of five) overflows L1 — "circular buffers ... grow to 1683136 B which
+            # is beyond max L1 size of 1499136 B" — which is exactly why halve_out_block exists on WH.
+            # There is no middle value. The only lever left is making the width a non-prime tile count
+            # (pad 193 -> 224 tiles => per_core_N=28, subblock 1x4, out_block_w=4, all 64 cores) at
+            # ~16% more matmul FLOPs; NOT done because the folded width also sizes the DRAM-sharded
+            # weight memcfg, both decode progcfgs and the weight cache key — not a local change.
             self.args.prefill_progcfg,
             self.args.dim,
             decode_out_memory_config=out_memory_config,
