@@ -56,13 +56,13 @@ void register_builtin_realtime_profiler_consumers() {
 RealtimeProfilerService::~RealtimeProfilerService() {
     {
         std::lock_guard lock(topology_mutex_);
-        if (!attached_rings_.empty()) {
+        if (!attached_producers_.empty()) {
             log_warning(
                 tt::LogMetal,
-                "[Real-time profiler] Service destroyed with {} ring(s) still attached; a MeshDevice outlived the "
+                "[Real-time profiler] Service destroyed with {} producer(s) still attached; a MeshDevice outlived the "
                 "MetalContext. Close all devices before teardown.",
-                attached_rings_.size());
-            attached_rings_.clear();
+                attached_producers_.size());
+            attached_producers_.clear();
         }
     }
 
@@ -90,8 +90,8 @@ experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::reg
 
     try {
         auto& registration = it->second;
-        for (const auto& [ring, max_batch_records] : attached_rings_) {
-            registration.readers.emplace_back(ring, ring->make_reader(), max_batch_records);
+        for (ProgramRecordProducer* producer : attached_producers_) {
+            registration.readers.emplace_back(producer, producer->make_reader(), producer->max_batch_records());
         }
         registration.thread =
             std::jthread([this, &registration](std::stop_token stop_token) { run_consumer(stop_token, registration); });
@@ -121,10 +121,10 @@ void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeP
     reap_retired_consumers();
 }
 
-void RealtimeProfilerService::attach_ring(RealtimeProfilerRecordRing& ring, size_t max_batch_records) {
+void RealtimeProfilerService::attach_producer(ProgramRecordProducer& producer) {
     {
         std::lock_guard topology_lock(topology_mutex_);
-        attached_rings_.emplace(&ring, max_batch_records);
+        attached_producers_.insert(&producer);
 
         try {
             for (auto& registration : consumers_ | std::views::values) {
@@ -132,38 +132,40 @@ void RealtimeProfilerService::attach_ring(RealtimeProfilerRecordRing& ring, size
                 if (registration.retired.load(std::memory_order_acquire)) {
                     continue;
                 }
-                registration.readers_to_add.emplace_back(&ring, ring.make_reader(), max_batch_records);
+                registration.readers_to_add.emplace_back(
+                    &producer, producer.make_reader(), producer.max_batch_records());
                 registration.control_pending.store(true, std::memory_order_release);
             }
         } catch (...) {
             for (auto& registration : consumers_ | std::views::values) {
                 std::lock_guard control_lock(registration.control_mutex);
-                std::erase_if(registration.readers_to_add, [&](const RingReader& r) { return r.ring == &ring; });
+                std::erase_if(
+                    registration.readers_to_add, [&](const ProducerReader& r) { return r.producer == &producer; });
             }
-            attached_rings_.erase(&ring);
+            attached_producers_.erase(&producer);
             throw;
         }
     }
     wake_consumers();
 }
 
-void RealtimeProfilerService::detach_ring(RealtimeProfilerRecordRing& ring) {
+void RealtimeProfilerService::detach_producer(ProgramRecordProducer& producer) {
     {
         std::lock_guard topology_lock(topology_mutex_);
-        attached_rings_.erase(&ring);
+        attached_producers_.erase(&producer);
 
         for (auto& registration : consumers_ | std::views::values) {
             std::lock_guard control_lock(registration.control_mutex);
             if (registration.retired.load(std::memory_order_acquire)) {
                 continue;
             }
-            registration.rings_to_drain.push_back(&ring);
+            registration.producers_to_drain.push_back(&producer);
             registration.control_pending.store(true, std::memory_order_release);
         }
     }
 
     wake_consumers();
-    ring.wait_until_no_readers();
+    producer.wait_until_no_readers();
 }
 
 void RealtimeProfilerService::wake_consumers() noexcept {
@@ -173,7 +175,7 @@ void RealtimeProfilerService::wake_consumers() noexcept {
 
 bool RealtimeProfilerService::is_active() const {
     std::lock_guard lock(topology_mutex_);
-    return !attached_rings_.empty();
+    return !attached_producers_.empty();
 }
 
 void RealtimeProfilerService::run_consumer(
@@ -183,8 +185,8 @@ void RealtimeProfilerService::run_consumer(
     tracy::SetThreadName(thread_name.c_str());
 
     std::vector<experimental::ProgramRealtimeRecord> records;
-    std::vector<RingReader> readers_to_add;
-    std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
+    std::vector<ProducerReader> readers_to_add;
+    std::vector<ProgramRecordProducer*> producers_to_drain;
     // Drops noticed on a reader with nothing to deliver, carried until a batch exists to report them on.
     uint64_t pending_dropped = 0;
 
@@ -214,7 +216,7 @@ void RealtimeProfilerService::run_consumer(
             {
                 std::lock_guard control_lock(registration.control_mutex);
                 readers_to_add.swap(registration.readers_to_add);
-                rings_to_drain.swap(registration.rings_to_drain);
+                producers_to_drain.swap(registration.producers_to_drain);
                 retired = registration.retired.load(std::memory_order_acquire);
                 registration.control_pending.store(false, std::memory_order_release);
             }
@@ -227,33 +229,33 @@ void RealtimeProfilerService::run_consumer(
             std::ranges::move(readers_to_add, std::back_inserter(registration.readers));
             readers_to_add.clear();
 
-            for (auto* ring : rings_to_drain) {
-                auto it = std::ranges::find(registration.readers, ring, &RingReader::ring);
+            for (auto* producer : producers_to_drain) {
+                auto it = std::ranges::find(registration.readers, producer, &ProducerReader::producer);
                 if (it != registration.readers.end()) {
                     it->draining = true;
                 }
             }
-            rings_to_drain.clear();
+            producers_to_drain.clear();
         }
 
         bool made_progress = false;
 
         for (auto it = registration.readers.begin(); it != registration.readers.end();) {
-            RingReader& ring_reader = *it;
+            ProducerReader& producer_reader = *it;
 
-            if (records.size() < ring_reader.max_batch_records) {
-                records.resize(ring_reader.max_batch_records);
+            if (records.size() < producer_reader.max_batch_records) {
+                records.resize(producer_reader.max_batch_records);
             }
             const std::span<experimental::ProgramRealtimeRecord> batch =
-                ring_reader.reader.read_batch(std::span(records).first(ring_reader.max_batch_records));
-            const uint64_t dropped_total = ring_reader.reader.dropped();
-            pending_dropped += dropped_total - ring_reader.observed_dropped;
-            ring_reader.observed_dropped = dropped_total;
+                producer_reader.reader.read_batch(std::span(records).first(producer_reader.max_batch_records));
+            const uint64_t dropped_total = producer_reader.reader.dropped();
+            pending_dropped += dropped_total - producer_reader.observed_dropped;
+            producer_reader.observed_dropped = dropped_total;
 
             if (!batch.empty()) {
                 invoke_callback(batch, std::exchange(pending_dropped, 0));
                 made_progress = true;
-            } else if (ring_reader.draining) {
+            } else if (producer_reader.draining) {
                 it = registration.readers.erase(it);
                 made_progress = true;
                 continue;
@@ -315,11 +317,11 @@ void RealtimeProfilerService::destroy_consumer(ConsumerRegistration& registratio
     }
 
     uint64_t dropped = 0;
-    for (const auto& ring_reader : registration.readers) {
-        dropped += ring_reader.reader.dropped();
+    for (const auto& producer_reader : registration.readers) {
+        dropped += producer_reader.reader.dropped();
     }
-    for (const auto& ring_reader : registration.readers_to_add) {
-        dropped += ring_reader.reader.dropped();
+    for (const auto& producer_reader : registration.readers_to_add) {
+        dropped += producer_reader.reader.dropped();
     }
     if (dropped != 0) {
         log_warning(

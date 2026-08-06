@@ -7,10 +7,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -23,8 +23,52 @@ namespace tt::tt_metal {
 
 using RealtimeProfilerRecordRing = BroadcastRing<experimental::ProgramRealtimeRecord>;
 
-// Owner of real-time profiler consumers. Receivers attach independent record rings; each registered
-// consumer gets its own thread draining every attached ring.
+/**
+ * @brief A source of real-time profiler records that consumers can be attached to.
+ *
+ * Consumers attach to a producer rather than to whatever transport the producer publishes through, so the service that
+ * owns them never has to know where records come from. One producer exists per MeshDevice in a normal run; tests
+ * implement this over a bare ring.
+ *
+ * Threading: every method may be called concurrently with the producer publishing, and make_reader() may be called
+ * concurrently from consumer registration. Implementations are responsible for that; the ring-backed ones get it from
+ * the ring.
+ */
+class ProgramRecordProducer {
+public:
+    ProgramRecordProducer() = default;
+    virtual ~ProgramRecordProducer() = default;
+
+    ProgramRecordProducer(const ProgramRecordProducer&) = delete;
+    ProgramRecordProducer& operator=(const ProgramRecordProducer&) = delete;
+    ProgramRecordProducer(ProgramRecordProducer&&) = delete;
+    ProgramRecordProducer& operator=(ProgramRecordProducer&&) = delete;
+
+    /** @brief Most records one callback may be handed at a time from this producer. */
+    [[nodiscard]] virtual size_t max_batch_records() const = 0;
+
+    /** @brief A reader positioned so that it sees exactly the records published after this call. */
+    [[nodiscard]] virtual RealtimeProfilerRecordRing::Reader make_reader() = 0;
+
+    /**
+     * @brief Blocks until every reader made from this producer has been released.
+     *
+     * The producer must have stopped publishing before this is called.
+     */
+    virtual void wait_until_no_readers() = 0;
+
+    /**
+     * @brief Records published so far.
+     *
+     * A reader sees exactly the records published after it was made, so a consumer's accounting is
+     * `received + dropped == num_published_records() - (its value when that consumer's reader was made)`. Comparing one
+     * consumer's total against another's is only valid when both readers were made at the same point in the stream.
+     */
+    [[nodiscard]] virtual uint64_t num_published_records() const = 0;
+};
+
+// Owner of real-time profiler consumers. Producers attach themselves; each registered consumer gets its own thread
+// draining every attached producer.
 class RealtimeProfilerService {
 public:
     RealtimeProfilerService() = default;
@@ -39,9 +83,10 @@ public:
         experimental::ProgramRealtimeProfilerCallback callback);
     void unregister_consumer(experimental::ProgramRealtimeProfilerCallbackHandle handle);
 
-    void attach_ring(RealtimeProfilerRecordRing& ring, size_t max_batch_records);
-    // The ring's writer must be stopped before this call. Blocks until every consumer has drained and released it.
-    void detach_ring(RealtimeProfilerRecordRing& ring);
+    void attach_producer(ProgramRecordProducer& producer);
+    // The producer must have stopped publishing before this call. Blocks until every consumer has drained and released
+    // it. Idempotent.
+    void detach_producer(ProgramRecordProducer& producer);
 
     // Wakes the consumer threads after a receiver publishes records.
     void wake_consumers() noexcept;
@@ -52,12 +97,13 @@ public:
     bool has_consumers() const { return num_consumers_.load(std::memory_order_relaxed) != 0; }
 
 private:
-    struct RingReader {
-        RingReader(RealtimeProfilerRecordRing* ring, RealtimeProfilerRecordRing::Reader reader, size_t max_batch) :
-            ring(ring), reader(std::move(reader)), max_batch_records(max_batch) {}
+    struct ProducerReader {
+        ProducerReader(ProgramRecordProducer* producer, RealtimeProfilerRecordRing::Reader reader, size_t max_batch) :
+            producer(producer), reader(std::move(reader)), max_batch_records(max_batch) {}
 
-        RealtimeProfilerRecordRing* ring;
+        ProgramRecordProducer* producer;
         RealtimeProfilerRecordRing::Reader reader;
+        // Cached rather than asked of the producer per batch, since the drain loop reads it on every pass.
         size_t max_batch_records;
         uint64_t observed_dropped = 0;
         bool draining = false;
@@ -77,7 +123,7 @@ private:
         experimental::ProgramRealtimeProfilerCallbackHandle handle;
         experimental::ProgramRealtimeProfilerCallback callback;
 
-        std::vector<RingReader> readers;
+        std::vector<ProducerReader> readers;
 
         // Set by a callback retiring itself.
         std::atomic<bool> retired{false};
@@ -85,8 +131,8 @@ private:
         // Cross-thread inbox: the hot loop only checks control_pending; control_mutex guards the rest.
         std::atomic<bool> control_pending{false};
         std::mutex control_mutex;
-        std::vector<RingReader> readers_to_add;
-        std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
+        std::vector<ProducerReader> readers_to_add;
+        std::vector<ProgramRecordProducer*> producers_to_drain;
 
         std::jthread thread;
     };
@@ -103,8 +149,8 @@ private:
     inline static thread_local ConsumerRegistration* current_registration_ = nullptr;
 
     mutable std::mutex topology_mutex_;
-    // Batch-size limit per attached ring, so a consumer registering later can build readers for existing rings.
-    std::unordered_map<RealtimeProfilerRecordRing*, size_t> attached_rings_;
+    // So a consumer registering later can build readers for producers that are already attached.
+    std::unordered_set<ProgramRecordProducer*> attached_producers_;
     ConsumerMap consumers_;
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
 

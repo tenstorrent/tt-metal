@@ -9,10 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <span>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -42,9 +40,9 @@ struct RealtimeProfilerCoreL1Addrs {
     uint32_t socket_config = 0;
 };
 
-// Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the record ring, and the receiver
-// thread behind them.
-class RealtimeProfilerReceiver {
+// The record producer for one MeshDevice: owns the per-device sockets, the record ring, and the receiver thread behind
+// them, and publishes what it drains to whatever consumers the service has attached.
+class RealtimeProfilerReceiver : public ProgramRecordProducer {
 public:
     // Null when no local device passed the eligibility gate; a constructed receiver always has devices to drain.
     static std::unique_ptr<RealtimeProfilerReceiver> create(
@@ -59,9 +57,13 @@ public:
     // Idempotent.
     void shutdown();
 
+    size_t max_batch_records() const override;
+    RealtimeProfilerRecordRing::Reader make_reader() override;
+    void wait_until_no_readers() override;
+
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
     uint32_t host_fifo_capacity_pages() const;
-    uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
+    uint64_t num_published_records() const override { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     // Records dropped before publication because their end timestamp preceded their start
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
@@ -88,11 +90,6 @@ private:
         // Records decoded but not yet published, waiting for the anchor that closes the interval they ran in. Their
         // host-facing fields are unset until then.
         std::vector<ProgramRealtimeRecord> staged;
-        // How much the next chord's rate differs from these is the only evidence that the clock moved *within* an
-        // interval, which a chord cannot otherwise see.
-        double last_interval_rate = 0.0;
-        double last_interval_rate_noise = 0.0;
-        std::chrono::nanoseconds last_published_sync_error{};
 
         DeviceState();
         ~DeviceState();

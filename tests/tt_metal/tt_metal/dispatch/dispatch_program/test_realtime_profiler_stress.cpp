@@ -254,24 +254,35 @@ TEST(RealtimeProfilerStress, FittedFrequencyTracksTheSessionAverage) {
     std::mutex mutex;
     std::map<uint32_t, std::vector<Anchor>> anchors_by_chip;
     std::map<uint32_t, double> frequency_by_chip;
-    std::map<uint32_t, int64_t> last_offset;
+    // The mapping is anchored per record, so an offset that changed is no longer a re-anchor and cannot bound how much
+    // is collected; at this record rate that is billions of samples. One per chip per millisecond is far more than a
+    // 60s regression needs.
+    constexpr auto kAnchorSampleInterval = std::chrono::milliseconds(1);
+    std::map<uint32_t, std::chrono::steady_clock::time_point> last_sampled;
     const auto epoch = std::chrono::steady_clock::now();
+    // device_cycle_offset is stated against the steady_clock epoch, which is boot, so it carries the published rate
+    // times the machine's whole uptime. Regressed as-is, a rate that merely re-measures itself by a fraction of a ppm
+    // moves the offset by uptime/window times as much as a real frequency error would -- 191833x on a box up 2.2 days,
+    // and proportionally less on a freshly booted one, so the verdict would track uptime rather than the clock. Moving
+    // the offsets onto an epoch-relative reference leaves the window itself as the only lever arm.
+    const double epoch_host_ns = static_cast<double>(epoch.time_since_epoch().count());
 
     const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
         const auto now = std::chrono::steady_clock::now();
         const std::lock_guard lock(mutex);
         for (const auto& rec : batch.records) {
-            const int64_t offset = rec.clock_sync.device_cycle_offset;
-            const auto [it, inserted] = last_offset.try_emplace(rec.chip_id, offset);
+            const auto [it, inserted] = last_sampled.try_emplace(rec.chip_id, now);
             if (!inserted) {
-                if (it->second == offset) {
+                if (now - it->second < kAnchorSampleInterval) {
                     continue;
                 }
-                it->second = offset;
+                it->second = now;
             }
+            const int64_t offset = rec.clock_sync.device_cycle_offset;
             frequency_by_chip[rec.chip_id] = rec.frequency;
             anchors_by_chip[rec.chip_id].push_back(
-                {static_cast<double>((now - epoch).count()), static_cast<double>(offset)});
+                {static_cast<double>((now - epoch).count()),
+                 static_cast<double>(offset) + rec.frequency * epoch_host_ns});
         }
     });
 
@@ -664,6 +675,11 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const double production_rate = static_cast<double>(rt->num_published_records() - pubs_before) / cal_seconds;
     ASSERT_GT(production_rate, 0.0) << "no records produced during calibration";
     mesh_device->quiesce_devices();
+    // A reader sees only what is published after it is made, so the pipeline has to be empty before the three
+    // registrations below: calibration records still draining would land in whichever readers already existed and make
+    // the cross-consumer totals disagree by however many slipped in between two RegisterProgramRealtimeProfilerCallback
+    // calls. quiesce_devices() stops the devices but does not wait for the profiler to drain.
+    std::this_thread::sleep_for(kPostQuiesceDrain);
 
     constexpr double kBorderlineSustainFraction = 0.95;
     constexpr double kSlowSustainFraction = 0.1;

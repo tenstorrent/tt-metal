@@ -294,7 +294,8 @@ TEST(RealtimeProfilerChordMapping, SecantRecoversTheRateAndPlacesTheAnchorOnTheC
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate);
+    const auto planned =
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0, kNominalRate);
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_NEAR(planned->frequency, kNominalRate, 1e-6);
@@ -309,9 +310,10 @@ TEST(RealtimeProfilerChordMapping, SecantRecoversTheRateAndPlacesTheAnchorOnTheC
 TEST(RealtimeProfilerChordMapping, ChordTooShortToTakeASlopeFromIsRefused) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto barely_later =
-        anchor_at(open.host + RealtimeProfilerClockSync::kSyncInterval / 4, kNominalRate, kProbeBracket);
+        anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 4, kNominalRate, kProbeBracket);
 
-    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, 0.0, 0.0, kNominalRate).has_value());
+    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, std::nullopt, 0.0, 0.0, kNominalRate)
+                     .has_value());
 }
 
 // One probe landing somewhere it could not have been is not evidence that the clock changed by 40%.
@@ -320,7 +322,8 @@ TEST(RealtimeProfilerChordMapping, ImplausibleSlopeIsRefused) {
     auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
     closing.ticks += 50'000;  // a probe that read far more ticks than 100us of this clock can produce
 
-    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate).has_value());
+    EXPECT_FALSE(
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0, kNominalRate).has_value());
 }
 
 // The published error must cover the two placements the chord is pinned by, whatever the clock did between them.
@@ -328,7 +331,8 @@ TEST(RealtimeProfilerChordMapping, ErrorCoversBothEndpointPlacements) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, std::chrono::nanoseconds(400));
     const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, std::chrono::nanoseconds(900));
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate);
+    const auto planned =
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0, kNominalRate);
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_GE(planned->mapping.sync_error, std::chrono::nanoseconds(450));
@@ -339,7 +343,8 @@ TEST(RealtimeProfilerChordMapping, SteadyClockAddsNoCurvature) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, kNominalRate, 0.0, kNominalRate);
+    const auto planned =
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, kNominalRate, 0.0, kNominalRate);
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
@@ -354,7 +359,8 @@ TEST(RealtimeProfilerChordMapping, RateChangeBeyondMeasurementNoiseIsChargedAsCu
     // 3% slower over the previous interval: an order of magnitude past what two 700ns brackets over 100us can fake.
     const double previous_rate = kNominalRate * 0.97;
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, previous_rate, 0.0, kNominalRate);
+    const auto planned =
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, previous_rate, 0.0, kNominalRate);
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_GT(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
@@ -371,9 +377,50 @@ TEST(RealtimeProfilerChordMapping, RateChangeWithinMeasurementNoiseIsNotChargedA
     // 0.5% apart, inside what two 700ns brackets over a 100us span can produce on their own.
     const double previous_rate = kNominalRate * 0.995;
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, previous_rate, 0.0, kNominalRate);
+    const auto planned =
+        RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, previous_rate, 0.0, kNominalRate);
 
     ASSERT_TRUE(planned.has_value());
+    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
+}
+
+// The rate a record is published with is measured across the baseline, not across its own chord: a 100us chord's slope
+// carries thousands of ppm, and every duration a consumer computes divides by it.
+TEST(RealtimeProfilerChordMapping, PublishedRateComesFromTheBaselineNotTheChord) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+    closing.ticks += 540;  // 0.4% of slope noise, well inside what two 700ns brackets over 100us can produce
+    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate, .noise = 0.0005};
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, 0.0, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_NEAR(planned->frequency, kNominalRate, 1e-9);
+    // The chord's own slope is still reported: it is the local rate, so it is what the next interval's curvature term
+    // has to compare against.
+    EXPECT_GT(planned->chord_rate, kNominalRate);
+}
+
+// Publishing a baseline-wide rate must not move where a record lands: each record is anchored to its own placement on
+// the chord, so a rate measured somewhere else costs the record's start nothing at all.
+TEST(RealtimeProfilerChordMapping, RecordLandsOnTheChordWhateverRateIsPublished) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+    // A baseline 1% away from this chord: far more than any real DVFS step, so if placement were carried at the
+    // published rate this would land a record ~500ns off.
+    const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate * 1.01, .noise = 0.0005};
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, 0.0, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    // A record three quarters of the way through the chord.
+    const uint64_t start_ticks = open.ticks + 3 * (closing.ticks - open.ticks) / 4;
+    const int64_t offset = RealtimeProfilerClockSync::device_cycle_offset_for(*planned, start_ticks);
+    const double mapped_host_ns = (static_cast<double>(start_ticks) - static_cast<double>(offset)) / planned->frequency;
+    const double chord_host_ns = static_cast<double>(open.host.time_since_epoch().count()) +
+                                 static_cast<double>(start_ticks - open.ticks) / planned->chord_rate;
+    EXPECT_NEAR(mapped_host_ns, chord_host_ns, 1.0);
+    // And nothing beyond the two placements is charged for it.
     EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
 }
 
@@ -424,12 +471,34 @@ experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uin
     };
 }
 
+// A producer over a bare ring, so the service can be exercised without standing up a receiver and its devices.
+class TestRecordProducer : public ProgramRecordProducer {
+public:
+    TestRecordProducer(size_t capacity, size_t max_batch) : ring_(capacity), max_batch_records_(max_batch) {}
+
+    size_t max_batch_records() const override { return max_batch_records_; }
+    RealtimeProfilerRecordRing::Reader make_reader() override { return ring_.make_reader(); }
+    void wait_until_no_readers() override { ring_.wait_until_no_readers(); }
+    uint64_t num_published_records() const override { return num_published_records_.load(std::memory_order_relaxed); }
+
+    void publish(std::span<const experimental::ProgramRealtimeRecord> records) {
+        ring_.writer().publish_batch(records);
+        num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
+    }
+    void publish(const experimental::ProgramRealtimeRecord& record) { publish({&record, 1}); }
+
+private:
+    RealtimeProfilerRecordRing ring_;
+    size_t max_batch_records_;
+    std::atomic<uint64_t> num_published_records_{0};
+};
+
 // Each consumer gets one delivery thread, and that thread services every attached ring -- what a multi-MeshDevice
 // run depends on to fan records from all meshes into one callback.
 TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing ring_a(16);
-    RealtimeProfilerRecordRing ring_b(16);
+    TestRecordProducer ring_a(16, 8);
+    TestRecordProducer ring_b(16, 8);
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -446,12 +515,12 @@ TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
         cv.notify_all();
     });
 
-    service.attach_ring(ring_a, 8);
-    service.attach_ring(ring_b, 8);
+    service.attach_producer(ring_a);
+    service.attach_producer(ring_b);
     const experimental::ProgramRealtimeRecord records_a[] = {make_service_record(1, 1), make_service_record(2, 1)};
     const experimental::ProgramRealtimeRecord records_b[] = {make_service_record(3, 2), make_service_record(4, 2)};
-    ring_a.writer().publish_batch(records_a);
-    ring_b.writer().publish_batch(records_b);
+    ring_a.publish(records_a);
+    ring_b.publish(records_b);
     service.wake_consumers();
 
     {
@@ -462,16 +531,16 @@ TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
         EXPECT_EQ(callback_threads.size(), 1u) << "a consumer must be served by exactly one delivery thread";
     }
 
-    service.detach_ring(ring_a);
-    service.detach_ring(ring_b);
+    service.detach_producer(ring_a);
+    service.detach_producer(ring_b);
     service.unregister_consumer(handle);
 }
 
 // UnregisterProgramRealtimeProfilerCallback blocks until any in-flight invocation of that callback has returned.
 TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing ring(8);
-    service.attach_ring(ring, 4);
+    TestRecordProducer ring(8, 4);
+    service.attach_producer(ring);
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -484,7 +553,7 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
         cv.wait(lock, [&] { return release_callback; });
     });
 
-    ring.writer().publish(make_service_record(1, 1));
+    ring.publish(make_service_record(1, 1));
     service.wake_consumers();
     {
         std::unique_lock lock(mutex);
@@ -507,16 +576,16 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
     cv.notify_all();
     unregister_thread.join();
     EXPECT_TRUE(unregister_returned.load(std::memory_order_acquire));
-    service.detach_ring(ring);
+    service.detach_producer(ring);
 }
 
 // A reader starts at the ring's current head: a late consumer sees the stream from that point on, not the backlog.
 TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing ring(8);
-    service.attach_ring(ring, 4);
+    TestRecordProducer ring(8, 4);
+    service.attach_producer(ring);
 
-    ring.writer().publish(make_service_record(1, 7));
+    ring.publish(make_service_record(1, 7));
     service.wake_consumers();
 
     std::mutex mutex;
@@ -532,7 +601,7 @@ TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
         cv.notify_all();
     });
 
-    ring.writer().publish(make_service_record(2, 7));
+    ring.publish(make_service_record(2, 7));
     service.wake_consumers();
 
     {
@@ -541,14 +610,14 @@ TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
         EXPECT_EQ(received, (std::vector<uint32_t>{2}));
     }
 
-    service.detach_ring(ring);
+    service.detach_producer(ring);
     service.unregister_consumer(handle);
 }
 
 TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing ring(8);
-    service.attach_ring(ring, 4);
+    TestRecordProducer ring(8, 4);
+    service.attach_producer(ring);
 
     const auto throwing = service.register_consumer(
         [](const ProgramRealtimeRecordBatch&) { throw std::runtime_error("intentional record failure"); });
@@ -564,7 +633,7 @@ TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
         cv.notify_all();
     });
 
-    ring.writer().publish(make_service_record(1, 1));
+    ring.publish(make_service_record(1, 1));
     service.wake_consumers();
 
     {
@@ -572,7 +641,7 @@ TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
         ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return good_count == 1; }));
     }
 
-    service.detach_ring(ring);
+    service.detach_producer(ring);
     service.unregister_consumer(throwing);
     service.unregister_consumer(good);
 }
@@ -580,10 +649,10 @@ TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
 // batch.dropped counts what this consumer lost since its previous batch, not since the session began.
 TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing overflowing_ring(4);
-    RealtimeProfilerRecordRing blocked_ring(4);
-    service.attach_ring(overflowing_ring, 4);
-    service.attach_ring(blocked_ring, 4);
+    TestRecordProducer overflowing_ring(4, 4);
+    TestRecordProducer blocked_ring(4, 4);
+    service.attach_producer(overflowing_ring);
+    service.attach_producer(blocked_ring);
 
     struct BatchResult {
         uint32_t chip_id;
@@ -606,7 +675,7 @@ TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
         cv.notify_all();
     });
 
-    blocked_ring.writer().publish(make_service_record(1, 2));
+    blocked_ring.publish(make_service_record(1, 2));
     service.wake_consumers();
     {
         std::unique_lock lock(mutex);
@@ -614,7 +683,7 @@ TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
     }
 
     for (uint32_t id = 10; id < 22; ++id) {
-        overflowing_ring.writer().publish(make_service_record(id, 1));
+        overflowing_ring.publish(make_service_record(id, 1));
     }
     service.wake_consumers();
     {
@@ -632,27 +701,27 @@ TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
         }));
     }
 
-    service.detach_ring(overflowing_ring);
-    service.detach_ring(blocked_ring);
+    service.detach_producer(overflowing_ring);
+    service.detach_producer(blocked_ring);
     service.unregister_consumer(handle);
 }
 
-// detach_ring is what MeshDevice close goes through: everything already published must be delivered before it
+// detach_producer is what MeshDevice close goes through: everything already published must be delivered before it
 // returns, or closing a device silently truncates its tail of records.
 TEST(RealtimeProfilerSanity, DetachDrainsPublishedRecordsBeforeReturning) {
     RealtimeProfilerService service;
-    RealtimeProfilerRecordRing ring(16);
-    service.attach_ring(ring, 8);
+    TestRecordProducer ring(16, 8);
+    service.attach_producer(ring);
 
     std::atomic<size_t> delivered = 0;
     const auto handle = service.register_consumer(
         [&](const ProgramRealtimeRecordBatch& batch) { delivered.fetch_add(batch.records.size()); });
     for (uint32_t id = 1; id <= 8; ++id) {
-        ring.writer().publish(make_service_record(id, 1));
+        ring.publish(make_service_record(id, 1));
     }
     service.wake_consumers();
 
-    service.detach_ring(ring);
+    service.detach_producer(ring);
     EXPECT_EQ(delivered.load(), 8u);
     service.unregister_consumer(handle);
 }
@@ -663,11 +732,11 @@ TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
     constexpr size_t kRecordsPerRing = 64;
 
     RealtimeProfilerService service;
-    std::vector<std::unique_ptr<RealtimeProfilerRecordRing>> rings;
+    std::vector<std::unique_ptr<TestRecordProducer>> rings;
     rings.reserve(kRingCount);
     for (size_t i = 0; i < kRingCount; ++i) {
-        rings.push_back(std::make_unique<RealtimeProfilerRecordRing>(128));
-        service.attach_ring(*rings.back(), 32);
+        rings.push_back(std::make_unique<TestRecordProducer>(128, 32));
+        service.attach_producer(*rings.back());
     }
 
     std::vector<std::atomic<size_t>> received(kConsumerCount);
@@ -682,7 +751,7 @@ TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
 
     for (size_t ring = 0; ring < kRingCount; ++ring) {
         for (size_t record = 0; record < kRecordsPerRing; ++record) {
-            rings[ring]->writer().publish(make_service_record(
+            rings[ring]->publish(make_service_record(
                 static_cast<uint32_t>(ring * kRecordsPerRing + record), static_cast<uint32_t>(ring)));
         }
     }
@@ -702,7 +771,7 @@ TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
     }
 
     for (auto& ring : rings) {
-        service.detach_ring(*ring);
+        service.detach_producer(*ring);
     }
     for (auto handle : handles) {
         service.unregister_consumer(handle);
@@ -763,7 +832,7 @@ TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     constexpr uint32_t kIterations = 300;
     for (uint32_t i = 0; i < kIterations; ++i) {
         enqueue_sanity_program(mesh_device_, /*runtime_id=*/1, all_cores());
-        std::this_thread::sleep_for(RealtimeProfilerClockSync::kSyncInterval);
+        std::this_thread::sleep_for(RealtimeProfilerClockSync::sync_interval());
     }
     quiesce_and_wait_for([&] { return collector.records().size() >= kIterations; });
     collector.stop();

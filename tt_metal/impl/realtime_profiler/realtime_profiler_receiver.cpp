@@ -96,6 +96,11 @@ constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 // contention; only a device that answers none of them has actually stopped serving its counter.
 constexpr uint32_t kResyncFailuresBeforeStalled = 16;
 
+// Records a device may hold staged, waiting for the probe that closes the interval they ran in. Fixed and preallocated:
+// the drain thread must never touch the allocator, and one interval of records is two orders of magnitude below this,
+// so reaching it means the drain has stalled -- at which point the D2H FIFO is the elastic buffer, not this.
+constexpr size_t kStagedCapacityRecords = 8192;
+
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
 constexpr size_t kMaxConsumerBatchCap = 1u << 20;  // hard ceiling on the above
@@ -431,7 +436,7 @@ void RealtimeProfilerReceiver::sync_device(DeviceState& dev_state, std::chrono::
     if (now < dev_state.next_poll_at) {
         return;
     }
-    constexpr auto interval = RealtimeProfilerClockSync::kSyncInterval;
+    const auto interval = RealtimeProfilerClockSync::sync_interval();
     // Advanced from the scheduled time, not from `now`, so a device keeps its staggered phase; scheduling off `now`
     // would let every device converge onto whichever pass ran late and put all the blocking reads in one drain pass.
     dev_state.next_poll_at += interval;
@@ -453,9 +458,11 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     if (last_sync_cost_report_ == std::chrono::steady_clock::time_point{}) {
         last_sync_cost_report_ = now;
         for (const auto& dev_state : devices_) {
-            sync_cost_at_last_report_.resyncs += dev_state.clock_sync->cost().resyncs;
-            sync_cost_at_last_report_.clock_reads += dev_state.clock_sync->cost().clock_reads;
-            sync_cost_at_last_report_.busy += dev_state.clock_sync->cost().busy;
+            const auto cost = dev_state.clock_sync->cost();
+            sync_cost_at_last_report_.resyncs += cost.resyncs;
+            sync_cost_at_last_report_.clock_reads += cost.clock_reads;
+            sync_cost_at_last_report_.dropped_probes += cost.dropped_probes;
+            sync_cost_at_last_report_.busy += cost.busy;
         }
         return;
     }
@@ -468,10 +475,12 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         const auto cost = dev_state.clock_sync->cost();
         total.resyncs += cost.resyncs;
         total.clock_reads += cost.clock_reads;
+        total.dropped_probes += cost.dropped_probes;
         total.busy += cost.busy;
     }
     const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
     const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
+    const uint64_t dropped_probes = total.dropped_probes - sync_cost_at_last_report_.dropped_probes;
     const auto busy = total.busy - sync_cost_at_last_report_.busy;
     const auto window = now - last_sync_cost_report_;
     sync_cost_at_last_report_ = total;
@@ -483,12 +492,13 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.2f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
+        "{} probe(s) dropped, {:.2f}us mean per resync, {:.2f}% of the receiver thread",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
         resyncs,
         reads,
         static_cast<double>(reads) / static_cast<double>(resyncs),
+        dropped_probes,
         std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
         100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count());
 }
@@ -581,12 +591,7 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
             break;
         }
         const auto& [open, closing] = *bracketing;
-        const auto chord = RealtimeProfilerClockSync::plan_chord_mapping(
-            open,
-            closing,
-            dev_state.last_interval_rate,
-            dev_state.last_interval_rate_noise,
-            dev_state.clock_sync->frequency());
+        const auto chord = dev_state.clock_sync->close_interval(open, closing);
         if (!chord.has_value()) {
             break;
         }
@@ -595,13 +600,10 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
         while (ready < dev_state.staged.size() && dev_state.staged[ready].end_timestamp <= closing.ticks) {
             dev_state.staged[ready].frequency = chord->frequency;
             dev_state.staged[ready].clock_sync = chord->mapping;
+            dev_state.staged[ready].clock_sync.device_cycle_offset =
+                RealtimeProfilerClockSync::device_cycle_offset_for(*chord, dev_state.staged[ready].start_timestamp);
             ++ready;
         }
-
-        dev_state.last_interval_rate = chord->frequency;
-        dev_state.last_interval_rate_noise = chord->rate_noise;
-        dev_state.last_published_sync_error = chord->mapping.sync_error;
-        dev_state.clock_sync->adopt_rate(chord->frequency);
     }
 
     // Retired even when nothing published: probes accrue whether or not records drain.
@@ -638,16 +640,28 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
     bring_up_device_clocks();
+    // Resized before being cleared, not just reserved: the pages have to be touched here, because a first-touch fault
+    // on the drain thread waits on mmap_lock the same way an allocation does.
+    for (DeviceState& dev_state : devices_) {
+        dev_state.staged.resize(kStagedCapacityRecords);
+        dev_state.staged.clear();
+    }
     stagger_sync_phases();
-    realtime_profiler_service_->attach_ring(ring_, consumer_batch_records_for(devices_.size()));
+    realtime_profiler_service_->attach_producer(*this);
 
     try {
         receiver_thread_ = std::thread(&RealtimeProfilerReceiver::run, this);
     } catch (...) {
-        realtime_profiler_service_->detach_ring(ring_);
+        realtime_profiler_service_->detach_producer(*this);
         throw;
     }
 }
+
+size_t RealtimeProfilerReceiver::max_batch_records() const { return consumer_batch_records_for(devices_.size()); }
+
+RealtimeProfilerRecordRing::Reader RealtimeProfilerReceiver::make_reader() { return ring_.make_reader(); }
+
+void RealtimeProfilerReceiver::wait_until_no_readers() { ring_.wait_until_no_readers(); }
 
 std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::initialize_devices(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id) {
@@ -816,7 +830,7 @@ void RealtimeProfilerReceiver::bring_up_device_clocks() {
 void RealtimeProfilerReceiver::stagger_sync_phases() {
     const auto now = std::chrono::steady_clock::now();
     for (size_t i = 0; i < devices_.size(); i++) {
-        devices_[i].next_poll_at = now + (RealtimeProfilerClockSync::kSyncInterval * static_cast<int64_t>(i)) /
+        devices_[i].next_poll_at = now + (RealtimeProfilerClockSync::sync_interval() * static_cast<int64_t>(i)) /
                                              static_cast<int64_t>(devices_.size());
     }
 }
@@ -839,7 +853,14 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
     if (available == 0) {
         return 0;
     }
-    const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
+    // One page decodes to at most one record, so bounding the read by the staging headroom is what keeps `staged` from
+    // ever growing past the capacity it was given. Pages left behind wait in the FIFO, which is sized for exactly that.
+    const size_t staged_headroom = kStagedCapacityRecords - dev_state.staged.size();
+    if (staged_headroom == 0) {
+        return 0;
+    }
+    const uint32_t num_pages_to_read =
+        std::min({available, kMaxSocketPagesPerRead, static_cast<uint32_t>(staged_headroom)});
     dev_state.socket->read(page_buf.data(), num_pages_to_read);
     stage_pages(
         dev_state, now, std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words));
@@ -881,10 +902,12 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
             fifo_pages_window_max_ = 0;
             std::chrono::nanoseconds worst_sync_error{};
             for (const auto& dev_state : devices_) {
-                worst_sync_error = std::max(worst_sync_error, dev_state.last_published_sync_error);
+                worst_sync_error = std::max(worst_sync_error, dev_state.clock_sync->last_published_sync_error());
             }
-            TracyPlot(
-                "RT profiler sync error (us)", (std::chrono::duration<double, std::micro>{worst_sync_error}.count()));
+            TTTracyPlotD(
+                RT_PROFILER,
+                "RT profiler sync error (us)",
+                (std::chrono::duration<double, std::micro>{worst_sync_error}.count()));
             last_fifo_plot = now;
         }
 
@@ -1002,8 +1025,8 @@ void RealtimeProfilerReceiver::shutdown() {
         receiver_thread_.join();
     }
 
-    // detach_ring is idempotent, so a second shutdown() is harmless.
-    realtime_profiler_service_->detach_ring(ring_);
+    // detach_producer is idempotent, so a second shutdown() is harmless.
+    realtime_profiler_service_->detach_producer(*this);
 
     for (const auto& dev_state : devices_) {
         const uint32_t full_wait_addr =

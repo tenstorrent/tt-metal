@@ -29,6 +29,7 @@
 
 #include "context/metal_context.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/common/env_lib.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
@@ -67,6 +68,12 @@ FrequencyCache& frequency_cache() {
 }
 
 }  // namespace
+
+std::chrono::nanoseconds RealtimeProfilerClockSync::sync_interval() {
+    static const std::chrono::nanoseconds interval =
+        std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 100));
+    return interval;
+}
 
 void RealtimeProfilerClockModel::seed_frequency(double frequency) {
     TT_FATAL(frequency > 0.0, "Real-time profiler clock model needs a positive seed frequency, got {}", frequency);
@@ -208,57 +215,97 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
 }
 
 void RealtimeProfilerClockSync::retire_probes_before(uint64_t ticks) {
+    if (probes_begin_ == probes_end_) {
+        return;
+    }
+    // Retained for whichever of the two reasons still holds: a record may need the probe as a near side, or the
+    // published rate is still measured across it. Without the second condition the baseline collapses back to a single
+    // chord the moment records drain, which is most of the time.
+    const auto baseline_starts_after = probe_at(probes_end_ - 1).host - kRateBaseline;
     // Two probes are kept preceding `ticks`, not one: a near side has to be far enough from the far side to take a
     // slope from, and a single retained probe cannot span anything.
-    while (probes_.size() > 3 && probes_[2].ticks <= ticks) {
-        probes_.pop_front();
+    while (probes_end_ - probes_begin_ > 3 && probe_at(probes_begin_ + 2).ticks <= ticks &&
+           probe_at(probes_begin_).host < baseline_starts_after) {
+        ++probes_begin_;
     }
+}
+
+std::optional<RealtimeProfilerClockSync::BaselineRate> RealtimeProfilerClockSync::baseline_rate() const {
+    if (probes_end_ - probes_begin_ < 2) {
+        return std::nullopt;
+    }
+    const Anchor& oldest = probe_at(probes_begin_);
+    const Anchor& newest = probe_at(probes_end_ - 1);
+    if (newest.ticks <= oldest.ticks || newest.host <= oldest.host) {
+        return std::nullopt;
+    }
+    const double span_ns =
+        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(newest.host - oldest.host).count());
+    // A baseline this narrow is no tighter than the chord it exists to improve on, so the chord's own slope stands.
+    if (newest.host - oldest.host < kRateBaseline / 4) {
+        return std::nullopt;
+    }
+    return BaselineRate{
+        .rate = static_cast<double>(newest.ticks - oldest.ticks) / span_ns,
+        .noise = static_cast<double>((oldest.bracket + newest.bracket).count()) / span_ns,
+    };
 }
 
 std::optional<std::pair<RealtimeProfilerClockSync::Anchor, RealtimeProfilerClockSync::Anchor>>
 RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_ticks) const {
-    if (probes_.size() < 2) {
+    if (probes_end_ - probes_begin_ < 2) {
         return std::nullopt;
     }
     // Probes are recorded in order, so both ends are found by bisection: the retained span grows with the backlog, and
     // scanning it per record is what turns a backlog into a stall.
-    const auto by_ticks = [](const Anchor& a, uint64_t ticks) { return a.ticks < ticks; };
+    const auto first_at_or_past = [this](uint64_t lo, uint64_t hi, uint64_t ticks) {
+        while (lo < hi) {
+            const uint64_t mid = lo + (hi - lo) / 2;
+            if (probe_at(mid).ticks < ticks) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    };
 
     // Far side: the oldest probe that still reads past the record, which keeps the chord as short as it can be.
-    const auto close_it = std::lower_bound(probes_.begin(), probes_.end(), end_ticks, by_ticks);
-    if (close_it == probes_.end()) {
+    uint64_t close_index = first_at_or_past(probes_begin_, probes_end_, end_ticks);
+    if (close_index == probes_end_) {
         // No probe has read past this record yet. It waits, which is the one thing worth waiting for.
         return std::nullopt;
     }
-    size_t close_index = static_cast<size_t>(close_it - probes_.begin());
-    if (close_index == 0) {
+    if (close_index == probes_begin_) {
         // The record predates everything retained; the two oldest are the closest thing to a chord around it.
-        close_index = 1;
+        close_index = probes_begin_ + 1;
     }
 
     // Near side: the newest probe at or before the record that is also far enough from the far side to take a slope
     // from. The span requirement is applied here so a pair is never offered that plan_chord_mapping would refuse.
-    const Anchor& close_anchor = probes_[close_index];
-    const auto start_it = std::upper_bound(
-        probes_.begin(), probes_.begin() + close_index, start_ticks, [](uint64_t ticks, const Anchor& a) {
-            return ticks < a.ticks;
-        });
-    size_t open_index = 0;
-    for (size_t i = static_cast<size_t>(start_it - probes_.begin()); i-- > 0;) {
-        if (close_anchor.host - probes_[i].host >= kSyncInterval / 2) {
+    const Anchor& close_anchor = probe_at(close_index);
+    const uint64_t start_index = first_at_or_past(probes_begin_, close_index, start_ticks + 1);
+    uint64_t open_index = probes_begin_;
+    for (uint64_t i = start_index; i-- > probes_begin_;) {
+        if (close_anchor.host - probe_at(i).host >= sync_interval() / 2) {
             open_index = i;
             break;
         }
     }
-    return std::make_pair(probes_[open_index], close_anchor);
+    return std::make_pair(probe_at(open_index), close_anchor);
 }
 
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::plan_chord_mapping(
-    const Anchor& open, const Anchor& closing, double previous_rate, double previous_rate_noise, double sanity_rate) {
+    const Anchor& open,
+    const Anchor& closing,
+    const std::optional<BaselineRate>& baseline,
+    double previous_rate,
+    double previous_rate_noise,
+    double sanity_rate) {
     // A chord much shorter than the interval asked for places records inside it just fine, but its slope is uncertain
     // by (both brackets)/span and that slope is published as `frequency`. A consumer evaluating the mapping away from
     // the record would then see slope_noise * distance, which is how a few-us chord becomes microseconds of error.
-    if (closing.host <= open.host || closing.ticks <= open.ticks || closing.host - open.host < kSyncInterval / 2) {
+    if (closing.host <= open.host || closing.ticks <= open.ticks || closing.host - open.host < sync_interval() / 2) {
         return std::nullopt;
     }
     const double span_ns =
@@ -282,16 +329,43 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
         curvature = std::chrono::nanoseconds(static_cast<int64_t>(span_ns * attributable / 2.0));
     }
 
-    const double closing_host_ns = static_cast<double>(closing.host.time_since_epoch().count());
+    // The rate published to consumers is the baseline's, not this chord's: a chord this narrow measures its slope to
+    // only a few thousand ppm, and every duration a consumer computes divides by it. Placement is unaffected because
+    // each record is anchored to where this chord puts it -- see device_cycle_offset_for.
+    double published_rate = rate;
+    double published_rate_noise = rate_noise;
+    if (baseline.has_value() && baseline->rate > 0.0) {
+        published_rate = baseline->rate;
+        published_rate_noise = baseline->noise;
+    }
+
     return ChordMapping{
         .mapping =
             experimental::ProgramRealtimeClockSync{
-                .device_cycle_offset = std::llround(static_cast<double>(closing.ticks) - rate * closing_host_ns),
+                .device_cycle_offset = 0,  // per record
                 .sync_error = interpolation_error(open, closing) + curvature,
             },
-        .frequency = rate,
-        .rate_noise = rate_noise,
+        .frequency = published_rate,
+        .rate_noise = published_rate_noise,
+        .chord_rate = rate,
+        .chord_rate_noise = rate_noise,
+        .open_ticks = open.ticks,
+        .open_host_ns = static_cast<double>(open.host.time_since_epoch().count()),
+        .inv_chord_rate = 1.0 / rate,
     };
+}
+
+std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::close_interval(
+    const Anchor& open, const Anchor& closing) {
+    auto chord = plan_chord_mapping(open, closing, baseline_rate(), previous_rate_, previous_rate_noise_, frequency());
+    if (!chord.has_value()) {
+        return std::nullopt;
+    }
+    previous_rate_ = chord->chord_rate;
+    previous_rate_noise_ = chord->chord_rate_noise;
+    last_published_sync_error_ = chord->mapping.sync_error;
+    model_.adopt_rate(chord->frequency);
+    return chord;
 }
 
 std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
@@ -513,7 +587,15 @@ bool RealtimeProfilerClockSync::resync() {
         cost_.busy += std::chrono::steady_clock::now() - started_at;
         return false;
     }
-    probes_.push_back(Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket});
+    if (probes_end_ - probes_begin_ == kProbeHistoryCapacity) {
+        // Anything still waiting on the oldest probe has waited a whole history's worth of intervals, far past any
+        // latency this is useful at, and the newest probe is the one that closes intervals -- so the oldest goes.
+        ++probes_begin_;
+        ++cost_.dropped_probes;
+    }
+    probe_history_[probes_end_ % kProbeHistoryCapacity] =
+        Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket};
+    ++probes_end_;
     cost_.busy += std::chrono::steady_clock::now() - started_at;
     return true;
 }

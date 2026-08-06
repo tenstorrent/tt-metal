@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <span>
@@ -74,12 +74,22 @@ public:
     // adopted or a chord is sanity-checked, so one bad pair of reads cannot mismap the records that follow.
     static constexpr double kRateClampFraction = 0.10;
 
-    // The one tunable in the sync path: how often a probe is taken. Every probe closes the interval its records ran
-    // in, so this single number sets all three things that trade against each other -- delivery latency (a record
-    // waits at most this long to be published), interpolation error (a DVFS step inside an interval costs the records
-    // in it up to rate_change * interval / 4), and cost (one blocking clock read per device per interval, ~0.7us of
-    // PCIe stall). Raising it is cheaper and slower in equal measure.
-    static constexpr auto kSyncInterval = std::chrono::microseconds(100);
+    // How often a probe is taken, per device. Every probe closes the interval its records ran in, so this one number
+    // sets delivery latency (a record waits at most this long to be published), the interpolation error a DVFS step
+    // inside an interval leaves (up to rate_change * interval / 4), and cost -- one blocking PCIe read per device per
+    // interval, measured at 891ns, so 32 devices at 100us is a third of a core.
+    //
+    // AICLK only moves when the ARC firmware's DVFS loop runs, which is a 1ms timer (dvfs.c:DVFSChange in
+    // tt-zephyr-platforms), so probes spaced far below that re-measure a clock that provably cannot have changed.
+    // Overridable via TT_RT_PROFILER_SYNC_INTERVAL_US to sweep this against a part's actual throttling behaviour.
+    static std::chrono::nanoseconds sync_interval();
+
+    // How wide a baseline the rate a record is published with is measured across. A chord's slope is uncertain by
+    // (both brackets)/span, so the ~100us chord a record sits in carries a few thousand ppm -- measured 600ppm rms and
+    // 3800ppm p1-p99 on an 8-chip mesh -- and that lands on every duration a consumer divides out. The same probes
+    // spanning 4ms give ~500ppm, which is still an order of magnitude tighter than the ~5200ppm AICLK steps the rate
+    // has to keep tracking, so widening it further would start smoothing over real DVFS instead of noise.
+    static constexpr auto kRateBaseline = std::chrono::milliseconds(4);
 
     // Ranking a few reads and keeping the tightest keeps the anchor's settling error near the read floor rather
     // than whatever the link was doing at the time: on a 32-chip mesh a lone read brackets 11-36us against
@@ -91,6 +101,9 @@ public:
     struct Cost {
         uint64_t resyncs = 0;
         uint64_t clock_reads = 0;
+        // Probes discarded because the history was full, i.e. records had been waiting on its oldest entry for the
+        // whole history.
+        uint64_t dropped_probes = 0;
         std::chrono::nanoseconds busy{};
     };
 
@@ -123,22 +136,64 @@ public:
     // a probe is kept only while some record might still need it as a near side.
     void retire_probes_before(uint64_t ticks);
 
-    // What a closed interval publishes its records with.
+    // A rate measured across the whole retained history rather than across one chord.
+    struct BaselineRate {
+        double rate = 0.0;
+        // Uncertainty in `rate`, as a fraction: the two probes' brackets over the span they were measured across.
+        double noise = 0.0;
+    };
+
+    // The rate across the retained probe history, or nullopt while it is too narrow to beat a single chord. Receiver
+    // thread, like the rest of the probe history.
+    [[nodiscard]] std::optional<BaselineRate> baseline_rate() const;
+
+    // What a closed interval publishes its records with. `mapping.device_cycle_offset` is per record, so it is left for
+    // device_cycle_offset_for; everything else is shared by every record the chord covers.
     struct ChordMapping {
         experimental::ProgramRealtimeClockSync mapping;
+        // Measured across kRateBaseline, not across this chord.
         double frequency = 0.0;
-        // Uncertainty in `frequency`, as a fraction: the two probes' brackets over the span they were measured across.
+        // Uncertainty in `frequency`, as a fraction.
         double rate_noise = 0.0;
+        // This interval's own slope. Published to nobody: it is the local rate, so it is what the next interval's
+        // curvature term has to be compared against, and a baseline rate would have smoothed the step away.
+        double chord_rate = 0.0;
+        double chord_rate_noise = 0.0;
+        // Enough to place a timestamp on the chord: its near anchor, and the reciprocal slope, inverted once here
+        // because the alternative is a division per record on the drain thread.
+        uint64_t open_ticks = 0;
+        double open_host_ns = 0.0;
+        double inv_chord_rate = 0.0;
     };
+
+    // The offset that restates a record's own interpolated placement in terms of the published `frequency`. Anchoring
+    // per record rather than once per chord is what keeps a baseline-wide rate from costing anything: the record's
+    // start lands exactly where the chord puts it, and only its duration -- microseconds, not the chord's span -- is
+    // carried at a rate that may differ from the local one.
+    [[nodiscard]] static int64_t device_cycle_offset_for(const ChordMapping& chord, uint64_t start_ticks) {
+        const double host_ns =
+            chord.open_host_ns +
+            (static_cast<double>(start_ticks) - static_cast<double>(chord.open_ticks)) * chord.inv_chord_rate;
+        return std::llround(static_cast<double>(start_ticks) - chord.frequency * host_ns);
+    }
 
     // Chooses what a closed interval publishes with, given its two probes and the previous interval's slope, or
     // nullopt when the pair cannot be taken as a chord at all. Pure: no device, no clock, no state.
     [[nodiscard]] static std::optional<ChordMapping> plan_chord_mapping(
         const Anchor& open,
         const Anchor& closing,
+        const std::optional<BaselineRate>& baseline,
         double previous_rate,
         double previous_rate_noise,
         double sanity_rate);
+
+    // plan_chord_mapping against this object's own baseline, previous interval and measured rate, retaining what the
+    // next interval will be compared against. Nullopt leaves all of it untouched, so a pair that cannot be taken as a
+    // chord does not disturb the interval before it.
+    [[nodiscard]] std::optional<ChordMapping> close_interval(const Anchor& open, const Anchor& closing);
+
+    // sync_error of the last interval this closed, which is the bound currently standing for this device.
+    [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return last_published_sync_error_; }
 
     // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
     // it inherits how well those points are placed. A clock that moved within the interval adds to this; see the
@@ -148,8 +203,6 @@ public:
     }
 
     [[nodiscard]] Cost cost() const { return cost_; }
-
-    void adopt_rate(double rate) { model_.adopt_rate(rate); }
 
 private:
     // False when there is no usable cache entry, or the probe failed and a full fit is needed.
@@ -177,7 +230,25 @@ private:
     uint32_t last_clock_lo_ = 0;
     std::chrono::steady_clock::time_point last_probe_at_;
     Cost cost_;
-    std::deque<Anchor> probes_;
+
+    // Retention is already bounded -- a probe is kept only while a staged record might still need it as a near side, or
+    // while the published rate is measured across it -- so the history is a preallocated ring, not a deque. A deque
+    // puts a block malloc/free on the drain thread every few probes, and this thread must never touch the allocator:
+    // glibc hands large blocks back with munmap, which takes mmap_lock for write and stalls every other thread in the
+    // process, so an allocation here couples the drain loop to whatever every consumer thread is doing.
+    static constexpr size_t kProbeHistoryCapacity = 4096;
+    std::array<Anchor, kProbeHistoryCapacity> probe_history_{};
+    uint64_t probes_begin_ = 0;
+    uint64_t probes_end_ = 0;
+
+    [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
+
+    // The interval this last closed. Only the difference between consecutive intervals' slopes says the clock moved
+    // *within* one, so this is what the curvature term is measured against.
+    double previous_rate_ = 0.0;
+    double previous_rate_noise_ = 0.0;
+    std::chrono::nanoseconds last_published_sync_error_{};
+
     double wrap_period_frequency_ = 0.0;
     std::chrono::nanoseconds wrap_period_{};
     // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
