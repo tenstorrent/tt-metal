@@ -4,7 +4,14 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
-from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
+from .layers import (
+    BatchedLinearDecode,
+    DeepSeekV4RMSNorm,
+    Linear,
+    LinearDecode,
+    _rms_norm_unweighted,
+    make_shared_decode_gcb,
+)
 from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -613,6 +620,55 @@ _COMPRESSORS = {
 }
 
 
+# The four decode projections, keyed in the order :meth:`DeepSeekV4Attention.decode` calls
+# them. That order is load-bearing under the prefetcher: projections sharing a GCB share a
+# single FIFO, so their weights must be queued in the order the matmuls pop them (see
+# :meth:`DeepSeekV4Attention.prefetch_weights`). All four want 64 B cores, which is what makes
+# them candidates to share a receiver set at all. Identical for every layer, which is what lets
+# one set of buffers serve a whole model.
+_DECODE_PROJ_LAYOUTS = {
+    "q_a_proj": {"K": 4096, "N": 1024, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
+    "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
+    "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
+    "o_b_proj": {"K": 8192, "N": 4096},
+}
+
+# q_b_proj and o_b_proj have byte-identical slabs, so they can share one GCB. q_a_proj and
+# kv_proj are much smaller and each take their own, because a GCB whose page size changes
+# between transfers hangs (see ``make_shared_decode_gcb``).
+_DECODE_PROJ_GCB_GROUPS = (("q_b_proj", "o_b_proj"), ("q_a_proj",), ("kv_proj",))
+
+
+def make_attention_prefetch_buffers(
+    device: ttnn.MeshDevice, weight_dtype: ttnn.DataType, num_prefetch_slabs: int = 1
+) -> dict:
+    """The GCBs attention blocks prefetch their projection weights through.
+
+    Returns a ``{projection name: GlobalCircularBuffer}`` mapping to hand to
+    :class:`DeepSeekV4Attention` as ``prefetch_buffers``. Three buffers back the four
+    projections, since two of them have matching slab sizes and can share.
+
+    Build this **once per device and pass it to every layer on that device**. A GCB is a
+    permanent L1 allocation, so per-layer buffers do not scale: at bf4 one block's worth is
+    ~342 KB per receiver core, which a 43-layer model would multiply well past L1. Every
+    layer has the same projection shapes, so one set serves them all.
+
+    Sharing across layers extends the FIFO ordering contract across them too: on each buffer
+    the weights must be queued in the order the matmuls consume them, which for a model
+    stepping layer by layer means layer order. Queueing layer ``i+1``'s weights while layer
+    ``i`` computes is fine and is the point; queueing them out of order is not, and yields
+    wrong results rather than an error.
+    """
+    buffers = {}
+    for group in _DECODE_PROJ_GCB_GROUPS:
+        global_cb = make_shared_decode_gcb(
+            device, [_DECODE_PROJ_LAYOUTS[name] for name in group], weight_dtype, num_slabs=num_prefetch_slabs
+        )
+        for name in group:
+            buffers[name] = global_cb
+    return buffers
+
+
 class DeepSeekV4Attention(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Attention`` (decode only, running KV cache).
 
@@ -622,6 +678,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     consume pre-built RoPE tables (see :func:`make_rope_table`); these are inputs
     because the rotary embedding is owned by the surrounding model in the
     reference, not by the attention block.
+
+    ``use_prefetcher=True`` switches the four decode projections (q_a, q_b, kv, o_b) onto
+    DRISC-prefetched weights: each keeps its weight DRAM ND-sharded and has the tensor
+    prefetcher push it into the matmul's in1 buffer, instead of copying DRAM -> L1 before
+    every call. Two things come with it:
+
+    * The caller must open a prefetcher session around the decode steps
+      (``ttnn.experimental.start_tensor_prefetcher`` / ``stop_tensor_prefetcher``, with a
+      ``wait_for_cq_on_tensor_prefetcher`` after the weights are written), because one
+      session should span a whole model step rather than a single block. Check
+      ``ttnn.experimental.is_tensor_prefetcher_supported(device)`` first.
+    * A GCB is a permanent L1 allocation, not a transient staging copy. Pass
+      ``prefetch_buffers`` from :func:`make_attention_prefetch_buffers` so one set is shared
+      by every layer on the device: left to build its own, each block costs ~342 KB per
+      receiver core, which does not scale past a handful of layers.
     """
 
     def __init__(
@@ -632,7 +703,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        num_prefetch_slabs: int = 1,
+        prefetch_buffers: Optional[dict] = None,
     ):
+        self.use_prefetcher = use_prefetcher
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
@@ -647,34 +722,27 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache = _as_cache(cache)
         print(f"weight_dtype: {weight_dtype}")
 
-        self.o_b_proj = LinearDecode(
-            weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype, K=8192, N=4096
-        )
-        self.kv_proj = LinearDecode(
-            weights["kv_proj.weight"],
-            device,
-            cache.file("kv_proj"),
-            dtype=weight_dtype,
-            partial_width_sharded=True,
-            k_blocks=4,
-            n_blocks=16,
-            N=512,
-            K=4096,
-        )
-        self.q_b_proj = LinearDecode(
-            weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype, n_blocks=64, K=1024, N=32768
-        )
-        self.q_a_proj = LinearDecode(
-            weights["q_a_proj.weight"],
-            device,
-            cache.file("q_a_proj"),
-            dtype=weight_dtype,
-            partial_width_sharded=True,
-            k_blocks=2,
-            n_blocks=32,
-            K=4096,
-            N=1024,
-        )
+        if use_prefetcher and prefetch_buffers is None:
+            prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs)
+
+        def projection(name):
+            prefetch = {"use_prefetcher": use_prefetcher}
+            if use_prefetcher:
+                prefetch["global_cb"] = prefetch_buffers[name]
+            return LinearDecode(
+                weights[f"{name}.weight"],
+                device,
+                cache.file(name),
+                dtype=weight_dtype,
+                **_DECODE_PROJ_LAYOUTS[name],
+                **prefetch,
+            )
+
+        self.q_a_proj = projection("q_a_proj")
+        self.q_b_proj = projection("q_b_proj")
+        self.kv_proj = projection("kv_proj")
+        self.o_b_proj = projection("o_b_proj")
+        self._prefetch_order = list(_DECODE_PROJ_LAYOUTS)
         # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
         # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
         # self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
@@ -746,10 +814,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        # self.o_b_proj.fetch_weights()
-        self.kv_proj.fetch_weights()
-        self.q_b_proj.fetch_weights()
-        self.q_a_proj.fetch_weights()
+        """Stage this block's projection weights ahead of the :meth:`decode` that uses them.
+
+        On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_b_proj
+        is left out because its [8192, 4096] weight does not fit alongside the others.
+
+        On the prefetcher path it instead queues the DRISC transfers, which allocate nothing
+        (the shared GCB was sized at construction) and run off the command queue, so every
+        projection is hoisted -- o_b_proj included. Requires an open prefetcher session (see
+        the class docstring), and every queued request must be consumed by a matching
+        ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
+
+        The four share one GCB, so they are queued in ``decode``'s call order. Nothing checks
+        this: a projection whose matmul runs out of turn pops its own page size off the head of
+        another weight's slab, which is wrong results rather than an error.
+        """
+        for name in self._prefetch_order:
+            proj = getattr(self, name)
+            if name == "o_b_proj" and not self.use_prefetcher:
+                # L1 path only: the staged copy of its [8192, 4096] weight does not fit
+                # alongside the others.
+                continue
+            proj.fetch_weights()
 
     def _sdpa_decode(
         self,
