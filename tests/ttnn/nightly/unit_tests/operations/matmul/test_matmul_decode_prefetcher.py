@@ -104,6 +104,16 @@ def test_matmul_decode_accepts_global_cb_kwarg(device):
     assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
 
 
+def _weight_tile_bytes(weight):
+    """Bytes of one 32x32 tile of ``weight``, from its own tile and dtype.
+
+    Block-float dtypes pack a tile smaller than the bfloat16 2048 (1088 for bfloat8_b,
+    576 for bfloat4_b), so a hardcoded 2048 oversizes the GCB for them -- harmless for
+    the passing tests but it makes the undersized-GCB test stop being undersized.
+    """
+    return weight.tile.get_tile_size(weight.dtype)
+
+
 def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=True, seed=0):
     """Build the activation, the DRAM receiver-contiguous weight, and the GCB.
 
@@ -159,7 +169,7 @@ def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=
         pt_b.reshape(1, 1, k, n),
         num_dram_banks=num_dram_banks,
         ring_size=num_b_cores,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat4_b if k > 4096 else ttnn.bfloat16,
         distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
 
@@ -171,8 +181,7 @@ def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=
         return pt_a, pt_b, a, weight, bank_to_receivers, num_b_cores
 
     # One GCB page == one receiver's whole [K, N/num_b_cores] slab.
-    tile_bytes = 2048  # bfloat16 32x32
-    slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * tile_bytes
+    slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
     gcb_size = num_slabs * slab_bytes
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
     return pt_a, pt_b, a, weight, gcb, num_b_cores
@@ -268,6 +277,9 @@ def test_make_matmul_decode_gcb_helper(device):
         # which never exercises it; getting it wrong hangs those cores rather than
         # failing, so this case is the only guard against that.
         (32, 1024, 1024),
+        (32, 4096, 512),
+        (32, 4096, 1024),
+        (32, 8192, 4096),
     ],
 )
 def test_matmul_decode_prefetched_shapes(device, m, k, n):
@@ -754,7 +766,7 @@ def test_matmul_decode_global_cb_rejects_l1_weight(device, partial_width_sharded
     _, pt_b, a, _, gcb, num_b_cores = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
     l1_weight = _l1_width_sharded_weight(device, pt_b, k, n, num_b_cores)
 
-    with expect_error(RuntimeError, "ND_SHARDED"):
+    with expect_error(RuntimeError, "input tensor B to live in DRAM"):
         ttnn.experimental.matmul_decode(a, l1_weight, partial_width_sharded=partial_width_sharded, global_cb=gcb)
 
 
@@ -791,8 +803,7 @@ def test_matmul_decode_global_cb_rejects_undersized_gcb(device, expect_error):
         device, m, k, n, num_a_cores=32, build_gcb=False
     )
 
-    tile_bytes = 2048  # bfloat16 32x32
-    slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * tile_bytes
+    slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
     small_gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         device, bank_to_receivers, slab_bytes // 2
     )
