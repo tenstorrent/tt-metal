@@ -466,6 +466,23 @@ class Qwen3VlVisionAttention(Module):
             exp_approx_mode=False,  # False is the more accurate softmax
         )
 
+    def _windowed_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+        """Flash tiling for windowed (block-diagonal) attention.
+
+        Same clamp as the ring's config. Windows shorter than the chunk are fine, and so are windows
+        that are not tile-aligned: the mask generator searches `cu_window_seqlens` per Q chunk, so one
+        chunk may straddle several windows (`tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py`
+        covers 33-row windows at chunk 64). Uses the full compute grid -- unlike the ring, nothing here
+        reserves cores for CCL workers.
+        """
+        chunk = min(-(-seq_len // _TILE) * _TILE, 128)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk,
+            k_chunk_size=chunk,
+            exp_approx_mode=False,  # False is the more accurate softmax
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
         tp = self._p.tp_factor
@@ -548,19 +565,25 @@ class Qwen3VlVisionAttention(Module):
             if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
                 msg = f"cu_seqlens must span [0, {seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
                 raise ValueError(msg)
-            attn = ttnn.concat(
-                [
-                    ttnn.transformer.scaled_dot_product_attention(
-                        q[:, :, start:end, :],
-                        k[:, :, start:end, :],
-                        v[:, :, start:end, :],
-                        is_causal=False,
-                        scale=self.scale,
-                        compute_kernel_config=self._sdpa_compute_kernel_config,
-                    )
-                    for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:])
-                ],
-                dim=-2,
+            # One windowed call rather than one SDPA per block: the device synthesizes the
+            # block-diagonal mask from `cu_window_seqlens`, so the boundaries never become host-side
+            # slices. `uint32` / ROW_MAJOR / 1-D and 2..1024 entries are what the op validates; 18
+            # blocks (`max_load`) is the most this model can present, well inside that.
+            cu_window = ttnn.from_torch(
+                torch.tensor(cu_seqlens, dtype=torch.int32),
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+            )
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                scale=self.scale,
+                program_config=self._windowed_program_config(seq_len),
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+                cu_window_seqlens=cu_window,
             )
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (seq_len, self.local_inner))
         # Row-parallel `proj` consumes exactly this fractured width and reduce-scatters, so gather back.
