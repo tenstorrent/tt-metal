@@ -155,7 +155,9 @@ jobs:
   # seconds. This is a second line of defence — `port-agent` validates the same input — because this
   # workflow is independently dispatchable by anyone with write access.
   validate:
-    runs-on: ubuntu-latest
+    # ubuntu-slim, this repo's label for light gate jobs, rather than ubuntu-latest — the latter
+    # backlogs here, and this job gates the build, so a queued validator stalls the whole run.
+    runs-on: ubuntu-slim
     steps:
       # workflow_dispatch constrains mode/arch with a `choice` picker, but workflow_call cannot —
       # reusable workflows have no choice type, so a caller can pass anything. Checked here so both
