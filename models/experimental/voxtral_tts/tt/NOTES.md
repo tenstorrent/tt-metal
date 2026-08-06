@@ -962,7 +962,21 @@ the scare measures divergence from the shipped config, not error — §6.25's tr
                 # columns change), which is exactly why the code counts were measured.
 ```
 
-### [flow-10] `_block` — HAND-ROLLED HEAD SPLIT, worth 1.233 ms/frame over `nlp_create_qkv_heads`
+### [flow-10] `_block` — the FUSED head split ships on Blackhole; §6.31 reverses
+
+**REVERSED. STATUS.md §6.45.** `nlp_create_qkv_heads` replaces the 9-op hand-rolled split, worth
+**+3.836 ms/frame** at **identical accuracy** (10/288 acoustic codes vs the fp32 reference, 0/8
+semantic, velocity maxabs 2.569e-02 and PCC 0.99998504 — the same numbers, not merely close).
+
+§6.33 already established the hand-rolled win was a SYSTEM EFFECT and not the op being faster.
+A system effect is exactly what does not travel between chips, and it did not: a small op costs
+3.4x more on the p150 (67.7 us against ~20), so 9 ops for 1 is now the wrong trade.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
+
+### [flow-10-n150] HAND-ROLLED HEAD SPLIT, worth 1.233 ms/frame over `nlp_create_qkv_heads`
 
 ```text
         # HAND-ROLLED HEAD SPLIT -- 3 slice + 3 reshape + 3 permute, replacing one
@@ -1780,7 +1794,21 @@ STATUS.md 6.5 has the setup and the two findings it did corroborate.
         # prefill_last so the loop below does not care which one is running.
 ```
 
-### [gpt-19] `_V_SHARD` — V's parking space, and why V and not K
+### [gpt-19] `_V_SHARD` — DELETED on Blackhole; the fused cache write loses here
+
+**REVERSED. STATUS.md §6.44.** `paged_fused_update_cache` is **0.687 ms/step SLOWER** on the p150
+than two plain `paged_update_cache` calls, so both it and `_V_SHARD` are gone — and with them the
+silent failure mode below, where RoPE on a core whose cos/sin table lives elsewhere returns
+3.4e38 from uninitialised L1 rather than raising. Bit-identical either way.
+
+Same cause as §6.45: a small op costs 3.4x more here (67.7 us against the N150's ~20), and the
+fused write buys one launch at the price of a reshard.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
+
+### [gpt-19-n150] V's parking space, and why V and not K
 
 ```text
  V's parking space, core (1,0). paged_fused_update_cache writes both caches in one kernel but

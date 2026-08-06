@@ -45,8 +45,9 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
-# One number used twice; the core count is inert for speed. NOTES.md [gpt-05].
-_QKV_GRID_X = 8
+# One number used twice. On Blackhole FEWER cores is faster -- 1 beats 8 by 0.46 ms/step, and
+# the grid provably never reaches the consumers (they always emit 1 core, (32,128)). [gpt-05].
+_QKV_GRID_X = 1
 _QKV_SHARD = ttnn.create_sharded_memory_config(
     (TILE, _QKV_WIDTH // _QKV_GRID_X), core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -56,11 +57,10 @@ _QKV_SHARD = ttnn.create_sharded_memory_config(
 _ROPE_SHARD = ttnn.create_sharded_memory_config(
     (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
     orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
-# NOTES.md [gpt-19] -- MOVE V, NOT K -- moving K returns 3.4e38 from uninitialised L1...
-_V_SHARD = ttnn.MemoryConfig(
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
-    ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
-                   (TILE, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR))
+# NOTES.md [gpt-19] -- _V_SHARD is GONE. It existed only to let paged_fused_update_cache accept
+# K and V, and on Blackhole that fused write is 0.687 ms/step SLOWER than two plain writes. Its
+# silent failure mode (RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38 from
+# uninitialised L1) goes with it. STATUS.md 6.44.
 
 # NOTES.md [gpt-20] -- wo has NO program config on Blackhole. 6.25 hand-tuned one for the N150
 # (+0.196 ms/frame); here it is worth nothing measurable and is deleted. Removing it is bit-exact,
@@ -250,10 +250,10 @@ class TtVoxtralGPT:
         # NOTES.md [gpt-23] -- two calls, not the fused q+k rope: convention mismatch, 0.236 ms/frame...
         kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [gpt-24] -- ONE fused write, not two: 0.405 ms/frame, bit-identical...
-        ttnn.experimental.paged_fused_update_cache(
-            cache[0], kh, cache[1], ttnn.to_memory_config(vh, _V_SHARD),
-            update_idxs_tensor=pos_t)
+        # NOTES.md [gpt-24] -- TWO writes, not the fused one: on Blackhole the fused write LOSES
+        # 0.687 ms/step and 6.20/6.22's whole V-move chain goes with it. STATUS.md 6.44.
+        ttnn.experimental.paged_update_cache(cache[0], kh, update_idxs_tensor=pos_t)
+        ttnn.experimental.paged_update_cache(cache[1], vh, update_idxs_tensor=pos_t)
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
