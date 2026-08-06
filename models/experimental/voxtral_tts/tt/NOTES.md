@@ -899,14 +899,23 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
         #   * every output must be forced to _L1. That is the whole difference. Left at the default
         #     the three tensors land in DRAM, measure the same 122 us as the fused op, and cost the
         #     downstream consumers the 2.5 ms/frame the original finding correctly identified.
-        #   * with memory_config=_L1 on all three: 112.4 us against 122.0 isolated, 1.086x.
-        #   * ON THE WHOLE BLOCK it is worth SIX TIMES that -- 1.233 ms/frame, 1.0583x, steady to
-        #     +/-0.0004x over three interleaved 200-frame rounds. The fused op needs a 4D
-        #     [B,1,3,QW] input, and that reshape repacks tile padding ([1,32,QW] -> [2,1,32,QW],
-        #     25.9 us); slicing the folded [1,B*3,QW] tensor directly never repacks. That is the
-        #     likely mechanism -- measured, not established.
-        #   * why 158 us before and 112.4 now is UNRECONCILED. Some difference of construction, not
-        #     found. Recorded rather than papered over.
+        #   * ISOLATED, THE FUSED OP IS NOT SLOWER. Settled at 500 reps x 6 alternating rounds
+        #     (STATUS.md 6.33): fused 122.3 us with a 0.2 us spread, manual 125.7 us with a 5.8 us
+        #     spread. An earlier reading of 112.4 was a low sample from that wide distribution. The
+        #     effect (~10 us) is smaller than the noise of the thing measuring it, so isolation
+        #     CANNOT decide this in either direction.
+        #   * ON THE WHOLE BLOCK it wins 1.233 ms/frame -- 22.375 -> 21.142, 1.0586/1.0585/1.0578
+        #     over three interleaved 200-frame rounds, spread 0.0008 on a 0.058 effect. So the win
+        #     is ENTIRELY a system effect around the op, not the op. Candidate mechanisms, none
+        #     verified: the fused path's 4D reshape builds a 768 KB intermediate ([1,6,6144] pads to
+        #     ONE 32-row slab, [2,1,3,6144] to TWO) that my column slices never create; different L1
+        #     layout for the four downstream consumers; different overlap with neighbouring ops.
+        #   * THE FUSED OP IS FLAT IN S, NOT IN B. The ~97 us below was measured growing S. Growing
+        #     the batch: B=2/4/8/16/32/64 -> 122.9/166.0/200.0/284.1/442.1/758.2 us, and it TT_FATALs
+        #     at B=128. Manual wins every size from B=4 to B=64, but by less and less (0.788x ->
+        #     0.942x) because manual makes THREE passes over memory where fused makes ONE. Block 2 is
+        #     structurally 3 tokens, so B is the only growth axis and B=64 is 32x anything planned.
+        #   * why 158 us before and today's numbers differ is UNRECONCILED. Recorded, not papered over.
         #
         # k is permuted (0,2,3,1) rather than (0,2,1,3), which emits it already transposed for the
         # scores matmul -- what transpose_k_heads=True used to do, at no extra cost.

@@ -2061,7 +2061,7 @@ quietly paying its weight-read win back in padding.
 | sweep | shipped | best alternative | verdict |
 |---|---|---|---|
 | 1. rms_norm, 49 calls/frame | 47.5 us (3 ops) | one-op interleaved **115.1** | **rejected** -- 2.4x slower AND 4.8e-03 off |
-| 2. qkv head split | 122.0 us | manual 3 slice+3 reshape+3 permute, L1 **112.4** | **1.086x, open** -- see the correction below |
+| 2. qkv head split | 122.0 us | manual 3 slice+3 reshape+3 permute, L1 | **isolated INCONCLUSIVE (§6.33); ships on the whole-block A/B** |
 | 3. unfold heads | 43.2 us | permute-straight-from-av 24.9 | **rejected** -- 1.77x but **1.4e+00 WRONG** |
 | 4. CFG combine + Euler | 160.0 us | weighted reduce **112.6** | 1.363x isolated, **then rejected on the block** |
 | 5. `_trunk` sequence build | 124.5 us | hoist the reshapes **105.8** | **SHIPS** -- bit-exact |
@@ -2282,6 +2282,70 @@ Two lessons, both cheap:
 
 `generated/` holds 39 `results*.json` files from this project's sweeps. Any of them will score cleanly
 and none of them will tell you it is the wrong one.
+
+### 6.33 — CORRECTION to §6.31: the hand-rolled split is NOT faster in isolation, and the fused op is not flat
+
+Two claims in §6.31 are wrong. The shipped change is still right, for a different reason.
+
+**WRONG CLAIM 1: "manual 112.4 us vs fused 122.0 us, 1.086x isolated".** It does not reproduce. Settled
+with 500 reps x 6 rounds, alternating A/B/B/A so neither op is always second, on both a real matmul
+output and a synthetic tensor:
+
+| source | | mean us | min | max | spread |
+|---|---|---|---|---|---|
+| real matmul output | fused | **122.3** | 122.2 | 122.4 | **0.2** |
+| | manual | 125.7 | 122.0 | 127.8 | 5.8 |
+| synthetic from_torch | fused | **122.1** | 122.0 | 122.2 | **0.2** |
+| | manual | 133.4 | 118.3 | 146.0 | 27.6 |
+
+**In isolation the fused op is at least as fast, and it is far more stable** -- 0.2 us spread against
+5.8-27.6. The 112.4 was a low sample from a wide distribution, and a 10 us "win" was read off it. Nine
+ops have variable dispatch cost; one op is deterministic. That variance is itself worth knowing.
+
+**WRONG CLAIM 2: "the fused op is fixed cost".** NOTES [flow-10] measured it flat at ~97 us from S=3 to
+S=32 and I generalised that to "fixed cost". It is flat in **S**, not in **B**:
+
+| B | rows | qkv KB | fused us | manual us | manual/fused | winner |
+|---|---|---|---|---|---|---|
+| 2 | **6** | 72 | 122.9 | 127.1 | 1.034x | fused |
+| 4 | 12 | 144 | 166.0 | 130.9 | 0.788x | manual |
+| 8 | 24 | 288 | 200.0 | 165.8 | 0.829x | manual |
+| 16 | 48 | 576 | 284.1 | 192.5 | 0.677x | manual |
+| 32 | 96 | 1152 | 442.1 | 365.6 | 0.827x | manual |
+| 64 | 192 | 2304 | 758.2 | 714.5 | 0.942x | manual |
+| 128 | 384 | 4608 | **TT_FATAL** | -- | -- | fused fails |
+
+6x the batch is 6x the data and 6.2x the time. Growing S and growing B are different axes and I conflated
+them.
+
+**A prediction that WAS right, directionally.** The manual route makes THREE passes over memory (slice
+writes q/k/v, reshape rewrites, permute rewrites) where the fused op makes ONE, so its advantage should
+erode as bytes start to dominate launch cost. It does: 0.788x at B=4 drifting to 0.942x at B=64. No
+crossover appears before the fused op TT_FATALs at B=128, so the erosion never completes -- but the
+mechanism is visible in the trend. Block 2 is structurally 3 tokens, so B is the only growth axis, and
+B=64 is 32x anything planned.
+
+**WHAT ACTUALLY STANDS, and it is a better result than the one I recorded.** The whole-block win is
+unaffected and triple-measured:
+
+    interleaved A/B, 3 rounds x 200 frames   22.375 -> 21.142 ms   1.0586 / 1.0585 / 1.0578
+                                             spread 0.0008 on a 0.058 effect
+    incremental, separate script             22.476 -> 21.142 ms
+    end-to-end RTF, cases 2 and 3            0.637 -> 0.620, 0.592 -> 0.572 (all three changes)
+
+**So the op is NOT faster, yet the block is 1.233 ms/frame faster.** The entire win is a system effect
+around the op, not the op. That makes the mechanism MORE open than §6.31 claimed, not less. Candidates,
+none verified: the fused path's 4-D reshape builds a 768 KB intermediate (384 KB -> 768 KB, since
+[1,6,6144] pads to one 32-row slab and [2,1,3,6144] pads to two) that must be allocated, written and
+re-read, which my column slices never create; the two paths' L1 layouts differ for the four downstream
+consumers; the fused kernel may not overlap with its neighbours the way nine small ops do.
+
+**The methodological point, which is the fourth version of the same lesson today.** §6.31 said the
+whole block paid "six times" the isolated figure. The truth is worse: **the isolated figure had the
+wrong SIGN.** At 6 rows the effect being measured (~10 us) is smaller than the run-to-run spread of the
+thing measuring it (5.8-27.6 us), so the isolated comparison could not have resolved it in either
+direction. Always report the spread next to the mean; a single number with no spread is not a
+measurement. The decision was right only because it was taken on the whole block.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
