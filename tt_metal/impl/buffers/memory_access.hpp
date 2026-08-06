@@ -5,16 +5,20 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::detail {
 
-// MeshDevice-aware L1 / DRAM channel access for unit meshes.
+// MeshDevice-aware L1 / DRAM channel / MeshBuffer access for unit meshes.
 //
 // WriteToDeviceL1/ReadFromDeviceL1 and DRAM channel APIs index the cluster by IDevice::id(),
 // which for MeshDevice is a logical mesh id — not a chip id. These helpers require a unit mesh
@@ -24,6 +28,32 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
     TT_FATAL(
         unit_mesh.num_devices() == 1, "Expected a unit MeshDevice (num_devices == 1), got {}", unit_mesh.num_devices());
     return unit_mesh.get_devices().at(0);
+}
+
+// MeshBuffer host↔device transfer for a unit mesh (coord (0, 0)). Prefer these over
+// detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
+template <typename DType>
+inline void WriteToBuffer(const distributed::MeshBuffer& mesh_buffer, const std::vector<DType>& host_buffer) {
+    auto* unit_mesh = mesh_buffer.device();
+    unit_mesh->mesh_command_queue().enqueue_write_shard_to_sub_grid(
+        mesh_buffer,
+        host_buffer.data(),
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)),
+        /*blocking=*/true);
+}
+
+template <typename DType>
+inline void ReadFromBuffer(const distributed::MeshBuffer& mesh_buffer, std::vector<DType>& host_buffer) {
+    auto* unit_mesh = mesh_buffer.device();
+    // ReadShard requires shared_ptr; alias without transferring ownership.
+    std::shared_ptr<distributed::MeshBuffer> alias(
+        const_cast<distributed::MeshBuffer*>(&mesh_buffer), [](distributed::MeshBuffer*) {});
+    distributed::ReadShard(
+        unit_mesh->mesh_command_queue(),
+        host_buffer,
+        alias,
+        distributed::MeshCoordinate(0, 0),
+        /*blocking=*/true);
 }
 
 inline bool WriteToL1(

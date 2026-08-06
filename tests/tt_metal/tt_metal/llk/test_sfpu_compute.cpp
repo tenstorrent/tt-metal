@@ -680,18 +680,14 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const size_t in_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
-    tt::tt_metal::InterleavedBufferConfig in_dram{
-        .device = mesh_device.get_devices()[0],
-        .size = in_bytes,
-        .page_size = in_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig out_dram{
-        .device = mesh_device.get_devices()[0],
-        .size = out_bytes,
-        .page_size = out_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    auto input_dram_buffer = CreateBuffer(in_dram);
-    auto output_dram_buffer = CreateBuffer(out_dram);
+    auto input_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in_bytes},
+        {.page_size = in_bytes, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_bytes},
+        {.page_size = out_bytes, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     // Every parametrization of these tests uses a single-core CoreRangeSet of {0, 0};
     // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
@@ -849,12 +845,12 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
     experimental::SetProgramRunArgs(program_run, params);
 
-    tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
+    tt_metal::detail::WriteToBuffer(*input_dram_buffer, packed_input);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(*output_dram_buffer, dest_buffer_data);
     return dest_buffer_data;
 }
 

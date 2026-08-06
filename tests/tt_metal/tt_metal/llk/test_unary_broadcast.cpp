@@ -390,7 +390,7 @@ void run_single_core_unary_broadcast_quasar(
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.mesh_buffer().get_reference_buffer()->address());
+    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.address());
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -416,12 +416,12 @@ void run_single_core_unary_broadcast_quasar(
     std::vector<uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
-    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), packed_tilized_input);
+    tt_metal::detail::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }

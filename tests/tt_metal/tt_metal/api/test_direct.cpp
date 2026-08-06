@@ -330,8 +330,8 @@ struct ReaderDatacopyWriterConfig {
 // generated input data (already written to input DRAM), and the per-tile DRAM
 // stride used when wiring reader/writer runtime args.
 struct ReaderDatacopyWriterContext {
-    std::shared_ptr<tt::tt_metal::Buffer> input_dram_buffer;
-    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer;
+    std::shared_ptr<distributed::MeshBuffer> input_dram_buffer;
+    std::shared_ptr<distributed::MeshBuffer> output_dram_buffer;
     uint32_t input_dram_byte_address = 0;
     uint32_t output_dram_byte_address = 0;
     size_t byte_size = 0;
@@ -344,15 +344,12 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
     ReaderDatacopyWriterContext ctx;
     ctx.byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
-    auto* device = mesh_device.get_devices()[0];
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = ctx.byte_size,
-        .page_size = ctx.byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    ctx.input_dram_buffer = tt_metal::CreateBuffer(dram_config);
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = ctx.byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = ctx.byte_size};
+    ctx.input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    ctx.output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
     ctx.input_dram_byte_address = ctx.input_dram_buffer->address();
-    ctx.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     ctx.output_dram_byte_address = ctx.output_dram_buffer->address();
 
     log_info(tt::LogTest, "Input DRAM byte address: {}", ctx.input_dram_byte_address);
@@ -360,7 +357,7 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
 
     ctx.inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -1.0f, 1.0f, ctx.byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::detail::WriteToBuffer(ctx.input_dram_buffer, ctx.inputs);
+    tt_metal::detail::WriteToBuffer(*ctx.input_dram_buffer, ctx.inputs);
 
     // DRAM buffer uses page_size = byte_size (whole-buffer), so derive the
     // per-tile DRAM stride directly from byte_size / num_tiles.
@@ -371,7 +368,7 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
 
 static bool verify_reader_datacopy_writer_output(const ReaderDatacopyWriterContext& ctx) {
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(ctx.output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(*ctx.output_dram_buffer, dest_buffer_data);
     return ctx.inputs == dest_buffer_data;
 }
 
