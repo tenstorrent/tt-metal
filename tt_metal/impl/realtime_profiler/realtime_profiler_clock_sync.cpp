@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
-#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -63,8 +62,6 @@ RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevi
     const auto& hal = MetalContext::instance(context_id_).hal();
     wall_clock_addr_lo_ = hal.get_tensix_wall_clock_reg_addr_lo();
     wall_clock_addr_hi_ = hal.get_tensix_wall_clock_reg_addr_hi();
-    fallback_rate_ = MetalContext::instance(context_id_).get_cluster().get_device_aiclk(chip_id_) / 1000.0;
-    TT_FATAL(fallback_rate_ > 0.0, "Device {} reported a non-positive AICLK", chip_id_);
     configure_clock_read_path();
 }
 
@@ -195,68 +192,33 @@ std::chrono::nanoseconds RealtimeProfilerClockSync::measured_bow(uint64_t open_i
 }
 
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::place(uint64_t ticks) {
-    if (probes_end_ == 0) {
-        return std::nullopt;
-    }
     const uint64_t probes_begin = oldest_probe();
-    const uint64_t close_index = first_probe_at_or_past(ticks);
-    const auto baseline = baseline_rate();
-    if (baseline.has_value() && baseline->rate > 0.0) {
-        fallback_rate_ = baseline->rate;
-    }
-
-    // Past every retained probe. The caller probes after reading a batch, so this is not the ordinary case for a record
-    // -- it means the read raced the probe, or the probe failed -- and there is nothing to wait for either way, since
-    // this is asked once, on the pass that read the record.
-    if (close_index == probes_end_) {
-        return extrapolate_from(probe_at(probes_end_ - 1), baseline);
-    }
-
+    // The caller probes after reading a batch, so a record's timestamps are always behind the newest probe and this
+    // clamp is a no-op. It exists so the pair is a pair whatever it is handed: past the far anchor place_on_chord
+    // charges the distance, which is the same thing a separate single-anchor path would have done with more code.
+    const uint64_t close_index = std::min(first_probe_at_or_past(ticks), probes_end_ - 1);
     const Anchor& closing = probe_at(close_index);
 
-    // Near side: the newest probe far enough from the far side to take a slope from. Walking back is monotone in span
-    // and the span floor is the only thing plan_chord_mapping refuses on, so the first anchor that clears it is both
-    // the tightest usable pair and the last word -- an older one cannot succeed where this failed.
+    // Near side: the newest probe far enough from the far side to take a slope from, and the oldest retained one when
+    // none is. warm_up() leaves four probes spanning kRateBaseline before any record exists and probes are only ever
+    // appended, so a pair wide enough to take a slope from is always in the ring.
+    uint64_t open_index = probes_begin;
     for (uint64_t i = close_index; i-- > probes_begin;) {
-        if (closing.host - probe_at(i).host < sync_interval() / 2) {
-            continue;
+        if (closing.host - probe_at(i).host >= sync_interval() / 2) {
+            open_index = i;
+            break;
         }
-        if (auto chord = plan_chord_mapping(probe_at(i), closing, baseline, measured_bow(i, close_index))) {
-            ++cost_.chords_placed;
-            cost_.chords_with_interior_probe += close_index > i + 1;
-            last_published_sync_error_ = chord->mapping.sync_error;
-            return chord;
-        }
-        break;
     }
 
-    return extrapolate_from(closing, baseline);
-}
-
-std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::extrapolate_from(
-    const Anchor& anchor, const std::optional<BaselineRate>& baseline) {
-    const double rate = baseline.has_value() && baseline->rate > 0.0 ? baseline->rate : frequency();
-    // Without a baseline the rate is the bring-up fit's, whose residual is quoted in ppm; a whole percent is a
-    // deliberate over-estimate, and this runs only when the history cannot produce a pair at all.
-    const double rate_noise = baseline.has_value() ? baseline->noise : 0.01;
-    if (rate <= 0.0) {
+    const auto baseline = baseline_rate();
+    auto chord = plan_chord_mapping(probe_at(open_index), closing, baseline, measured_bow(open_index, close_index));
+    if (!chord.has_value()) {
         return std::nullopt;
     }
-    ChordMapping anchored{
-        .mapping = {.device_cycle_offset = 0, .sync_error = placement_error(anchor.bracket)},
-        .frequency = rate,
-        .chord_rate = rate,
-        .chord_rate_noise = rate_noise,
-        .open_ticks = anchor.ticks,
-        .open_host_ns = static_cast<double>(anchor.host.time_since_epoch().count()),
-        .inv_chord_rate = 1.0 / rate,
-        .close_ticks = anchor.ticks,
-        // Zero span, so every timestamp is outside it and place_on_chord charges each one its own distance from the
-        // anchor. That is what makes a single anchor safe to reuse across a whole backlog.
-        .batch_through_ticks = std::numeric_limits<uint64_t>::max(),
-    };
-    last_published_sync_error_ = anchored.mapping.sync_error;
-    return anchored;
+    ++cost_.chords_placed;
+    cost_.chords_with_interior_probe += close_index > open_index + 1;
+    last_published_sync_error_ = chord->mapping.sync_error;
+    return chord;
 }
 
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::plan_chord_mapping(
@@ -301,67 +263,58 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     };
 }
 
-std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
+ClockProbe RealtimeProfilerClockSync::probe() {
     TTZoneScopedDN(RT_PROFILER, "Probe");
-    uint32_t lo = 0;
-    try {
-        // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a
-        // gap long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low
-        // word wrapping advances the high word by exactly one -- which is both exact and one fewer PCIe access on the
-        // one path where an access is least welcome.
-        const bool must_read_hi = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
-                                  std::chrono::steady_clock::now() - last_probe_at_ > kMaxProbeGapBeforeRereadingHi;
+    // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a gap
+    // long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low word
+    // wrapping advances the high word by exactly one -- which is both exact and one fewer PCIe access on the one path
+    // where an access is least welcome.
+    const bool must_read_hi = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
+                              std::chrono::steady_clock::now() - last_probe_at_ > kMaxProbeGapBeforeRereadingHi;
 
-        std::chrono::steady_clock::time_point host_before;
-        std::chrono::steady_clock::time_point host_after;
-        {  // latency-critical
-            host_before = std::chrono::steady_clock::now();
-            lo = *mapped_clock_lo_;
-            host_after = std::chrono::steady_clock::now();
-        }
-        // Reading the low word latches the high one, so this read is of the value that goes with `lo`, and it stays
-        // outside the bracket.
-        if (must_read_hi) {
-            cached_clock_hi_ = *mapped_clock_hi_;
-        } else if (lo < last_clock_lo_) {
-            ++cached_clock_hi_;
-        }
-        last_clock_lo_ = lo;
-        last_probe_at_ = host_after;
-        ++cost_.clock_reads;
-        const uint32_t hi = cached_clock_hi_;
-        const auto bracket = host_after - host_before;
-        TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
-        return ClockProbe{
-            host_before,
-            std::chrono::duration_cast<std::chrono::nanoseconds>(bracket),
-            (static_cast<uint64_t>(hi) << 32) | lo};
-    } catch (const std::exception& e) {
-        log_debug(tt::LogMetal, "[Real-time profiler] Device {}: clock read failed ({})", chip_id_, e.what());
-        return std::nullopt;
+    std::chrono::steady_clock::time_point host_before;
+    std::chrono::steady_clock::time_point host_after;
+    uint32_t lo = 0;
+    {  // latency-critical
+        host_before = std::chrono::steady_clock::now();
+        lo = *mapped_clock_lo_;
+        host_after = std::chrono::steady_clock::now();
     }
+    // Reading the low word latches the high one, so this read is of the value that goes with `lo`, and it stays outside
+    // the bracket.
+    if (must_read_hi) {
+        cached_clock_hi_ = *mapped_clock_hi_;
+    } else if (lo < last_clock_lo_) {
+        ++cached_clock_hi_;
+    }
+    last_clock_lo_ = lo;
+    last_probe_at_ = host_after;
+    ++cost_.clock_reads;
+    const auto bracket = host_after - host_before;
+    TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
+    return ClockProbe{
+        host_before,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(bracket),
+        (static_cast<uint64_t>(cached_clock_hi_) << 32) | lo};
 }
 
-std::optional<ClockProbe> RealtimeProfilerClockSync::best_of(int probes) {
-    std::optional<ClockProbe> best;
-    for (int i = 0; i < probes; i++) {
-        const auto p = probe();
-        if (p.has_value() && (!best.has_value() || p->bracket < best->bracket)) {
-            best = p;
-        }
+ClockProbe RealtimeProfilerClockSync::best_of(int probes) {
+    ClockProbe best = probe();
+    for (int i = 1; i < probes; i++) {
         // Each read blocks the calling thread on PCIe, so the remaining ones are only worth taking while they might
         // still tighten the bracket. A read already at the recent typical width leaves them nothing to improve; the
         // full count is spent only when the link is making reads late.
-        if (best.has_value() && typical_bracket_ > std::chrono::nanoseconds::zero() &&
-            best->bracket <= typical_bracket_ + typical_bracket_ / 2) {
+        if (typical_bracket_ > std::chrono::nanoseconds::zero() &&
+            best.bracket <= typical_bracket_ + typical_bracket_ / 2) {
             break;
         }
+        const ClockProbe p = probe();
+        if (p.bracket < best.bracket) {
+            best = p;
+        }
     }
-    if (best.has_value()) {
-        typical_bracket_ = typical_bracket_ == std::chrono::nanoseconds::zero()
-                               ? best->bracket
-                               : (typical_bracket_ * 7 + best->bracket) / 8;
-    }
+    typical_bracket_ =
+        typical_bracket_ == std::chrono::nanoseconds::zero() ? best.bracket : (typical_bracket_ * 7 + best.bracket) / 8;
     return best;
 }
 
@@ -382,18 +335,15 @@ void RealtimeProfilerClockSync::warm_up() {
     }
 }
 
-bool RealtimeProfilerClockSync::resync() {
+void RealtimeProfilerClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
     const auto started_at = std::chrono::steady_clock::now();
-    const auto p = best_of(kResyncProbes);
+    const ClockProbe p = best_of(kResyncProbes);
     ++cost_.resyncs;
-    if (p.has_value()) {
-        probe_history_[probes_end_ % kProbeHistoryCapacity] =
-            Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket};
-        ++probes_end_;
-    }
+    probe_history_[probes_end_ % kProbeHistoryCapacity] =
+        Anchor{p.host_time + placement_error(p.bracket), p.device_ticks, p.bracket};
+    ++probes_end_;
     cost_.busy += std::chrono::steady_clock::now() - started_at;
-    return p.has_value();
 }
 
 }  // namespace tt::tt_metal

@@ -93,16 +93,6 @@ constexpr auto kSyncCostReportInterval = std::chrono::seconds(5);
 
 constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 
-// How long a device may go without a successful clock read before its mapping is reported as aging. Stated as a
-// duration rather than a count of consecutive misses, because a miss is not a fixed amount of time any more: a device
-// is probed after every non-empty read, so misses arrive microseconds apart under load and probe_interval() apart
-// when quiet, and the same count would mean anywhere from tens of microseconds to a second.
-//
-// The number that matters is what the gap costs a record. Past the last anchor a timestamp is extrapolated, and
-// place_on_chord charges it the baseline rate's ~500ppm over the distance, so 10ms of silence is ~5us against the
-// ~0.6us a placed record normally carries. That is where the bound stops being the one the design promises.
-constexpr auto kMappingStaleAfter = std::chrono::milliseconds(10);
-
 // A floor on how often each device's clock is read, under the probe every read already takes. A chord is one probe gap
 // wide and a rate step inside it misplaces the records in it by step * span / 4, so probe spacing is accuracy: measured
 // under didt, where records are sparse enough that this floor is what sets the spacing, the bow ran 11us at p90 and
@@ -449,9 +439,7 @@ std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
     dev_state.next_probe_due_at = now + probe_interval();
     const auto before = dev_state.clock_sync->cost().busy;
-    if (dev_state.clock_sync->resync()) {
-        dev_state.last_probe_success_at = now;
-    }
+    dev_state.clock_sync->resync();
     return dev_state.clock_sync->cost().busy - before;
 }
 
@@ -495,7 +483,6 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         return;
     }
 
-    report_stalled_syncs(now);
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
@@ -510,33 +497,6 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count(),
         chords,
         chords == 0 ? 0.0 : 100.0 * static_cast<double>(with_interior) / static_cast<double>(chords));
-}
-
-void RealtimeProfilerReceiver::report_stalled_syncs(std::chrono::steady_clock::time_point now) {
-    size_t stalled = 0;
-    std::chrono::nanoseconds worst{};
-    for (const auto& dev_state : devices_) {
-        if (dev_state.last_probe_success_at == std::chrono::steady_clock::time_point{}) {
-            continue;  // never probed, so there is no gap to measure yet
-        }
-        const auto silent_for = now - dev_state.last_probe_success_at;
-        if (silent_for >= kMappingStaleAfter) {
-            ++stalled;
-            worst = std::max(worst, std::chrono::duration_cast<std::chrono::nanoseconds>(silent_for));
-        }
-    }
-    if (stalled != 0) {
-        TT_LOG_WARNING_THROTTLED(
-            last_probe_timeout_warn_,
-            now,
-            kWarnInterval,
-            "[Real-time profiler] {} of {} device(s) have not answered a clock read for at least {}ms (worst {}ms); "
-            "records from them are extrapolated from an aging anchor, and sync_error is charging them for it",
-            stalled,
-            devices_.size(),
-            kMappingStaleAfter.count(),
-            std::chrono::duration_cast<std::chrono::milliseconds>(worst).count());
-    }
 }
 
 uint32_t RealtimeProfilerReceiver::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }

@@ -82,8 +82,6 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        // Zero until the first successful clock read. See kMappingStaleAfter.
-        std::chrono::steady_clock::time_point last_probe_success_at{};
         // When this device is next due a probe even if it drained nothing. See probe_interval.
         std::chrono::steady_clock::time_point next_probe_due_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
@@ -108,9 +106,6 @@ private:
     // probe is what brackets the batch just read, and on probe_interval() otherwise, because probe spacing is chord
     // width and chord width is the accuracy.
     std::chrono::nanoseconds probe_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
-    // Called from report_sync_cost, not from the drain loop: a device that has stopped answering is reported at
-    // most once per warning interval, so scanning every device for it on every pass is work the drain never needs.
-    void report_stalled_syncs(std::chrono::steady_clock::time_point now);
     void report_sync_cost(std::chrono::steady_clock::time_point now);
     // Decodes `pages` and publishes them, placed against the probe history. True when anything was published, so the
     // caller knows to wake consumers. `batch` is the caller's scratch, reused so this never allocates.
@@ -159,7 +154,6 @@ private:
     std::vector<ProgramRealtimeRecord> publish_batch_;
 
     std::chrono::steady_clock::time_point last_malformed_warn_{};
-    std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
     std::chrono::steady_clock::time_point last_sync_cost_report_{};
     RealtimeProfilerClockSync::Cost sync_cost_at_last_report_;
 };

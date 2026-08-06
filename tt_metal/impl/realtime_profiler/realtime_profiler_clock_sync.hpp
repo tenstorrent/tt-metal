@@ -95,12 +95,10 @@ public:
     // fallback in place() is for.
     void warm_up();
 
-    // Takes one probe and retains it. False only when the device did not answer.
-    bool resync();
-
-    // The last rate measured across kRateBaseline, or the commanded AICLK before any has been. Only a timestamp the
-    // probe history does not surround is published at this rate; anything it does surround rides its own chord.
-    [[nodiscard]] double frequency() const { return fallback_rate_; }
+    // Takes one probe and retains it. Cannot fail: the read is a load through an already-mapped window, and a device
+    // without one is refused at construction. So probes_end_ is kWarmUpProbes after warm_up() and only grows, which is
+    // what lets place() take a usable pair for granted.
+    void resync();
 
     // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
     // them via their secant, whatever the clock did in between.
@@ -140,9 +138,8 @@ public:
         // Not needed to place anything; it is what says whether a timestamp is being interpolated between the two
         // measured points or extrapolated past them. See place_on_chord.
         uint64_t close_ticks = 0;
-        // The largest start timestamp this mapping may be reused for. A measured chord stops at its far anchor, because
-        // past that a tighter pair exists or will. An extrapolated one has no such limit: place_on_chord already
-        // charges each timestamp for its own distance from the anchor, so one of them stamps a whole backlog correctly.
+        // The largest start timestamp this mapping may be reused for: past its far anchor a tighter pair exists, so the
+        // next record resolves its own.
         uint64_t batch_through_ticks = 0;
     };
 
@@ -219,20 +216,15 @@ private:
     // when no probe lies inside the chord, which is the absence of evidence, not a claim of linearity.
     [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t open_index, uint64_t close_index) const;
 
-    // A mapping pinned to one probe and sloped at the best rate available, for a timestamp the probe history does not
-    // surround. Nullopt only if no rate is known at all.
-    [[nodiscard]] std::optional<ChordMapping> extrapolate_from(
-        const Anchor& anchor, const std::optional<BaselineRate>& baseline);
-
     // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
     // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record is
     // what turns a backlog into a stall.
     [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
 
     void configure_clock_read_path();
-    std::optional<ClockProbe> probe();
+    ClockProbe probe();
     // Ranked, not thresholded: under record load the whole bracket distribution shifts.
-    std::optional<ClockProbe> best_of(int probes);
+    ClockProbe best_of(int probes);
 
     ContextId context_id_;
     uint32_t chip_id_ = 0;
@@ -274,8 +266,6 @@ private:
     [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
 
     std::chrono::nanoseconds last_published_sync_error_{};
-
-    double fallback_rate_ = 0.0;
 };
 
 }  // namespace tt::tt_metal
