@@ -210,6 +210,12 @@ permissions:
 run-name: >-
   Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)'
   || (github.event_name == 'schedule') && ' (Blackhole)'
+  || '' }}${{ (github.event_name == 'workflow_dispatch') && format(' SKUs[{0}{1}{2}{3}{4}]',
+  inputs.run-wormhole && 'WH' || '',
+  inputs.run-wormhole && inputs.run-blackhole && ',' || '',
+  inputs.run-blackhole && 'BH' || '',
+  (inputs.run-wormhole || inputs.run-blackhole) && inputs.run-sim && ',' || '',
+  inputs.run-sim && 'Sim' || '')
   || '' }}
 jobs:
   check-harbor:
@@ -319,9 +325,9 @@ jobs:
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox_civ2"
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
