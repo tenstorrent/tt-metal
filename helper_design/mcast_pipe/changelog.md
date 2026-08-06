@@ -6,6 +6,25 @@ feedback round lands.
 
 ---
 
+## Round 22 — typed Flag control values, API v11 (2026-08-06)
+
+- **Trigger (API-007):** Matmul's sparsity batch-validity exchange carries `VALID` or
+  `IGNORE_BATCH` in the data-ready semaphore cell; the v10 helper hardcoded the Flag value to
+  `VALID` on both faces.
+- **API:** `SenderPipe::send_signal(uint32_t value = VALID)` now writes a caller-supplied non-zero
+  Flag value before the existing multicast. Flag `ReceiverPipe::receive_signal()` waits for
+  `>= VALID`, captures and returns the observed value, then clears the cell to `INVALID` once.
+  Counter remains monotone `+1` and requires the default argument. Handshake behavior is unchanged.
+- **Version:** caller-visible control semantics advance `MCAST_PIPE_API_VERSION` **10 → 11**. The
+  host wire does not change; the existing v10 fleet becomes stale and re-enters apply-dm-helper as
+  Tier 0 before new Matmul migration work.
+- **Style:** no new style fork or bake-off cell. The value is protocol payload on the already selected
+  Flag path; no performance re-measure was warranted.
+- **Validation:** fresh-JIT focused default-`VALID` and `IGNORE_BATCH` cells passed under `--dev`.
+  The complete helper suite passed 79/79 and `McastHostFixture.*` passed 28/28.
+
+---
+
 ## Round 21 — final v10 release gate (2026-08-05)
 
 - **Validation:** the host build, helper host/device suites, opaque-boundary

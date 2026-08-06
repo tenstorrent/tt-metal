@@ -399,7 +399,7 @@ ns result (+1.761%).
 ## API-007 — Let Flag signals carry caller-supplied control values
 
 - **Date:** 2026-08-06
-- **Status:** Accepted
+- **Status:** Implemented
 - **Surface:** `dataflow_kernel_lib::SenderPipe::send_signal()` and
   `ReceiverPipe::receive_signal()`
 - **Migration evidence:** Matmul in0 sparsity batch-validity exchange in
@@ -430,10 +430,16 @@ existing configuration.
 
 ### Resolution
 
-Accepted for materialization through `tune-dm-helper` before the Matmul in0
-migration. This is a caller-facing method-semantics extension and therefore
-must bump `MCAST_PIPE_API_VERSION`, add focused Flag tests for `VALID` and
-`IGNORE_BATCH`, and remigrate the existing v10 fleet as Tier 0 before net-new
+Implemented on 2026-08-06 as `MCAST_PIPE_API_VERSION=11`. Flag
+`send_signal(value = VALID)` writes the caller-supplied non-zero value before
+the existing signal multicast. Flag `receive_signal()` waits for `>= VALID`,
+returns the observed value, and clears the cell to `INVALID` exactly once.
+Counter remains a monotone `+1` event channel and requires the default
+argument. Handshake behavior and the host wire are unchanged.
+
+Fresh-JIT focused cells passed for default `VALID` and `IGNORE_BATCH`; the
+complete helper device suite passed 79/79 and `McastHostFixture.*` passed
+28/28. The existing v10 fleet must now be remigrated as Tier 0 before net-new
 Matmul work resumes.
 
 ## API-008 — Use Counter mode for race-free TopK readiness

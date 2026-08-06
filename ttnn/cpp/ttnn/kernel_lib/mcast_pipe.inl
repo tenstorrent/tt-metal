@@ -111,7 +111,7 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
 void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    send_signal() {
+    send_signal(uint32_t value) {
     if (degenerate_) {
         return;  // nobody to signal
     }
@@ -119,7 +119,12 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
         consumer_ready_.wait(ack_count_);
         consumer_ready_.set(0);
     }
-    signal_ready_(/*loopback=*/false, num_dests_excl_);
+    // Typed values are intentionally Flag-only. Counter stays a monotone +1 event channel.
+    ASSERT(value >= VALID);
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+        ASSERT(value == VALID);
+    }
+    signal_ready_(/*loopback=*/false, num_dests_excl_, value);
     fence_<SourceL1Guard::Guard>(/*loopback=*/false);
 }
 
@@ -159,15 +164,16 @@ template <
     bool ROTATING_SENDER>
 FORCE_INLINE void
 SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    signal_ready_(bool loopback, uint32_t mcast_dests) {
+    signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
     } else {
-        // set_multicast broadcasts this core's own cell as the source, so re-assert VALID first: a
-        // core that also receives on this cell leaves it INVALID after a receive, and a once-only set
-        // would go stale and stall the receivers. Redundant no-op for a send-only core.
-        data_ready_.set(VALID);
+        // set_multicast broadcasts this core's own cell as the source, so write this round's value
+        // first. A core that also receives on this cell leaves it INVALID after a receive, and a
+        // once-only set would go stale and stall the receivers. Rewriting VALID is a redundant no-op
+        // for a send-only core; a typed control signal instead writes its caller-supplied value.
+        data_ready_.set(value);
         if (loopback) {
             data_ready_.set_multicast<NocOptions::MCAST_INCL_SRC>(
                 noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
@@ -289,10 +295,17 @@ uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, D
         data_ready_.wait_min(++round_);
         return round_;
     } else {
-        data_ready_.wait(VALID);
+        // Flag control signals may carry any non-zero value. Capture it before the single clear so
+        // the caller can distinguish the ordinary VALID doorbell from a typed control state.
+        data_ready_.wait_min(VALID);
+        uintptr_t data_ready_addr = get_semaphore(DATA_READY_SEM_ID);
+#ifdef ARCH_QUASAR
+        data_ready_addr += MEM_L1_UNCACHED_BASE;
+#endif
+        const uint32_t value = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_addr);
         data_ready_.set(INVALID);
         ++round_;
-        return VALID;
+        return value;
     }
 }
 

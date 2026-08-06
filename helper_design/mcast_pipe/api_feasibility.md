@@ -1,6 +1,26 @@
-DERIVED FROM: current mcast_pipe API v9, census.txt, kernel_annotations/*, migration_audit/*, hazards_catalog.md, and changelog.md
+DERIVED FROM: current mcast_pipe API v11, census.txt, kernel_annotations/*, migration_audit/*, hazards_catalog.md, and changelog.md
 
 # Step ★ — API Feasibility (`mcast_pipe`)
+
+## Step-D re-entry and outcome (2026-08-06) — API-007 typed Flag signals
+
+> DERIVED FROM: accepted API-007 feedback, Matmul sparsity sender/receiver kernels, the v10 helper,
+> and the focused v11 device cells.
+
+The Matmul batch-validity exchange is the previously identified value-carrying Flag pattern: one
+shared cell carries `INVALID` (0), `VALID` (1), or `IGNORE_BATCH` (2). It maps to the existing
+control-only Pipe face with a caller-supplied non-zero Flag value. `send_signal(value = VALID)` writes
+that value into the sender cell before the existing `set_multicast`; `receive_signal()` waits for
+`>= VALID`, captures the observed value, clears the cell to `INVALID` exactly once, and returns it.
+Handshake policy remains channel-owned. Counter remains the existing monotone `+1` event channel and
+accepts only the default argument.
+
+This is a caller-facing method-semantics extension, so `MCAST_PIPE_API_VERSION` advances from 10 to
+11. It introduces no new helper face, template knob, topology, or style fork. Focused fresh-JIT
+`VALID`-default and `IGNORE_BATCH` cells passed; the complete helper suite passed 79/79 and the
+unchanged host-wire fixture passed 28/28.
+
+---
 
 ## Step-D re-entry and outcome (2026-08-03) — width-sharded Conv activation
 

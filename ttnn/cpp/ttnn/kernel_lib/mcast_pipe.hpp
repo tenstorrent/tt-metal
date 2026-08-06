@@ -52,7 +52,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 10
+#define MCAST_PIPE_API_VERSION 11
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -210,10 +210,12 @@ public:
     FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
-    // Broadcast a plain readiness signal (a doorbell). PRE_HANDSHAKE waits for and resets the
-    // configured consumer acknowledgements first, exactly as send() does. The signal itself is
-    // always EXCLUDE-source because no data accompanies it. Pairs with ReceiverPipe::receive_signal().
-    void send_signal();
+    // Broadcast a readiness signal (a doorbell, optionally carrying a small non-zero Flag value).
+    // PRE_HANDSHAKE waits for and resets the configured consumer acknowledgements first, exactly as
+    // send() does. The signal itself is always EXCLUDE-source because no data accompanies it. Typed
+    // values are a Flag-only capability; Counter remains a monotone +1 event channel and requires
+    // the default VALID argument. Pairs with ReceiverPipe::receive_signal().
+    void send_signal(uint32_t value = VALID);
 
 private:
     // ---- data multicast via the Noc object ----
@@ -222,7 +224,7 @@ private:
     // ---- signal the receivers the data is ready ----
     // `loopback` matches the data mcast of the same send(): when send() included the sender's own core
     // as a receiver, the signal must reach it too. send_signal() carries no data, so it never loops back.
-    FORCE_INLINE void signal_ready_(bool loopback, uint32_t mcast_dests);
+    FORCE_INLINE void signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value = VALID);
 
     // ---- post-send fence ----
     template <SourceL1Guard SOURCE_GUARD>
@@ -291,7 +293,7 @@ public:
     // Wait the control signal. Symmetric with SenderPipe::send_signal(). PRE_HANDSHAKE first sends a
     // readiness acknowledgement to the current sender coordinate; no-handshake mode leaves the
     // coordinates untouched.
-    //   * Flag    — a plain doorbell: returns once the signal arrives, then clears it.
+    //   * Flag    — waits for any non-zero value, returns the observed value, then clears it once.
     //   * Counter — returns the monotone round number reached.
     uint32_t receive_signal();
 

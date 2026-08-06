@@ -249,7 +249,16 @@ def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
 
 
 # ---------- control-only Counter: both configured handshake policies ----------
-def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handshake):
+def _run_control_only_signal(
+    device,
+    recv_rect,
+    sender_logical,
+    n_iters,
+    handshake,
+    data_ready_mode,
+    control_value=0,
+    expected_value=None,
+):
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
     num_recv = (rx1 - rx0 + 1) * (ry1 - ry0 + 1)
@@ -264,7 +273,7 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handsh
         ttnn.McastConfig(
             base_sem_id=0,
             handshake=handshake,
-            data_ready=ttnn.McastDataReady.Counter,
+            data_ready=data_ready_mode,
         ),
     )
 
@@ -295,7 +304,7 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handsh
         )
     ]
 
-    sender_ct = list(mc.compile_time_args()) + [n_iters]
+    sender_ct = list(mc.compile_time_args()) + [n_iters, control_value]
     sender_rt = ttnn.RuntimeArgs()
     sender_rt[sx][sy] = list(mc.runtime_args(ttnn.CoreCoord(sx, sy)))
     sender_k = ttnn.KernelDescriptor(
@@ -307,7 +316,7 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handsh
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    recv_ct = [cb_result] + list(mc.compile_time_args()) + [n_iters]
+    recv_ct = [cb_result] + list(mc.compile_time_args()) + [n_iters, control_value]
     recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     recv_rt = ttnn.RuntimeArgs()
     page_id = 0
@@ -327,9 +336,12 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handsh
     pd = ttnn.ProgramDescriptor(kernels=[sender_k, recv_k], semaphores=mc.owned_semaphores(), cbs=cbs)
     output = ttnn.generic_op([input_tensor, output_tensor], pd)
     torch_out = ttnn.to_torch(output).to(torch.int64)
-    assert torch.equal(torch_out, torch.full((num_recv, 8), n_iters, dtype=torch.int64))
+    if expected_value is None:
+        expected_value = n_iters
+    assert torch.equal(torch_out, torch.full((num_recv, 8), expected_value, dtype=torch.int64))
     logger.info(
-        f"CONTROL-ONLY Counter handshake={handshake} rect={recv_rect} sender={sender_logical} N={n_iters}: PASS"
+        f"CONTROL-ONLY mode={data_ready_mode} value={control_value} handshake={handshake} "
+        f"rect={recv_rect} sender={sender_logical} N={n_iters}: PASS"
     )
 
 
@@ -337,7 +349,34 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handsh
 @pytest.mark.parametrize("n_iters", [2, 32])
 @pytest.mark.parametrize("handshake", [False, True], ids=["no_handshake", "handshaked"])
 def test_control_only_counter(device, rect_name, n_iters, handshake):
-    _run_control_only_counter(device, RECTS[rect_name], SENDER, n_iters, handshake)
+    _run_control_only_signal(
+        device,
+        RECTS[rect_name],
+        SENDER,
+        n_iters,
+        handshake,
+        ttnn.McastDataReady.Counter,
+    )
+
+
+@pytest.mark.parametrize(
+    "control_value,expected_value",
+    [(0, 1), (2, 2)],
+    ids=["default_valid", "ignore_batch"],
+)
+def test_control_only_flag_value(device, control_value, expected_value):
+    # Handshake serializes the level-flag rounds; one round is sufficient to prove both the default
+    # VALID value and the Matmul IGNORE_BATCH value survive the semaphore multicast and clear-on-read.
+    _run_control_only_signal(
+        device,
+        RECTS["1x2"],
+        SENDER,
+        n_iters=1,
+        handshake=True,
+        data_ready_mode=ttnn.McastDataReady.Flag,
+        control_value=control_value,
+        expected_value=expected_value,
+    )
 
 
 # ---------- NoC1 corner-ordering: McastRect must own the per-NoC start/end swap ----------

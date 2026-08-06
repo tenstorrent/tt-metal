@@ -16,10 +16,15 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr auto mc = McastArgs</*CT=*/0, /*RT=*/0>();
     constexpr uint32_t num_iters = get_compile_time_arg_val(mc.next_compile_time_args_offset());
+    constexpr uint32_t control_value = get_compile_time_arg_val(mc.next_compile_time_args_offset() + 1);
 
     Noc noc;
     auto pipe = mc.sender(noc);
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        pipe.send_signal();
+        if constexpr (control_value == INVALID) {
+            pipe.send_signal();
+        } else {
+            pipe.send_signal(control_value);
+        }
     }
 }

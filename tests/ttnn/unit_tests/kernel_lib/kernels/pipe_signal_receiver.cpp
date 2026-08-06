@@ -20,7 +20,8 @@ void kernel_main() {
     constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/2>();
     constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS);
-    constexpr auto out_args = TensorAccessorArgs<SCALARS + 1>();
+    constexpr uint32_t control_value = get_compile_time_arg_val(SCALARS + 1);
+    constexpr auto out_args = TensorAccessorArgs<SCALARS + 2>();
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_page_id = get_arg_val<uint32_t>(1);
@@ -30,7 +31,11 @@ void kernel_main() {
     uint32_t final_round = 0;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         final_round = pipe.receive_signal();
-        ASSERT(final_round == iter + 1);
+        if constexpr (control_value == INVALID) {
+            ASSERT(final_round == iter + 1);
+        } else {
+            ASSERT(final_round == control_value);
+        }
     }
 
     CircularBuffer result_cb(cb_result);
