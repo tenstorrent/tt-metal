@@ -1764,6 +1764,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     # kv_actual_isl == 0, which the kernels derive on-device, so the ring graph serves it
     # too — halving trace memory and warmup, and dropping the mask path's ~80ms premium on
     # chunk 0 (277ms -> 189ms). GEMMA4_ONE_TRACE=0 restores the two-trace split.
+    settle_ms = float(os.environ.get("GEMMA4_TRACE_SETTLE_MS", "25"))
     one_trace = os.environ.get("GEMMA4_ONE_TRACE", "1") == "1"
     # The ring trace must be captured at a chunk that HAS a predecessor: the halo layout is
     # built host-side at create time and needs a complete predecessor group. Replaying it
@@ -1837,6 +1838,20 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
+            # Fabric settle between replays. WORKAROUND, not a fix: large ring gathers
+            # issued back-to-back deadlock at deep ring depth. Characterized with
+            # test_prefill_trace_replay_stress —
+            #   fixed depth (value constant, shallow gather)   120 replays, survived
+            #   capped 1..10 (value CHANGES, shallow gather)   120 replays, survived
+            #   full 1..63   (value changes, deep gather)      hangs at ~51
+            #   full + 200ms / +25ms delay                     survived; +5ms hangs
+            # So the trigger is transfer SIZE, not the changing metadata, and
+            # ttnn.synchronize_device does NOT prevent it — the device barrier does not
+            # cover in-flight inter-chip traffic. readback_all never hung because its
+            # per-chunk gather+readback supplied the same slack incidentally.
+            # The real fix belongs in the ring/fabric completion path.
+            if settle_ms:
+                time.sleep(settle_ms / 1000.0)
             out = out_ring if (one_trace or chunk_idx > 0) else out_first
             # Reading every chunk's hidden states to host is a test artifact — a prefill
             # server leaves the KV cache on device and reads back only the last chunk,
@@ -1922,3 +1937,153 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             f"[traced_pcc] no CPU reference for ctx={context_len}; perf above is measured but "
             f"replay correctness is NOT verified at this length"
         )
+
+
+# ── Test 10: trace-replay stress, to separate replay-count from ring-depth ────
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("advance", [False, True], ids=["fixed_depth", "advancing_depth"])
+def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request):
+    """Replay one captured ring trace repeatedly, to characterize the replay deadlock.
+
+    test_prefill_long_context_traced hangs with readback_final at deep ring depth
+    (observed at chunks 54, 59 and 61 of 64) and never with readback_all, whose
+    per-chunk _cp_gather_torch issues an eager all_gather between replays. A 256k run
+    is a 4-minute debug cycle and a hang needs a board reset, so this isolates the
+    variable instead.
+
+    ``fixed_depth`` replays the SAME chunk's metadata every time: replay count grows,
+    ring depth does not. ``advancing_depth`` walks kv_actual_isl forward like a real
+    run. If only the advancing case hangs, the trigger is depth (gather extent, halo
+    group, cache occupancy); if both hang at a similar count, it is the replays
+    themselves (semaphore or fabric state accumulating).
+
+    GEMMA4_STRESS_REPLAYS sets the count; nothing is read back, matching the shape
+    that hangs.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+
+    context_len = int(os.environ.get("GEMMA4_STRESS_CTX", str(LONG_CONTEXT_LENGTHS[-1])))
+    n_replays = int(os.environ.get("GEMMA4_STRESS_REPLAYS", "120"))
+    delay_ms = float(os.environ.get("GEMMA4_STRESS_DELAY_MS", "0"))
+    sync_stage = os.environ.get("GEMMA4_STRESS_SYNC_STAGE", "0") == "1"
+    max_chunk = int(os.environ.get("GEMMA4_STRESS_MAXCHUNK", "100000"))
+    n_chunks = context_len // chunk
+    model_path = _model_path()
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+    tokens_all, _tok, _plen = cpu_ref.build_token_sequence(model_path, chunk, context_len, model_args.vocab_size)
+
+    host_input = _host_tensor(
+        mesh_device,
+        tokens_all[:, :chunk].contiguous(),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_positions = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    model.set_prefill_rope_positions(device_positions)
+    model._ring_metadata_external = True
+
+    def _stage(chunk_idx):
+        chunk_start = chunk_idx * chunk
+        staged = _host_tensor(
+            mesh_device,
+            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(staged, device_input)
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+            ttnn.reset_global_semaphore_value(_sem, 0)
+        pos_host = _host_tensor(
+            mesh_device,
+            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
+        # GEMMA4_STRESS_SYNC_STAGE: barrier between the host metadata write and the
+        # replay that reads it. The traced kernels NoC-read kv_actual_isl from DRAM; if
+        # the write has not landed they see the PREVIOUS chunk's value, and reader,
+        # writer and compute then derive different work plans and deadlock on mismatched
+        # page counts. Invisible at fixed depth, where stale == fresh.
+        if sync_stage:
+            ttnn.synchronize_device(mesh_device)
+        return chunk_start
+
+    def _forward(chunk_start):
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            return model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+
+    out = _forward(_stage(1))
+    ttnn.synchronize_device(mesh_device)
+    out.deallocate(True)
+    # Stage BEFORE begin_trace_capture: _stage does host->device writes, which a capture
+    # region rejects outright ("Writes are not supported during trace capture").
+    cap_start = _stage(1)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_ring = _forward(cap_start)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[stress] captured; replaying {n_replays}x mode={'advancing' if advance else 'fixed'}")
+
+    try:
+        t0 = time.time()
+        for i in range(n_replays):
+            # GEMMA4_STRESS_MAXCHUNK caps the cycle so kv_actual_isl still CHANGES every
+            # replay while the gather stays shallow. Separates "the value changed" from
+            # "the transfer got big": if a capped cycle survives, size is the trigger.
+            _stage((i % min(max_chunk, n_chunks - 1)) + 1 if advance else 1)
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            # GEMMA4_STRESS_DELAY_MS: readback_all never hangs and adds ~140ms of host
+            # work per chunk, so slack between replays is a candidate explanation. If a
+            # bare sleep also prevents it, the deadlock is a race rather than accumulated
+            # state — and that distinction decides where the fix belongs.
+            if delay_ms:
+                time.sleep(delay_ms / 1000.0)
+            if i % 10 == 0 or i == n_replays - 1:
+                logger.info(f"[stress] replay {i + 1}/{n_replays} ok ({time.time() - t0:.1f}s)")
+        logger.info(f"[stress] SURVIVED {n_replays} replays in {time.time() - t0:.1f}s")
+    finally:
+        ttnn.release_trace(mesh_device, tid)
