@@ -686,9 +686,6 @@ def test_gpt_oss_demo(
 
         # Clear KV caches for repeat batches (like tt-transformers)
         if batch_idx != 0:
-            # Fix for ND hangs with multiple repeat batches
-            generator.prev_page_table = None
-
             for i in range(len(model)):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.self_attn.layer_past
