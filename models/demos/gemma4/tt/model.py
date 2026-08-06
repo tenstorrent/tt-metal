@@ -988,6 +988,16 @@ class Gemma4Model:
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
+        # Publish this chunk's per-chunk scalars once, before any layer runs. Every layer
+        # reads the same two metadata tensors, and they must be written from the host
+        # outside any traced region — a trace captures addresses, not values, which is the
+        # whole point of routing these through DRAM instead of runtime args.
+        if not is_decode and chunk_start_idx is not None:
+            from models.demos.gemma4.tt.ccl import cp_degree as _cp_degree
+
+            if _cp_degree(self.mesh_config) > 1:
+                self.ccl_manager.set_ring_metadata(slot_idx=user_id or 0, kv_actual_global=int(chunk_start_idx))
+
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             rope_presliced = False
