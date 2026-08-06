@@ -14,6 +14,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_rms_norm_sharded,
     rms_norm_golden,
     run_sharded_norm_logical_width_multicore,
+    cores_of,
+    non_rectangular_width_shard_config,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
@@ -365,26 +367,12 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
 def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in_last_row, dtype):
     torch.manual_seed(0)
 
-    device_grid = device.compute_with_storage_grid_size()
-    if full_rows + 1 > device_grid.y or cores_in_last_row >= device_grid.x:
-        pytest.skip(f"case does not fit a {device_grid.x}x{device_grid.y} device grid")
-
-    num_cores = full_rows * device_grid.x + cores_in_last_row
-    grid = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
-    assert len(grid.ranges()) > 1, f"{num_cores} cores on a {device_grid.x}-wide grid should not be a rectangle"
-
     h = 32
     shard_width = 32
-    w = num_cores * shard_width
+    _, sharded_mem_config, w = non_rectangular_width_shard_config(device, full_rows, cores_in_last_row, h, shard_width)
 
     torch_input_tensor = generate_input_tensor(h, w, "random", dtype)
     torch_weight = generate_input_tensor(1, w, "random", dtype)
-
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
-    )
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -414,37 +402,15 @@ def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in
     )
 
 
-def _cores_of(core_range_set):
-    return {
-        (x, y)
-        for r in core_range_set.ranges()
-        for x in range(r.start.x, r.end.x + 1)
-        for y in range(r.start.y, r.end.y + 1)
-    }
-
-
 def test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(device, expect_error):
     """The reduction multicasts over the bounding box of the shard grid, so a non-rectangular grid also
     places kernels, CBs and semaphores on the holes inside that box. create_descriptor must therefore
     reject a core_range_set that omits those holes instead of silently scheduling work on cores the
     caller excluded, which could collide with another program."""
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.y < 2 or device_grid.x < 4:
-        pytest.skip(f"case does not fit a {device_grid.x}x{device_grid.y} device grid")
-
-    num_cores = device_grid.x + 3
-    grid = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
-    assert len(grid.ranges()) > 1, f"{num_cores} cores on a {device_grid.x}-wide grid should not be a rectangle"
-
     h = 32
     shard_width = 32
-    w = num_cores * shard_width
+    grid, sharded_mem_config, w = non_rectangular_width_shard_config(device, 1, 3, h, shard_width)
 
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
-    )
     input_tensor = ttnn.from_torch(
         generate_input_tensor(h, w, "random", torch.bfloat16),
         device=device,
@@ -483,12 +449,12 @@ def test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(devic
         params, tensor_args, output_tensor, bounding_box_set
     )
 
-    allowed_cores = _cores_of(bounding_box_set)
+    allowed_cores = cores_of(bounding_box_set)
     scheduled_cores = set()
     for kernel in descriptor.kernels:
-        scheduled_cores |= _cores_of(kernel.core_ranges)
+        scheduled_cores |= cores_of(kernel.core_ranges)
     for semaphore in descriptor.semaphores:
-        scheduled_cores |= _cores_of(semaphore.core_ranges)
+        scheduled_cores |= cores_of(semaphore.core_ranges)
 
     assert (
         not scheduled_cores - allowed_cores

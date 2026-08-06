@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
@@ -681,3 +682,36 @@ def run_sharded_norm_logical_width_multicore(
         **_LOGICAL_WIDTH_NORM_BUDGET[dtype],
         check_pcc=False,  # PCC is scale-invariant; a padded-width normalization is a (near-)pure scale
     )
+
+
+def cores_of(core_range_set):
+    """Expand a CoreRangeSet into a set of (x, y) tuples."""
+    return {
+        (x, y)
+        for r in core_range_set.ranges()
+        for x in range(r.start.x, r.end.x + 1)
+        for y in range(r.start.y, r.end.y + 1)
+    }
+
+
+def non_rectangular_width_shard_config(device, full_rows, cores_in_last_row, h, shard_width):
+    """A width-sharded config whose shard grid has a partially-filled last row, so it is not a rectangle
+    and its bounding box contains holes. Skips if the geometry does not fit the device grid.
+
+    Returns:
+        (grid, memory_config, w) where w is the resulting full tensor width.
+    """
+    device_grid = device.compute_with_storage_grid_size()
+    if full_rows + 1 > device_grid.y or cores_in_last_row >= device_grid.x:
+        pytest.skip(f"case does not fit a {device_grid.x}x{device_grid.y} device grid")
+
+    num_cores = full_rows * device_grid.x + cores_in_last_row
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
+    assert len(grid.ranges()) > 1, f"{num_cores} cores on a {device_grid.x}-wide grid should not be a rectangle"
+
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return grid, memory_config, num_cores * shard_width
