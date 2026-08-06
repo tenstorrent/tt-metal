@@ -103,6 +103,37 @@ Two design constraints from measurement, both of which would otherwise bite mid-
   parallel resblock branches along the channel axis is nearly free -- and by fact 1 it also widens
   rows, so it wins twice.
 
+### Step 2a — per-channel activation parameters (next increment, designed not built)
+
+`1c11e1dd366` made the depthwise kernel honour fused activations, verified with GELU at 7.621e-08 for
+0.9 % cost. `snake_beta` cannot use that seam yet: it is `y = x + (1/(beta+eps)) * sin(alpha*x)^2` with
+alpha and beta **per channel**, while the unary seam is parameterised by compile-time scalars. Landing
+this removes the snake op, its tilize and its untilize from every band -- 3 of ~53 ops, and more
+importantly it is the step that proves per-channel state can ride the conv.
+
+Design, in the order to build it:
+
+1. **Host precomputes `inv_beta = 1/(beta+eps)`.** The kernel then needs no reciprocal, only two
+   per-channel vectors: `alpha` and `inv_beta`.
+2. **Shape them like the output tiles.** Replicate each value down all 32 rows of a tile, so the
+   kernel can use plain `mul_binary_tile` with no broadcast. For C > 32 that is `ceil(C/32)` tiles per
+   vector, ordered to match how the output tiles walk the channel axis.
+3. **Carrying them: prefer extending the weights CB over adding a new one.** The weights CB is already
+   indexed per channel-tile in exactly the pattern needed, and the reader already fills it. Appending
+   the two parameter tiles per channel-tile to the prepared weight avoids a new CB, a new reader
+   stream, and a second indexing scheme that could disagree with the first. Note the non-coalesced
+   path consumes in1 with `wait_front(1)` / `pop_front(1)` per tap (kernel lines 59/100, 141/179) while
+   the coalesced path takes the whole block (216/258), so the two consume differently and the append
+   must respect that. A separate CB is the fallback if that proves awkward.
+4. **Kernel, on the last tap only**, with the accumulator in DST_ACC:
+   `copy alpha -> DST_A; mul_binary_tile(ACC, A, A); sin_tile(A); mul_binary_tile(A, A, A);
+    copy inv_beta -> DST_B; mul_binary_tile(A, B, A); add_binary_tile(ACC, A, ACC)`.
+   That is 4 DST slots; check against the fp32 DST budget in half-sync before assuming it fits.
+5. **Gate it** the way the existing activation is, so nothing changes unless requested.
+
+Verify with `fused_activation.py` extended to snake: the bar is rel_rmse ~1e-07 against a float64
+golden, matching what GELU achieved, and cost within a few percent of the unfused conv.
+
 **Step 3 — bf16.** Already runnable (`14572d860ce`), 0.959 s and 34.93 dB against a 28 dB gate. Worth
 taking *after* steps 1-2, because bf16's benefit is halved bytes and bytes only become the binding
 term once rows are wide.
