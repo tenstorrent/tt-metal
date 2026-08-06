@@ -349,7 +349,6 @@ conditions do not match (this port is a single-chip bring-up at a capped AR hori
 models/demos/xtts_v2/
   tt/pipeline.py                     # the ONE shared chained forward (demo + tests import this)
   demo/demo_tts.py                   # runnable demo (argparse + __main__)
-  demo/demo.py                       # dead auto-generated scaffold — do not use
   tests/e2e/test_e2e_tts.py          # e2e gate: Gate 1/2/3 + per-stage PCC
   tests/e2e/test_accuracy_decomposition.py  # print-only: 2x2 ablation, sub-stage PCCs, log-mel
   tests/e2e/test_00_forward_on_device.py   # per-stub device forward smoke
