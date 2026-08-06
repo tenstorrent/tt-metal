@@ -177,6 +177,69 @@
         "SORT-SINGLE-ROW-CONTROL"
       ],
       "coverage": "complete with exact fresh-cache coordinator, reader, and writer JIT evidence"
+    },
+    {
+      "id": "topk:multicore:final-readiness",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.cpp",
+      "dispatch": "multicore TopK final coordinator and local workers",
+      "migration_unit": "topk-multicore-final-readiness",
+      "inventory": ["TOPK-MULTICORE"],
+      "coverage": "high; historical exact sender/receiver JIT evidence and complete mapped inventory"
+    },
+    {
+      "id": "layernorm:sharded:pre-allgather-reduce",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
+      "dispatch": "is_pre_all_gather=true; kernel paths and reader arguments supplied by sharded_layernorm_factory_helpers.cpp",
+      "migration_unit": "layernorm-sharded-pre-allgather",
+      "inventory": ["LN-PRE-ALLGATHER", "LN-POST-ALLGATHER", "LN-SHARDED"],
+      "coverage": "high; post/plain inventories guard the builder split"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path with mcast_in0=true and in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path with mcast_in0=true and in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path with in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path with in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:sparse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse Matmul MCAST_IN0 path",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-SPARSE-IN0"],
+      "coverage": "device-verified from an empty isolated cache; sender hash 14177997899853619887 and receiver hash 18131090411884538285"
     }
   ],
   "inventory_definitions": {
@@ -198,6 +261,20 @@
         "test_matmul_on_subdevice_1d_mcast_full_grid",
         "test_matmul_compute_output_specs_with_allowed_worker_cores: mcast program-config cases"
       ]
+    },
+    "MM-SPARSE-IN0": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py",
+      "compile_focused": "test_sparse_matmul_without_nnz[core_grid=(4, 4)-in1_dtype=DataType.BFLOAT8_B-tile_w=32-tile_h=16-num_batches=(1, 4)-num_experts=8-mkn=(16, 128, 512)] under --dev from an empty isolated TT_METAL_CACHE",
+      "tests": [
+        "test_sparse_matmul_with_nnz",
+        "test_sparse_matmul_without_nnz",
+        "test_batched_sparse_matmul_with_nnz",
+        "test_batched_sparse_matmul_without_nnz",
+        "test_sparse_matmul_inputA_with_nnz",
+        "test_sparse_matmul_inputA_without_nnz"
+      ],
+      "excluded": "argument-validation tests do not launch the tracked sparse kernels",
+      "verification": "2026-08-06 compile-focused case passed with 0/29 JIT hits; cache contained sender hash 14177997899853619887 and receiver hash 18131090411884538285"
     },
     "MM-IN1-ALL": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
@@ -419,17 +496,17 @@
   "entries": [
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-      "status": "blocked",
-      "inventory": "MM-IN0-INTERLEAVED",
-      "coverage": "audited",
-      "result": "not migrated; typed/custom control-value helper gap"
+      "status": "pending",
+      "inventory": "MM-IN0-INTERLEAVED + MM-SPARSE-IN0",
+      "coverage": "high; sparse route device-verified",
+      "result": "API-007 accepted; sparse route passed from empty cache with sender hash 14177997899853619887"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-      "status": "blocked",
-      "inventory": "MM-IN0-INTERLEAVED",
-      "coverage": "audited",
-      "result": "not migrated; typed/custom control-value helper gap"
+      "status": "pending",
+      "inventory": "MM-IN0-INTERLEAVED + MM-SPARSE-IN0",
+      "coverage": "high; sparse route device-verified",
+      "result": "API-007 accepted; sparse route passed from empty cache with receiver hash 18131090411884538285"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
@@ -447,7 +524,7 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-      "status": "blocked",
+      "status": "pending",
       "inventory": "MM-BLOCK-SHARDED-HYBRID",
       "coverage": "exact failure isolated",
       "result": "migrated PCC 0.981998/0.983415; restored baseline passed"
@@ -520,14 +597,14 @@
       "status": "blocked",
       "inventory": "LN-PRE-ALLGATHER",
       "coverage": "audited",
-      "result": "partial migration reverted; acknowledged signal-only helper gap"
+      "result": "API-003 implemented at v10; builder-split prerequisite remains"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
-      "status": "blocked",
+      "status": "pending",
       "inventory": "LN-PRE-ALLGATHER",
       "coverage": "audited",
-      "result": "partial migration reverted; acknowledged signal-only helper gap"
+      "result": "API-003 implemented at v10; builder-split prerequisite remains"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
@@ -545,7 +622,7 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
-      "status": "blocked",
+      "status": "pending",
       "inventory": "LN-SHARDED",
       "coverage": "audited",
       "result": "partial migration reverted; acknowledged signal-only and one-gate/multi-block gaps"
@@ -562,14 +639,14 @@
       "status": "blocked",
       "inventory": "TOPK-MULTICORE",
       "coverage": "audited",
-      "result": "not migrated; race-free no-handshake initialization gap"
+      "result": "API-008 resolves readiness through existing no-handshake Counter mode"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
-      "status": "blocked",
+      "status": "pending",
       "inventory": "TOPK-MULTICORE",
       "coverage": "audited",
-      "result": "not migrated; paired receiver initialization gap"
+      "result": "API-008 resolves readiness through existing no-handshake Counter mode"
     }
   ],
   "baseline_note": "Refreshed by apply-dm-helper verify-only pass 2026-08-03 (was 54d8dfb7bef78ff7f3f8060e85aeac1371c86347 / 2026-07-30). The map itself is API-independent and was reused as-is; only the baseline ref + date moved. MM-IN1-ALL reproduced 302 passed / 188 expected skips / 490 selected on this baseline, single-chip Blackhole p100a."
