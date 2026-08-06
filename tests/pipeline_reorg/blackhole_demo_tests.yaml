@@ -11,9 +11,9 @@
 
 # This pipeline holds Blackhole demo / performance tests that have not yet been
 # migrated to the tier 1/2/3 pipelines
-# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently a
-# mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
-# LLM e2e, data-parallel, and device-perf entries have been migrated out.
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently only
+# diffusion / vision demos. The Llama / Qwen / Mistral LLM e2e, data-parallel, and
+# device-perf entries have all been migrated out.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):

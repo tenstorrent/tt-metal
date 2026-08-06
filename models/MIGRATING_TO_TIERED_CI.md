@@ -316,12 +316,17 @@ For most BH SKUs you don't need to do anything special — the standard
 pattern works because the impl yaml maps the host cache into the
 canonical path.
 
-> **Note on BH cache-tree layout:** the BH runners lay their `tt_cache`
-> out with a **double-dash** org separator (`tt_cache/<org>--<name>`,
-> e.g. `tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503`) rather
-> than the nested `tt_cache/<org>/<name>` used on the WH side. Match
-> whichever form the existing cache on your target SKU already uses, or
-> the job pays a full cold-cache weight conversion on every run.
+> **Note on the `tt_cache` org separator:** two forms are in use —
+> nested (`tt_cache/<org>/<name>`) and double-dash
+> (`tt_cache/<org>--<name>`). This is **not** a WH-vs-BH split; it is a
+> per-model artifact of how that model's cache was first populated, and
+> it stays with the model across SKUs. Gemma-4 and GPT-OSS use
+> double-dash on WH and BH alike (`tt_cache/google--gemma-4-E2B-it` on
+> `wh_n150`, `tt_cache/openai--gpt-oss-20b` on `wh_llmbox_perf`), while
+> Llama and Qwen use the nested form on both (including on
+> `bh_quietbox_2`). Copy whichever form the entry you are porting
+> already used, or the job pays a full cold-cache weight conversion on
+> every run.
 
 **Exception: LFC-mode SKUs (`bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2`).** The cache is not pre-populated
 on these runners; the test job must pull the weights itself at the
