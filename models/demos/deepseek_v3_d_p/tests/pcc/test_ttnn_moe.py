@@ -998,3 +998,68 @@ def test_kimi_k3_moe(
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        # A four-chip QuietBox runs the complete Kimi device path as one
+        # four-way dispatch group. This keeps the debug smoke on all devices
+        # while exercising the same row-axis collectives as the linear MoE path.
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+                # First-run device compilation can exceed pytest's default 300s.
+                pytest.mark.timeout(60),
+            ],
+            id="quietbox-linear-4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+def test_kimi_moe_quietbox_device_only(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    topology,
+    request,
+):
+    """Run a four-chip Kimi-style device debug smoke without host-reference work."""
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        # masked_bincount uses a 64-core grid, so 64 is the smallest legal
+        # per-chip sequence length. It keeps the device-debug workload below
+        # the 5s operation watchdog while exercising the full 4-chip graph.
+        seq_len_per_chip=64,
+        # The debug smoke retains Kimi's routing behavior but uses tile-aligned
+        # reduced widths. This bounds the distributed combine transfer under
+        # the safe runner's 5s per-operation watchdog.
+        emb_dim=1024,
+        hidden_dim=256,
+        # 384 routed experts (96/chip) exceed the safe runner's 5s per-op
+        # watchdog under watcher/LLK instrumentation. This reduced Kimi
+        # configuration exercises the same device graph with 16 experts/chip.
+        num_routed_experts=64,
+        # One routed pick keeps the gate and distributed dispatch path compact.
+        num_experts_per_tok=1,
+        # `compute_constants` reserves tile padding for each local expert.
+        dispatch_buffer_capacity_factor=1,
+        run_pcc_check=False,
+        num_links=num_links,
+        topology=topology,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+    )
