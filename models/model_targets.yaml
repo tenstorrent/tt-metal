@@ -934,7 +934,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            owner_id: U08GEGWHQJF # Adam Roberge
             team: models
 
   mixtral-8x7b:
