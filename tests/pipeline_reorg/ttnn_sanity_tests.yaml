@@ -9,13 +9,13 @@
 # on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
 #
-# TRIAL-ONLY: narrowed to a single N300 leg running just the broadcast_to negative
-# tests, to confirm ai-summary crash-signal wording. Do not merge.
+# TRIAL-ONLY: single N300 leg running the full eltwise group 3, to reproduce the
+# buried-TT_FATAL context where the LLM returns a low-confidence CRASH. Do not merge.
 
-- name: "ttnn broadcast_to negative"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py -v -k invalid'
+- name: "ttnn eltwise group 3"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 3 -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 20
+      timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95
