@@ -135,6 +135,48 @@ class Tensor:
         s = [1] * (len(reps) - len(self._shape)) + list(self._shape)
         return Tensor([d * r for d, r in zip(s, reps)], self.dtype)
 
+    def tile(self, *reps) -> "Tensor":
+        # torch.tile aligns reps to the *right* (unlike repeat): fewer reps than dims
+        # tiles the trailing dims. rope does angles.tile(2) on a 2-D tensor.
+        if len(reps) == 1 and isinstance(reps[0], (list, tuple)):
+            reps = tuple(reps[0])
+        reps, s = list(reps), list(self._shape)
+        if len(reps) < len(s):
+            reps = [1] * (len(s) - len(reps)) + reps
+        else:
+            s = [1] * (len(reps) - len(s)) + s
+        return Tensor([d * r for d, r in zip(s, reps)], self.dtype)
+
+    def repeat_interleave(self, repeats: int, dim: int = None, **k) -> "Tensor":
+        r = repeats if isinstance(repeats, int) else (repeats.numel() if isinstance(repeats, Tensor) else 1)
+        if dim is None:
+            return Tensor([self.numel() * r], self.dtype)
+        s = list(self._shape)
+        s[dim] *= r
+        return Tensor(s, self.dtype)
+
+    def flatten(self, start_dim: int = 0, end_dim: int = -1) -> "Tensor":
+        s = list(self._shape)
+        n = len(s)
+        start = start_dim + n if start_dim < 0 else start_dim
+        end = end_dim + n if end_dim < 0 else end_dim
+        merged = 1
+        for d in s[start : end + 1]:
+            merged *= d
+        return Tensor(s[:start] + [merged] + s[end + 1 :], self.dtype)
+
+    def new_zeros(self, *shape, **k) -> "Tensor":
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+            shape = tuple(shape[0])
+        return Tensor(list(shape), k.get("dtype") or self.dtype)
+
+    new_ones = new_empty = new_zeros
+
+    def cos(self, *a, **k) -> "Tensor":
+        return Tensor(self._shape, self.dtype)
+
+    sin = tanh = sigmoid = sqrt = rsqrt = exp = log = abs = cos
+
     def to(self, *a, **k) -> "Tensor":
         dtype = k.get("dtype") or next((x for x in a if isinstance(x, DType)), self.dtype)
         return Tensor(self._shape, dtype)
@@ -159,9 +201,14 @@ class Tensor:
 
     # -- arithmetic (metadata only) ------------------------------------------
     def _binary(self, other) -> "Tensor":
-        if isinstance(other, Tensor) and other.numel() > self.numel():
-            return Tensor(other._shape, self.dtype)
-        return Tensor(self._shape, self.dtype)
+        # NumPy/torch broadcasting: align shapes from the right, each dim = max of
+        # the two (one must be 1 or equal). A scalar leaves the shape unchanged.
+        # rope tables rely on this: positions[:,:,None] * inv_freq[None,None,:].
+        if not isinstance(other, Tensor):
+            return Tensor(self._shape, self.dtype)
+        ra, rb = list(reversed(self._shape)), list(reversed(other._shape))
+        out = [max(ra[i] if i < len(ra) else 1, rb[i] if i < len(rb) else 1) for i in range(max(len(ra), len(rb)))]
+        return Tensor(list(reversed(out)), self.dtype)
 
     # elementwise ops broadcast to the larger operand's shape; `theta ** arange(...)`
     # (rope inverse-frequencies) needs the reflected forms too.
@@ -193,14 +240,23 @@ class Tensor:
     def __getitem__(self, key) -> "Tensor":
         if not isinstance(key, tuple):
             key = (key,)
-        out = []
-        for axis, k in enumerate(key):
-            if isinstance(k, slice):
-                start, stop, _ = k.indices(self._shape[axis])
-                out.append(stop - start)
+        # None inserts a size-1 axis (consumes no input axis); Ellipsis spans the axes
+        # left over after the explicit indexers; int drops an axis; slice keeps its length.
+        n_indexers = sum(1 for k in key if k is not None and k is not Ellipsis)
+        ellipsis_span = self.ndim - n_indexers
+        out, ax = [], 0
+        for k in key:
+            if k is None:
+                out.append(1)
             elif k is Ellipsis:
-                out.extend(self._shape[axis:])
-        out.extend(self._shape[len(key) :])
+                out.extend(self._shape[ax : ax + ellipsis_span])
+                ax += ellipsis_span
+            elif isinstance(k, slice):
+                out.append(len(range(*k.indices(self._shape[ax]))))
+                ax += 1
+            else:  # integer index: drop the axis
+                ax += 1
+        out.extend(self._shape[ax:])
         return Tensor(out or [1], self.dtype)
 
     def __setitem__(self, key, value) -> None:
@@ -265,8 +321,18 @@ def cat(tensors: Sequence[Tensor], dim: int = 0) -> Tensor:
 
 def stack(tensors: Sequence[Tensor], dim: int = 0) -> Tensor:
     s = list(tensors[0].shape)
+    if dim < 0:
+        dim += len(s) + 1  # insertion index: stack(dim=-1) appends a new last axis
     s.insert(dim, len(tensors))
     return Tensor(s, tensors[0].dtype)
+
+
+def meshgrid(*grids, **k) -> tuple:
+    """torch.meshgrid(*1-D grids, indexing="ij"): N tensors each of shape (len(g0),...,len(gN))."""
+    if len(grids) == 1 and isinstance(grids[0], (list, tuple)):
+        grids = tuple(grids[0])
+    sizes = [g.numel() for g in grids]
+    return tuple(Tensor(list(sizes), g.dtype) for g in grids)
 
 
 def tensor(data, **k) -> Tensor:

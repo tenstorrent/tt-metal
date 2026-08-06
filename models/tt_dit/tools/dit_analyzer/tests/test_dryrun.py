@@ -440,6 +440,31 @@ def test_ellipsis_slicing_targets_the_trailing_axis():
     assert "ok" in proc.stdout, proc.stdout
 
 
+def test_host_torch_reproduces_the_vae_rope_construction_shapes():
+    """The MiniMax-H3 VAE builds its rope tables with a chain of *host* torch ops on
+    construction-time constants: meshgrid over per-axis grids, stack(dim=-1)+flatten
+    to (T*H*W, 3), then broadcasting positions[:,:,None] * inv_freq[None,None,:] and
+    tile/cos/sin. The metadata-only host torch must reproduce every shape or the VAE
+    stage never builds (and the connected encoder->DiT->VAE pipeline can't be analyzed).
+    """
+    from dit_analyzer.dryrun import hostfakes as t
+
+    T, H, W, rotary, num_axes, head_dim, n_suffix = 7, 16, 16, 48, 3, 64, 5
+    grids = [t.arange(0.5, s) for s in (T, H, W)]
+    positions = t.stack(t.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)
+    assert positions.shape == (T * H * W, 3), positions.shape  # meshgrid+stack(-1)+flatten
+    positions = t.cat([positions, positions.new_zeros((n_suffix, 3))], dim=0)  # + suffix rows
+    n = T * H * W + n_suffix
+    assert positions.shape == (n, 3)
+    inv_freq = t.arange(0, 1, 2 * num_axes / rotary)  # float step -> rotary/(2*num_axes) values
+    assert inv_freq.shape == (rotary // (2 * num_axes),), inv_freq.shape
+    angles = positions[:, :, None] * inv_freq[None, None, :]  # broadcast (n,3,1)*(1,1,F) -> (n,3,F)
+    assert angles.shape == (n, 3, rotary // (2 * num_axes)), angles.shape
+    angles = angles.flatten(1, 2).tile(2)  # (n, 3F) -> (n, rotary)
+    assert angles.shape == (n, rotary), angles.shape
+    assert angles.cos().shape == (n, rotary) and angles.sin().shape == (n, rotary)
+
+
 def test_ttnn_slice_reads_local_bounds_and_lifts_to_logical():
     """`ttnn.slice(x, starts, ends)` bounds are on the per-device view. Slicing one
     param block out of a TP-fractured `[param | h]` feature axis (MiniMax-H3 AdaLN)
