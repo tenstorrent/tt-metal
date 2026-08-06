@@ -1667,3 +1667,43 @@ the original candidate list in §N+4 and got dropped when the Tensix comparison 
 
 **The 2x2 can never be completed on the Tensix side** (fast dispatch + resident worker program is illegal), so
 core type can only ever be tested by holding dispatch mode fixed at SLOW -- where, so far, neither core hangs.
+
+## §N+11 — THE 2x2 IS COMPLETE: only DRISC *AND* fast dispatch hangs (bh-05, 2026-08-06)
+
+The Tensix arm CAN run under fast dispatch. `dispatch_core_manager` pops a worker off the BACK of the dispatch
+pool for the real-time profiler and removes it from `logical_dispatch_cores`, so FD never allocates it; with the
+RT profiler off, that core is idle and a resident non-CQ program can own it. Wired up via
+`get_reserved_realtime_profiler_core()` -- the drainer lands on logical (11,9) and services all 110 cores,
+5,501,088 markers, 0 stalls. The long-standing "impossible (resident program)" entry in this file was wrong.
+
+Same churn cycle (repeat 1,2,4,6,8,12,16 @ delay 500), 2 trials x 49 runs per cell, each from a fresh reset:
+
+| | **fast dispatch** | **slow dispatch** |
+|---|---|---|
+| **DRISC** | **3 hangs / ~118 runs** | 0 / 98 |
+| **Tensix BRISC** | **0 / 98** | 0 / 98 |
+
+**Neither factor alone does it.** The DRISC under slow dispatch is clean for 98 runs. Fast dispatch with a
+Tensix drainer is clean for 98 runs. Only the CONJUNCTION hangs. 3/118 in that one cell against 0/294 across the
+other three (Fisher p ~ 0.01) -- the strongest signal this investigation has produced, and the first one resting
+on a complete factorial rather than a ladder.
+
+**Supersedes §N+10.** That section concluded "dispatch mode is the leading candidate, core type unsupported",
+which was the best reading available when the Tensix arm was believed slow-dispatch-only. With the fourth cell
+filled it is wrong: dispatch mode alone does not explain it either. It is DRAM-core egress *in the presence of
+fast-dispatch traffic*.
+
+### Why an interaction is mechanically plausible
+
+Fast dispatch keeps dispatch kernels resident and moving on the same NoC the drainer ships on. A DRISC egresses
+from a die-edge DRAM endpoint whose route to the PCIe tile differs from a worker's, so it is the one combination
+where drainer egress and dispatch traffic share links they otherwise would not. That is a testable next step:
+vary dispatch INTENSITY (number of CQs, dispatch core placement) with the DRISC arm fixed.
+
+### Standing caveats
+
+- 3 hangs total. Rare-event statistics, and the three took 4, 31 and ~34 runs to appear -- huge variance.
+- Grid differs between the arms that hang (120 under fast dispatch when FULL_GRID is unset, 110 elsewhere).
+  Pin the grid before treating the interaction as established.
+- No early-warning signal: probes stay flat (ack 163-188 ns, worker 701-742) across every clean run in all four
+  cells.

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -21,6 +22,7 @@
 #include <thread>
 
 #include <tt-metalium/allocator.hpp>
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -515,14 +517,32 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // legal on a worker at all.
     const bool tensix_drain = drain_on_tensix();
     const char* sd_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (tensix_drain && (sd_env == nullptr || *sd_env == '\0' || *sd_env == '0')) {
-        log_warning(
-            tt::LogMetal,
-            "[perf-debug profiler] Device {}: TT_METAL_PERF_DEBUG_DRAIN_TENSIX needs "
-            "TT_METAL_SLOW_DISPATCH_MODE=1 (a resident worker program cannot coexist with fast dispatch)",
+    const bool slow_dispatch = sd_env != nullptr && *sd_env != '\0' && *sd_env != '0';
+
+    // A Tensix drainer under FAST dispatch, which this used to refuse outright ("a resident worker program
+    // cannot coexist with fast dispatch"). It can, on ONE core: dispatch_core_manager pops a worker off the
+    // BACK of the dispatch pool for the real-time profiler and REMOVES it from logical_dispatch_cores, so FD
+    // never allocates it. With the RT profiler off, that core is idle and a resident non-CQ program can own it.
+    //
+    // This matters because it is the missing cell of the 2x2. Every "Tensix survives where the DRISC hangs"
+    // result compared DRISC+fast against Tensix+slow -- two variables at once -- precisely BECAUSE the Tensix
+    // arm was believed to be slow-dispatch-only. It is not, and core type can finally be tested with dispatch
+    // mode held fixed.
+    std::optional<CoreCoord> fd_tensix_core;
+    if (tensix_drain && !slow_dispatch) {
+        auto rt_core = MetalContext::instance(context_id).get_dispatch_core_manager().get_reserved_realtime_profiler_core(
             device_id);
-        disarm_producers(mesh_device, device_id);
-        return false;
+        if (!rt_core.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: no reserved real-time-profiler core to borrow, so a Tensix "
+                "drainer has nowhere to live under fast dispatch (reservation is skipped for non-MMIO chips, "
+                "ETH dispatch, fabric tensix datamover, and Quasar) -- use TT_METAL_SLOW_DISPATCH_MODE=1",
+                device_id);
+            disarm_producers(mesh_device, device_id);
+            return false;
+        }
+        fd_tensix_core = CoreCoord{rt_core->x, rt_core->y};
     }
 
     // The drainer is a DRISC: one DM RISC-V on a DRAM core. Nothing else here is Blackhole-specific, but
@@ -548,8 +568,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // type. TT_METAL_PERF_DEBUG_FULL_GRID=1 drops the reservation on the DRISC arm (see full_grid()).
     // TT_METAL_PERF_DEBUG_FULL_GRID=1 gives the column back to the producers (DRISC arm only -- the Tensix
     // drainer's own core comes out of it, so it stays reserved there regardless).
-    const bool reserve_column =
-        sd_env != nullptr && *sd_env != '\0' && *sd_env != '0' && (tensix_drain || !full_grid());
+    const bool reserve_column = slow_dispatch && (tensix_drain || !full_grid());
     const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
@@ -604,12 +623,19 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // and the producers keep the FULL compute grid -- the offered load is then identical to the
             // DRISC runs, which is the only way the two are comparable.
             // Column gx is the one held back above; drainer d takes row d of it.
-            TT_FATAL(
-                d < gy,
-                "drainer {} does not fit the reserved column (only {} rows)",
-                d,
-                gy);
-            ctx.drisc_logical[d] = CoreCoord{gx, d};
+            // Slow dispatch: the held-back column is free, drainer d takes row d of it. Fast dispatch: the
+            // column belongs to dispatch, so borrow the idle RT-profiler core instead (see above). Either way
+            // the drainer sits OUTSIDE the producer grid, which is what keeps the two arms comparable.
+            if (fd_tensix_core.has_value()) {
+                ctx.drisc_logical[d] = *fd_tensix_core;
+            } else {
+                TT_FATAL(
+                    d < gy,
+                    "drainer {} does not fit the reserved column (only {} rows)",
+                    d,
+                    gy);
+                ctx.drisc_logical[d] = CoreCoord{gx, d};
+            }
             ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::WORKER);
             drisc_phys = cluster.get_physical_coordinate_from_logical_coordinates(
                 device_id, ctx.drisc_logical[d], CoreType::WORKER, /*no_warn=*/true);
