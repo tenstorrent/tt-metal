@@ -1040,7 +1040,26 @@ Result conv2d_L1(
                     while (osw_mm > 8 || (n_ntiles_mm % osw_mm) != 0) {
                         osw_mm--;
                     }
-                    mm1d_cfg->in0_block_w = full_k_ntiles_mm;
+                    // [#48552] K-SPILL the plain-matmul Program B when the full-K single block of weights would
+                    // not fit L1 (layer4 conv2 512->512 3x3: per_core_N*full_K = 16*144 = 2304 tiles ~= 4.6 MB).
+                    // Streaming weights from DRAM K-block-by-K-block (in0_block_w < full_K, num_blocks > 1) drops
+                    // the resident weights to in0_block_w*N (e.g. 8*16 = 128 tiles ~= 256 KB) and routes through the
+                    // plain matmul's DRAM-weights K-spill accumulate -- the capability validated by
+                    // test_matmul_dram_weights_kspill.py (Blocker A). This is what lets a "would-be block-sharded"
+                    // layer4 conv run HEIGHT_SHARDED through the plain matmul, dodging the fused conv_bmm 0x19
+                    // (Blocker B) entirely -- no cross-core K-reduction (all K stays on one core, just streamed).
+                    // Small-K convs (layers 1-3, weights well under L1) KEEP the full-K single block (no spill, no
+                    // dependence on the K-spill accumulate), so they are unaffected.
+                    uint32_t in0_blk_w_mm = full_k_ntiles_mm;
+                    constexpr uint32_t kMaxSingleBlockWeightTiles = 1024;  // ~2 MB; above this, stream (K-spill)
+                    if (n_ntiles_mm * full_k_ntiles_mm > kMaxSingleBlockWeightTiles) {
+                        uint32_t k_blk = 8;
+                        while (k_blk > 1 && (full_k_ntiles_mm % k_blk) != 0) {
+                            k_blk--;
+                        }
+                        in0_blk_w_mm = k_blk;
+                    }
+                    mm1d_cfg->in0_block_w = in0_blk_w_mm;
                     mm1d_cfg->per_core_N = n_ntiles_mm;
                     mm1d_cfg->out_block_w = n_ntiles_mm;
                     mm1d_cfg->out_subblock_w = osw_mm;
