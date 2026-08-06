@@ -1235,6 +1235,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         slot_remap=None,
         enable_trace=False,
         user_slots=None,
+        positions=None,
         *,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
@@ -1249,6 +1250,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         Sampling update commands are mandatory. Slot remaps are applied before
         parameter/state updates and seed advancement.
+
+        ``positions`` carries the absolute decode positions. A state reset zeroes the
+        seed counters, so without them a re-admitted seeded request restarts its RNG
+        stream from token 0.
         """
         self._apply_sampling_slot_remap(slot_remap)
         if sampling_params is not None:
@@ -1259,6 +1264,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 reload_sampling_params=reload_sampling_params,
                 reset_sampling_state=reset_sampling_state,
                 user_slots=user_slots,
+                positions=positions,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
             )
