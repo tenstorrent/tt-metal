@@ -24,6 +24,7 @@ TTTv1 source for precision recipes:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -144,8 +145,11 @@ class TransformerBlock1D(LightweightModule):
         return out
 
     def prefill_forward(
-        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx
+        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size: int = 1
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         residual = x
 
         attn_in = self.attention_norm.prefill_forward(x)
@@ -157,6 +161,7 @@ class TransformerBlock1D(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         attn_out = ttnn.to_memory_config(attn_out, self.prefill_residual_memcfg)
 
@@ -187,9 +192,12 @@ class TransformerBlock1D(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        batch_size: int = 1,
     ):
         if mode == "prefill":
-            return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            return self.prefill_forward(
+                x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size=batch_size
+            )
         return self.decode_forward(x, current_pos, rot_mats, page_table)
 
 
@@ -298,6 +306,21 @@ class Llama33_70BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
+    # per-group batch; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
+    # generator.py:679-700) so the eager norm+lm_head tail + full-vocab readback run once instead of 4×.
+    # At S=128 the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe).
+    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop. Llama-3.3-70B has no
+    # QKV bias and no Q/K norm, so its prefill is fully row-independent → batched prefill is bit-safe
+    # (same reasoning as the 1B/3B ports).
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens).
@@ -350,20 +373,33 @@ class Llama33_70BConfig:
 class _Llama33_70BWHTuning:
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. Kept on
+    # for consistency with the 1B/3B/family ports + long-prompt prefill; inert on the 128-bucket
+    # short-context workload (only fires for seq_len > 128, e.g. long prompts).
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_llama33_70b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llama33_70BWHTuning:
     """Pick WH L1 tuning knobs for Llama-3.3-70B on T3K.
 
-    The 70B FF is wide (intermediate=28672 → 3584 per device on T3K); the prefill FF1/FF3
-    matmul is chunked at ``mlp_prefill_len_cutoff=256`` to bound L1, mirroring the proven
-    Qwen3-32B / Qwen2.5-7B T3K value (256 divides every prefill chunk size: 2048/1024/512;
-    128-token smoke prefill is below the cutoff so it is not reshaped). ``decode_spill_w1_to_dram``
-    stays off; re-evaluate if decode batch-32 trips L1 circular-buffer validation.
+    The 70B FF is wide (intermediate=28672 → 3584 per device on T3K); the prefill FF1/FF3 matmul is
+    chunked at ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``)
+    and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci FF prefill (``[1,1,B*S,dim]``,
+    B*S=4096 at the 128 bucket) this runs 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of
+    256 (``per_core_M=1``) — matching TTTv1's blocking on the ~80%-FLOP block (this is the worst model,
+    so the biggest absolute win). 1024 divides every folded prefill length ≥1024 (all power-of-2
+    products of pb∈{1,2,4,8,16,32} × bucket∈{128,512,1024,2048}); shorter folds skip the reshape. The
+    earlier 256 was a 7B-on-N300 inheritance (per-device FF shard 9472 ≫ the T3K 70B shard 3584), so
+    its tighter-L1 motive does not apply here; 1024 fits — TTTv1 runs it for this exact model on this
+    box. Output is unchanged: ``in0_block_w`` / the K-contraction are independent of the M-tiling, so
+    only ``per_core_M`` changes. ``decode_spill_w1_to_dram`` stays off; re-evaluate if decode batch-32
+    trips L1 circular-buffer validation.
     """
     t = _Llama33_70BWHTuning()
-    t.mlp_prefill_len_cutoff = 256
+    t.mlp_prefill_len_cutoff = 1024
     t.mlp_decode_spill_w1_to_dram = False
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"MLP tuning for Llama-3.3-70B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
@@ -449,6 +485,7 @@ def _build_decoder_layer(
                 q_chunk_size=0,
                 k_chunk_size=0,
             ),
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -482,6 +519,7 @@ def _build_decoder_layer(
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
             decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -856,7 +894,11 @@ class Llama33_70BTransformer1D(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for i, layer in enumerate(self.layers):
             activation_dtype = self.activation_dtypes[i]
@@ -864,7 +906,7 @@ class Llama33_70BTransformer1D(LightweightModule):
                 old = x
                 x = ttnn.typecast(x, activation_dtype)
                 ttnn.deallocate(old)
-            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
 
         if get_last_token == -1:
             return x
@@ -909,6 +951,7 @@ class Llama33_70BTransformer1D(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         rot_mats = rot_mats_global
         if mode == "prefill":
@@ -920,6 +963,7 @@ class Llama33_70BTransformer1D(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 get_last_token=get_last_token,
+                batch_size=batch_size,
             )
         return self.decode_forward(x, current_pos, rot_mats, page_table=page_table)
 
@@ -1140,10 +1184,21 @@ class EagerLlama33_70BExecutor:
 class TracedLlama33_70BExecutor:
     """Thin wrapper: passes Llama33_70B model to TracedLLMExecutor."""
 
-    def __init__(self, model: Llama33_70BTransformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+    def __init__(
+        self,
+        model: Llama33_70BTransformer1D,
+        mesh_device: ttnn.MeshDevice,
+        model_args=None,
+        ondevice_decode_loop: bool = False,
+    ):
         if model_args is not None:
             model.model_args = model_args
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_llama_executor_named_modules)
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_llama_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+        )
 
     @property
     def model(self):

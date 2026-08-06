@@ -336,6 +336,46 @@
   team: ttnn
   category: data_movement
 
+- name: ccl nightly tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  skus:
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U07M7QZ0BQA # Camilo Vega
+  team: ttnn
+  category: ccl
+
+- name: Galaxy CCL tests
+  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: ccl
+
+- name: Galaxy MoE tests
+  cmd: |
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe &&
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: ccl
+
+- name: BH Galaxy CCL tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
+  skus:
+    bh_galaxy:
+      timeout: 40
+  owner_id: U07M7QZ0BQA # Camilo Vega
+  team: ttnn
+  category: ccl
+
 - name: ttnn nightly docs examples tests
   # docs_examples runs on viommu-stable SKUs.
   cmd: 'pytest tests/ttnn/docs_examples -xv -m "not disable_fast_runtime_mode" --timeout=600'
