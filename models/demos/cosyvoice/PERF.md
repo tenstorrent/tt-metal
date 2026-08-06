@@ -1,8 +1,9 @@
 # Model performance and accuracy
 
 Performance and accuracy numbers for CosyVoice-300M, collected from direct pytest runs in
-`models/demos/cosyvoice/tests/`. Full derivations and the reasoning behind each figure are in
-[`docs/perf.md`](docs/perf.md).
+`models/demos/cosyvoice/tests/`. This is the single source for both — every figure below was
+measured on the hardware named in *Environment*, none is an estimate, and none is `xfail`-ed. Where
+a target is missed the number is stated with the reason and the identified lever.
 
 ## Environment
 - Device: Blackhole `p150a`
@@ -102,6 +103,42 @@ geometry. Output is bit-identical. **It was a software limit, not a silicon one*
 plainly because the first reading of `:762` was that convolutions cannot be traced on this stack,
 and that reading would have written off both remaining stages.
 
+### Why the KV cache is fixed-width — 73× on the only pass that counts
+
+A KV cache that grows one slot per token gives **every step a new attention key size** — 210, 211,
+212 — and TTNN's program cache is keyed on tensor shape, so every token paid a fresh JIT compile.
+
+| | mean/step | tok/s |
+|---|---:|---:|
+| growing cache, cold (what a real utterance gets) | `2595.34 ms` | `0.4` |
+| growing cache, warm (a second pass over the same sizes) | `28.32 ms` | `35.3` |
+| **fixed-width cache, first pass** | **`34.10 ms`** | **`29.3`** |
+
+First and last of 32 steps: `29.08 → 3299.99 ms` cold, `28.41 → 28.53 ms` warm. The warm pass is
+dead flat, so the arithmetic cost of a longer cache is negligible — **98.9 % of the cold cost was
+compilation.** `forward_chunk_fixed()` holds the key width at `max_len`, leaving two shapes for a
+whole utterance; `cache_width()` rounds to a multiple of 128 so a handful of buckets covers every
+request. The `34.10` against the warm `28.32` is the trade: attention over 256 slots, not 210–241.
+
+**The live tokens sit at the *end* of the buffer.** ESPnet's `rel_shift` skews the score block
+assuming the queries are the last `t1` of the `K` key positions. Left-aligning gives every query the
+relative geometry of a position it is not at — wrong everywhere, obviously wrong nowhere, and no
+shape assertion catches it. `test_device_fixed_shape_cache_matches_the_growing_one` does.
+
+### Vocoder op costs
+
+| op | shape | latency |
+|---|---|---:|
+| iSTFT | 18 049 frames → 72 192 samples (3.27 s of audio) | **`1.115 ms`** |
+| iSTFT | 1 024 frames → 4 092 samples | `0.853 ms` |
+| `ConvTranspose1d` | 512→256, k=16, s=8, L=282 (`ups[0]`) | **`3.886 ms`** |
+
+**The inverse transform is cheap and `conv_transpose2d` at `H=1` is not.** The whole iSTFT costs
+1.115 ms for 3.27 s of audio — an RTF contribution of 0.00034 — while a single upsample layer costs
+3.886 ms, **3.5× the entire iSTFT**, and there are two of them. The op that was supposed to be the
+hard part is negligible; the op standing in for a missing `ttnn.conv_transpose1d` dominates the
+stage.
+
 ## Accuracy
 
 | Module | PCC |
@@ -114,6 +151,40 @@ and that reading would have written off both remaining stages.
 | traced vs untraced decode | `1.0000000000` (bit-exact) |
 | iSTFT vs captured golden | `0.9999298811` |
 
+### Two levers that mattered more than expected
+
+**High math fidelity belongs on the matmuls, not only the convolutions.** `MathFidelity.HiFi4` with
+`fp32_dest_acc_en` on `ttnn.linear`/`ttnn.matmul` moved the CFM estimator's *last* Euler step from
+`0.9986` to `0.9992` — a 41 % error reduction — and its first from `0.9998` to `0.9998`. The gap
+widens with `t` because later steps carry larger activations, and it compounds because the ten
+evaluations are *integrated*. **Depth, not op type, decides fidelity.**
+
+**`ttnn.cumsum` is 2000× less accurate than torch's**, against an fp64 reference over the real
+72 192-sample f0:
+
+```
+device cumsum, fp32    max|d| 5.62e-01    (t=1k 2.3e-07, t=36k 0.114)
+torch  cumsum, fp32    max|d| 2.44e-04
+```
+
+Phase is `2π·(cumsum mod 1)`, so 0.56 absolute is **more than half a cycle** — the harmonic bank is
+randomised by the end of the utterance. At T=1024 and T=8192 the error is ~1e-5, which is why this
+passed every module-level test and surfaced only end to end. `phase_mod1()` reduces each block total
+mod 1 before accumulating, keeping every partial sum O(1): `0.843 → 0.99999745`.
+
+### Why the waveform gate injects the reference excitation
+
+f0 error **integrates** into excitation phase. Drift is `Σ(Δf0)/sr` over samples, so holding it under
+a tenth of a cycle across 72 192 samples needs a mean f0 error below **0.03 Hz** — 1.5e-4 relative at
+200 Hz, about 13 mantissa bits. The device's f0 predictor lands at ~16 Hz max error even with fp32
+weights *and* activations, because Tensix HiFi4 is four bfloat16 passes rather than true fp32.
+
+This is a property of the model, not a defect to fix. **Sample-level waveform comparison is only
+meaningful with the reference excitation injected**, which is what the PCC gate does; for a
+self-computed excitation the honest metrics are the energy envelope and the RMS, and those hold
+(`0.9975` envelope, RMS within 6 %). Same discipline the CFM's initial noise and `SineGen`'s two
+draws already follow.
+
 ## Speech quality — 5 languages, 2 modes
 
 Scored with whisper `large-v3`; CER for CJK, WER for English.
@@ -125,6 +196,17 @@ Scored with whisper `large-v3`; CER for CJK, WER for English.
 
 Cantonese is a **model** limitation, not a port defect: the PyTorch reference scores *worse* on the
 same text through the same ASR (`83.87 %` zero-shot vs this port's `64.52 %`).
+
+## Operational notes
+
+**`l1_small_size` scales with conv *configurations*, not tensor size.** `ttnn.conv1d` allocates
+prepared weights from that bank and keeps them, so three models live at once (~80 convs) exhausts
+the 32 KB a single-model test uses — failing part-way through the *second* utterance with
+`Not enough space to allocate 480 B L1_SMALL buffer`. Zero-shot needs 128 KB; cross-lingual needs
+256 KB, because its prompt is 1289 mel frames against 326.
+
+**Persist the JIT cache across runs.** Mounting `/root/.cache/tt-metal-cache` took the first
+utterance from `161.7 s` to `14.8 s` wall. Every distinct sequence length is a fresh compile.
 
 ## Perf coverage
 Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
