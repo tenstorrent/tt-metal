@@ -19,7 +19,7 @@ order they catch things:
 
 Per-component numerics are gated elsewhere and are not repeated here: the conditioner in
 `test_text_encoder_minimax_h3.py`, the DiT in `test_transformer_minimax_h3.py`, both VAEs in
-`test_vae_*` and `test_audio_vae_minimax_h3.py`, all at this same 768P/5s working point.
+`test_vae_*` and `test_audio_minimax_h3.py`, all at this same 768P/5s working point.
 
 Artifacts are written to a stable path so the output can be *looked at*. Every numeric gate below
 can pass on video that is visibly wrong, and the two failure modes whole-tensor statistics hide best

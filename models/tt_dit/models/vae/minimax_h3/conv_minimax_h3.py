@@ -450,17 +450,6 @@ def reflect_pad_hw(x_BTHWC: ttnn.Tensor, pad_h: int | tuple[int, int], pad_w: in
     return x_BTHWC
 
 
-def reflect_pad_bottom_right(x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-    """The downsample's asymmetric ``F.pad(..., (0,1,0,1), mode="reflect")``.
-
-    One extra row at the bottom and one column at the right, reflected -- so the
-    stride-2 conv that follows produces exactly ``ceil(size / 2)``.
-    """
-    height, width = x_BTHWC.shape[2], x_BTHWC.shape[3]
-    x_BTHWC = ttnn.concat([x_BTHWC, slice_dim(x_BTHWC, 2, height - 2, height - 1)], dim=2)
-    return ttnn.concat([x_BTHWC, slice_dim(x_BTHWC, 3, width - 2, width - 1)], dim=3)
-
-
 def slice_dim(x: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
     starts = [0] * len(x.shape)
     stops = list(x.shape)

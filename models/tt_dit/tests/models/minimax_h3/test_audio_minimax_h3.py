@@ -20,10 +20,14 @@ before ``conv_post``, where LTX's narrowest is 24. ``_AlignedOutConv1d`` pads 8 
 while ``SnakeBeta`` keeps 8, so that boundary gets its own case.
 """
 
+from __future__ import annotations
+
 import copy
 import json
 import math
 import os
+import struct
+import time
 
 import pytest
 import torch
@@ -37,8 +41,16 @@ from ....layers.audio_ops import Conv1dViaConv3d
 # ``register_h3_audio_blockings()``, which is what puts the H3 audio conv shapes into
 # ``_FP32_BLOCKINGS``. Without it every conv here would silently fall back to the conservative
 # ``C_in_block = 32`` default and measure a *different op* than production (STATE.md am. 111).
-from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
+from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
+    assert_weight_norm_axes_consistent,
+    convert_minimax_h3_audio_state_dict,
+    fuse_attention_biases,
+    fuse_weight_norm,
+    remap_amp_activations,
+)
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
+from ....parallel.config import ParallelFactor
+from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
@@ -460,3 +472,471 @@ def test_roundtrip(mesh_device):
     psnr = _psnr(expected, actual)
     assert psnr >= 28.0, f"round-trip PSNR {psnr:.2f} dB < 28 dB"
     assert _log_mel_distance(expected, actual) <= 5.0, "round-trip spectrum drifted"
+
+
+# -------------------------------------------------------------------- weight-norm fusion and checkpoint conversion
+#
+# Gate M8d.0: the MiniMax-H3 audio checkpoint conversion. Host only, no device.
+#
+# This is the cheapest high-value gate in the audio port, because it kills the two bugs
+# most likely to produce a decoder that is *well-formed but subtly wrong*:
+#
+# 1. **The ConvTranspose1d weight-norm axis.** ``torch.nn.utils.weight_norm`` defaults to
+#    ``dim=0``, and for ``ConvTranspose1d`` axis 0 is ``in_channels``, not ``out_channels``,
+#    because the weight is stored ``(in, out, k)``. Fusing over the wrong axis still yields
+#    correctly-shaped weights, so nothing downstream complains -- the audio just sounds
+#    wrong, and it gets misattributed to precision.
+# 2. **The ``activations`` interleave.** H3 stores six activations per AMP block flat;
+#    ``AMPBlock1`` wants two lists of three. Swapping them is equally invisible.
+#
+# Correctness is measured against torch itself: build the reference module, call
+# ``remove_weight_norm``, and compare. That makes the reference the oracle rather than a
+# second copy of the same arithmetic.
+
+
+def _checkpoint_header(path: str) -> dict:
+    """safetensors header only -- shapes without reading 605 MB of tensor data."""
+    with open(path, "rb") as handle:
+        length = struct.unpack("<Q", handle.read(8))[0]
+        return {k: v for k, v in json.loads(handle.read(length)).items() if k != "__metadata__"}
+
+
+def test_fuse_weight_norm_matches_torch_conv1d():
+    """``fuse_weight_norm`` == what torch's own ``remove_weight_norm`` leaves behind."""
+    torch.manual_seed(0)
+    conv = torch.nn.Conv1d(16, 32, kernel_size=7)
+    conv = torch.nn.utils.weight_norm(conv)
+    with torch.no_grad():
+        conv.weight_g.normal_(1.0, 0.2)
+        conv.weight_v.normal_()
+
+    fused = fuse_weight_norm(conv.weight_g.detach(), conv.weight_v.detach())
+    torch.nn.utils.remove_weight_norm(conv)
+
+    assert fused.shape == conv.weight.shape
+    relative = (fused - conv.weight).abs().max().item() / conv.weight.abs().max().item()
+    assert relative < 1e-6, f"Conv1d fusion differs from torch by {relative:.3e}"
+
+
+def test_fuse_weight_norm_matches_torch_conv_transpose1d():
+    """The load-bearing case: axis 0 of a ConvTranspose1d weight is ``in_channels``."""
+    torch.manual_seed(1)
+    conv = torch.nn.ConvTranspose1d(32, 16, kernel_size=4, stride=2)
+    assert conv.weight.shape == (32, 16, 4), "ConvTranspose1d weight is (in, out, k)"
+    conv = torch.nn.utils.weight_norm(conv)
+    with torch.no_grad():
+        conv.weight_g.normal_(1.0, 0.2)
+        conv.weight_v.normal_()
+    assert conv.weight_g.shape == (32, 1, 1), "weight_g is per-in_channel, confirming dim=0"
+
+    weight_g = conv.weight_g.detach().clone()
+    weight_v = conv.weight_v.detach().clone()
+    fused = fuse_weight_norm(weight_g, weight_v)
+    torch.nn.utils.remove_weight_norm(conv)
+
+    relative = (fused - conv.weight).abs().max().item() / conv.weight.abs().max().item()
+    assert relative < 1e-6, f"ConvTranspose1d fusion differs from torch by {relative:.3e}"
+
+    # Show that reducing over the wrong axis is silently type-correct: same shape, wrong
+    # values. That is precisely why the axis needs a test rather than a comment.
+    wrong_norm = weight_v.transpose(0, 1).flatten(1).norm(dim=1).view(1, -1, 1)
+    wrong = weight_g * weight_v / wrong_norm
+    assert wrong.shape == fused.shape, "the wrong axis still type-checks -- hence this test"
+    assert not torch.allclose(wrong, fused, atol=1e-4), "the two axes agree, so this test proves nothing"
+
+
+def test_remap_amp_activations_interleaves_correctly():
+    """``activations.{0,2,4}`` -> ``acts1.{0,1,2}`` and ``{1,3,5}`` -> ``acts2.{0,1,2}``."""
+    state = {f"resblocks.0.activations.{i}.act.alpha": torch.tensor([float(i)]) for i in range(6)}
+    remapped = remap_amp_activations(state)
+
+    for i in range(3):
+        assert remapped[f"resblocks.0.acts1.{i}.act.alpha"].item() == 2 * i
+        assert remapped[f"resblocks.0.acts2.{i}.act.alpha"].item() == 2 * i + 1
+    assert not any("activations." in key for key in remapped), "an activations key survived"
+
+
+def test_fuse_attention_biases_rejects_a_nonzero_k_bias():
+    """A ``zero_k_bias`` that is not zero must fail loudly, not be dropped."""
+    state = {
+        "pre_block.attn.q_bias": torch.ones(8),
+        "pre_block.attn.v_bias": torch.full((8,), 2.0),
+        "pre_block.attn.zero_k_bias": torch.zeros(8),
+    }
+    fused = fuse_attention_biases(state)
+    bias = fused["pre_block.attn.qkv.bias"]
+    assert bias.shape == (24,)
+    assert torch.equal(bias[:8], torch.ones(8))
+    assert torch.equal(bias[8:16], torch.zeros(8))
+    assert torch.equal(bias[16:], torch.full((8,), 2.0))
+
+    state["pre_block.attn.zero_k_bias"] = torch.ones(8)
+    with pytest.raises(AssertionError, match="not all zero"):  # allow-pytest.raises: guards a silent data-loss path
+        fuse_attention_biases(state)
+
+
+def test_real_checkpoint_axes_and_conversion():
+    """The real 1087-tensor checkpoint: axis assumptions hold and every pair fuses."""
+    weights_dir = _weights_dir()
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    from safetensors.torch import load_file
+
+    state = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+    assert_weight_norm_axes_consistent(state)
+
+    num_pairs = len([k for k in state if k.endswith(".weight_g")])
+    assert num_pairs > 100, f"expected ~172 weight-normed convs, found {num_pairs}"
+
+    converted = convert_minimax_h3_audio_state_dict(state)
+    assert not [k for k in converted if k.endswith((".weight_g", ".weight_v"))], "a weight-norm pair survived"
+    assert not [k for k in converted if k.endswith(("q_bias", "v_bias", "zero_k_bias"))], "an attn bias survived"
+    assert not [k for k in converted if "activations." in k], "an activations key survived"
+    # Every fused conv should have produced exactly one weight, and nothing else was lost.
+    assert (
+        len(converted) == len(state) - num_pairs - 2
+    ), f"key count {len(converted)} does not match {len(state)} minus {num_pairs} g/v pairs and 2 folded biases"
+
+
+def test_real_checkpoint_fusion_matches_reference_module():
+    """Fused weights equal what the reference's own ``remove_weight_norm`` produces."""
+    weights_dir = _weights_dir()
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
+    from diffusers import AutoencoderKLMiniMaxH3Audio
+    from safetensors.torch import load_file
+
+    config = {
+        k: v
+        for k, v in json.loads(open(os.path.join(weights_dir, "config.json")).read()).items()
+        if not k.startswith("_")
+    }
+    reference = AutoencoderKLMiniMaxH3Audio(**config)
+    state = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+    reference.load_state_dict(state)
+
+    for module in reference.modules():
+        if hasattr(module, "weight_g"):
+            torch.nn.utils.remove_weight_norm(module)
+    expected = dict(reference.state_dict())
+
+    converted = convert_minimax_h3_audio_state_dict(state)
+
+    checked = 0
+    worst_key, worst = None, 0.0
+    for key, value in expected.items():
+        if not key.endswith(".weight") or key not in converted:
+            continue
+        scale = max(value.abs().max().item(), 1e-12)
+        relative = (converted[key] - value).abs().max().item() / scale
+        if relative > worst:
+            worst_key, worst = key, relative
+        checked += 1
+    assert checked > 100, f"only compared {checked} fused weights"
+    assert worst < 1e-6, f"worst fused weight is {worst_key} at relative {worst:.3e}"
+
+
+# -------------------------------------------------------------------- T-parallel audio decode
+#
+# T-parallel audio decode: correctness against the single-device path, and the speedup.
+#
+# Audio decode is 1.284 s against a ~0.05 s target, is **device-bound** (trace buys 1.07 %,
+# STATE.md amendment 60), and runs on **one device**. The visual halves got 32x from
+# data-parallelism over `(clip, tile)` work units; a single 5 s audio stream is one unit, so
+# none of that applies. The equivalent lever here is sharding the time axis across the mesh --
+# which ``vocoder_ltx.Vocoder`` already implements (``parallel_config.factor`` threads through
+# ``_upload_BCT``'s T-alignment padding, ``_forward_device``'s partition, and the closing
+# T-gather) and ``MiniMaxH3AudioDecoder`` already accepts. The shipping path simply passes
+# ``None``.
+#
+# Sharded output is gated against the unsharded output of the same weights, so a speedup that
+# comes from dropping work fails rather than reports.
+
+
+MESH = [
+    pytest.param(
+        (4, 8),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
+        id="mesh4x8",
+    )
+]
+# (t_factor, mesh_axis). Axis 1 is the 8-wide axis of the 4x8 Galaxy, axis 0 the 4-wide one.
+# t_factor=8 on axis 1 measures 0.898 s but returns a *different signal* (PSNR -6.3 dB vs
+# the single-device path), so it is xfail-marked rather than removed: the bug is worth
+# finding, and 207 frames padding to 256 makes 256/8 = 32 exactly one tile per shard, which
+# is the obvious suspect. See STATE.md amendment 63.
+FACTORS = [(1, 1), (4, 0), (8, 1)]
+KNOWN_BROKEN = {(8, 1)}
+NUM_LATENT_FRAMES = 207
+ITERS = 3
+
+
+def _best(fn) -> float:
+    fn()
+    best = float("inf")
+    for _ in range(ITERS):
+        t0 = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+
+def _build(mesh_device, config, converted, parallel_config, ccl_manager):
+    decoder = MiniMaxH3AudioDecoder(
+        latent_channels=config["latent_channels"],
+        latent_dim=config["latent_dim"],
+        decoder_dim=config["decoder_dim"],
+        decoder_rates=tuple(config["decoder_rates"]),
+        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
+        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
+        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    decoder.load_torch_state_dict(converted, strict=False)
+    return decoder
+
+
+def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
+    """Say *where* a diverging shard layout diverges. "PSNR -10.2 dB" alone names no bug.
+
+    Three shapes of answer, each pointing somewhere different:
+
+    - concentrated at the internal shard boundaries -> the halo exchange is wrong, and each conv in the
+      stack needs `kernel_size - 1` samples of its neighbour that it is not getting;
+    - uniform across the whole signal -> the shard layout itself is wrong, not its edges;
+    - a prefix or suffix only -> the causal padding or the final trim is off by a shard.
+
+    Also reports the best cross-correlation lag: a diverging-but-highly-correlated output at a nonzero
+    lag is a *shift*, which is a trim bug rather than a numerics one, and PSNR cannot distinguish those.
+    """
+    import numpy as np
+
+    error = (parallel - baseline).abs()
+    total = baseline.shape[-1]
+    logger.info(
+        f"  divergence localization, t_factor={factor}: overall mean {error.mean():.6f} "
+        f"max {error.max():.4f} against baseline absmax {baseline.abs().max():.4f}"
+    )
+    per_shard = []
+    for shard in range(factor):
+        lo, hi = shard * total // factor, (shard + 1) * total // factor
+        per_shard.append(float(error[..., lo:hi].mean()))
+    logger.info(f"  per-shard mean error: {[f'{v:.6f}' for v in per_shard]}")
+
+    # Boundary vs interior. A halo bug puts the error in a narrow band at each internal boundary.
+    window = 128
+    boundary, interior = [], []
+    for shard in range(1, factor):
+        cut = shard * total // factor
+        boundary.append(float(error[..., max(0, cut - window) : cut + window].mean()))
+    mask = torch.ones(total, dtype=torch.bool)
+    for shard in range(1, factor):
+        cut = shard * total // factor
+        mask[max(0, cut - window) : cut + window] = False
+    interior = float(error[..., mask].mean())
+    logger.info(
+        f"  boundary bands (+-{window}): {[f'{v:.6f}' for v in boundary]}  interior {interior:.6f}  "
+        f"ratio {max(boundary) / max(interior, 1e-12):.2f}"
+    )
+
+    a = baseline[0, 0].numpy()
+    c = parallel[0, 0].numpy()
+    best, best_lag = -2.0, None
+    for lag in range(-4096, 4097, 32):
+        x, y = (a[-lag:], c[: len(c) + lag]) if lag < 0 else (a[: len(a) - lag], c[lag:])
+        n = min(len(x), len(y))
+        if n < 2048:
+            continue
+        r = float(np.corrcoef(x[:n], y[:n])[0, 1])
+        if r > best:
+            best, best_lag = r, lag
+    logger.info(
+        f"  correlation at lag 0: {float(np.corrcoef(a, c)[0, 1]):.4f}; "
+        f"best {best:.4f} at lag {best_lag} (nonzero lag => a shift, i.e. a trim bug)"
+    )
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
+def test_audio_decode_t_parallel(mesh_device):
+    weights_dir = _weights_dir()
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
+    from diffusers import AutoencoderKLMiniMaxH3Audio
+    from loguru import logger
+    from safetensors.torch import load_file
+
+    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
+
+    config = _config(weights_dir)
+    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
+    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
+    converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
+
+    torch.manual_seed(2)
+    latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
+
+    baseline_out = None
+    baseline_s = None
+    results = []
+    for factor, axis in FACTORS:
+        pc = None if factor <= 1 else ParallelFactor(factor=factor, mesh_axis=axis)
+        ccl = None if pc is None else CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+        try:
+            decoder = _build(mesh_device, config, converted, pc, ccl)
+            out = decoder(latents)
+            seconds = _best(lambda: decoder(latents))
+        except Exception as exc:  # a factor the stack rejects is a result, not a test failure
+            logger.warning(f"t_factor={factor} axis={axis} FAILED: {str(exc)[:160]}")
+            results.append((factor, axis, None, None))
+            continue
+
+        if baseline_out is None:
+            baseline_out, baseline_s = out, seconds
+            psnr = float("inf")
+        else:
+            assert out.shape == baseline_out.shape, f"factor {factor}: {out.shape} != {baseline_out.shape}"
+            psnr = _psnr(baseline_out, out)
+        results.append((factor, axis, seconds, psnr))
+        logger.info(
+            f"PERF audio_decode t_factor={factor} axis={axis}: {seconds:.4f} s "
+            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr:.1f} dB"
+        )
+        if psnr < 40.0 and out is not baseline_out:
+            _localize_divergence(baseline_out.float(), out.float(), factor=factor, logger=logger)
+        del decoder
+
+    logger.info("=== audio decode T-parallel summary ===")
+    for factor, axis, seconds, psnr in results:
+        if seconds is None:
+            logger.info(f"  t_factor={factor:2d} axis={axis}: unsupported")
+        else:
+            logger.info(
+                f"  t_factor={factor:2d} axis={axis}: {seconds:.4f} s  {baseline_s / seconds:5.2f}x  "
+                f"PSNR {psnr:6.1f} dB"
+            )
+
+    # The baseline must have run, or there is nothing to compare against and every other factor was
+    # skipped for want of a reference. Without this the test PASSES when the whole stack is broken:
+    # observed once on a device left dirty by an unrelated crash, where all three factors raised
+    # TT_FATAL, each was swallowed as "unsupported", and the run reported green. A gate that cannot
+    # fail is worse than no gate.
+    baseline_ran = any(seconds is not None and factor == 1 for factor, _, seconds, _ in results)
+    assert baseline_ran, (
+        "the single-device baseline did not run, so nothing was compared. If this follows a crashed "
+        "run, reset the device (`tt-smi -glx_reset`) -- an allocator TT_FATAL here is usually a dirty "
+        "device, not a code failure"
+    )
+    ran = [(f, a) for f, a, seconds, _ in results if seconds is not None and f != 1]
+    assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"
+
+    # Any factor that ran must agree with the single-device path; a fast wrong answer fails.
+    for factor, axis, seconds, psnr in results:
+        if seconds is None or (factor, axis) in KNOWN_BROKEN:
+            continue
+        assert psnr > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr:.1f} dB"
+
+
+# -------------------------------------------------------------------- traced audio decode
+#
+# Traced vs untraced audio decode, with a correctness gate between them.
+#
+# Audio decode measures 1.273 s against a ~0.05 s target (STATE.md amendment 59). It gets
+# nothing from the data-parallelism that carried the visual path -- a 5 s clip is one stream,
+# not 224 independent work units -- but it is the opposite kind of workload from the visual
+# halves: ~1 MB tensors over many ops, so **host dispatch**, not device time, is expected to
+# dominate. ``vocoder_ltx.Vocoder`` says so itself ("the vocoder is ~70% host-bound") and
+# already carries a `@traced_function` device region plus a ``forward_traced`` entry point --
+# H3's decoder simply called the untraced ``forward_BCT``.
+#
+# Traced output must match untraced exactly-ish, so this asserts before it reports timing.
+
+
+# 300 MB covers the default path but not the precision levers: with ``MINIMAX_H3_AUDIO_ACCURATE=1`` the
+# graph grows (the depthwise MAC form does one pass per tap, and the shifted-matmul convs add
+# ``3 * kernel_size`` matmuls each), and the trace needs 375463936 B. The failure names the requirement
+# exactly -- ``mesh_trace.cpp:80``, "Creating trace buffers of size ... but only ... is allocated" -- so
+# size for the larger of the two rather than making the region depend on an env var.
+TRACED = [
+    pytest.param((1, 1), {"l1_small_size": 65536, "trace_region_size": 450_000_000}, id="single_device"),
+]
+NUM_LATENT_FRAMES = 207
+ITERS = 5
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), TRACED, indirect=["mesh_device", "device_params"])
+def test_audio_decode_traced(mesh_device):
+    weights_dir = _weights_dir()
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
+    from diffusers import AutoencoderKLMiniMaxH3Audio
+    from loguru import logger
+    from safetensors.torch import load_file
+
+    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
+
+    config = _config(weights_dir)
+    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
+    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
+    converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
+
+    torch.manual_seed(2)
+    decoder = MiniMaxH3AudioDecoder(
+        latent_channels=config["latent_channels"],
+        latent_dim=config["latent_dim"],
+        decoder_dim=config["decoder_dim"],
+        decoder_rates=tuple(config["decoder_rates"]),
+        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
+        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
+        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
+        mesh_device=mesh_device,
+    )
+    decoder.load_torch_state_dict(converted, strict=False)
+
+    latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
+
+    plain = decoder(latents)
+    traced = decoder(latents, traced=True)
+    assert traced.shape == plain.shape, f"{traced.shape} != {plain.shape}"
+
+    # Trace replays the same program on the same data, so bit-identical (PSNR inf) is the
+    # *expected* result rather than a suspicious one. It is a weak assertion on its own
+    # though -- it would read inf just as happily if traced=True had silently fallen through
+    # to the untraced path -- so check separately that a tracer was actually captured, and
+    # that the output is not trivially zero (which would also give inf).
+    tracers = type(decoder.decoder)._forward_device._tracers_keyed.get(decoder.decoder, {})
+    assert tracers, "traced=True captured no trace; the PSNR below would be meaningless"
+    assert plain.abs().max() > 1e-6, "decoder produced all-zero output; PSNR would be vacuous"
+
+    psnr = _psnr(plain, traced)
+    logger.info(f"traced vs untraced PSNR: {psnr:.2f} dB ({len(tracers)} trace(s) captured)")
+
+    untraced_s = _best(lambda: decoder(latents))
+    traced_s = _best(lambda: decoder(latents, traced=True))
+    logger.info(
+        f"PERF audio_decode_5s untraced {untraced_s:.4f} s | traced {traced_s:.4f} s "
+        f"-> {untraced_s / traced_s:.2f}x"
+    )
+
+    # Where is the 1.2 s? The traced region is only the vocoder's `_forward_device`; the
+    # latent projection round-trips through host in the middle of forward
+    # (decoder_minimax_h3_audio.py: to_torch -> transpose/contiguous -> re-upload), and the
+    # final readback is untraced too. Split them so the next step is not a guess.
+    proj_s = _best(lambda: decoder._project_latents_device(latents))
+    projected = decoder._project_latents_device(latents)
+    voc_s = _best(lambda: decoder.decoder.forward_BCT(projected))
+    voc_traced_s = _best(lambda: decoder.decoder.forward_BCT_traced(projected))
+    logger.info(
+        f"PERF split: dec_in_proj {proj_s:.4f} s | vocoder {voc_s:.4f} s | " f"vocoder traced {voc_traced_s:.4f} s"
+    )
+    decoder.release_trace()
+
+    assert psnr > 60.0, f"traced output diverges from untraced: PSNR {psnr:.2f} dB"

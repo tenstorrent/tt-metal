@@ -552,11 +552,3 @@ class MiniMaxH3Encoder3d(Module):
         return self.conv_out(
             _norm_silu(self.norm_out, h, self.dtype, parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
         )
-
-
-def pad_pixel_channels(x_BTHWC: torch.Tensor, aligned: int = 32) -> torch.Tensor:
-    """Zero-pad the 3 pixel channels up to the tile-aligned count the conv expects."""
-    channels = x_BTHWC.shape[-1]
-    if channels >= aligned:
-        return x_BTHWC
-    return torch.nn.functional.pad(x_BTHWC, (0, aligned - channels))

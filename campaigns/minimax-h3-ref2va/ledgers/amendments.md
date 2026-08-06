@@ -799,3 +799,84 @@ would have settled it before the code change is the one am. 132 already contains
 2.82× for 1.95× the rows per device, which is device-work scaling, not host-work scaling — a pipeline
 bound on host dispatch would have scaled far more weakly, as the 2-layer test's own docstring records
 for seq_len 2048–21504.
+
+## Amendment 134 (2026-08-06) — H3 test consolidation: 33 files to 19 with every test identity preserved; and two categories I proposed deleting turned out to gate real coverage, so they stayed
+
+**What the suite looked like.** 33 test files, 345 collected tests, 11.7k lines — against ltx's 12
+files and wan's 13. Not a test-count problem: ltx and wan collect 2399 tests between them, seven times
+H3's. H3 spread a *smaller* suite across three times the files. The peer pattern is one file per
+subsystem, heavily parameterized, with component gates beside the whole-subsystem gate
+(`test_vae_ltx.py` is 1200 lines holding conv, resnet, upsample *and* encoder/decoder).
+
+**What was done.** Five merges, test bodies moved verbatim:
+
+| target | absorbed | why safe |
+|---|---|---|
+| `test_transformer_minimax_h3.py` | attention, one block, token refiner, adaln cache block | all `(4, 8)`, identical device params, already shared `common.py`; **4 fewer device inits** |
+| `test_vae_minimax_h3.py` | conv, encoder, decoder | all `SINGLE_DEVICE`; **3 fewer device inits** |
+| `test_vae_parallel_minimax_h3.py` | data parallel, stitch device | differing fabric configs, so files not inits |
+| `test_audio_minimax_h3.py` | convert, T-parallel, traced | mirrors `test_audio_ltx.py` |
+| `test_performance_minimax_h3.py` | transformer block perf | matches the single `test_performance_*` in wan/mochi/sd35 |
+
+Plus 12 genuinely redundant ref2va tests deleted, 4 tracked tools moved to `tools/`, 2 dead public
+functions removed (`reflect_pad_bottom_right`, `pad_pixel_channels`).
+
+**Verification without a device.** Test *identity* diffing: all 345 node names captured before, and
+every surviving test must still collect under the same `test_name[params]` key (all 345 are unique
+across files, so the key is merge-invariant). Result: 337 collected, LOST exactly the 12 intended
+deletions, GAINED exactly the 4 new parametrize cases. 153 host-only tests pass. The merged **device**
+files are verified to collect and import, **not** verified to pass.
+
+**Three traps the merges hit, none of which a collect-only check would have caught alone.**
+
+1. `test_vae` ended up with **three** `_to_device` definitions, two identical and one genuinely
+   different — 2-arg bf16/TILE for the ViT decoder against 3-arg fp32/ROW_MAJOR with channel padding
+   for the conv path. Python resolves globals at call time, so the last definition would have captured
+   *every* earlier caller and failed with a TypeError. Renamed to `_to_device_tiled`.
+2. `test_audio` imported `_config`/`_psnr`/`_weights_dir` from `test_performance_vae` *and* defined its
+   own. The local ones shadow, and the moved code called `_weights_dir("audio_vae")` against a 0-arg
+   local. Both resolve to the same directory, so the call sites were pointed at the local one and the
+   cross-module import dropped.
+3. A `from __future__ import annotations` spliced mid-import-block is a `SyntaxError`, and it silently
+   cost the whole file: 21 audio tests vanished from the collect with no other symptom.
+
+The generalisable check is not "does it parse" but **"is any name defined twice, or both imported and
+defined"** — run across all H3 test files, now clean.
+
+**Two things I got wrong, and did not do.**
+
+*The `_weights_dir` "duplication".* The plan said it was copy-pasted across 9 test files and should be
+hoisted to `common.py`. Reading the bodies: **8 distinct implementations** sharing a name — different
+signatures (`()` vs `(subfolder)`), return types (`str | None` vs `str` vs `Path`), env precedence
+(`MINIMAX_H3_MODEL_PATH` first vs `DIFFUSERS_DIR` only) and failure modes (return `None` vs
+`pytest.skip`). Unifying them would have changed behaviour in several files. Dropped, on the evidence.
+
+*The deletions I asked for and then did not make.* I proposed removing four "A/B decision tests" on the
+grounds that they gate no correctness, and three "reference-less probes" on the grounds that nothing
+compares them against a reference. Both classifications were wrong, and wrong in the same way — I
+classified by *heuristic* (does the file mention `diffusers`? does the docstring say "probe"?) instead
+of by reading the assertions:
+
+- `test_conv_operand_split_improves_precision` carries a loose **absolute** ceiling whose stated purpose
+  is catching the blocking registration silently regressing (am. 111: 2.40e-03 unregistered against
+  1.86e-03 registered).
+- `test_depthwise_mac_is_more_accurate_than_conv1d` asserts `<= 1e-6` absolutely, gating the MAC path as
+  fp32-grade — not an ordering.
+- `test_tap_matmul_beats_conv3d` covers the `causal_narrow_out` bias-width bug class across 4 shapes.
+- `test_swiglu_half_order_needs_no_swap` pins the checkpoint's `[value; gate]` packing against
+  `diffusers.models.attention.FeedForward`, and asserts the *other* order fails so it can detect a swap.
+- `test_vae_norm_primitives` says in its own docstring that its last test assembles the primitives and
+  compares against `torch.nn.GroupNorm`. A non-diffusers reference is still a reference.
+- `test_neighbor_pad_t` isolates `_t_neighbor_pad` against a host expectation because am. 107 saw
+  T-parallel audio decode produce garbage across 381 halo calls per forward. The test I claimed covered
+  it (`test_encode_video_chunking`) is the *video* VAE's temporal chunking — a different code path.
+- `test_two_axis_all_gather_permutes_dim0_by_transpose` pins production `gathered_tile_order`
+  empirically and guards the am. 86 no-op readback that "looked like a 39 % speedup precisely because
+  it moved no data".
+
+**Method note.** "Does not mention the reference implementation" is not evidence a test gates nothing,
+and a docstring's self-deprecating title ("Primitives probe") is not evidence either. The 12 deletions
+that *were* made are the ones where redundancy was demonstrated rather than assumed: a bit-exact
+whole-layout parity gate covers the same detection across 7 cases, and the two departing tests carrying
+unique geometry (a 1:1 sounded video against a 16:9 target; a reversed nine-reference order) had that
+geometry moved **into** the gate's matrix and confirmed passing first.

@@ -4,7 +4,7 @@
 
 `ref2va` (omni-reference conditioning) is brought up in its own campaign run root,
 `campaigns/minimax-h3-ref2va/` — read its `CAMPAIGN.md` for the working point and gate status.
-**Amendments 114–130 live in `campaigns/minimax-h3-ref2va/ledgers/amendments.md`, not here**, per
+**Amendments 114–134 live in `campaigns/minimax-h3-ref2va/ledgers/amendments.md`, not here**, per
 `tt-dit-loop`'s split of bounded checkpoint from append-only ledger. Four of them correct claims in
 this file's own pitfalls: `l1_small_size` 65536 is not universal (the video VAE's taps=3 encoder needs
 ≤ 16384, am. 124/126), the seam ratio yields false *failures* as well as false passes (am. 130), and
@@ -13,8 +13,13 @@ production mesh (am. 124/125).
 
 Latency: **fully warm 63–74 s was measured before that merge and is not yet re-measured on this base.**
 cglagovich's fused FF matmul and AdaLN precompute both land in the hot path, so treat that range as
-stale until `test_performance_pipeline_minimax_h3.py` has run here. The e2e correctness gates run cold
+stale until `test_performance_minimax_h3.py` has run here. The e2e correctness gates run cold
 and their per-stage numbers (denoise 129.3 s) are not comparable to it.
+
+The test suite was consolidated to **one file per subsystem**, following `tests/models/ltx/` and
+`tests/models/wan2_2/`: 33 files to 19, 345 collected tests to 337, with every surviving test keeping
+its node name (am. 134). `tests/models/minimax_h3/tools/` holds the non-test scripts. The merged
+**device** files are verified to collect and import but have **not** been re-run on hardware.
 
 History lives in git, not here. `git log --follow -- STATE.md` walks every amendment as its own commit
 message; the last full journal text is `git show c0a1a7029b3:STATE.md` (amendments 1–**111**), with
