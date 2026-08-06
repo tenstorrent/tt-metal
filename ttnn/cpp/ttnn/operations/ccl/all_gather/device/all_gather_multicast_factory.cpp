@@ -272,23 +272,20 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     uint32_t cb_page_size = input_page_size * pages_per_packet;
     uint32_t cb_depth = 3;
 
-    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
-    // frequency between reader and writer. Note this increases effective CB depth.
-    // Don't do this for row-major layout because of all the careful handling of page sizes.
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        // Empirically determined heuristic, works well for all tensor sizes
-        const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
-        // Find the largest multiplier in [1, ideal] that fits in available L1
-        const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
-        if (multiplier < ideal_multiplier) {
-            log_warning(
-                tt::LogOp,
-                "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-                max_l1_space);
-        }
-        cb_page_size *= multiplier;
+    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between reader and
+    // writer. Note this increases effective CB depth. Row-major is safe too: an integer multiplier preserves
+    // the multiple-of-input_page_size property above.
+    // Empirically determined heuristic, works well for all tensor sizes
+    const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
+    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
+    if (multiplier < ideal_multiplier) {
+        log_warning(
+            tt::LogOp,
+            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
+            max_l1_space);
     }
+    cb_page_size *= multiplier;
 
     // --- Stripe geometry ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
