@@ -307,7 +307,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .eps = eps,
         .per_core_recip_lut_size = block_w,
         .tile_width = tile_width};
-    auto compile_time_args = CompileTimeArgs::build(ct_ctx);
+    const auto reader_kernel_variant = is_pre_all_gather    ? ReaderKernelVariant::PreAllGather
+                                       : is_post_all_gather ? ReaderKernelVariant::PostAllGather
+                                                            : ReaderKernelVariant::Sharded;
+    auto compile_time_args = CompileTimeArgs::build(ct_ctx, reader_kernel_variant);
 
     // Pack eps for later use
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);

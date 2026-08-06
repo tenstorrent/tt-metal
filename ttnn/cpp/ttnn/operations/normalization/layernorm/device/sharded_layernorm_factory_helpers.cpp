@@ -610,17 +610,21 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     return sizes;
 }
 
-CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
-    CompileTimeArgs args;
+namespace {
 
+struct ReaderCompileTimeArgs {
+    std::vector<uint32_t> sender;
+    std::vector<uint32_t> receiver_all_to_all;
+    std::vector<uint32_t> receiver;
+};
+
+ReaderCompileTimeArgs build_common_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
     const auto& grid = *ctx.grid;
     const auto& workers = *ctx.workers;
     const auto& core_ranges = *ctx.core_ranges;
 
-    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
-
-    // Reader sender compile time args
-    args.reader_sender = {
+    ReaderCompileTimeArgs args;
+    args.sender = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -642,8 +646,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.use_welford,
         core_ranges.num_mcast_dests};
 
-    // Reader receiver all-to-all compile time args
-    args.reader_receiver_all_to_all = {
+    args.receiver_all_to_all = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -662,8 +665,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
 
-    // Reader receiver (not all-to-all) compile time args
-    args.reader_receiver = {
+    args.receiver = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -681,6 +683,41 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         ctx.reduce_second_stage_semaphore_id,
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
+
+    return args;
+}
+
+ReaderCompileTimeArgs build_pre_allgather_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
+    return build_common_reader_compile_time_args(ctx);
+}
+
+ReaderCompileTimeArgs build_post_allgather_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
+    return build_common_reader_compile_time_args(ctx);
+}
+
+ReaderCompileTimeArgs build_sharded_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
+    return build_common_reader_compile_time_args(ctx);
+}
+
+}  // namespace
+
+CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx, ReaderKernelVariant reader_variant) {
+    CompileTimeArgs args;
+    const auto& workers = *ctx.workers;
+
+    ReaderCompileTimeArgs reader_args;
+    switch (reader_variant) {
+        case ReaderKernelVariant::PreAllGather: reader_args = build_pre_allgather_reader_compile_time_args(ctx); break;
+        case ReaderKernelVariant::PostAllGather:
+            reader_args = build_post_allgather_reader_compile_time_args(ctx);
+            break;
+        case ReaderKernelVariant::Sharded: reader_args = build_sharded_reader_compile_time_args(ctx); break;
+    }
+    args.reader_sender = std::move(reader_args.sender);
+    args.reader_receiver_all_to_all = std::move(reader_args.receiver_all_to_all);
+    args.reader_receiver = std::move(reader_args.receiver);
+
+    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
 
     // Writer sender compile time args
     args.writer_sender = {

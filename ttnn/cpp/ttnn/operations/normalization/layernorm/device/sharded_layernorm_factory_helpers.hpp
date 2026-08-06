@@ -249,6 +249,12 @@ struct CompileTimeArgsContext {
     uint32_t tile_width = 32;
 };
 
+enum class ReaderKernelVariant {
+    PreAllGather,
+    PostAllGather,
+    Sharded,
+};
+
 // Result of building compile-time args
 struct CompileTimeArgs {
     std::vector<uint32_t> reader_sender;
@@ -259,7 +265,7 @@ struct CompileTimeArgs {
     std::vector<uint32_t> compute_all_to_all;
     std::vector<uint32_t> compute_not_all_to_all;
 
-    static CompileTimeArgs build(const CompileTimeArgsContext& ctx);
+    static CompileTimeArgs build(const CompileTimeArgsContext& ctx, ReaderKernelVariant reader_variant);
 };
 
 //////////////////////////////////////////////////////////////////////////////
