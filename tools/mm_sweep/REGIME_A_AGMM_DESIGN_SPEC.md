@@ -101,9 +101,22 @@ implementation assigned each ring position a single direction by `ring_pos` pari
 `tp-1` hops from its origin instead of `tp/2`. Same bytes, worse latency, and it inflates `T_ready_max` —
 the leading term of the ring bound.
 
-**Terms.** `ppr = 8/tp` ring positions per source rank (`tp | 8`). A *stripe* is one core's cb0 slot 0,
-identified by `(kk, p)`; position `p` has origin rank `r = p / ppr`. On device `d`,
-`fd = (d-r) mod tp`, `bd = (r-d) mod tp`, so `fd + bd = tp`.
+**Glossary.** Terms coined for this appendix, plus the two indices that are easy to confuse.
+
+| term | meaning |
+|---|---|
+| **stripe** | the transport unit: the contents of ONE core's cb0 **slot 0**, `W*M_block*K_block` tiles. Identified by `(sl, p)`. The only part of a core's K slice that is not produced by the on-chip ring. |
+| **`p`** — ring position | the core's index `0..7` in its 8-core on-chip bank ring (`ring_pos` in the plan/kernels). NOT a device index. |
+| **`sl`** — slice | the within-bank slice index `0..preaders-1` (`= kk*mfac + nn*Sm + mm`, the plan's `CorePlan::slice`). Distinct from `kk`, which is only the `Pk` group; a rank owns `ppr` positions in EACH of the `preaders` slices. |
+| **`ppr`** | ring positions per source rank, `= 8/tp` (requires `tp \| 8`). Rank of a position is `r = p / ppr`. |
+| **rank** — `d`, `r` | device index `0..tp-1` within the TP group along `cluster_axis`. `d` = this device, `r` = a stripe's origin rank. |
+| **origin** | the device with `d == r`: the one that reads the stripe from its LOCAL in0 shard rather than receiving it. |
+| **reach** — `f`, `b` | how many hops a given stripe is relayed forward / backward before stopping. `f + b = tp-1` always. |
+| **terminal** | a device at reach (`fd == f` or `bd == b`): it consumes the stripe and relays it no further. |
+| **wave / depth** — `w` | hops travelled, so arrivals group into waves by arrival time. `w = 0` is local. |
+| **antipode** | at even `tp`, the device `tp/2` away from the origin — equidistant in both directions, hence the one that has to be assigned a direction. |
+
+`fd = (d-r) mod tp` and `bd = (r-d) mod tp`, so `fd + bd = tp`.
 
 **The antipode is split, per stripe.** At even `tp` the device at distance `tp/2` is equidistant both ways,
 so one direction must carry it — and if that is always the same direction, that link carries
@@ -111,16 +124,17 @@ so one direction must carry it — and if that is always the same direction, tha
 byte granularity: give each stripe a flag deciding which direction owns its extra hop,
 
 ```text
-via_fwd(kk, p) = ((p mod ppr) + kk) mod 2 == 0
+via_fwd(sl, p) = ((p mod ppr) + sl) mod 2 == 0
 reach          = (f, b) = (tp/2, tp/2 - 1) if via_fwd else (tp/2 - 1, tp/2)      [f + b = tp-1 always]
 ```
 
 alternating over the `ppr * preaders` stripes each rank owns, so half of every rank's payload reaches its
-antipode each way. `ppr == 1` at tp=8 makes this a per-`Pk`-group alternation, which is why the index
-includes `kk`. Because the split is per stripe, **a core still receives exactly one stripe and one credit** —
-no partial slot, no second arrival to reconcile.
+antipode each way. The index is the SLICE `sl`, not the `Pk` group `kk`: at tp=8 `ppr == 1`, so `p mod ppr`
+is always 0 and the alternation has to come from the second term, and `sl` gives `preaders` distinct values
+where `kk` gives only `Pk`. Because the split is per stripe, **a core still receives exactly one stripe and
+one credit** — no partial slot, no second arrival to reconcile.
 
-**Per-core rule.** For core `(kk, p)`, exactly one case applies (`fd+bd = tp` with `f+b = tp-1` makes the two
+**Per-core rule.** For core `(sl, p)`, exactly one case applies (`fd+bd = tp` with `f+b = tp-1` makes the two
 arrival cases mutually exclusive and jointly exhaustive):
 
 | case | role | sends |
