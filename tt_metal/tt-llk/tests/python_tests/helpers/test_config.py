@@ -198,6 +198,9 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # Which group of 8 L1 client interfaces the L1 counters observe. The mux routes interfaces into the
+    # counters as they count, so one run sees one group; sweep this to cover all of them.
+    PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     DUMP_RAW_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_METRICS: ClassVar[bool] = False
     DUMP_CSV_COUNTERS: ClassVar[bool] = False
@@ -953,7 +956,7 @@ class TestConfig:
                 # Only compile BRISC with counter support when counters are enabled,
                 # otherwise BRISC arms counter hardware which adds monitoring overhead.
                 perf_cnt_flag = (
-                    "-DPERF_COUNTERS_COMPILED "
+                    f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                     if TestConfig.ENABLE_PERF_COUNTERS
                     else ""
                 )
@@ -1256,7 +1259,7 @@ class TestConfig:
                     TestConfig.ENABLE_PERF_COUNTERS
                     and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 ):
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
@@ -1549,6 +1552,7 @@ class TestConfig:
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
+
             words = np.frombuffer(
                 read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
                 dtype=np.uint32,

@@ -118,15 +118,39 @@ inline std::uint32_t get_counter_base_addr(counter_bank bank)
 
 // === 4. Built-in counter inventory: built from the canonical hw_counters.h arrays (see docs) ===
 
+// The L1 bank has only 8 physical counters, and PERF_CNT_MUX_CTRL[6:4] selects which group of 8 client
+// interfaces feeds them *while they count* - it is not a read-time selector. One run therefore observes
+// exactly one group. Emitting every group made all of them read back the counting group's 8 values under
+// several different client names, so 4 of every 5 L1 columns were duplicates at an indeterminate mux.
+// Capture one group per run and select it here; sweep the groups across runs to cover all interfaces.
+#ifndef LLK_PERF_L1_MUX_GROUP
+#define LLK_PERF_L1_MUX_GROUP 0
+#endif
+
+constexpr std::uint8_t L1_MUX_GROUP = LLK_PERF_L1_MUX_GROUP;
+
+// Groups an arch does not expose are declared empty, so a zero size means "not available here".
+constexpr std::uint32_t l1_group_size(std::uint8_t mux)
+{
+    return mux == 0   ? l1_0_counters.size()
+           : mux == 1 ? l1_1_counters.size()
+           : mux == 2 ? l1_2_counters.size()
+           : mux == 3 ? l1_3_counters.size()
+           : mux == 4 ? l1_4_counters.size()
+                      : 0u;
+}
+
+static_assert(L1_MUX_GROUP <= PERF_CFG_L1_MUX_MASK, "LLK_PERF_L1_MUX_GROUP must fit in PERF_CNT_MUX_CTRL[6:4]");
+static_assert(l1_group_size(L1_MUX_GROUP) > 0, "LLK_PERF_L1_MUX_GROUP selects an L1 mux group this architecture does not expose");
+
 // Total counters across all bank arrays (per arch), evaluated at compile time.
 constexpr std::uint32_t builtin_counter_count()
 {
-    return instrn_counters.size() + fpu_counters.size() + unpack_counters.size() + pack_counters.size() + l1_0_counters.size() + l1_1_counters.size() +
-           l1_2_counters.size() + l1_3_counters.size() + l1_4_counters.size();
+    return instrn_counters.size() + fpu_counters.size() + unpack_counters.size() + pack_counters.size() + l1_group_size(L1_MUX_GROUP);
 }
 
 // Concatenate the per-bank arrays into config words, in the fixed order the readout expects:
-// INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then L1 by ascending mux.
+// INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group.
 constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_config()
 {
     std::array<std::uint32_t, builtin_counter_count()> cfg {};
@@ -142,11 +166,26 @@ constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_confi
     emit(fpu_counters, counter_bank::fpu, 0);
     emit(unpack_counters, counter_bank::tdma_unpack, 0);
     emit(pack_counters, counter_bank::tdma_pack, 0);
-    emit(l1_0_counters, counter_bank::l1, 0);
-    emit(l1_1_counters, counter_bank::l1, 1);
-    emit(l1_2_counters, counter_bank::l1, 2);
-    emit(l1_3_counters, counter_bank::l1, 3);
-    emit(l1_4_counters, counter_bank::l1, 4);
+    if constexpr (L1_MUX_GROUP == 0)
+    {
+        emit(l1_0_counters, counter_bank::l1, 0);
+    }
+    else if constexpr (L1_MUX_GROUP == 1)
+    {
+        emit(l1_1_counters, counter_bank::l1, 1);
+    }
+    else if constexpr (L1_MUX_GROUP == 2)
+    {
+        emit(l1_2_counters, counter_bank::l1, 2);
+    }
+    else if constexpr (L1_MUX_GROUP == 3)
+    {
+        emit(l1_3_counters, counter_bank::l1, 3);
+    }
+    else
+    {
+        emit(l1_4_counters, counter_bank::l1, 4);
+    }
     return cfg;
 }
 
@@ -215,25 +254,23 @@ inline void arm_hardware()
 // Scan config, publish enabled flag + bank mask + per-zone valid_count to L1, then configure + arm.
 inline void configure_all_zones()
 {
-    bool found_valid                                    = false;
-    std::uint32_t bank_mask                             = 0;
-    std::uint32_t valid_counts[PERF_COUNTERS_MAX_ZONES] = {};
+    // Every zone is described by the one shared config, so the scan answer is identical for all of
+    // them. Scan once and replicate: scanning per zone read the same COUNTER_SLOT_COUNT words 8 times
+    // over, and those are volatile L1 reads issued on BRISC immediately before it releases the TRISCs.
+    bool found_valid        = false;
+    std::uint32_t bank_mask = 0;
+    std::uint32_t count     = 0;
 
-    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
+    const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
+    for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
     {
-        const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-        std::uint32_t count                      = 0;
-        for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
+        const std::uint32_t metadata = config_mem[i];
+        if (metadata & PERF_CFG_VALID_BIT)
         {
-            const std::uint32_t metadata = config_mem[i];
-            if (metadata & PERF_CFG_VALID_BIT)
-            {
-                found_valid = true;
-                count++;
-                bank_mask |= (1u << (metadata & PERF_CFG_BANK_MASK));
-            }
+            found_valid = true;
+            count++;
+            bank_mask |= (1u << (metadata & PERF_CFG_BANK_MASK));
         }
-        valid_counts[zone] = count;
     }
 
     *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR) = found_valid ? 1u : 0u;
@@ -241,7 +278,7 @@ inline void configure_all_zones()
     volatile std::uint32_t* valid_count_ptr                                     = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_VALID_COUNT_ADDR);
     for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
     {
-        valid_count_ptr[zone] = valid_counts[zone];
+        valid_count_ptr[zone] = count;
     }
 
     if (found_valid)
@@ -391,14 +428,9 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         }
         std::uint32_t bank_id    = cw & PERF_CFG_BANK_MASK;
         std::uint32_t counter_id = (cw >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK;
-        std::uint32_t l1_mux     = (cw >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
         const bank_regs& br      = banks[bank_id];
-        if (bank_id == static_cast<std::uint32_t>(counter_bank::l1))
-        {
-            const std::uint32_t cur = ckernel::reg_read(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-            ckernel::reg_write(
-                RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT));
-        }
+        // No L1 mux write here: the mux routes interfaces into the counters as they count, so it is fixed
+        // once by configure_hardware and cannot be re-aimed after the fact.
         const std::uint32_t expected_mode = counter_id << PERF_CFG_COUNTER_SHIFT;
         ckernel::reg_write(br.mode_reg, expected_mode);
         // Readback poll: MMIO fence so the counter-select store lands before the OUT_H read.
@@ -417,7 +449,10 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
 
 // === 8. Per-thread role + RAII: the pack thread arms+freezes; sync_point keeps it correct (see docs) ===
 
-// The pack thread is the designated actor that arms and freezes+reads counters for every zone.
+// The pack thread is the designated actor that freezes+reads counters for every zone, and arms them for
+// the run types whose entry goes through sem_rendezvous. It does NOT arm the entry_via_sync_point run
+// types (L1_CONGESTION, MATH_ISOLATE): those elect TRISC0 so the barrier matches the no-counter build's
+// stub exactly, so for them the arming thread and the freezing thread are different threads.
 constexpr bool is_perf_actor_thread()
 {
 #if defined(LLK_TRISC_PACK)
@@ -506,9 +541,18 @@ inline __attribute__((always_inline)) void sem_rendezvous(bool is_action_thread,
 // ELF, so this selects the measured-best barrier for each rather than trading one row against another.
 // sync_point is also what the no-counter build itself calls (counters.h NC stub), so where it is chosen
 // the two builds reach ZONE_START through the identical barrier.
+//   L1_TO_L1        sync_point required, and for a different reason than the other two: it is the only
+//                   run type whose window is a cross-thread span (pack's ZONE_END minus unpack's
+//                   ZONE_START, profiler.py _stats_l1_to_l1), so its measurement includes the thread
+//                   spacing at zone entry. Entering through the semaphore while the no-counter build
+//                   entered through sync_point therefore put the two barriers' different alignment
+//                   straight into every INIT row: -21 cycles on average, negative in 462 of 462
+//                   variants, reproducing to the cycle across independent build pairs. The *_ISOLATE
+//                   run types time their own thread start-to-end, so they are blind to entry spacing by
+//                   construction and keep the cheaper semaphore.
 constexpr bool entry_via_sync_point(PerfRunType rt)
 {
-    return rt == PerfRunType::L1_CONGESTION || rt == PerfRunType::MATH_ISOLATE;
+    return rt == PerfRunType::L1_CONGESTION || rt == PerfRunType::MATH_ISOLATE || rt == PerfRunType::L1_TO_L1;
 }
 
 // TRISC0 — the thread the no-counter path elects as its rendezvous actor (its MEASURE_PERF_COUNTERS
@@ -556,6 +600,10 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
 //
 // (The L1_CONGESTION columns are against NC 691/471. An earlier revision of this table used 685/474,
 // which are WC numbers, and so wrongly reported these two as reaching exactly zero.)
+//
+// The arming-thread rows are superseded for MATH_ISO and both CONG columns: entry_via_sync_point now
+// elects TRISC0 for those run types whatever LLK_PERF_ARM_ON says, so those three columns can no longer
+// differ between the two arming rows. Only the L1_TO_L1 and *_ISOLATE columns still respond to it.
 //
 // Two conclusions. Arming on the pack thread halves the total L1_CONGESTION error (|-6|+|+3| = 9 versus
 // |-12|+|+2| = 14 for TRISC0 arming), so it is still the better choice there. And the
