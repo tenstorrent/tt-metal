@@ -16,7 +16,7 @@ Key features:
 from __future__ import annotations
 
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer
+from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
 
 from .transformer import RMSNormLayer
 from .autograd_ops import autograd_split
@@ -41,7 +41,13 @@ class MultiHeadLatentAttention(AbstractModuleBase):
     def __init__(self, config, rope_params) -> None:
         super().__init__()
 
-        self.n_heads = config.n_heads
+        use_tp = bool(getattr(config, "use_tp", False))
+        if use_tp:
+            tp_size = ttml.mesh().axis_size("tp")
+            self.n_heads = config.n_heads // tp_size
+        else:
+            self.n_heads = config.n_heads
+
         self.q_lora_rank = config.q_lora_rank
         self.qk_nope_head_dim = config.qk_nope_head_dim
         self.qk_rope_head_dim = config.qk_rope_head_dim
@@ -50,9 +56,22 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         self.kv_lora_rank = config.kv_lora_rank
         self.rope_params = rope_params
 
+        q_out = config.n_heads * self.qk_head_dim
+        kv_up_out = config.n_heads * (config.qk_nope_head_dim + config.v_head_dim)
+        attn_in = config.n_heads * config.v_head_dim
+
         # Q path: direct projection or LoRA bottleneck
         if config.q_lora_rank == 0:
-            self.wq = LinearLayer(config.dim, config.n_heads * self.qk_head_dim, has_bias=False)
+            if use_tp:
+                self.wq = ColumnParallelLinear(
+                    config.dim,
+                    q_out,
+                    has_bias=False,
+                    gather_output=False,
+                    axis_name="tp",
+                )
+            else:
+                self.wq = LinearLayer(config.dim, q_out, has_bias=False)
             self.wq_a = None
             self.q_norm = None
             self.wq_b = None
@@ -60,19 +79,46 @@ class MultiHeadLatentAttention(AbstractModuleBase):
             self.wq = None
             self.wq_a = LinearLayer(config.dim, config.q_lora_rank, has_bias=False)
             self.q_norm = RMSNormLayer(config.q_lora_rank)
-            self.wq_b = LinearLayer(config.q_lora_rank, config.n_heads * self.qk_head_dim, has_bias=False)
+            if use_tp:
+                self.wq_b = ColumnParallelLinear(
+                    config.q_lora_rank,
+                    q_out,
+                    has_bias=False,
+                    gather_output=False,
+                    axis_name="tp",
+                )
+            else:
+                self.wq_b = LinearLayer(config.q_lora_rank, q_out, has_bias=False)
 
         # KV path: joint down-project (kv_latent + k_pe)
         self.wkv_a = LinearLayer(config.dim, config.kv_lora_rank + config.qk_rope_head_dim, has_bias=False)
         self.kv_norm = RMSNormLayer(config.kv_lora_rank)
-        self.wkv_b = LinearLayer(
-            config.kv_lora_rank,
-            config.n_heads * (config.qk_nope_head_dim + config.v_head_dim),
-            has_bias=False,
-        )
+        if use_tp:
+            self.wkv_b = ColumnParallelLinear(
+                config.kv_lora_rank,
+                kv_up_out,
+                has_bias=False,
+                gather_output=False,
+                axis_name="tp",
+            )
+        else:
+            self.wkv_b = LinearLayer(
+                config.kv_lora_rank,
+                kv_up_out,
+                has_bias=False,
+            )
 
         # Output projection
-        self.wo = LinearLayer(config.n_heads * config.v_head_dim, config.dim, has_bias=False)
+        if use_tp:
+            self.wo = RowParallelLinear(
+                attn_in,
+                config.dim,
+                has_bias=False,
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.wo = LinearLayer(attn_in, config.dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         n_heads = self.n_heads

@@ -380,6 +380,26 @@
   team: models
   sp_config: sc1
 
+- name: "Blaze - high_bw_all_gather CCL perf and accuracy"
+  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. The test initializes
+  # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
+  # and validates gathered output exactly.
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
+    '
+  test_type: high_bw_all_gather_perf
+  test_group: sdpa_perf
+  skus:
+    bh_sc1_high_power:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  sp_config: sc1
+
 - name: "Blaze - Chunked Kimi perf (code_debug 55k, no trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
@@ -518,6 +538,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner

@@ -516,6 +516,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
@@ -544,6 +549,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"TILE_HW", tile_hw},
         {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
         {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
+        {"pad_scaler_bits", pad.scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
+        {"pad_k_bits", pad.k_bits},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -624,6 +633,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
@@ -658,6 +669,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -833,6 +846,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size,
         }}},
     });
+
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
