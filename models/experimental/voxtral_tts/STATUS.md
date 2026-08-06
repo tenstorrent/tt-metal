@@ -2818,7 +2818,7 @@ prior is "different".
 
 Only the third harness is reported above.
 
-### 6.40 — p150: the same reversal in Block 2, +4.17 ms/frame. NOT YET SHIPPED
+### 6.40 — p150: the same reversal in Block 2, +4.5 ms/frame. SHIPPED — and 3 seeds nearly rejected it
 
 §6.39 rerun against Block 2's norm, which is called **49x per frame** (2 per `_block` x 3 layers
 x 7 Euler steps, plus `_trunk`'s final norm x7) against Block 1's 52. Unit is the whole Block 2
@@ -2845,10 +2845,53 @@ sharded curve is monotone with fewer cores better, and the newly-reachable 96 co
 **So the reversal is a property of the CHIP, not of Block 1** — two independent blocks, two
 different call counts, same answer.
 
-**NOT SHIPPED YET.** It needs the Block 2 gate before it can: `--gate flow` (velocity PCC,
-semantic exactness, frame codes) plus long-form WER over >=3 seeds, the same ladder §6.39
-cleared. The 1-of-36 acoustic code difference on a real hidden state is small but a code is what
-reaches the audio, so it is not self-certifying.
+**GATED AND SHIPPED**, but the route there is the most instructive part of this section.
+
+**⚠ AT THREE SEEDS THIS LOOKED LIKE A REGRESSION AND I RECOMMENDED REJECTING IT.** Long-form
+errors per 298 words, one process per (arm, seed):
+
+| seed | sharded 8x4 | interleaved |
+|---|---|---|
+| 0 | 1 | 2 |
+| 1 | 0 | 2 |
+| 2 | 0 | 0 |
+| **3** | **3** | **0** |
+| **4** | **1** | **0** |
+| **5** | **1** | **0** |
+| **total** | **6 of 1788 (0.34%)** | **4 of 1788 (0.22%)** |
+
+Seeds 0–2 read 1 vs 4 and I called it "a reproducible inflection drop in 2 of 3 seeds", which is
+§6.7's criterion for real signal. Seeds 3–5 read 3/1/1 vs 0/0/0 and the sign flips: over six
+seeds the SHARDED arm is worse. §6.7 said this in July — *"every single-seed WER comparison made
+during that sweep was uninformative"* — and three is not enough either when the effect is this
+small. **Do not adjudicate a sub-1%-of-corpus WER difference on three seeds.**
+
+**AND THE DETERMINISTIC EVIDENCE WAS MISREAD FIRST, WHICH IS THE WORSE ERROR.** The sweep table
+above has a `codes != 8x4` column, and a nonzero value there was reported as the gate "mildly
+agreeing" the change was worse. It does not: that column measures divergence from the SHIPPED
+CONFIG, and §6.25 is explicit that the default is not ground truth. Scored against the fp32 CPU
+reference instead, 8 real prompts (§6.10's methodology):
+
+| arm | acoustic != fp32 | semantic wrong | velocity maxabs | velocity PCC |
+|---|---|---|---|---|
+| sharded 8x4 | 10 / 288 | 0 / 8 | 3.233e-02 | 0.99997914 |
+| **interleaved** | **10 / 288** | **0 / 8** | **2.569e-02** | **0.99998504** |
+
+Identical code and semantic accuracy, and interleaved is **21% closer to truth on the velocity**.
+It is not less precise — it is marginally more precise, exactly as in §6.39. `--gate flow` agrees
+(3 of 74 codes both arms, velocity PCC 0.99998438 vs 0.99998415) though that gate runs on
+`make_synthetic_inputs`, i.e. random activations, so it is trap-#12 evidence and the real-prompt
+table above is the one to quote.
+
+A mechanism prediction that was ALSO wrong, recorded so it is not reasoned from again: sharding
+computes 32 partial sums plus a cross-core combine, i.e. a shallower accumulation than one core
+summing 3072 values, and shallower trees round better — so sharded "should" be the more accurate
+one. Measured, it is the less accurate one, in both blocks. At ~1e-7 per op, which config lands
+nearer fp32 after 21 amplifying `_block` calls is not predictable from the reduction shape.
+
+**Shipped:** long-form gen **57.82 -> 53.30 ms/frame** over all 6 seeds (n=21/22 long-form
+cases), 15/15 `[END_AUDIO]` in all twelve runs, WER better on the 6-seed total. `TILE` in
+`ttnn_voxtral_flow.py` is deleted with the shard configs — it had no other consumer.
 
 **Note also what this says about the p150 gap.** Block 2 measures 32.8 ms/frame sharded / 28.6
 interleaved here against §6.31's **20.8 ms on the N150** — so after §6.39 fixed Block 1 (now

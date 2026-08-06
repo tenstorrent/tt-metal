@@ -835,7 +835,23 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
 # not a small error, it is a different code.
 ```
 
-### [flow-07] `module level` — RMSNORM, WIDTH-SHARDED. Same finding as Block 1's...
+### [flow-07] `module level` — the norm is NOT sharded on Blackhole (p150 fork)
+
+**REVERSED ON BLACKHOLE, exactly as [gpt-04] did. STATUS.md §6.40 is the current answer; the
+N150 record is kept below because the contrast is the finding.**
+
+Width-sharding this norm is worth **−4.5 ms/frame** here over its 49 calls, against +1.46x on
+the N150. And it is **closer to fp32 truth, not further** — 8 real prompts, vs the fp32 CPU
+reference: identical acoustic codes (10/288 both arms), identical semantic (0/8 both), velocity
+max-abs 3.233e-02 sharded against **2.569e-02** interleaved.
+
+Two things §6.40 records that are worth carrying: at THREE seeds the WER read 1 vs 4 and looked
+like a regression; at six it is 6 vs 4 the other way. And the `codes != 8x4` column that prompted
+the scare measures divergence from the shipped config, not error — §6.25's trap.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
 
 ```text
 # RMSNORM, WIDTH-SHARDED. Same finding as Block 1's _NORM_SHARD, and it matters more here: 7 norms
