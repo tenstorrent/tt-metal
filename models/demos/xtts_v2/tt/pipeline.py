@@ -1029,6 +1029,11 @@ def run_tts(
     wav_hf = _hf_vocode(model, latents_hf, g_hf).reshape(-1)
     m = min(wav_tt.shape[0], wav_hf.shape[0])
     res["full_chain_waveform_pcc"] = comp_pcc(wav_hf[:m], wav_tt[:m], 0.95)[1]
+    # phase-insensitive full-chain metric (A3): log-mel spectral PCC + mean L1.
+    # Raw-sample PCC penalizes phase differences the log-mel envelope absorbs —
+    # HiFi-GAN generates phase, so this is the perceptually meaningful yardstick.
+    # PRINTED ONLY: never gated, thresholds untouched.
+    res["logmel_pcc"], res["logmel_l1"] = _logmel_spectral_metrics(wav_tt[:m], wav_hf[:m])
     res["wav_tt"] = wav_tt
     res["wav_hf"] = wav_hf
     res["generative_pcc"] = min(res["ar_per_step_logits_pcc"], res["latents_pcc"])
@@ -1043,10 +1048,37 @@ def run_tts(
             "latents_pcc",
             "waveform_pcc",
             "full_chain_waveform_pcc",
+            "logmel_pcc",
+            "logmel_l1",
             "generative_pcc",
         ]:
             print(f"  {k_} = {res[k_]}")
     return res
+
+
+def _logmel_spectral_metrics(wav_a, wav_b, sr=24000, n_fft=1024, hop=256, n_mels=80):
+    """Log-mel spectral PCC and mean L1 distance between two waveforms (fp32 torch)."""
+    import torchaudio
+
+    def logmel(w):
+        spec = (
+            torch.stft(
+                w.float(),
+                n_fft=n_fft,
+                hop_length=hop,
+                win_length=n_fft,
+                window=torch.hann_window(n_fft),
+                return_complex=True,
+            ).abs()
+            ** 2
+        )
+        fb = torchaudio.functional.melscale_fbanks(
+            n_freqs=n_fft // 2 + 1, f_min=0.0, f_max=sr / 2, n_mels=n_mels, sample_rate=sr
+        )
+        return torch.log(spec.t() @ fb + 1e-6)
+
+    a, b = logmel(wav_a), logmel(wav_b)
+    return comp_pcc(a, b, 0.0)[1], (a - b).abs().mean().item()
 
 
 # ─────────────────────────────── HF goldens ─────────────────────────────────

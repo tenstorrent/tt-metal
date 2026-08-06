@@ -50,17 +50,25 @@ def test_e2e_tts(device):
     missing = sorted(_ALL_29 - invoked)
     print(f"invoked {len(invoked)}/29 graduated stubs; missing={missing}")
     print(f"codes(TT)={res['codes_tt'].tolist()}")
-    print(f"full_chain_waveform_pcc (supplementary, compounds bf16 d-vector sensitivity)="
-          f"{res['full_chain_waveform_pcc']}")
+    print(
+        f"full_chain_waveform_pcc (supplementary, compounds bf16 d-vector sensitivity)="
+        f"{res['full_chain_waveform_pcc']}"
+    )
+    print(f"logmel_pcc (phase-insensitive full-chain, print-only)={res['logmel_pcc']} " f"logmel_l1={res['logmel_l1']}")
     achieved_pcc = res["e2e_pcc"]
     print(f"e2e PCC={achieved_pcc}")
 
     # Gate 2 — every graduated module invoked in the real forward path
     assert not missing, f"Gate 2 FAILED: graduated stubs not invoked: {missing}"
     # Per-stage: every TT stage matches HF run on the previous TT output
-    for k, thr in [("speaker_embedding_pcc", 0.95), ("cond_latent_pcc", 0.95),
-                   ("ar_token_match", 0.95), ("ar_per_step_logits_pcc", 0.95),
-                   ("latents_pcc", 0.95), ("waveform_pcc", 0.95)]:
+    for k, thr in [
+        ("speaker_embedding_pcc", 0.95),
+        ("cond_latent_pcc", 0.95),
+        ("ar_token_match", 0.95),
+        ("ar_per_step_logits_pcc", 0.95),
+        ("latents_pcc", 0.95),
+        ("waveform_pcc", 0.95),
+    ]:
         assert res[k] >= thr, f"stage gate FAILED: {k}={res[k]} < {thr}"
     # Gate 3 — final generate()-chain output (per-step logits + latents + vocoded waveform)
     print(f"e2e PCC={achieved_pcc}")
