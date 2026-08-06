@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 
 #include <algorithm>
-#include <initializer_list>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -71,28 +70,6 @@ bool width_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal:
         .has_value();
 }
 
-bool shapes_equal(
-    const std::vector<Tensor>& input_tensors, std::initializer_list<std::initializer_list<uint32_t>> expected) {
-    if (input_tensors.size() != expected.size()) {
-        return false;
-    }
-    auto expected_it = expected.begin();
-    for (size_t i = 0; i < input_tensors.size(); ++i, ++expected_it) {
-        const auto& shape = input_tensors[i].logical_shape();
-        if (static_cast<size_t>(shape.rank()) != expected_it->size()) {
-            return false;
-        }
-        int j = 0;
-        for (uint32_t extent : *expected_it) {
-            if (shape[j] != extent) {
-                return false;
-            }
-            ++j;
-        }
-    }
-    return true;
-}
-
 }  // namespace
 
 ImplementationSelector parse_implementation(const std::string& implementation) {
@@ -156,17 +133,20 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
-    // Ungeneralized: no predicate relating these shapes to their measured
-    // device-time regression was found, so this is an exact-match floor per
-    // the manifest's demoted-cases list (all 3 in-scope dtypes), not a
-    // general condition.
-    if (dim == 2 && shapes_equal(input_tensors, {{1, 32, 32}, {1, 32, 64}, {1, 32, 32}})) {
-        return true;
-    }
-    if (dim == 1 && shapes_equal(input_tensors, {{32, 32}, {32, 64}, {32, 96}})) {
-        return true;
-    }
-    return false;
+    // General: reader_concat_rm_width_nway.cpp (build_concat_rm_width_nway) has
+    // no direct-write fast path -- every input's stick is staged through the
+    // scratch CB and copied out one byte at a time (kernel lines computing
+    // `target[byte] = src[byte]` per input, every output page), unlike the
+    // two-input width reader's aligned direct-write branch. This per-byte copy
+    // dominates regardless of shape or dtype, so any width-dim concat with
+    // more than two inputs is demoted unconditionally. Confirmed by measured
+    // regression across 2D/3D/4D shapes and all 3 in-scope dtypes (phase-7
+    // seeds: {32,32}/{32,64}/{32,96} dim=-1; {1,32,32}/{1,32,64}/{1,32,32}
+    // dim=2; {1,1,32,32}x3 dim=-1) -- no shape in that set was fast, so an
+    // exact-match list would only under-generalize the mechanism.
+    const uint32_t ndim = input_tensors[0].logical_shape().rank();
+    const bool is_width = (dim == ndim - 1);
+    return is_width && input_tensors.size() > 2;
 }
 
 bool supported_execution_controls(unsigned int groups, const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {

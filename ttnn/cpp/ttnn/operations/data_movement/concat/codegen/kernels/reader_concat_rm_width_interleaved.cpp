@@ -79,32 +79,42 @@ void kernel_main() {
         input_cb.reserve_back(1);
         uint32_t l1_addr = input_cb.get_write_ptr();
 
-        // Read in0's stick
-        if constexpr (in0_aligned) {
+        if constexpr (in0_aligned && in1_direct) {
+            // Both sticks land directly in disjoint ranges of the same reserved
+            // CB page with no scratch involved: issue both reads and barrier
+            // once, matching the native reader's batching instead of forcing a
+            // round trip after in0 with no consumer.
             noc.async_read(s0, input_cb, IN0_STICK_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-        } else {
-            // Non-aligned: read aligned page into scratch, copy actual bytes
-            noc.async_read(s0, scratch_cb, IN0_PAGE_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            CoreLocalMem<volatile uint16_t> src_ptr(scratch_addr);
-            CoreLocalMem<volatile uint16_t> dst_ptr(l1_addr);
-            for (uint32_t w = 0; w < IN0_STICK_SIZE / 2; ++w) {
-                dst_ptr[w] = src_ptr[w];
-            }
-        }
-
-        // Read in1's stick right after in0's
-        if constexpr (in1_direct) {
             noc.async_read(s1, input_cb, IN1_STICK_SIZE, {.page_id = stick_id_1}, {.offset_bytes = IN0_STICK_SIZE});
             noc.async_read_barrier();
         } else {
-            noc.async_read(s1, scratch_cb, IN1_PAGE_SIZE, {.page_id = stick_id_1}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            CoreLocalMem<volatile uint16_t> src_ptr(scratch_addr);
-            CoreLocalMem<volatile uint16_t> dst_ptr(l1_addr + IN0_STICK_SIZE);
-            for (uint32_t w = 0; w < IN1_STICK_SIZE / 2; ++w) {
-                dst_ptr[w] = src_ptr[w];
+            // Read in0's stick
+            if constexpr (in0_aligned) {
+                noc.async_read(s0, input_cb, IN0_STICK_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+            } else {
+                // Non-aligned: read aligned page into scratch, copy actual bytes
+                noc.async_read(s0, scratch_cb, IN0_PAGE_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                CoreLocalMem<volatile uint16_t> src_ptr(scratch_addr);
+                CoreLocalMem<volatile uint16_t> dst_ptr(l1_addr);
+                for (uint32_t w = 0; w < IN0_STICK_SIZE / 2; ++w) {
+                    dst_ptr[w] = src_ptr[w];
+                }
+            }
+
+            // Read in1's stick right after in0's
+            if constexpr (in1_direct) {
+                noc.async_read(s1, input_cb, IN1_STICK_SIZE, {.page_id = stick_id_1}, {.offset_bytes = IN0_STICK_SIZE});
+                noc.async_read_barrier();
+            } else {
+                noc.async_read(s1, scratch_cb, IN1_PAGE_SIZE, {.page_id = stick_id_1}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                CoreLocalMem<volatile uint16_t> src_ptr(scratch_addr);
+                CoreLocalMem<volatile uint16_t> dst_ptr(l1_addr + IN0_STICK_SIZE);
+                for (uint32_t w = 0; w < IN1_STICK_SIZE / 2; ++w) {
+                    dst_ptr[w] = src_ptr[w];
+                }
             }
         }
 
