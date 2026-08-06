@@ -686,6 +686,7 @@ def allocate_dflash_kv_cache(
     *,
     sp_axis: int = 0,
     tp_axis: int = 1,
+    num_users: int = 1,
     dtype: ttnn.DataType = ttnn.bfloat8_b,  # align w/ decode KV cache (init_kvpe_cache default is bf8); bf8/TILE
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Allocate the DFlash drafter's separate K and V context caches, owned OUTSIDE the module by the
@@ -695,23 +696,61 @@ def allocate_dflash_kv_cache(
     with the caller lets it drive cache lifecycle (the migration hand-off to the decode mesh) and dtype
     (default bf8/``bfloat8_b`` to match the decode KV cache; see ``init_kvpe_cache``).
 
-    Global (logical) shape ``[num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``, TP-sharded on
-    kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens (the
-    decode/migration layout, no redundant per-SP copies). Allocated + zeroed on device (DRAMZeroFill) with
-    no host tensor / H2D copy. Returns ``(k_cache, v_cache)``.
+    Global (logical) shape ``[num_users * num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``,
+    TP-sharded on kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens
+    (the decode/migration layout, no redundant per-SP copies). Allocated + zeroed on device (DRAMZeroFill)
+    with no host tensor / H2D copy. Returns ``(k_cache, v_cache)``.
 
-    NOTE: the interleaved DRAM format here is provisional pending decode alignment — see the
-    ND_DRAM_SHARDED ``TODO`` in the body."""
+    ``num_users`` independent cache slots share one cache, laid out **user-major** exactly as
+    ``init_kvpe_cache`` documents for the verifier's KVPE cache: ``slot = user_id * num_hidden_layers +
+    layer_idx``, so each user's draft layers stay contiguous. This is the linearization
+    ``update_padded_kv_cache`` computes on device (``batch_idx = slot_idx * num_layers + layer_idx``), and
+    the one ``kv_chunk_table._num_layers_from_cache`` assumes when it derives a cache's layer count as
+    ``shape[0] // num_users``. ``num_users=1`` (the default) reproduces the single-slot shape.
+
+    ND-DRAM-sharded with the same spec ``init_kvpe_cache`` uses — ``[1, 1,
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]``, round-robin over the DRAM-bank grid — because the
+    migration address table REQUIRES it: ``populate_kv_chunk_address_table_kimi`` emits one address per
+    (bank, 32-token chunk) off ``dram_bank_base_addr``, which describes the buffer only if each 32-token
+    chunk is contiguous within a single bank. Under interleaved DRAM that chunk is ``head_dim/32`` bfp8
+    tiles striped across as many banks, so every table entry would point at the wrong bytes. The write op
+    is layout-agnostic (generic ``TensorAccessor``, and it hashes ``cache.memory_config()``), so this
+    changes only the compiled program, not the call."""
     sp = mesh_device.shape[sp_axis]
     tp = mesh_device.shape[tp_axis]
     assert (
         config.num_key_value_heads % tp == 0
     ), f"num_key_value_heads ({config.num_key_value_heads}) must divide across tp ({tp})"
     assert cache_seq % sp == 0, f"cache_seq ({cache_seq}) must divide across sp ({sp})"
+    assert num_users >= 1, f"num_users ({num_users}) must be >= 1"
+    # update_padded_kv_cache requires the per-chip cache seq to be a whole number of tiles, and a whole
+    # number of chunk writes (it FATALs on cache_seq % input_seq != 0), so keep the tile check here where
+    # the layout is decided rather than discovering it inside the op.
+    assert (cache_seq // sp) % ttnn.TILE_SIZE == 0, (
+        f"per-chip cache seq ({cache_seq // sp} = cache_seq {cache_seq} / sp {sp}) must be a multiple of "
+        f"TILE_SIZE ({ttnn.TILE_SIZE})"
+    )
+    # ND shard / migration-table constraints. These are a DIFFERENT requirement from the tile check above
+    # (the two constants both happen to be 32), so assert them separately: the address table walks whole
+    # NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token chunks, and a bfp8 chunk must be a whole number of tiles wide.
+    assert (cache_seq // sp) % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
+        f"per-chip cache seq ({cache_seq // sp}) must be a multiple of NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK "
+        f"({NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}); the migration address table addresses whole bank chunks"
+    )
+    assert config.head_dim % ttnn.TILE_SIZE == 0, (
+        f"head_dim ({config.head_dim}) must be a multiple of {ttnn.TILE_SIZE} so a bank chunk is a whole "
+        f"number of tiles (kv_chunk_table._dram_chunk_size_bytes rejects otherwise)"
+    )
 
-    # Per-device (post-shard) shape: kv-head split across TP (dim 1), seq split across SP (dim 2).
+    # Per-device (post-shard) shape: slot/layer on dim 0 (user-major, NOT sharded), kv-head split across TP
+    # (dim 1), seq split across SP (dim 2).
     local_shape = ttnn.Shape(
-        [config.num_hidden_layers, config.num_key_value_heads // tp, cache_seq // sp, config.head_dim]
+        [
+            num_users * config.num_hidden_layers,
+            config.num_key_value_heads // tp,
+            cache_seq // sp,
+            config.head_dim,
+        ]
     )
     # 2D-shard topology matching ShardTensor2dMesh (seq on sp_axis -> dim 2, kv-head on tp_axis -> dim 1) so
     # the readback composer (ConcatMesh2dToTensor, read_dims=(2,1)) reconstructs the global cache — the same
@@ -724,16 +763,30 @@ def allocate_dflash_kv_cache(
         ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
     ]
 
+    # ND DRAM shard spec, identical in form to init_kvpe_cache's: one shard is
+    # [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim] -- a single (slot/layer, kv-head, 32-token) block
+    # kept contiguous in ONE bank -- round-robined across the DRAM-bank grid. Dim 1 is sharded at extent 1,
+    # so the drafter's 2 kv-heads/chip are simply separate shards (unlike zero_padded_kv_cache, nothing here
+    # requires a single head).
+    num_dram_banks = get_num_dram_banks(mesh_device)
+    bank_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)]
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, config.head_dim],
+            grid=bank_grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
     def _alloc_zeroed() -> ttnn.Tensor:
         # Allocate + zero on device (DRAMZeroFill) instead of a host torch.zeros + H2D copy: the drafter
         # cache scales with the sequence and the host pack/transfer of the full cache is slow (mirrors
         # init_kvpe_cache above). The shard topology is stamped after the fill.
-        # TODO: switch this interleaved DRAM (DRAM_MEMORY_CONFIG) to ND_DRAM_SHARDED to align with the
-        # decode-side drafter KV-cache layout for the migration hand-off (cf. init_kvpe_cache's NdShardSpec
-        # + create_kv_chunk_address_table_ds).
-        cache = ttnn.allocate_tensor_on_device(
-            local_shape, dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
-        )
+        cache = ttnn.allocate_tensor_on_device(local_shape, dtype, ttnn.TILE_LAYOUT, mesh_device, kv_mem_config)
         DRAMZeroFill.op(cache)
         cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
         return cache
