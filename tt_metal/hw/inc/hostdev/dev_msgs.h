@@ -374,14 +374,11 @@ struct addressable_core_t {
 // TODO: This can move into the hal eventually.
 // This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-// Sized for the largest supported configuration: UNHARVESTED Blackhole (the ttsim CI target) =
+// Sized for the largest supported configuration: unharvested Blackhole (the ttsim CI target) =
 // DRAM(8*2) + Eth(14) = 30. Harvested BH silicon (P150) is DRAM(8*2) + 1 PCIe + Eth(12) = 29; WH
-// virtualizes only Eth(16) and Tensix; Quasar (quasar_32) is DRAM only today. The previous value of
-// 29 fit only harvested parts, and the unharvested simulator silently overran this array by one
-// entry into harvested_coords on every device init (masked because harvested_coords is written
-// afterwards); populate_core_info_msg now bounds-checks against this capacity, so it must cover
-// the unharvested case (30). Kept at the exact requirement: the mailbox L1 budgets
-// (MEM_MAILBOX_SIZE) on WH/BH have no headroom, so every extra entry here costs kernel L1.
+// virtualizes only Eth(16) and Tensix; Quasar (quasar_32) is DRAM only today.
+// populate_core_info_msg bounds-checks against this capacity. Kept at the exact requirement:
+// the mailbox L1 budgets (MEM_MAILBOX_SIZE) have no headroom, so every extra entry costs kernel L1.
 constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 30;
 // This is the max number of Non Worker Cores across BH and WH.
 // BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
