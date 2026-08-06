@@ -180,6 +180,10 @@ class CCLManager:
         # slot and prefix length are properties of the chunk, not the layer, so all 60
         # layers read the same two tensors and the host updates them once per chunk.
         self._ring_metadata = None
+        # Set by a traced caller to the full context length. logical_n sizes the ring
+        # gather at create time and is re-patched per dispatch; a trace does neither, so
+        # a per-chunk value would freeze the gather at the capturing chunk's prefix.
+        self.ring_logical_n_override = None
 
     def _scalar_metadata_tensor(self, value):
         """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.
