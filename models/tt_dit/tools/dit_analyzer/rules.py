@@ -734,19 +734,47 @@ def run_rules(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> Report:
     )
 
 
+def _redundancy_signature(f: Finding, v: CollectiveView):
+    """A frame-independent fingerprint of *what* is redundant, for the merge key.
+
+    Two participant groups may only be reported as one finding when they are
+    redundant in the *same way*. For the whole-value rules (a dead / duplicated
+    collective) that is always true, so the signature is constant and every group
+    merges (this is what lets a subset-dead collective become one ``replicated_stage``).
+
+    But ``overwide_gather`` / ``participant_shrink`` describe a *partial* waste whose
+    shape can differ per group: on a packed [text|audio|video] sequence the first
+    shard's unread region is the text prefix while the last shard's is the padding
+    tail — different sizes, different rows. Keyed only on (rule, node) those two
+    collapse into one finding carrying the first group's region and both groups'
+    bytes, over-claiming the waste. Fingerprinting the per-device wasted *volume*
+    (frame-independent, unlike absolute coordinates) plus the needer/sender
+    positions keeps genuinely-identical groups merged and splits the rest."""
+    if f.rule not in ("overwide_gather", "participant_shrink"):
+        return None  # whole-value rules: one finding across all groups, as before
+    waste = v.wasted()
+    vols = tuple(waste[d].padded_volume() for d in v.group)
+    idx = {d: i for i, d in enumerate(v.group)}  # positions within the group, not absolute ids
+    needers = tuple(sorted(idx[d] for d in v.needers()))
+    senders = tuple(sorted(idx[d] for d in v.useful_senders()))
+    return (vols, needers, senders)
+
+
 def _merge_across_groups(
     raw: Sequence[Tuple[Finding, CollectiveView]], groups_per_node: Dict[str, int]
 ) -> List[Finding]:
-    """One finding per (rule, nodes), covering every participant group it holds on.
+    """One finding per (rule, nodes, redundancy-shape), covering every participant group
+    it holds on identically.
 
     A mesh axis usually has several independent communication groups (a 2x4 mesh
     has two TP groups). A verdict that holds on only some of them is reported as
-    such rather than silently generalised.
+    such rather than silently generalised; and two groups whose redundancy has a
+    *different shape* (see :func:`_redundancy_signature`) stay separate findings.
     """
-    merged: Dict[Tuple[str, Tuple[str, ...]], Finding] = {}
-    order: List[Tuple[str, Tuple[str, ...]]] = []
+    merged: Dict[Tuple, Finding] = {}
+    order: List[Tuple] = []
     for f, v in raw:
-        key = (f.rule, tuple(f.nodes))
+        key = (f.rule, tuple(f.nodes), _redundancy_signature(f, v))
         if key not in merged:
             if not f.stack:
                 f.stack = list(v.node.stack)

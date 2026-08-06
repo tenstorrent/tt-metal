@@ -383,6 +383,32 @@ def test_connected_pipeline_reveals_a_cross_boundary_redundant_gather():
     assert "submesh" in repl[0].suggestion and repl[0].severity == "medium"
 
 
+def test_boundary_groups_with_different_waste_do_not_merge():
+    """Two participant groups may only be reported as one finding when they are redundant
+    in the *same way*. On a packed sequence sliced in the middle, the first shard wastes
+    its front while the last shard wastes its (differently sized) tail — different rows,
+    different volume. Keyed only on (rule, node) they collapsed into one `overwide_gather`
+    carrying the first group's region and both groups' bytes, over-claiming the waste (the
+    real MiniMax-H3 DiT reported a text-prefix drop and a padding-tail drop as one finding).
+    They must stay separate, each with its own region and group.
+    """
+    b = GraphBuilder("pack", MESH)
+    # seq (dim2, 512) sharded into 4 over TP; hidden (dim3, 256) sharded over SP so the
+    # all_gather over SP actually materialises remote data on each per-TP group.
+    x = b.input("x", [1, 512, 256], shard={TP: 1, SP: 2})
+    g = b.all_gather(x, dim=2, mesh_axis=SP, label="gather")  # groups run along SP, one per TP shard
+    z = b.slice(g, axis=1, start=64, stop=500)  # drop 64 off the front shard, 12 off the tail shard
+    report = analyze_graph(b.finish([z]))
+
+    ow = [f for f in report.findings if f.rule == "overwide_gather"]
+    # the two boundary shards (front-waste 64 rows, tail-waste 12 rows); interior shards waste nothing
+    assert len(ow) == 2, [(f.rule, f.proof.get("participant_groups")) for f in report.findings]
+    assert all(len(f.proof["participant_groups"]) == 1 for f in ow)  # neither absorbed the other's group
+    groups = {tuple(f.proof["participant_groups"][0]) for f in ow}
+    assert len(groups) == 2, groups  # distinct groups, not one region claimed for both
+    assert len({f.proof["wasted_fraction"] for f in ow}) == 2  # different-sized waste, not a shared 11%
+
+
 def test_faithful_boundary_bridges_a_reshaping_handoff():
     """A handoff can change shape — a host unpatchify/reshape between stages, as the pipeline
     does DiT→VAE. Wired explicitly (`(name, graph, in_sym)`), the boundary reads the full
