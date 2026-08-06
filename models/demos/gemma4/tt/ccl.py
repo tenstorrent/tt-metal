@@ -176,6 +176,56 @@ class CCLManager:
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)
         ]
         self._ring_gather_buffers = {}
+        # Trace-safe per-chunk scalars for the ring path. One pair for the whole model:
+        # slot and prefix length are properties of the chunk, not the layer, so all 60
+        # layers read the same two tensors and the host updates them once per chunk.
+        self._ring_metadata = None
+
+    def _scalar_metadata_tensor(self, value):
+        """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.
+
+        Shape/layout/dtype mirror what update_padded_kv_cache and the ring readers
+        expect ([1,1,1,1] uint32 row-major in DRAM, replicated so every device reads
+        element [0]).
+        """
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def get_ring_metadata(self):
+        """``(slot_id, kv_actual_isl)`` tensors for the trace-safe ring path.
+
+        Passing these instead of Python ints moves the per-chunk scalars off the host
+        dispatch path: the readers load them from DRAM on-device, so the values are not
+        baked into the program's runtime args and one captured trace replays across
+        chunks. With the scalar form a trace would freeze whichever chunk was live at
+        capture, and every later chunk would read the wrong prefix length.
+        """
+        if self._ring_metadata is None:
+            self._ring_metadata = (self._scalar_metadata_tensor(0), self._scalar_metadata_tensor(0))
+        return self._ring_metadata
+
+    def set_ring_metadata(self, slot_idx, kv_actual_global):
+        """Update the metadata tensors in place for the chunk about to run.
+
+        Called once per chunk, before the layer loop (or before a trace replay). Writes
+        into the existing device tensors rather than allocating, because a trace holds
+        the addresses it captured.
+        """
+        slot_t, kv_t = self.get_ring_metadata()
+        for tensor, value in ((slot_t, slot_idx), (kv_t, kv_actual_global)):
+            host = ttnn.from_torch(
+                torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host, tensor)
 
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA.
