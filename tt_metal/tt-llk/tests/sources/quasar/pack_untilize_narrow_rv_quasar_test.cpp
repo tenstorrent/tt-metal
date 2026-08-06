@@ -170,6 +170,15 @@ __attribute__((noinline)) static std::uint32_t do_rv_pacr(std::uint32_t gpr0, st
 }
 
 // RV_PACR 3-GPR descriptor.
+//   GPR0 = clr_valid | (input_idx << 1) | (l1_addr << 11) | (rows << 29)
+//   GPR1 = out_fmt   | (in_fmt << 8)    | (untilize_stride << 16)
+//   GPR2 = packer_sel | (buffer_addr << 2) | (tile_dim << 20) | (untilize << 23)
+//        | (inc_mode << 24) | (inc_input_idx << 25) | (inc_output_idx << 26)
+// i.e. clr_dvalid at bit 0, so input_addr @ [10:1] / l1_addr @ [28:11] as below. This is also
+// validated empirically by this test (RV_WHOLE_TILE mode is byte-identical to the untilize
+// golden, narrow mode places datums correctly — neither works if these offsets are wrong).
+// NOTE: assembly.yaml's RV_PACR prose disagrees (it reads L1 addr as GPR0[17:0], buffer_addr as
+// GPR1[24:7]), but that description is self-inconsistent (it also cites GPR[1] for a GPR2 field).
 struct rv_pacr_gpr0_t
 {
     std::uint32_t clr_dvalid       : 1;  // [0]
