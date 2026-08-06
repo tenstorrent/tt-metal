@@ -1635,7 +1635,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # flow). Position alignment then keeps the stream reproducible even
             # when vLLM evicts a running request and re-admits it in a different
             # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            if active_seed_slots is not None and (reload_sampling_params or reset_sampling_state):
+            # An empty slot list is skipped, not passed through: reset_seed_from_slots
+            # marks the manager reset even when it moves nothing, which sends the next
+            # step back through the full-batch seed upload and SKIP copy.
+            if active_seed_slots and (reload_sampling_params or reset_sampling_state):
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
                     seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
