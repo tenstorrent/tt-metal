@@ -129,14 +129,49 @@ linears total **201 µs per layer — 2.82 ms across 14 layers, only 34 % of the
 were never the bottleneck; the remaining ~280 non-linear ops are, at ~19 µs each against the 6.3 µs
 floor.
 
+### The KV-cache shift costs what it does because of tile layout, not bytes
+
+Pricing the decode layer op by op (`scripts/probe_decode_profile.py`) puts KV maintenance well ahead
+of everything else: `slice` + `concat` on the `[1, 16, 256, 64]` buffer at ~228 µs against 19–64 µs
+for every other non-linear op. **0.5 MB moved in 134 µs is about 3.7 GB/s** — two orders below what
+a copy that size should cost, so the bytes are not the explanation.
+
+They are not. `scripts/probe_kv_alignment.py` isolates it:
+
+| operation on the `[1, 16, 256, 64]` cache | bfloat16 | bfloat8_b |
+|---|---:|---:|
+| slice from row 1 *(the current shift)* | `78.3 µs` | `78.3 µs` |
+| slice from row 32 *(tile-aligned)* | **`7.0 µs`** | `6.9 µs` |
+| concat 255 + 1 row *(the current append)* | `207.4 µs` | `207.2 µs` |
+| concat 224 + 32 rows *(tile-aligned)* | **`13.1 µs`** | `13.0 µs` |
+
+**11× and 16× cheaper at tile granularity, and `bfloat8_b` — half the bytes — is identical to the
+last decimal.** In `TILE_LAYOUT` rows live in 32-row tiles, so slicing from row 1 or appending a
+single row re-tiles the entire buffer. This is a layout cost wearing a bandwidth cost's clothes.
+
 ### Why it stops here, and what would move it
 
-The largest identifiable block of that remainder is KV-cache maintenance: `slice` + `concat` + `copy`
-per tensor per layer, six ops on `[1, 16, 256, 64]` buffers. Replacing it with an in-place
-`ttnn.update_cache` would move 2 KB instead of 0.5 MB — but the live tokens must sit at the **end**
-of the buffer, because `rel_shift` skews on the assumption that the queries are the last of the key
-positions. Left-aligning would need a per-step slice offset, and a trace bakes slice offsets in at
-capture. The two requirements are incompatible as the graph stands.
+The obvious fix — shift a tile at a time instead of a row — collides with the relative-position
+attention. A 256-wide window with the newest token at the end forces a one-row move per step: any
+scheme that keeps the query at a fixed physical row must move the whole window with it, and any
+scheme that lets it drift needs a per-step slice offset, which a trace bakes at capture.
+
+Padding the window to 288 with a 32-row staging block *does* keep every op tile-aligned and every
+shape fixed, and the validity mask can suppress the duplicates — but it breaks the geometry. A key
+at physical row `j` is assigned relative distance `287 − j`, while its true distance is `256 + i − j`
+at sub-step `i`; the older context is then encoded at a distance up to 31 positions too far. That is
+an approximation, not a refactor, and this model's token-agreement gate already sits at 95.83 %
+against a 95 % bar.
+
+The exact version needs **32 pre-captured traces** (one per sub-step, each baking its own offsets)
+and **32 pre-rotated positional windows per layer** — about 264 MB. That is a real path and the
+measurements above price it, but it is a different size of change from everything else here.
+
+**Math fidelity is free in time and is already at its best setting.** `COSYVOICE_FIDELITY` sweeps it:
+HiFi4, HiFi2 and LoFi all measure RTF `0.646`/`0.646`/`0.649` — so neither stage is MAC-throughput
+bound. Accuracy is not flat: HiFi2 looked better on the two end-to-end flow numbers but is worse on
+**9 of 11** modules, including AR prefill (`0.9997530373` → `0.9987304709`); the flow's end-to-end
+gain was error cancellation over components that individually got worse. HiFi4 stays.
 
 Reaching `RTF < 0.5` needs 2.121 s → 1.635 s, a further 23 %; `RTF < 0.2` needs 0.654 s, which at
 164 tokens is under 4 ms per token for the LLM alone with nothing left for the flow. Neither is
