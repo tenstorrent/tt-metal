@@ -47,6 +47,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // Runtime params (templates only under SPEED_OF_LIGHT). Kept as runtime args so they do not
+    // trigger per-value recompiles.
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+#endif
     const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
@@ -149,6 +158,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
     if constexpr (!unpack_to_dest)
     {
@@ -265,6 +279,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_faces          = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
+    const std::uint32_t LAST_TILE_W_DATUMS = params.LAST_TILE_W_DATUMS;
 #endif
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
@@ -408,8 +429,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
             // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
             // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned -> no spill).
-            constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
-            constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
+            const bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
+            const std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t row = 0; row < last_row_end; row++)

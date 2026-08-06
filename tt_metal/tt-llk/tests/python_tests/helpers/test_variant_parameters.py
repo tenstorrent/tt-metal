@@ -1155,7 +1155,7 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
-class LAST_TILE_W_DATUMS(TemplateParameter):
+class LAST_TILE_W_DATUMS(RuntimeParameter):
     """Kept width (in datums) of the narrow last tile in the RV_PACR narrow-row test.
 
     16 packs the whole skip-face-1 face-row (cols 0-15); 8 keeps only the lower half
@@ -1168,6 +1168,9 @@ class LAST_TILE_W_DATUMS(TemplateParameter):
         return (
             f"constexpr std::uint32_t LAST_TILE_W_DATUMS = {self.last_tile_w_datums};"
         )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t LAST_TILE_W_DATUMS;", "I"
 
 
 @dataclass
