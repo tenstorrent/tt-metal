@@ -194,12 +194,24 @@ def request_step_timesteps(
     video_sigmas: torch.Tensor,
     audio_sigmas: torch.Tensor,
     condition_noise_aug: float | None = None,
+    audio_condition_timestep: float | None = None,
 ) -> list[torch.Tensor]:
     """The sorted distinct timesteps of each denoise step.
 
-    Both modalities step their own schedule inside one forward and conditioning
-    rows sit at ``max(video_t, noise_aug)``, so a step carries two or three
-    levels. ``t = 1 - sigma``, and the terminal sigma has no evaluation.
+    Both modalities step their own schedule inside one forward and video conditioning
+    rows sit at ``max(video_t, noise_aug)``, so a step carries two or three levels.
+    ``t = 1 - sigma``, and the terminal sigma has no evaluation.
+
+    ``audio_condition_timestep`` adds a **fourth** level, and only ``ref2va`` needs it:
+    a reference soundtrack's rows are clean and run at a literal ``t = 1.0`` at every
+    step (campaign am. 115). Left out for ``t2va`` and ``fl2va``, which have no audio
+    conditioning rows -- so their tables are unchanged, and the pipeline's table cache
+    key already separates the two partitions.
+
+    Getting this wrong is not subtle, which is worth noting given how much of this
+    campaign was: the table is addressed by matching a row's timestep *by value*, so a
+    level the table does not carry raises ``IndexError`` in the pipeline's lookup rather
+    than silently modulating with the wrong row. That is how the gap was found.
     """
     video = 1.0 - video_sigmas[:-1].to(torch.float32)
     audio = 1.0 - audio_sigmas[:-1].to(torch.float32)
@@ -211,6 +223,8 @@ def request_step_timesteps(
         levels = [video[index], audio[index]]
         if condition_noise_aug is not None:
             levels.append(torch.clamp(video[index], min=float(condition_noise_aug)))
+        if audio_condition_timestep is not None:
+            levels.append(torch.tensor(float(audio_condition_timestep), dtype=video.dtype))
         steps.append(torch.unique(torch.stack(levels), sorted=True))
     return steps
 

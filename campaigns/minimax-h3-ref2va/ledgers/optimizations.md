@@ -12,3 +12,4 @@ a latency. A row that merely adds code without a gate crossing does not belong h
 | r3 | 5ec8933bbfa | typed `condition_blocks` in the transformer + the three ref2va cases | gate 4 red → green | existing PCCs bit-identical, not merely >= 0.9995 | artifacts/round-3/ |
 | r5 | 5ec8933bbfa | audio-encoder mesh readback + `l1_small_size` 16384 for ref2va | gate 3 red → green | all three modalities >= 99.99% vs reference | artifacts/round-5/ |
 | r6 | 4d04f289379 | ring fabric params for ref2va + `_denoise_and_decode` shared tail | gates 5-6 red → green | t2va CLIP 37.38 and all VBench dimensions unchanged | artifacts/round-6/ |
+| r7 | PENDING | fourth AdaLN level for ref2va audio conditioning | gate 7 red → green; audio-bearing e2e red → green | signal 0.128143 vs floor 0.000000 | artifacts/round-8/ |
