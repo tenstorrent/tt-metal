@@ -1679,6 +1679,11 @@ def _print_scorecard(
         for name in ("TTFT", "T/S/U", "T/S"):
             L.append("  │ %-16s : N/A  (%s)" % (name, reason))
         L.append("  │ ISL / OSL         : %s / %s  (tokens; N/A for non-token models)" % (isl, osl))
+        # The condition a step/vision measurement is meaningless without. Printed only when the model
+        # HAS one -- a resolution line on a text model would state a condition that does not exist.
+        _res = os.environ.get("TT_PERF_RESOLUTION") or (facts or {}).get("resolution")
+        if _res:
+            L.append("  │ resolution        : %sx%s  (px per unit of work)" % (_res, _res))
         if before_ms and after_ms:
             d = (before_ms - after_ms) / before_ms * 100.0
             L.append("  │ full-model e2e    : %.1f -> %.1f ms  (%+.1f%%)" % (before_ms, after_ms, d))
@@ -3603,7 +3608,14 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     try:
         from agent import model_bytes as _mb
 
-        _unit = _mb.unit_for_tag(
+        # THE OBSERVED UNIT HERE TOO. This exclusion drops the embedding table from the streamed
+        # bytes, because a token unit reads it by INDEX -- one row per token -- and counting the whole
+        # table overstates a decode step (gemma3's is 262144 x 3840, about 1 GB against 11 GB). But
+        # whether the model IS a token unit was decided by the tag, which is the same defect the
+        # ceiling just stopped making: Kokoro-82M is tagged text-to-speech, reads as `token`, and has
+        # no token loop at all -- so its tables would be excluded from a byte count they belong in.
+        # The tag remains only for the window before the first trace, where nothing is observed yet.
+        _unit = str(os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT") or "").strip().lower() or _mb.unit_for_tag(
             cfg.get("pipeline_tag") or (manifest.get("model_meta") or {}).get("pipeline_tag") or ""
         )
         _snap = _hf_snapshots(mid)[0] if mid and _hf_snapshots(mid) else None
@@ -3671,12 +3683,36 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
             # experts/top_k, making the ceiling far too low and every run read ABOVE_BAND. Returning
             # None keeps the ms-floor fallback: weaker, but not wrong.
             return None
+    # ONLY THE OBSERVATION SETS THE UNIT. It used to fall back to a table keyed on the HF
+    # pipeline_tag, and a wrong unit does not degrade the ceiling -- it puts it in the wrong currency
+    # entirely, then the band, the at-floor verdict and the headline rate all inherit that. A tag
+    # names the TASK and cannot state whether a model loops: `text-to-speech` covers XTTS, which emits
+    # tokens, and Kokoro, which is StyleTTS2 and produces a whole waveform in one pass, so the table
+    # has to pick and is wrong for the other. HunyuanImage-3.0, tagged text-to-image but
+    # autoregressive, is the same failure the other way.
+    #
+    # No observation yet means NO UNIT, which means no unit ceiling and the run lands on the ms-floor
+    # form until the first trace reports. That is the rule the rest of this code already follows --
+    # _anchored_ceiling_facts: "No recoverable unit means no ceiling, which lands on the floor
+    # fallback: weaker, but not wrong." The table contradicted it; now it does not.
+    #
+    # The tag is still read ABOVE, for default_conditions: ISL/OSL/steps/resolution must be chosen
+    # BEFORE anything runs, so nothing observed can supply them, and a wrong guess there is visible in
+    # the scorecard rather than silently rescaling the ceiling.
+    _observed = str(os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT") or "").strip().lower()
+    if _observed:
+        facts["unit"] = _observed
+    # RESOLUTION IS A MEASUREMENT CONDITION, and for a step or vision unit it IS the work: a denoise
+    # step at 1024 is ~4x the step at 512, so two runs of one model differ ~4x. emit-e2e already reads
+    # image_size to build its PCC input; the perf side never received it, so a steps/s figure could
+    # not say what it described. Recorded here rather than guessed at render time, and left absent for
+    # text models, where there is no such condition to state.
     try:
-        from agent import model_bytes as _mb2
+        from agent.model_bytes import resolution_from_config as _rfc
 
-        _u = _mb2.unit_from_config(cfg)
-        if _u:
-            facts["unit"] = _u
+        _res = int(os.environ.get("TT_PERF_RESOLUTION") or 0) or _rfc(cfg)
+        if _res:
+            facts["resolution"] = int(_res)
     except Exception:  # noqa: BLE001
         pass
     # A CONFIG VALUE MAY BE A LIST. Per-layer configs carry lists where a scalar is expected, and raw

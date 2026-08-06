@@ -71,6 +71,32 @@ def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[in
     return default_rows, default_cols
 
 
+def headline_unit(stage_names, pipeline=None) -> str:
+    """Which unit of work the headline measures: "token", "step", or "inference".
+
+    STRUCTURE FIRST. This was decided by `"decode" in stage_name.lower()` -- a substring test on free
+    text emit-e2e wrote, which is a guess wearing an observation's clothes: a pipeline whose recurring
+    stage is called `generate` reads as one-pass, and one that names any stage `decode` reads as
+    autoregressive whether it loops or not.
+
+    A pipeline exposing decode_step(state) retires ONE TOKEN PER CALL by definition -- that is the
+    decode contract PipelineDecodeAdapter requires and raises NotTraceCapable without. It is a fact
+    about the built object, so it is checked first. The name match stays underneath it for
+    stage-adapter pipelines, which expose per-stage hooks rather than the single decode contract.
+
+    Lives here rather than in trace_replay because that module imports ttnn at module scope and so
+    cannot be imported, let alone tested, without a device.
+    """
+    if pipeline is not None and callable(getattr(pipeline, "decode_step", None)):
+        return "token"
+    names = [str(n or "").lower() for n in (stage_names or [])]
+    if any("decode" in n for n in names):
+        return "token"
+    if any(k in n for n in names for k in ("step", "denoise", "diffus")):
+        return "step"
+    return "inference"
+
+
 def resolve_batch(pipeline, requested: int = 0) -> int:
     """How many users this pipeline serves: the request, else what the pipeline declares, else 1.
 

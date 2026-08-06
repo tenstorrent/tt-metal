@@ -175,7 +175,20 @@ def measure_adapter(adapter, device) -> float:
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
 
     pipeline_ms = sum(ms for _, ms, _ in results)
+    # THE UNIT IS A STRUCTURAL FACT, so read the STRUCTURE, not a name. This matched
+    # `"decode" in stage_name` -- a substring test on free text emit-e2e wrote -- which is a guess
+    # wearing an observation's clothes: a pipeline whose recurring stage is called `generate` reads
+    # as one-pass, and one that names any stage `decode` reads as autoregressive whether it loops or
+    # not. The decode CONTRACT is the real signal: a pipeline exposing decode_step(state) retires one
+    # token per call by definition, which is what PipelineDecodeAdapter already requires and raises
+    # NotTraceCapable without. The name match stays BELOW it, for stage-adapter pipelines that expose
+    # per-stage hooks rather than the single decode contract.
+    from models.experimental.perf_automation.agent.perf_adapter import headline_unit as _hu
+
+    _unit = _hu([r[0] for r in results], getattr(adapter, "_pipe", None))
     decode = next((r for r in results if "decode" in r[0].lower()), None)
+    if _unit == "token" and decode is None and results:
+        decode = results[-1]
     # WHICH UNIT OF WORK THE HEADLINE MEASURES. This selection already knew -- a decode stage means
     # the number is per TOKEN, no decode stage means it is one whole pipeline pass -- but it never
     # said so, and the roofline band on the other end assumed "token" unconditionally. A step-unit

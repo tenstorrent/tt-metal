@@ -83,6 +83,16 @@ _OWNERS = {
                 # means no ceiling, which is the rule this registry exists to enforce.
                 "_anchored_ceiling_bytes",
                 "_anchored_ceiling_facts",
+                # THE OBSERVED UNIT SUPERSEDES THE FILE, and this is the single point every consumer
+                # of the facts passes through. perf_target_inputs.json records what a TABLE keyed on
+                # the HF pipeline_tag guessed at setup, before anything ran -- and a tag names the
+                # TASK, which cannot state whether a model loops: `text-to-speech` covers XTTS, which
+                # emits tokens, and Kokoro, which produces a whole waveform in one pass. Once
+                # trace_replay has reported what the built pipeline ACTUALLY did, that is a fact, and
+                # a fact outranks the lookup it is correcting. This does NOT re-derive the unit from a
+                # config -- it reads the observation and applies it, and when nothing has been
+                # observed the file's value stands untouched.
+                "_load_perf_target_inputs",
             },
             "cc_optimize/summary.py": {"_roofline_lines"},
         },
@@ -247,8 +257,13 @@ def test_the_ledger_anchor_outranks_the_snapshot_for_the_ceiling(tmp_path, monke
 
 
 def test_no_hop_re_derives_the_unit_from_the_model(tmp_path):
-    """The unit is derived ONCE (model_bytes) and passed. A second derivation would be a second source
-    of truth that can disagree -- so only model_bytes may consult a pipeline tag or architecture."""
+    """The unit is OBSERVED once and passed. A second derivation would be a second source of truth
+    that can disagree.
+
+    unit_from_config and unit_for_architectures are gone entirely -- a class name cannot say whether a
+    model loops, and a unit in the wrong currency takes the band, the at-floor verdict and the
+    headline rate with it. unit_for_tag survives for measurement CONDITIONS only (ISL/OSL/steps), so
+    no module on this list may reach for it to answer "what does one unit of work cost"."""
     from pathlib import Path as _P
 
     root = _P(__file__).resolve().parents[1]
@@ -256,3 +271,6 @@ def test_no_hop_re_derives_the_unit_from_the_model(tmp_path):
         src = (root / rel).read_text()
         for name in ("unit_for_tag", "unit_from_config", "unit_for_architectures"):
             assert name not in src, "%s re-derives the unit via %s instead of reading it" % (rel, name)
+    mb = (root / "agent" / "model_bytes.py").read_text()
+    for gone in ("def unit_from_config", "def unit_for_architectures", "_UNIT_BY_ARCH_SUFFIX"):
+        assert gone not in mb, "%s is back; the unit has a second source again" % gone

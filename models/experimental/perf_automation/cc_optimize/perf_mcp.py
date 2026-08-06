@@ -4408,20 +4408,33 @@ def _load_perf_target_inputs() -> dict | None:
     for a model whose facts had existed minutes earlier. Rebuilding here costs one safetensors header
     read and makes the ceiling survive the revert instead of depending on it.
     """
+    facts = None
     try:
-        return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
+        facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
     except Exception:  # noqa: BLE001
         pass
-    try:
-        import importlib.util as _ilu
+    if facts is None:
+        try:
+            import importlib.util as _ilu
 
-        _spec = _ilu.spec_from_file_location("cc_run_ptin", str(Path(__file__).parent / "run.py"))
-        _run = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_run)
-        _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, None, _MANIFEST)
-        return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
-    except Exception:  # noqa: BLE001
-        return None
+            _spec = _ilu.spec_from_file_location("cc_run_ptin", str(Path(__file__).parent / "run.py"))
+            _run = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_run)
+            _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, None, _MANIFEST)
+            facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
+        except Exception:  # noqa: BLE001
+            return None
+    # THE OBSERVED UNIT OVERRIDES THE CACHED GUESS. The file's `unit` came from a table keyed on the
+    # HF pipeline_tag, which names the TASK and cannot state whether a model loops: `text-to-speech`
+    # covers XTTS, which emits tokens, and Kokoro, which is StyleTTS2 and produces a whole waveform in
+    # one pass. trace_replay reports what the built pipeline ACTUALLY did, and once it has, that is a
+    # fact rather than a lookup. Applied HERE, on both paths, because the file is written once at
+    # setup -- before any trace exists -- and then read from cache for the rest of the run, so
+    # correcting only the producer would never reach a run whose file already exists.
+    _obs = str(os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT") or "").strip().lower()
+    if _obs and isinstance(facts, dict) and facts.get("unit") != _obs:
+        facts["unit"] = _obs
+    return facts
 
 
 def _perf_target_status(rep: dict, dev: float) -> dict | None:
