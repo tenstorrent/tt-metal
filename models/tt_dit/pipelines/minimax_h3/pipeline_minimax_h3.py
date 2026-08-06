@@ -122,6 +122,11 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # directly is unaffected.
 PRECOMPUTE_ADALN_ENV = "MINIMAX_H3_PRECOMPUTE_ADALN"
 
+# The timestep a ref2va reference soundtrack's rows run at: a literal 1.0, every step. They are
+# clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
+# conditioning rows, which sit at max(t, 0.999). See `references.py` and campaign am. 115.
+MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
+
 # Read from the two scheduler_config.json files, which hold nothing else.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
@@ -879,6 +884,9 @@ class MiniMaxH3Pipeline:
                 VIDEO_SHIFT,
                 AUDIO_SHIFT,
                 MINIMAX_H3_KEYFRAME_NOISE_AUG,
+                # ref2va carries a fourth level (the audio conditioning t = 1.0), so its table
+                # has more rows per step than t2va's and the two must not share a file.
+                self.task,
                 self.transformer_config["num_layers"],
                 self.transformer_config["hidden_size"],
                 self.transformer_config["freq_dim"],
@@ -899,7 +907,15 @@ class MiniMaxH3Pipeline:
         audio = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
         video.set_timesteps(num_inference_steps)
         audio.set_timesteps(num_inference_steps)
-        step_timesteps = request_step_timesteps(video.sigmas, audio.sigmas, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+        step_timesteps = request_step_timesteps(
+            video.sigmas,
+            audio.sigmas,
+            MINIMAX_H3_KEYFRAME_NOISE_AUG,
+            # A FOURTH level, for ref2va only: a reference soundtrack's rows are clean and run at
+            # a literal t = 1.0 at every step. t2va and fl2va have no audio conditioning rows, so
+            # they keep three levels and their tables are byte-unchanged.
+            audio_condition_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP if self.task == "ref2va" else None,
+        )
 
         path = self._adaln_cache_path(num_inference_steps)
         if path.is_file():
@@ -1711,7 +1727,7 @@ class MiniMaxH3Pipeline:
                 float(t),
                 float(audio_timesteps[i]),
                 max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
-                1.0,
+                MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
             )
             # The condition rows travel as their own argument, not prepended to either stream: the
             # packed layout puts them between text and audio, so the model places them there itself.

@@ -564,3 +564,48 @@ believe a gate, ask what value it would return if the feature were entirely abse
 test to the divergence check, where it works, and never applied it to the directional check — where the
 answer is "the same noise it returns now". Asking it of *every* assertion, not just the headline one,
 is the rule that would have caught this before three generations of Galaxy time.
+
+---
+
+## Amendment 129 (2026-08-06) — the precomputed AdaLN table had no row for the audio-conditioning timestep, so every audio-bearing ref2va request failed; and it failed loudly, which is why it was cheap
+
+**Assumed** (am. 115): that because `build_row_timesteps` already accepted a `condition_audio_timestep`
+and the pipeline already passed `1.0`, the audio-conditioning level cost no code.
+
+**Measured.** Mesh 4×8, ring params, `l1_small_size=16384`, commit `2ad946fc6bf`, the two audio-bearing
+e2e shapes. Both failed identically, inside `_denoise`:
+
+```
+IndexError: index 0 is out of bounds for dimension 0 with size 0
+  pipeline_minimax_h3.py:1745
+    [int((levels == value).nonzero()[0, 0]) for value in unique]
+```
+
+`build_row_timesteps` returns **four** distinct levels for a request with reference audio rows —
+video `t`, audio `t`, `max(t, 0.999)` for the visual conditioning rows, and a literal `1.0` for the
+audio conditioning rows. But `request_step_timesteps`, which decides what the precomputed AdaLN table
+carries, only ever built **three**: t2va and fl2va have no audio conditioning rows, so the fourth level
+had never existed. The value lookup then found nothing to match.
+
+Everything up to that point was correct, and the log says so: the video reference encoded to
+`(37296, 96)` video rows plus `(414, 32)` audio rows in 90.1 s, and the packed sequence came out at
+**81542 → 81664 padded**, matching am. 114's host-only prediction exactly. Only the table lookup was
+short a row.
+
+**What changes.** `request_step_timesteps` takes an optional `audio_condition_timestep` and the pipeline
+passes it **for `ref2va` only**, so t2va's and fl2va's tables stay byte-unchanged and need no rebuild.
+`self.task` joins the table's cache key, because a four-level table has more rows per step than a
+three-level one and the two must not share a file. The timestep itself is now a named constant rather
+than a literal `1.0` in two places.
+
+Also corrected: the `mixed` case's padded length is **89856**, not the 90112 am. 114 predicted. That
+prediction used a guessed presentation length and the real one tokenizes shorter; am. 123 had already
+recorded `mixed` as an interpolation rather than a measurement. The e2e test now asserts the measured
+value per case, so a shape drift cannot pass.
+
+**Method note, and the one piece of good luck in this campaign.** This failure was *loud*. The table is
+addressed by matching a row's timestep **by value**, so a missing level raises `IndexError` instead of
+quietly selecting a neighbouring row — which is exactly the silent-wrong-modulation failure am. 118 was
+about. Had the lookup been positional, or had it clamped, this would have shipped as "ref2va audio
+conditioning is subtly wrong" with no gate able to see it. Value-matched lookups over positional ones
+are worth their cost.

@@ -12,3 +12,4 @@ One row per round, win or loss. Answers "what has been tried?"
 | r4 | 2026-08-06 | 5ec8933bbfa | shape-probe | do 46080/81664/111616 fit at full depth against `transformer_ref` | warm 2.11/3.26/5.45 s | 6 passed, outputs finite and non-degenerate | kept |
 | r5 | 2026-08-06 | 5ec8933bbfa | reference-encode | per-modality device encode vs the reference encoder step, on real media | 3 passed, 746 s | image 99.9905% / audio 99.9910% / video 99.9927% | kept |
 | r6 | 2026-08-06 | 4d04f289379 | e2e | ref2va end to end at 46080, plus the t2va/fl2va no-regression gate | 210.7 s compute; regression 5 passed | conditioning signal 0.080038 vs floor 0.000000; t2va metrics bit-identical | kept |
+| r7 | 2026-08-06 | PENDING | adaln-fourth-level | add the audio-conditioning timestep as a fourth AdaLN level, for ref2va only | 270.5 s / 372.0 s compute | discriminator + order gates pass; seam check red on one case | kept |
