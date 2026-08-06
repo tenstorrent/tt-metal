@@ -34,7 +34,6 @@ host torch tensors in **kwargs.
 from __future__ import annotations
 
 import ttnn
-
 from models.demos.xtts_v2._stubs.g_p_t2_model import build as _build_gpt2_model
 from models.demos.xtts_v2._stubs.learned_position_embeddings import build as _build_lpe
 
@@ -53,7 +52,9 @@ def build(device, torch_module):
     # Token embedding (ROW_MAJOR for ttnn.embedding).
     emb_w = ttnn.as_tensor(
         m.embeddings.weight.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # Absolute position-prefix lookup via the graduated
@@ -65,23 +66,31 @@ def build(device, torch_module):
     linear = m.lm_head[1]
     lnf_w = ttnn.as_tensor(
         norm.weight.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     lnf_b = ttnn.as_tensor(
         norm.bias.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # nn.Linear weight is [out, in]; ttnn matmul wants [in, out].
     head_w = ttnn.as_tensor(
         linear.weight.detach().t().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     head_b = ttnn.as_tensor(
         linear.bias.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -97,17 +106,36 @@ def build(device, torch_module):
 
     model_dim = int(m.embeddings.weight.shape[1])
 
-    # Snapshot the stateful prefix embedding stored via store_prefix_emb().
-    prefix_torch = m.cached_prefix_emb.detach().contiguous().to(torch.bfloat16)
-    prefix_len = int(prefix_torch.shape[1])
-    prefix_tt = ttnn.as_tensor(
-        prefix_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Snapshot the stateful prefix embedding stored via store_prefix_emb(). Kept in
+    # a mutable state cell so a served pipeline can refresh it per utterance via
+    # `forward.set_prefix(...)` without rebuilding the transformer (build_pipeline).
+    state = {}
+
+    def _upload_prefix(prefix_torch):
+        prefix_tt = ttnn.as_tensor(
+            prefix_torch.detach().contiguous().to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        state["prefix_tt"] = prefix_tt
+        state["prefix_len"] = int(prefix_tt.shape[1])
+
+    # cached_prefix_emb only exists after the first compute_embeddings() call; when the
+    # pipeline is built before any utterance (build_pipeline), the prefix arrives via
+    # set_prefix from the per-utterance forward instead.
+    if getattr(m, "cached_prefix_emb", None) is not None:
+        _upload_prefix(m.cached_prefix_emb)
 
     def forward(_primary=None, *args, **kwargs):
         import torch as _torch
 
+        if "prefix_tt" not in state:
+            raise RuntimeError(
+                "g_p_t2_inference_model: no prefix embedding uploaded — call "
+                "forward.set_prefix(gpt_inference.cached_prefix_emb) after compute_embeddings"
+            )
         # Host-free decode: when a device `gen_ids_tt` [1, gen_len] (uint32) is
         # supplied, embed it directly — no host slice, no host->device upload. The
         # ids are grown on device by the caller via ttnn.concat of the on-device
@@ -116,34 +144,43 @@ def build(device, torch_module):
         if gen_ids_tt is not None:
             ids_tt = gen_ids_tt
             gen_len = int(ids_tt.shape[1])
-            pos_src = ids_tt                             # lpe reads only .shape[1]
+            pos_src = ids_tt  # lpe reads only .shape[1]
         else:
             input_ids = kwargs["input_ids"]
-            gen_inputs = input_ids[:, prefix_len:]       # host int slice
+            gen_inputs = input_ids[:, state["prefix_len"] :]  # host int slice
             gen_len = int(gen_inputs.shape[1])
             ids_tt = ttnn.as_tensor(
-                gen_inputs.to(_torch.int32).contiguous(), dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+                gen_inputs.to(_torch.int32).contiguous(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             pos_src = gen_inputs
         tok = ttnn.embedding(ids_tt, emb_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         # lpe reads only pos_src.shape[1]=gen_len and returns float32
         # [gen_len, D]; cast to bf16 so ttnn.add operand dtypes match tok.
-        pos = lpe(pos_src)                               # float32 [gen_len, D]
+        pos = lpe(pos_src)  # float32 [gen_len, D]
         pos = ttnn.reshape(pos, [1, gen_len, model_dim])
         pos = ttnn.typecast(pos, ttnn.bfloat16)
-        gen_emb = ttnn.add(tok, pos)                     # [1, gen_len, D]
+        gen_emb = ttnn.add(tok, pos)  # [1, gen_len, D]
 
-        emb = ttnn.concat([prefix_tt, gen_emb], dim=1)   # [1, prefix_len+gen_len, D]
+        emb = ttnn.concat([state["prefix_tt"], gen_emb], dim=1)  # [1, prefix_len+gen_len, D]
 
         hidden = gpt2_forward(emb)
         normed = ttnn.layer_norm(hidden, epsilon=_LN_EPS, weight=lnf_w, bias=lnf_b)
         logits = ttnn.linear(
-            normed, head_w, bias=head_b, compute_kernel_config=_head_kernel_cfg,
+            normed,
+            head_w,
+            bias=head_b,
+            compute_kernel_config=_head_kernel_cfg,
         )  # [1, seq, num_audio_tokens]
         return logits
 
+    # Per-utterance prefix refresh: re-uploads ONLY the prefix buffer (the rest of the
+    # build — transformer, embeddings, LM head — is reused). Same as_tensor upload path
+    # as the build-time snapshot, so numerics are identical.
+    forward.set_prefix = _upload_prefix
     return forward
 
 
