@@ -479,8 +479,10 @@ class ChunkedPrefillPageTableGuardMixin:
         tails on the attention modules. Without a reset, the capture forward
         takes the middle-chunk branch and loads new programs mid-capture
         (TT_FATAL). sp0 must compile+capture with ``sliding_tail_in is None``;
-        sp1 must have the same persistent tails present for both passes — seed
-        them with an eager first-chunk if needed before calling capture.
+        sp1 must start capture from the *same* tail state compile started with.
+        APC / vLLM chunked continuations often JIT-capture sp1 with no prior
+        stash — compile takes the no-tail SDPA path then stashes a tail, and
+        capture would otherwise hit ``q_pad`` concat (program not in cache).
         """
         import ttnn
         from models.tt_transformers.tt.common import copy_host_to_device
@@ -511,6 +513,12 @@ class ChunkedPrefillPageTableGuardMixin:
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
+        # Snapshot pre-compile sliding state so capture can restore it. Compile
+        # always mutates `_sliding_prefill_tail` (and may first-alloc or copy
+        # into `sliding_prefill_tail_persistent`).
+        had_starting_tails = self._any_sliding_prefill_tails(model_id)
+        had_persistent = self._any_sliding_prefill_persistent(model_id)
+
         # Match Python graph for both compile and capture (sp0: first-alloc,
         # no ttnn.copy). Soft release leaves sliding_prefill_tail_persistent set
         # after compile, so capture would take the copy path and TT_FATAL
@@ -535,6 +543,12 @@ class ChunkedPrefillPageTableGuardMixin:
         # Restore the same starting tail state as compile before capture.
         if int(start_pos) == 0:
             self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
+        elif not had_starting_tails:
+            # sp1 JIT (APC / first middle chunk): compile ran no-tail SDPA then
+            # stashed a new tail. Drop that stash so capture matches. Keep
+            # persistent only when compile also started with it (end-of-forward
+            # copy path); otherwise hard-clear so both passes first-alloc.
+            self._release_all_sliding_prefill_tails(model_id, clear_persistent=not had_persistent)
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
@@ -681,6 +695,23 @@ class ChunkedPrefillPageTableGuardMixin:
             user_id=user_id,
             start_pos=chunk_start_idx,
         )
+
+    def _any_sliding_prefill_tails(self, model_id=-1) -> bool:
+        """True if any layer has a cross-chunk ``_sliding_prefill_tail`` stash."""
+        for layer in getattr(self.model[model_id], "layers", []):
+            attn = getattr(layer, "self_attn", None)
+            if attn is not None and getattr(attn, "_sliding_prefill_tail", None) is not None:
+                return True
+        return False
+
+    def _any_sliding_prefill_persistent(self, model_id=-1) -> bool:
+        """True if any layer has ``sliding_prefill_tail_persistent`` ring buffers."""
+        for layer in getattr(self.model[model_id], "layers", []):
+            attn = getattr(layer, "self_attn", None)
+            cfg = getattr(attn, "config", None) if attn is not None else None
+            if cfg is not None and getattr(cfg, "sliding_prefill_tail_persistent", None) is not None:
+                return True
+        return False
 
     def _release_all_sliding_prefill_tails(self, model_id=-1, *, clear_persistent: bool = False):
         for layer in getattr(self.model[model_id], "layers", []):

@@ -25,10 +25,15 @@ from models.tt_transformers.tt.generator import (
 # warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
 # (``can_gemma4_enable_prefill_trace``) so they stay consistent.
 # Include 4096 so cold single-chunk / first scheduler grant ≤4k can replay a
-# prefill device trace (TTFT). Continuations (``num_cached_tokens>0``) stay eager
-# unless ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` (product yaml). Sliding-tail stash +
-# persistent rebind in ``attention/prefill.py`` keep remnant chunks coherent
-# across vLLM chunk boundaries (#51186). Trim via ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
+# prefill device trace (TTFT). Continuations (``num_cached_tokens>0`` — APC hits
+# and vLLM chunked-prefill remnants) always stay eager: Gemma4 sliding layers
+# carry a mutable in-memory tail that diverges compile vs capture (TT_FATAL
+# unwarmed ``ttnn.concat`` / ``ttnn.copy``). ``GEMMA4_CHUNKED_PREFILL_TRACE=1``
+# only enables the *generator* long-ISL multi-chunk replay path (seeded
+# ``sp0_mc``/``sp1_mc``), not JIT ``sp1`` via ``can_enable_trace``. Sliding-tail
+# stash + persistent rebind in ``attention/prefill.py`` keep eager remnant
+# chunks coherent across vLLM chunk boundaries (#51186). Trim via
+# ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
 _DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
 
@@ -52,11 +57,13 @@ GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 
 
 def chunked_prefill_trace_enabled() -> bool:
-    """True when long-ISL multi-chunk should replay captured 4k prefill traces.
+    """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 
     Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable. Each generator
-    chunk (default 4096) replays the matching ``sp0``/``sp1`` prefill trace
-    instead of an eager ``ttnn_prefill_forward``.
+    chunk (default 4096) replays the matching ``sp0_mc``/``sp1_mc`` prefill
+    trace instead of an eager ``ttnn_prefill_forward``. Does **not** authorize
+    vLLM APC / remnant JIT ``sp1`` captures — those stay eager via
+    :func:`can_gemma4_enable_prefill_trace`.
     """
     return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
 
@@ -505,13 +512,20 @@ def can_gemma4_enable_prefill_trace(
 ) -> bool:
     """Return True when Gemma4 prefill device trace may be captured or replayed.
 
-    ``num_cached_tokens > 0`` (sp1 / APC / multi-chunk middle) is allowed only
-    when ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on — cold single-chunk traces stay
-    sp0-only.
+    Cold single-chunk / first scheduler grant only (``num_cached_tokens == 0``).
+    APC hits and vLLM chunked-prefill remnants (``num_cached_tokens > 0``) stay
+    eager — same posture as tt_transformers #32056 and required for Gemma4
+    hybrid sliding tails (compile/capture graph must not depend on mutable
+    ``sliding_tail_in`` / persistent ring state). Long-ISL traced multi-chunk
+    bypasses this gate via :func:`chunked_prefill_trace_enabled` inside the
+    generator chunk loop.
     """
     if uses_pli:
         return False
-    if num_cached_tokens != 0 and not chunked_prefill_trace_enabled():
+    # Never JIT-capture / replay sp1 through the shared can_enable_trace path.
+    # Remnant / APC continuations are eager; generator multi-chunk uses its own
+    # seeded sp0_mc/sp1_mc path when GEMMA4_CHUNKED_PREFILL_TRACE=1.
+    if num_cached_tokens != 0:
         return False
     if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
         return False
