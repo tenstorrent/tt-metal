@@ -50,6 +50,48 @@ TT_SMI = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
 DEAD_BOARD_SIGS = ("0xffffffff", "board should be reset", "pcie link", "device hang", "hang detected")
 
+# THE KERNEL'S VERDICT that a reset cannot help. `tt-smi -r` talks to the card OVER PCIe and asks its
+# board-management firmware to cycle power; when that firmware is the thing refusing, the request has
+# nowhere to land. The driver logs exactly that, and it is the only signal available that separates
+# "wedged, reset it" from "wedged, the host must reboot":
+#
+#   tenstorrent tenstorrent!2: Failed to set initial power state: -22
+#
+# Observed on this box 2026-08-05 13:36 through 2026-08-06 12:07 -- 714 occurrences, one per open
+# attempt, spanning a reboot-less day in which 34 resets changed nothing. Nothing else in the kernel
+# log marked it: no thermal trip, no PCIe AER, no OOM, no hung task.
+UNRESETTABLE_KERNEL_SIGS = ("failed to set initial power state",)
+KERNEL_LOG_LINES = int(os.environ.get("TT_RECOVERY_DMESG_LINES", "400") or "400")
+
+
+def _kernel_tail() -> str:
+    """The recent kernel log, or "" when it cannot be read.
+
+    BOUNDED and best-effort: recovery must never depend on dmesg being readable, and a host that
+    restricts it (dmesg_restrict=1, no journal) simply falls back to counting failures.
+    """
+    for cmd in (["dmesg", "--ctime"], ["journalctl", "-k", "--no-pager", "-n", str(KERNEL_LOG_LINES)]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and r.stdout:
+                return "\n".join((r.stdout or "").splitlines()[-KERNEL_LOG_LINES:])
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+def board_needs_host_reboot(kernel_text: str = None) -> bool:
+    """Has the driver reported a fault that a PCIe reset provably cannot clear?
+
+    True means STOP RESETTING and tell the operator to reboot -- retrying is guaranteed to fail, and
+    the cost of not knowing is measured in hours: run 39 spent ~100 minutes on 34 resets and then sat
+    dead until morning, because the tool could only infer "unrecoverable" from repeated failure and
+    never read the reason sitting in the kernel log.
+    """
+    txt = (_kernel_tail() if kernel_text is None else str(kernel_text or "")).lower()
+    return any(sig in txt for sig in UNRESETTABLE_KERNEL_SIGS)
+
+
 HEALTH_TIMEOUT_S = float(os.environ.get("TT_RECOVERY_HEALTH_TIMEOUT_S", "45") or "45")
 RESET_FAIL_LIMIT = int(
     os.environ.get("TT_RECOVERY_FAIL_LIMIT", os.environ.get("PERF_MCP_RESET_FAIL_LIMIT", "3")) or "3"
@@ -269,6 +311,33 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
     (which board, how many tries, whether it worked, when to give up) is decided here so no caller
     can decide it differently.
     """
+    # GIVING UP IS DECIDED HERE, with everything else. This docstring has always promised that "how
+    # many tries... [is] decided here so no caller can decide it differently" -- and the counting was,
+    # but the STOPPING was not: recovery_exhausted() had exactly one consumer in the tool
+    # (termination_check, on the profile-raises path), while the four call sites that actually reset
+    # -- probes, run.py, perf_mcp._recover_device, and note_crash's dead-board branch -- consulted
+    # nothing. So RESET_FAILS climbed to 34 against a limit of 3 and no one stopped: ~100 minutes of
+    # resets on a board that could not come back, then hours of dead run. A limit counted in one place
+    # and enforced in none is not a limit.
+    if recovery_exhausted():
+        if log:
+            log(
+                "recovery EXHAUSTED at %s (%d failures >= limit %d) -- not resetting again"
+                % (where, RESET_FAILS["n"], RESET_FAIL_LIMIT)
+            )
+        return False
+    # AND A RESET THE KERNEL HAS ALREADY RULED OUT IS NOT WORTH ONE TRY, let alone three. `tt-smi -r`
+    # asks the card's board-management firmware, over PCIe, to cycle power; when that firmware is what
+    # is refusing, there is nothing to ask. The driver says so, and saying so is the whole difference
+    # between "retry" and "the host must reboot".
+    if board_needs_host_reboot():
+        RESET_FAILS["n"] = RESET_FAIL_LIMIT
+        if log:
+            log(
+                "device at %s needs a HOST REBOOT, not a reset: the driver reports a board-management "
+                "fault (%s) that no PCIe reset can clear" % (where, UNRESETTABLE_KERNEL_SIGS[0])
+            )
+        return False
     targets = targets_for(error_text, config_target, expand=expand)
     for tgt in targets:
         try:

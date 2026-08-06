@@ -197,7 +197,10 @@ def test_termination_check_wires_warm_start_into_next_target():
     """Wiring: the lookup must be reachable from termination_check, not just defined."""
     src = (_CC / "perf_mcp.py").read_text()
     i = src.index("def termination_check")
-    body = src[i : i + 8000]
+    # THE WHOLE FUNCTION, not a fixed byte window. This sliced `src[i : i + 8000]`, so any edit near
+    # the top of termination_check pushed the wiring it checks out of view and failed a function that
+    # had not changed -- a test measuring its own window size rather than the claim it states.
+    body = src[i : src.index("\ndef ", i + 1)]
     assert "_warm_start_for(" in body or "warm_start" in body, (
         "termination_check does not populate next_target['warm_start']; the table is still the " "agent's job to find"
     )

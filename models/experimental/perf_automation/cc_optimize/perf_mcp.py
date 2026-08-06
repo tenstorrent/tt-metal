@@ -4700,11 +4700,25 @@ def termination_check() -> dict:
             # STOP POLLING A DEAD BOARD. can_stop=False means "work remains"; a device that cannot be
             # recovered is not work remaining, and the agent is instructed never to stop while it is
             # False -- which is how a dead card produced hours of 6-minute no-op gate calls.
+            # NAME WHAT THE OPERATOR MUST DO. "unrecoverable after N attempts" is an inference from
+            # repeated failure; when the kernel has reported a board-management fault it is a
+            # diagnosis, and the two call for different actions. Run 39 halted with the vague form and
+            # sat dead until morning -- a reboot would have taken two minutes.
+            _reboot = False
+            try:
+                _reboot = _dr().board_needs_host_reboot()
+            except Exception:  # noqa: BLE001
+                pass
             return {
                 "can_stop": True,
-                "halt": "device_unrecoverable",
-                "error": "device could not be recovered after %d reset attempts: %s"
-                % (_RESET_FAIL_LIMIT, str(exc)[-300:]),
+                "halt": "needs_host_reboot" if _reboot else "device_unrecoverable",
+                "error": (
+                    "the driver reports a board-management fault no PCIe reset can clear "
+                    "('Failed to set initial power state') -- REBOOT THE HOST, then re-run: %s"
+                    if _reboot
+                    else "device could not be recovered after %d reset attempts: %s"
+                )
+                % ((str(exc)[-300:],) if _reboot else (_RESET_FAIL_LIMIT, str(exc)[-300:])),
             }
         return {"can_stop": False, "error": f"profiler crashed: {str(exc)[-500:]}"}
     _note_device_ok()
