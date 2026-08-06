@@ -27,8 +27,7 @@ namespace {
 // codegen/kernels/sequencers.h: constexpr uint32_t SEQ_PAD = 5;
 constexpr uint32_t kSeqPad = 5;
 
-// ops/pad/spec.py: _L1_ALIGN / _L1_SAFETY_MARGIN.
-constexpr uint32_t kL1Align = 16;
+// ops/pad/spec.py: _L1_SAFETY_MARGIN.
 constexpr uint32_t kL1SafetyMargin = 64 * 1024;
 
 // common/codegen_common/builder_utils.py: usable_l1()'s _L1_OVERHEAD -- a flat firmware/dispatch/
@@ -123,12 +122,12 @@ PadCodegenParams build_pad_codegen_params(
         // generator's.
         const uint32_t elem_size = input_4d.element_size();
         const uint32_t dram_alignment = input_4d.buffer()->alignment();
-        // input_page mirrors spec.py's stage_buf_size (DRAM-pitch-aligned staging read). output_page
-        // mirrors stick_size_out_aligned, which spec.py aligns to _L1_ALIGN (an L1 CB-page quantity),
-        // NOT dram_alignment -- using dram_alignment here would over-align the output page and can
-        // shrink read_batch/write_batch earlier than the generator does for the same device.
+        // input_page mirrors spec.py's stage_buf_size (DRAM-pitch-aligned staging read) and
+        // output_page its stick_size_out_aligned. Both are dram_alignment quantities: the reader's
+        // CB page pitch has to clear the NOC granule (see create_descriptor_rm), so the pitch the
+        // budget is charged for and the pitch the CB is actually built at are the same number.
         const uint32_t input_page = tt::align(W * elem_size, dram_alignment);
-        const uint32_t output_page = tt::align(attrs.W_out * elem_size, kL1Align);
+        const uint32_t output_page = tt::align(attrs.W_out * elem_size, dram_alignment);
         IDevice* device = input_4d.device();
         const uint32_t budget = device->l1_size_per_core() - kL1FirmwareOverhead;
         const auto [rb, wb] = rm_pad_batches_for_l1(
@@ -169,6 +168,14 @@ ProgramDescriptor create_descriptor_tiled(
     // DRAM page pitch is placement-specific: the pad reader (fill size), CB page, and writer
     // must ALL step at the same aligned pitch or multi-page tensors accrue a page skew.
     const uint32_t tile_bytes = tt::align(tt::tile_size(data_format), dram_alignment);
+    // The SEQ_PAD reader fills cb_pad a uint32_t at a time and floors the word count, so a tile
+    // size that is not a whole number of words would leave its last partial word unwritten and read
+    // stale L1 back as pad. Every current format satisfies this via the dram_alignment rounding
+    // above; assert it so a future encoding cannot make that incidental property fail silently.
+    TT_FATAL(
+        tile_bytes % sizeof(uint32_t) == 0,
+        "pad_codegen (TILE): tile_bytes={} is not a whole number of 4B words",
+        tile_bytes);
     const uint32_t pad_buf_size = tt::align(tile_bytes, dram_alignment);
 
     const uint32_t total_out_tiles = N_out * C_out * Ht_out * Wt_out;
@@ -327,11 +334,10 @@ ProgramDescriptor create_descriptor_rm(
     const uint32_t front_pad_w_bytes = front_w * elem_size;
     const uint32_t back_pad_w_bytes = (W_out - W - front_w) * elem_size;
     // Page pitch, so also every l1_addr the reader targets. A NOC read settles its destination to
-    // the enclosing granule, so this must be a dram_alignment multiple, not merely kL1Align: at 16B
+    // the enclosing granule, so this must be a dram_alignment multiple, not merely L1's 16B: at 16B
     // one stick's data read reaches past its own length into the pad bytes the next fields hold.
-    // Deliberately not the page size that build_pad_codegen_params budgets L1 against -- that one
-    // keys the cache and stays bit-identical to the generator's; this exceeds it by <dram_alignment
-    // per page, well inside the headroom kL1FirmwareOverhead already reserves.
+    // build_pad_codegen_params budgets L1 against this same quantity, so the batches it caches are
+    // charged for the pages this CB really allocates.
     const uint32_t stick_size_out_aligned = tt::align(stick_size_out, dram_alignment);
 
     const uint32_t total_out_sticks = N_out * C_out * H_out;
