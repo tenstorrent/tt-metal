@@ -41,10 +41,11 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
 
 // Perf gate (auto-routing only): in-scope cases not worth the codegen path under `auto`. Never
 // consulted by the codegen prim's validate, so a demoted case still runs under
-// implementation=codegen and keeps being measured. Carries two general conditions — a caller-forced
-// single-worker route, and Wt == 1, where every builder degenerates to a single tile per compute
-// block and the batched writer is off — plus an enumerated table for the Wt >= 2 configurations no
-// mechanism was found for.
+// implementation=codegen and keeps being measured. Carries three general conditions — a
+// caller-forced single-worker route; Wt == 1, where every builder degenerates to a single tile per
+// compute block and the batched writer is off; and Wt == 3 with the 2D-column split unreachable on
+// the real device grid — plus an enumerated table for the remaining configurations no mechanism was
+// found for.
 bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args);
 
 enum class ImplementationSelector { Auto, Native, Codegen };

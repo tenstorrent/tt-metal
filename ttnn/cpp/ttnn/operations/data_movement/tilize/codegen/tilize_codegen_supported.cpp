@@ -116,8 +116,9 @@ struct DemotedCase {
 // preferred form. A row leaves this table only when a measurement on the ported kernel clears it —
 // a demoted case still runs under implementation=codegen, so verify keeps measuring every row here.
 //
-// Every row here has Wt >= 2; the whole Wt == 1 class is covered by the predicate in is_demoted()
-// below rather than enumerated, which is why several measured Wt == 1 shapes are absent.
+// Wt == 1 (row_path_wt1_no_pipeline) and Wt == 3 (row_path_wt3_no_column_split /
+// row_path_wt3_column_split_unavailable) are both covered by general predicates in is_demoted()
+// below rather than enumerated here, which is why no row in this table has Wt == 1 or Wt == 3.
 //
 // Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
 // are one row, since they produce the same program. Placement is part of the key because the
@@ -126,21 +127,11 @@ struct DemotedCase {
 constexpr DemotedCase kUngeneralizedDemotedCases[] = {
     // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row.
     {1, 1, 2, DataType::UINT16, BufferType::DRAM},
-    // [2, 12, 64, 96] — NC 24, Ht 2, Wt 3. DRAM only: the L1 twin is an open perf item, not a
-    // demotion, so it must keep reaching codegen under `auto`.
-    {24, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
-    // [3, 7, 64, 96] — NC 21, Ht 2, Wt 3.
-    {21, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
-    {21, 2, 3, DataType::BFLOAT16, BufferType::L1},
-    // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3.
-    {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
-    {48, 3, 3, DataType::BFLOAT16, BufferType::L1},
-    // The following tile geometries are deliberately absent from this table: codegen beats native
-    // on every one of them, they only trail generic_op, so demoting would route a case that wins
-    // to the slower path.
+    // The following Wt == 2 / Wt == 5 tile geometries are deliberately absent from this table:
+    // codegen beats native on every one of them, they only trail generic_op, so demoting would
+    // route a case that wins to the slower path.
     //   NC 2, Ht 6, Wt 7  ([2, 192, 224]) — both placements.
     //   NC 4, Ht 7, Wt 5  ([4, 224, 160]) — L1 only; the DRAM twin is not in this class.
-    //   NC 5, Ht 5, Wt 3  ([5, 160, 96])  — both placements.
     //   NC 7, Ht 3, Wt 5  ([7, 96, 160])  — L1 only; the DRAM twin is not in this class.
     //
     // [5, 8, 64, 64] — NC 40, Ht 2, Wt 2.
@@ -153,17 +144,29 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
     {6, 7, 5, DataType::BFLOAT16, BufferType::L1},
     // [6, 4, 96, 64] — NC 24, Ht 3, Wt 2.
     {24, 3, 2, DataType::BFLOAT16, BufferType::L1},
-    // [9, 160, 96] — NC 9, Ht 5, Wt 3.
-    {9, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
-    {9, 5, 3, DataType::BFLOAT16, BufferType::L1},
 };
+
+// row_path_wt3_no_column_split / row_path_wt3_column_split_unavailable: build_tilize_row's 2D
+// column split (choose_tilize_2d_ncol in tilize_codegen_program_factory.cpp) has exactly one
+// candidate factor for Wt == 3 — ncol == 3 — and grants it only when the grid has room for
+// total_ht * 3 cores, i.e. 3 * total_ht <= cores (floor(cores / total_ht) >= 3, exact under integer
+// floor division). Below that bound build_tilize_row falls back to the plain row split: same core
+// assignment and same per-core tile-row count as native's split_blocks_for_tilize, so the codegen
+// path pays the unified reader's per-stick indirection and the batched writer's setup with none of
+// the column split's extra parallelism to amortize it against. Ledger evidence is exact on this
+// boundary with no exception in either direction (device_vs_native 0.89-0.98 below it, 1.16-1.83
+// at or above it), so this is a condition rather than another block of exact rows. Queries the
+// real device grid rather than a hardcoded core count, per the porting guide's alignment-guard
+// rule — the boundary moves with the grid, a sweep-derived constant would not.
+bool tilize_wt3_column_split_available(uint32_t total_ht, IDevice* device) {
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t num_avail_cores = grid.x * grid.y;
+    return 3 * total_ht <= num_avail_cores;
+}
 
 }  // namespace
 
-// tensor_args is unnamed here only because every surviving demotion is expressible in the normalized
-// cache-key attributes; it stays in the signature because that is the context a predicate over the
-// real shape or placement would need.
-bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs&) {
+bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
     // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
     // codegen's pipelining has nothing to overlap, and native has a route built for that request.
@@ -192,6 +195,19 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // Wt == 1 counterexample, so this is a condition rather than another block of exact rows.
     if (operation_attributes.Wt == 1) {
         return true;
+    }
+
+    // GENERAL PREDICATE — row_path_wt3_no_column_split / row_path_wt3_column_split_unavailable
+    // (see tilize_wt3_column_split_available above). Needs the real device grid, so it is skipped
+    // for a host tensor the same way supported_by_codegen's CB-fit check is: `auto` never reaches a
+    // host tensor here, and the prim's structural TT_FATALs cover that case independently of this
+    // perf gate.
+    if (operation_attributes.Wt == 3) {
+        const Tensor& input = tensor_args.input_tensor;
+        const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
+        if (is_device_tensor(input) && !tilize_wt3_column_split_available(total_ht, input.device())) {
+            return true;
+        }
     }
 
     // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's

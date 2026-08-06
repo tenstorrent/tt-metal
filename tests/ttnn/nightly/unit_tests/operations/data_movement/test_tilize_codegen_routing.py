@@ -20,6 +20,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 _NATIVE = "native"  # forced-native golden leg
 _CODEGEN = "codegen"  # forced-codegen leg
 _ROUTED = "auto"
+_DRAM = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)}
 
 
 def _make_input(shape, dtype):
