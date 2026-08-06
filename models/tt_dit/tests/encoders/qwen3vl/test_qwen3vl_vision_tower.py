@@ -95,9 +95,16 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 # perf mode skips the quadratic CPU golden (shapes/finiteness only) and says nothing about accuracy
 _PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
 assert all(name in GRIDS for name in _PERF_GRIDS)
-_CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
-    pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS
-]
+# The largest grids' check-mode CPU golden exceeds the default 300 s budget (measured at tp8_sp4:
+# ~492 s for the 65k single-block references, ~778 s for max_load's 168k rows). Per-grid timeout
+# headroom on the check cases only -- perf mode skips the golden. Sizes from 43682d4.
+_TIMEOUTS = {"ref_4to1": 900, "ref_1to4": 900, "max_load": 1800}
+_CASES = [
+    pytest.param(
+        name, True, id=f"check-{name}", marks=[pytest.mark.timeout(_TIMEOUTS[name])] if name in _TIMEOUTS else []
+    )
+    for name in GRIDS
+] + [pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS]
 
 
 @VISION_PARAMS
