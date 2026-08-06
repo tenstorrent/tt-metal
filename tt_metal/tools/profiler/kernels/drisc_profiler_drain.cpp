@@ -116,7 +116,10 @@ inline bool reserve_pages_bounded(
 // rewritten while writes are still in flight, i.e. trade a hung drainer for silently corrupt capture. So
 // the caller must treat `false` as "egress is dead": stop shipping entirely and leave the loop, never as
 // "carry on". That is safe precisely because it only ever fires when the consumer has already gone away.
-inline bool write_barrier_bounded(uint64_t deadline) {
+inline bool write_barrier_bounded(
+    uint64_t deadline,
+    volatile tt_l1_ptr uint32_t* dbg_hw = nullptr,
+    volatile tt_l1_ptr uint32_t* dbg_sw = nullptr) {
     // Bounded on ITERATIONS as well as cycles. The cycle deadline alone assumes two things that a wedged NIU
     // breaks: that get_timestamp() advances, and that the loop gets to evaluate it at all. Under slow dispatch
     // the DRISC was observed stuck here with the 50 ms deadline never firing (phase=11 forever), which can only
@@ -130,6 +133,14 @@ inline bool write_barrier_bounded(uint64_t deadline) {
     uint32_t spins = 0;
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
         invalidate_l1_cache();
+        // Publish BOTH sides of the flush predicate so a wedge is diagnosable from the host without a
+        // debugger. ncrisc_noc_nonposted_writes_flushed compares a HARDWARE counter against a SOFTWARE
+        // mirror; if the mirror is out of sync the predicate can never come true, which looks identical to
+        // "the NoC is stalled" but is a completely different bug.
+        if (dbg_hw != nullptr) {
+            *dbg_hw = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_WR_ACK_RECEIVED);
+            *dbg_sw = noc_nonposted_writes_acked[NOC_INDEX];
+        }
         if (++spins >= kMaxSpins || get_timestamp() >= deadline) {
             return false;
         }
@@ -184,14 +195,25 @@ void kernel_main() {
     // batch is pushed to the host. On a single NoC the two are serialized by the barriers however the loop
     // is arranged -- the split is what makes the overlap physically possible.
     //
-    // Both NIUs are already live: DRISC firmware runs noc_local_state_init() for every NOC, and
-    // drisc_set_stream_mode_all() puts BOTH into stream mode.
-#ifdef DRAIN_ON_TENSIX
-    // Tensix BRISC firmware inits ONLY its own noc_index (brisc.cc:385), so the read NoC's local state --
-    // the transaction-id counters noc_async_read_barrier() waits on -- is uninitialized here. Without this
-    // the read barrier compares against stale counters and returns early.
+    // RESYNC THE SOFTWARE NOC COUNTERS ON BOTH NOCS, ALWAYS.
+    //
+    // The barriers do not watch hardware -- they compare a hardware counter against a SOFTWARE MIRROR
+    // (`ncrisc_noc_nonposted_writes_flushed` is `NIU_MST_WR_ACK_RECEIVED == noc_nonposted_writes_acked[noc]`).
+    // Those mirrors live in this core's memory and PERSIST ACROSS KERNEL LAUNCHES. A resident drainer is
+    // launched repeatedly onto a core that is never reset, so any run that ends with writes still unacked
+    // leaves the mirror permanently AHEAD of hardware -- and the next kernel's first write barrier then waits
+    // for an equality that can never hold. Measured: HW_ACK_RECEIVED=14768 vs SW_acked=14770, frozen, so the
+    // drainer wedged in the barrier on sweep 1 and the host reported FAILED TO START. It reproduced on every
+    // run until a `tt-smi -r`, which is what made it look like "the DRISC cannot run under slow dispatch".
+    //
+    // The comment this replaces asserted DRISC firmware runs noc_local_state_init() for every NOC. It does --
+    // on FW boot, which is not the same thing as on every kernel launch. Do it here, unconditionally: it is
+    // the only way to guarantee the mirrors match hardware at the start of THIS kernel, it is idempotent, and
+    // the Tensix build has always needed it for the read NoC anyway (BRISC firmware inits only its own,
+    // brisc.cc:385, and a stale read counter makes noc_async_read_barrier() return EARLY -- silent corruption
+    // rather than a wedge).
+    noc_local_state_init(NOC_INDEX);
     noc_local_state_init(kReadNoc);
-#endif
     // Does constructing Noc{kReadNoc} move the RUNTIME global `noc_index`? It matters: the library
     // noc_async_write_barrier() defaults to that global, while the writes are issued on the COMPILE-TIME
     // NOC_INDEX. If they diverge, the barrier guarding staging reuse watches the wrong NoC.
@@ -217,6 +239,9 @@ void kernel_main() {
     // PHASE_RESERVE with a frozen hb. Both live in the 64 B pad between done and stop.
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
     volatile tt_l1_ptr uint32_t* phase = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 8);
+    // +12/+16: the two sides of the write-barrier flush predicate, live while it spins.
+    volatile tt_l1_ptr uint32_t* dbg_hw_ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 12);
+    volatile tt_l1_ptr uint32_t* dbg_sw_ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 16);
     constexpr uint32_t kPhaseInit = 1, kPhasePoll = 2, kPhaseReserve = 3, kPhaseWrite = 4, kPhaseExit = 5;
     // Sub-phases of WRITE, so a stuck egress says WHICH call blocks: 6=chunked NoC write to the
     // PCIe tile, 7=socket_push_pages bookkeeping, 8=socket_notify_receiver (a PCIe write of the
@@ -226,6 +251,7 @@ void kernel_main() {
     // which are OUTSIDE ship_run and so were invisible: a stale phase 4 after a dropped frame
     // made it look like the write path was blocking when execution had already moved on.
     constexpr uint32_t kPhDropped = 10, kPhBar1 = 11, kPhBar2 = 12, kPhBarTail = 13;
+    constexpr uint32_t kPhTailBar = 15;  // the post-loop write barrier, which shared phase 11 and hid there
     // 14 = socket_barrier() in the exit tail. It had NO marker, so a kernel blocked there reported the
     // loop's stale 12 and was twice mis-diagnosed as the sweep-body write barrier. Every blocking call
     // needs its own marker or the phase word lies by omission.
@@ -452,7 +478,7 @@ void kernel_main() {
             if (gen_shipped[gen]) {
                 const uint64_t t_b0 = get_timestamp();
                 *phase = kPhBar1;
-                const bool flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles);
+                const bool flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
                 c_barrier += get_timestamp() - t_b0;
                 if (!flushed) {
                     egress_dead = true;
@@ -495,7 +521,7 @@ void kernel_main() {
         {
             const uint64_t t_b0 = get_timestamp();
             *phase = kPhBar2;
-            if (!write_barrier_bounded(t_b0 + kCreditWaitCycles)) {
+            if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
                 egress_dead = true;
             }
             c_barrier += get_timestamp() - t_b0;
@@ -527,7 +553,8 @@ void kernel_main() {
         socket_barrier(sender);
     }
     *phase = kPhBarTail;
-    (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
+    *phase = kPhTailBar;  // distinct from kPhBar1: the tail barrier used to run while phase still read 11
+    (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
     const uint64_t t_end = get_timestamp();
 
     const uint64_t cycles = t_end - t_start;
