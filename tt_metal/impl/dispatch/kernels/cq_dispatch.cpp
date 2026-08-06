@@ -256,6 +256,11 @@ FORCE_INLINE void fd_bench_record_first_observe(bool& recorded, uint32_t availab
         return;
     }
     recorded = true;
+    // Per-command timestamp for the averaged Metric A, indexed by the pre-increment count so it lines up
+    // with the prefetcher's issue[i]. t_obs was sampled at the top of this function, before any store.
+    if (fd_bench_observe_count < fd_copy_bench::kPairEntries) {
+        fd_copy_bench::slots()[fd_copy_bench::kObservePairBase + fd_bench_observe_count] = t_obs;
+    }
     fd_copy_bench::slots()[fd_copy_bench::kSlotLastTObserved] = t_obs;
     fd_copy_bench::slots()[fd_copy_bench::kSlotObserveCount] = ++fd_bench_observe_count;
     fd_copy_bench::slots()[fd_copy_bench::kSlotLastAvailBytes] = available_data;
@@ -275,6 +280,13 @@ static uint32_t fd_bench_nonblock_cycles = 0;
 static uint32_t fd_bench_nonblock_count = 0;
 static uint32_t fd_bench_bytes = 0;
 static uint32_t fd_bench_cmd_count = 0;
+// Main-loop accounting (see fd_copy_bench.hpp). loop_wait covers the top-of-loop
+// wait_for_available_data_and_release_old_pages, which is where credit release to the prefetcher actually
+// happens -- previously outside every bracket, and over half the command period was unattributed.
+static uint32_t fd_bench_loop_wait_cycles = 0;
+static uint32_t fd_bench_loop_cmd_cycles = 0;
+static uint32_t fd_bench_loop_iters = 0;
+static uint32_t fd_bench_loop_wait_max = 0;
 
 // Non-blocking waits are the baseline: same code path, no spin. Their per-call cost is the overhead the
 // blocking waits also pay (uncached semaphore read, invalidate_l1_cache, noc_async_atomic_barrier, block
@@ -289,6 +301,11 @@ FORCE_INLINE void fd_bench_note_wait(bool blocked, uint32_t cycles) {
 }
 
 FORCE_INLINE void fd_bench_accumulate(uint32_t total, uint32_t bytes) {
+    // One timestamp per command, whether or not this command ever blocked. `total` was already computed by the
+    // caller before this call, so the probe does not inflate the cycle accounting.
+    if (fd_bench_cmd_count < fd_copy_bench::kPairEntries) {
+        fd_copy_bench::slots()[fd_copy_bench::kCmdTimePairBase + fd_bench_cmd_count] = get_timestamp_32b();
+    }
     fd_bench_total_cycles += total;
     fd_bench_bytes += bytes;
     ++fd_bench_cmd_count;
@@ -316,6 +333,14 @@ FORCE_INLINE void fd_bench_init_dispatch() {
     fd_bench_nonblock_count = 0;
     fd_bench_bytes = 0;
     fd_bench_cmd_count = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopIters] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitMax] = 0;
+    fd_bench_loop_wait_cycles = 0;
+    fd_bench_loop_cmd_cycles = 0;
+    fd_bench_loop_iters = 0;
+    fd_bench_loop_wait_max = 0;
     fd_copy_bench::slots()[fd_copy_bench::kSlotDispatchMagic] = fd_copy_bench::kDispatchMagic;
 }
 
@@ -1781,7 +1806,16 @@ void kernel_main() {
     *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
+        // BENCHMARK: this top-of-loop call is where credits are released back to the prefetcher, and it was
+        // outside every previous bracket. See fd_copy_bench.hpp / design doc §4.3a.
+        const uint32_t fd_bench_lw0 = rdcycle();
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
+        const uint32_t fd_bench_lw = rdcycle() - fd_bench_lw0;
+        fd_bench_loop_wait_cycles += fd_bench_lw;
+        // The first wait spans device-init to first-command and dwarfs everything else; the host trims it.
+        if (fd_bench_lw > fd_bench_loop_wait_max) {
+            fd_bench_loop_wait_max = fd_bench_lw;
+        }
 
         DeviceZoneScopedN("CQ-DISPATCH");
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -1794,7 +1828,14 @@ void kernel_main() {
         }
 #endif
 
+        const uint32_t fd_bench_cmd0 = rdcycle();
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
+        fd_bench_loop_cmd_cycles += rdcycle() - fd_bench_cmd0;
+        ++fd_bench_loop_iters;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitCycles] = fd_bench_loop_wait_cycles;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCycles] = fd_bench_loop_cmd_cycles;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopIters] = fd_bench_loop_iters;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitMax] = fd_bench_loop_wait_max;
 
         // Increment dispatch progress counter and write to L1 memory
         dispatch_progress++;

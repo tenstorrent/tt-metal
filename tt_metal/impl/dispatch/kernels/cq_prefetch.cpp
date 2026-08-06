@@ -389,6 +389,13 @@ FORCE_INLINE void fd_bench_record_first_issue(bool& recorded, uint32_t t_issue, 
         return;
     }
     recorded = true;
+    // Per-command timestamp for the averaged Metric A. Written before the counter bump so the index is the
+    // pre-increment count; the host pairs issue[i] with the dispatcher's observe[i]. All of these stores
+    // happen AFTER the copy was launched, so none of them delay the measured event.
+    if (fd_bench_publish_count < fd_copy_bench::kPairEntries) {
+        fd_copy_bench::slots()[fd_copy_bench::kIssuePairBase + fd_bench_publish_count] = t_issue;
+        fd_copy_bench::slots()[fd_copy_bench::kIssueBytesPairBase + fd_bench_publish_count] = bytes;
+    }
     fd_copy_bench::slots()[fd_copy_bench::kSlotLastTIssue] = t_issue;
     fd_copy_bench::slots()[fd_copy_bench::kSlotPublishCount] = ++fd_bench_publish_count;
     fd_copy_bench::slots()[fd_copy_bench::kSlotLastIssueBytes] = bytes;
@@ -404,7 +411,41 @@ static uint32_t fd_bench_ring_count = 0;
 // reaches write_pages_to_dispatcher -- on a mixed command stream these would blend across command types.
 static uint32_t fd_bench_acquire_accum = 0;
 static uint32_t fd_bench_issue_accum = 0;
+// Held at 0 by construction since the iDMA completion barrier was removed: on both arches the payload
+// publish is now a NoC write whose drain is deferred to fd_bench_flush_cycles rather than waited on
+// inline. A nonzero value here would mean an exposed barrier crept back into the publish path.
 static uint32_t fd_bench_wait_accum = 0;
+// Whole-command total, accumulated across the run (not reset per publish like the three above).
+static uint32_t fd_bench_relay_accum = 0;
+// Whole-RELAY_INLINE-command total, accumulated across the run. See fd_copy_bench.hpp kSlotRelayInlineCmdCycles.
+static uint32_t fd_bench_relay_inline_accum = 0;
+// Splits the above into acquire_pages(1) wait (dispatcher backpressure) vs the noc_async_write() issue
+// (CB0 contention with RELAY_LINEAR). See fd_copy_bench.hpp kSlotRelayInlineAcquireCycles/IssueCycles.
+static uint32_t fd_bench_relay_inline_acquire_accum = 0;
+static uint32_t fd_bench_relay_inline_issue_accum = 0;
+// release_pages, by call site, accumulated across the whole run with a call count so the host can report
+// cycles/call -- the only form comparable across arches, since Quasar makes ~2x the calls (see the slot
+// comments in fd_copy_bench.hpp). "main" is the per-publish release both arches do; "early" is Quasar's
+// extra 32 KB tranche release and stays 0 on BH.
+static uint32_t fd_bench_rel_main_accum = 0;
+static uint32_t fd_bench_rel_main_count = 0;
+static uint32_t fd_bench_rel_early_accum = 0;
+static uint32_t fd_bench_rel_early_count = 0;
+// Cycles the benchmark's own bookkeeping burns INSIDE the process_relay_linear_cmd bracket (ring pushes
+// and the trailing slot publishes). These are uncached stores on Quasar and cached on tt-1xx, so leaving
+// them unmeasured inflates Quasar's relay_internal by ~3x relative to BH and reads as an arch difference.
+static uint32_t fd_bench_overhead_accum = 0;
+
+// Forced-barrier transfer time (FD_BENCH_MEASURE_TRANSFER builds only). Placed AFTER the issue accounting
+// so it is the same shape as the old iDMA local_copy_bytes_wait(): transfer time not already hidden by
+// issue. iDMA gave 1086 cyc / 128 KB => ~120 B/cyc; this is the NoC comparison point.
+static uint32_t fd_bench_xfer_accum = 0;
+
+// Prefetcher main-loop accounting; splits prefetch_external into CQ-fetch wait vs command work.
+static uint32_t fd_bench_pf_fetch_cycles = 0;
+static uint32_t fd_bench_pf_cmd_cycles = 0;
+static uint32_t fd_bench_pf_loop_iters = 0;
+static uint32_t fd_bench_pf_fetch_max = 0;
 
 FORCE_INLINE void fd_bench_publish_begin() {
     fd_bench_acquire_accum = 0;
@@ -412,7 +453,8 @@ FORCE_INLINE void fd_bench_publish_begin() {
     fd_bench_wait_accum = 0;
 }
 
-FORCE_INLINE void fd_bench_ring_push(uint32_t flush_cycles, uint32_t publish_cycles, uint32_t bytes) {
+FORCE_INLINE void fd_bench_ring_push(
+    uint32_t flush_cycles, uint32_t publish_cycles, uint32_t bytes, uint32_t read_cycles, uint32_t window_cycles = 0) {
     const uint32_t idx = fd_bench_ring_count++;
     fd_copy_bench::slots()[fd_copy_bench::kSlotRingCount] = fd_bench_ring_count;
     if (idx >= fd_copy_bench::kRingEntries) {
@@ -426,6 +468,10 @@ FORCE_INLINE void fd_bench_ring_push(uint32_t flush_cycles, uint32_t publish_cyc
     e[fd_copy_bench::kRingOffWaitCycles] = fd_bench_wait_accum;
     e[fd_copy_bench::kRingOffPublishCycles] = publish_cycles;
     e[fd_copy_bench::kRingOffBytes] = bytes;
+    e[fd_copy_bench::kRingOffReadCycles] = read_cycles;
+    // Separate, appended parallel array -- see fd_copy_bench.hpp kWindowRingBase for why this isn't just
+    // another field on `e` above.
+    fd_copy_bench::slots()[fd_copy_bench::kWindowRingBase + idx] = window_cycles;
 }
 
 FORCE_INLINE void fd_bench_init_prefetch() {
@@ -433,82 +479,135 @@ FORCE_INLINE void fd_bench_init_prefetch() {
     fd_copy_bench::slots()[fd_copy_bench::kSlotLastTIssue] = 0;
     fd_copy_bench::slots()[fd_copy_bench::kSlotPublishCount] = 0;
     fd_copy_bench::slots()[fd_copy_bench::kSlotRingCount] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayCmdCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseMainCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseMainCount] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseEarlyCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseEarlyCount] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotBenchOverheadCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotXferBarrierCycles] = 0;
+    fd_bench_xfer_accum = 0;
+    fd_bench_overhead_accum = 0;
+    fd_bench_relay_accum = 0;
+    fd_bench_relay_inline_accum = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineCmdCycles] = 0;
+    fd_bench_relay_inline_acquire_accum = 0;
+    fd_bench_relay_inline_issue_accum = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineAcquireCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineIssueCycles] = 0;
+    fd_bench_rel_main_accum = 0;
+    fd_bench_rel_main_count = 0;
+    fd_bench_rel_early_accum = 0;
+    fd_bench_rel_early_count = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotPfFetchCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotPfCmdCycles] = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotPfLoopIters] = 0;
+    fd_bench_pf_fetch_cycles = 0;
+    fd_bench_pf_cmd_cycles = 0;
+    fd_bench_pf_loop_iters = 0;
+    fd_bench_pf_fetch_max = 0;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotPfFetchMax] = 0;
     fd_bench_ring_count = 0;
     fd_copy_bench::slots()[fd_copy_bench::kSlotPrefetchMagic] = fd_copy_bench::kPrefetchMagic;
+
+    // One-time dump of the NoC plumbing that the proposed Quasar NoC-loopback copy would depend on.
+    //
+    // Why this was checked: before the NoC-loopback change, the Quasar path used iDMA with raw L1
+    // addresses and never read downstream_noc_xy, so these values had NEVER been exercised on this arch.
+    // They are load-bearing now -- if they resolve against unexpected cores, a NoC write lands in the
+    // wrong place. Kept as a cheap one-time assertion of the plumbing.
+    //
+    // Expected on Quasar, per quasar_single_chip_1cq (PREFETCH_HD and DISPATCH_HD both k_quasar_noc):
+    //   downstream == my        -- both are DMs on the SAME Tensix, so the copy is a loopback unicast, which
+    //                              QSR_NOC_Specification.md 4 explicitly blesses as "a DMA operation within
+    //                              a single Tensix core"
+    //   noc_index  == 0         -- Quasar is a single bidirectional mesh; k_quasar_noc pins every direction
+    //                              to NOC_0
+    //   cb_base                 -- the dispatcher's CB, in the shared TL1
+    DPRINT(
+        "FDBENCH noc plumbing: my=({},{}) downstream=({},{}) noc_index={} downstream_xy={} cb_base={}\n",
+        (uint32_t)MY_NOC_X,
+        (uint32_t)MY_NOC_Y,
+        (uint32_t)DOWNSTREAM_NOC_X,
+        (uint32_t)DOWNSTREAM_NOC_Y,
+        (uint32_t)my_noc_index,
+        (uint32_t)downstream_noc_xy,
+        (uint32_t)downstream_cb_base);
 }
 
-#ifdef ARCH_QUASAR
-// Init iDMA on Quasar for local L1 to L1 copy from prefetcher to dispatcher
-// Sets up multi-channel iDMA, cmdbuf_0 and trid = 0 is the default
-// All local_copy_bytes_issue() share cmdbuf_0/trid 0, so a single local_copy_bytes_wait() drains
-// everything. Do not issue local copies on another trid/cmdbuf without a matching wait.
-FORCE_INLINE void init_iDMA() {
-    // Setup iDMA
-    overlay::reset_cmdbuf_0();
-    overlay::idma_setup_as_copy_cmdbuf_0(false);
-    overlay::setup_ongoing_cmdbuf_0(
-        /*src_addr_inc_en=*/false,
-        /*dest_addr_inc_en=*/false,
-        /*trid_inc_en=*/false,
-        /*req_vc_inc_en=*/true,
-        /*resp_vc_inc_en=*/false);
-    overlay::setup_wrapping_vcs_cmdbuf_0(
-        /*wr=*/true,
-        /*req_start_vc=*/overlay::CMDBUF_WR_REQ_VC,
-        /*req_end_vc=*/overlay::CMDBUF_WR_REQ_VC + 7);
-    overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
-}
+// #if defined(ARCH_QUASAR)
+// // Init iDMA on Quasar for local L1 to L1 copy from prefetcher to dispatcher
+// // Sets up multi-channel iDMA, cmdbuf_0 and trid = 0 is the default
+// // All local_copy_bytes_issue() share cmdbuf_0/trid 0, so a single local_copy_bytes_wait() drains
+// // everything. Do not issue local copies on another trid/cmdbuf without a matching wait.
+// FORCE_INLINE void init_iDMA() {
+//     // Setup iDMA
+//     overlay::reset_cmdbuf_0();
+//     overlay::idma_setup_as_copy_cmdbuf_0(false);
+//     overlay::setup_ongoing_cmdbuf_0(
+//         /*src_addr_inc_en=*/false,
+//         /*dest_addr_inc_en=*/false,
+//         /*trid_inc_en=*/false,
+//         /*req_vc_inc_en=*/true,
+//         /*resp_vc_inc_en=*/false);
+//     overlay::setup_wrapping_vcs_cmdbuf_0(
+//         /*wr=*/true,
+//         /*req_start_vc=*/0,
+//         /*req_end_vc=*/overlay::CMDBUF_WR_REQ_VC + 7);
+//     overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
+// }
 
-// Same core local L1 to L1 iDMA copies. iDMA bypasses DM caches, so callers must use
-// uncached TL1 access or flush/invalidate cache and call local_copy_bytes_wait() before reusing
-// src or releasing dst.
-FORCE_INLINE void local_copy_bytes_issue(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
-    ASSERT(dst_addr + num_bytes <= dst_end);
-#if defined(PRINT_IDMA_DETAIL_BENCH)
-    uint32_t issue_start = rdcycle();
-#endif
-    constexpr uint32_t kChunkThreshold = 2560;  // Empirical sim threshold; recheck on silicon.
-    constexpr uint32_t num_dma_banks = 8;
-    if (num_bytes <= kChunkThreshold) {
-        overlay::set_src_cmdbuf_0(src_addr);
-        overlay::set_dest_cmdbuf_0(dst_addr);
-        overlay::set_len_cmdbuf_0(num_bytes);
-        overlay::issue_cmdbuf_0();
-    } else {
-        const uint32_t base_chunk = num_bytes / num_dma_banks;
-        const uint32_t remainder = num_bytes % num_dma_banks;  // TODO replace with bitmask
-        uint32_t offset = 0;
-        for (uint32_t i = 0; i < num_dma_banks; i++) {
-            const uint32_t this_chunk = base_chunk + (i < remainder ? 1 : 0);
-            overlay::set_src_cmdbuf_0(src_addr + offset);
-            overlay::set_dest_cmdbuf_0(dst_addr + offset);
-            overlay::set_len_cmdbuf_0(this_chunk);
-            overlay::issue_cmdbuf_0();
-            offset += this_chunk;
-        }
-    }
-#if defined(PRINT_IDMA_DETAIL_BENCH)
-    uint32_t issue_time = rdcycle() - issue_start;
-    DEVICE_PRINT("local_copy_bytes_issue num_bytes: {} issue_time: {} \n", num_bytes, issue_time);
-#endif
-}
+// // Same core local L1 to L1 iDMA copies. iDMA bypasses DM caches, so callers must use
+// // uncached TL1 access or flush/invalidate cache and call local_copy_bytes_wait() before reusing
+// // src or releasing dst.
+// FORCE_INLINE void local_copy_bytes_issue(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t
+// dst_end) {
+//     ASSERT(dst_addr + num_bytes <= dst_end);
+// #if defined(PRINT_IDMA_DETAIL_BENCH)
+//     uint32_t issue_start = rdcycle();
+// #endif
+//     constexpr uint32_t kChunkThreshold = 2560;  // Empirical sim threshold; recheck on silicon.
+//     constexpr uint32_t num_dma_banks = 8;
+//     if (num_bytes <= kChunkThreshold) {
+//         overlay::set_src_cmdbuf_0(src_addr);
+//         overlay::set_dest_cmdbuf_0(dst_addr);
+//         overlay::set_len_cmdbuf_0(num_bytes);
+//         overlay::issue_cmdbuf_0();
+//     } else {
+//         const uint32_t base_chunk = num_bytes / num_dma_banks;
+//         const uint32_t remainder = num_bytes % num_dma_banks;  // TODO replace with bitmask
+//         uint32_t offset = 0;
+//         for (uint32_t i = 0; i < num_dma_banks; i++) {
+//             const uint32_t this_chunk = base_chunk + (i < remainder ? 1 : 0);
+//             overlay::set_src_cmdbuf_0(src_addr + offset);
+//             overlay::set_dest_cmdbuf_0(dst_addr + offset);
+//             overlay::set_len_cmdbuf_0(this_chunk);
+//             overlay::issue_cmdbuf_0();
+//             offset += this_chunk;
+//         }
+//     }
+// #if defined(PRINT_IDMA_DETAIL_BENCH)
+//     uint32_t issue_time = rdcycle() - issue_start;
+//     DEVICE_PRINT("local_copy_bytes_issue num_bytes: {} issue_time: {} \n", num_bytes, issue_time);
+// #endif
+// }
 
-// Blocks until every iDMA transfer issued on the selected trid has completed
-FORCE_INLINE void local_copy_bytes_wait(uint32_t trid = overlay::CMDBUF_DEF_TRID) {
-#if defined(PRINT_IDMA_DETAIL_BENCH)
-    uint32_t wait_start = rdcycle();
-    uint32_t spin_iters = 0;
-    while (!overlay::idma_acked_cmdbuf_0(trid)) {
-        spin_iters++;
-    }
-    uint32_t wait_time = rdcycle() - wait_start;
-    DEVICE_PRINT("local_copy_bytes_wait spin_iters: {} wait_time: {} \n", spin_iters, wait_time);
-#else
-    while (!overlay::idma_acked_cmdbuf_0(trid)) {
-    }
-#endif
-}
-#endif
+// // Blocks until every iDMA transfer issued on the selected trid has completed
+// FORCE_INLINE void local_copy_bytes_wait(uint32_t trid = overlay::CMDBUF_DEF_TRID) {
+// #if defined(PRINT_IDMA_DETAIL_BENCH)
+//     uint32_t wait_start = rdcycle();
+//     uint32_t spin_iters = 0;
+//     while (!overlay::idma_acked_cmdbuf_0(trid)) {
+//         spin_iters++;
+//     }
+//     uint32_t wait_time = rdcycle() - wait_start;
+//     DEVICE_PRINT("local_copy_bytes_wait spin_iters: {} wait_time: {} \n", spin_iters, wait_time);
+// #else
+//     while (!overlay::idma_acked_cmdbuf_0(trid)) {
+//     }
+// #endif
+// }
+// #endif
 
 template <uint32_t downstream_cb_base_addr, uint32_t downstream_cmd_buf>
 FORCE_INLINE void write_downstream(
@@ -525,8 +624,8 @@ FORCE_INLINE void write_downstream(
                 static_cast<uint32_t>(data_ptr),
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
-#elif defined(ARCH_QUASAR)
-            local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
+// #elif defined(ARCH_QUASAR)
+//             local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -544,8 +643,8 @@ FORCE_INLINE void write_downstream(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, length, downstream_end);
+// #elif defined(ARCH_QUASAR)
+//     local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
     cq_noc_async_write_with_state_any_len<
         true,
@@ -1015,6 +1114,8 @@ uint32_t process_debug_cmd(uintptr_t cmd_ptr) {
 
 template <bool cmddat_wrap_enable, typename RelayInlineState>
 static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_downstream_data_ptr) {
+    // See fd_copy_bench.hpp kSlotRelayInlineCmdCycles.
+    const uint32_t fd_bench_relay_inline_start = rdcycle();
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
@@ -1024,8 +1125,15 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    RelayInlineState::cb_writer.acquire_pages(npages);
+    //
+    // See fd_copy_bench.hpp kSlotRelayInlineAcquireCycles.
+    {
+        const uint32_t fd_bench_a0 = rdcycle();
+        RelayInlineState::cb_writer.acquire_pages(npages);
+        fd_bench_relay_inline_acquire_accum += rdcycle() - fd_bench_a0;
+    }
 
+    const uint32_t fd_bench_issue_start = rdcycle();
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
@@ -1045,15 +1153,21 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
         length,
         RelayInlineState::downstream_cb_end_addr,
         RelayInlineState::downstream_noc_encoding);
+    // See fd_copy_bench.hpp kSlotRelayInlineIssueCycles.
+    fd_bench_relay_inline_issue_accum += rdcycle() - fd_bench_issue_start;
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
-#if defined(ARCH_QUASAR)
-    // Barrier for the write_downstream() call(s) above: on Quasar those are issue-only iDMA transfers
-    local_copy_bytes_wait();
-#else
+    // #if defined(ARCH_QUASAR)
+    //     // Barrier for the write_downstream() call(s) above: on Quasar those are issue-only iDMA transfers
+    //     local_copy_bytes_wait();
+    // #else
     noc_async_writes_flushed();
-#endif
+    // #endif
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
+    fd_bench_relay_inline_accum += rdcycle() - fd_bench_relay_inline_start;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineCmdCycles] = fd_bench_relay_inline_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineAcquireCycles] = fd_bench_relay_inline_acquire_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineIssueCycles] = fd_bench_relay_inline_issue_accum;
     return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
 
@@ -1063,12 +1177,19 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 // NOTE: this routine assumes we're sending a command header and that is LESS THAN A PAGE
 template <bool cmddat_wrap_enable>
 static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& dispatch_data_ptr) {
+    // See fd_copy_bench.hpp kSlotRelayInlineCmdCycles.
+    const uint32_t fd_bench_relay_inline_start = rdcycle();
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
 
     uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    DispatchRelayInlineState::cb_writer.acquire_pages(1);
+    // See fd_copy_bench.hpp kSlotRelayInlineAcquireCycles.
+    {
+        const uint32_t fd_bench_a0 = rdcycle();
+        DispatchRelayInlineState::cb_writer.acquire_pages(1);
+        fd_bench_relay_inline_acquire_accum += rdcycle() - fd_bench_a0;
+    }
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
@@ -1078,21 +1199,33 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
-#if defined(ARCH_QUASAR)
-        local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
-#else
+        // #if defined(ARCH_QUASAR)
+        //         local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+        // #else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+        // #endif
         dispatch_data_ptr += remaining;
         length -= remaining;
         data_ptr = cmddat_q_base;
     }
-#if defined(ARCH_QUASAR)
-    local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
-#else
+    // #if defined(ARCH_QUASAR)
+    //     local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+    // #else
+    // Quasar takes this path too (loopback unicast to a DM on the same Tensix). No flush here: this
+    // routine deliberately does not release the page -- the payload write that follows in
+    // write_pages_to_dispatcher does, and its last packet carries the flush covering both. Both use
+    // NOC_UNICAST_WRITE_VC, so they arrive in order and one flush at the end is sufficient.
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+    // #endif
     dispatch_data_ptr += length;
+    // See fd_copy_bench.hpp kSlotRelayInlineIssueCycles.
+    fd_bench_relay_inline_issue_accum += rdcycle() - fd_bench_issue_start;
 
+    fd_bench_relay_inline_accum += rdcycle() - fd_bench_relay_inline_start;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineCmdCycles] = fd_bench_relay_inline_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineAcquireCycles] = fd_bench_relay_inline_acquire_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayInlineIssueCycles] = fd_bench_relay_inline_issue_accum;
     return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
 
@@ -1105,7 +1238,6 @@ static uint32_t write_pages_to_dispatcher(
     // BENCHMARK: everything in this function is either acquire (waiting on the DISPATCHER to free pages) or
     // issue (the descriptor/cmdbuf writes that launch the copy). Split so the two can be told apart -- they
     // point at completely different fixes.
-    const uint32_t fd_bench_fn_start = rdcycle();
     uint32_t fd_bench_acq = 0;
 
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
@@ -1118,17 +1250,23 @@ static uint32_t write_pages_to_dispatcher(
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
         fd_bench_acq = rdcycle() - fd_bench_a0;
     }
+    // Dedicated pair for "everything after acquire" instead of subtracting fd_bench_acq from a
+    // whole-function total -- that total would also be inflated by the acquire log calls above, which
+    // already ran by this point but before any consuming rdcycle() read existed to capture them.
+    const uint32_t fd_bench_issue_t0 = rdcycle();
 
     uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
+        // #if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+// #endif
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
+// #elif defined(ARCH_QUASAR)
+//         local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<
             true,
@@ -1144,8 +1282,8 @@ static uint32_t write_pages_to_dispatcher(
 
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
+// #elif defined(ARCH_QUASAR)
+//     local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<
         true,
@@ -1155,54 +1293,65 @@ static uint32_t write_pages_to_dispatcher(
         /*flush_last_transfer=*/true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
     downstream_data_ptr += amt_to_write;
+    fd_bench_issue_accum += rdcycle() - fd_bench_issue_t0;
 
     fd_bench_acquire_accum += fd_bench_acq;
-    fd_bench_issue_accum += (rdcycle() - fd_bench_fn_start) - fd_bench_acq;
 
     return npages;
 }
 
 #if defined(ARCH_QUASAR)
-// Quasar iDMA writes are issue-only; this helper waits before releasing dispatcher pages
 template <bool final_has_preacquired_page = false>
 static void write_pages_to_dispatcher_and_release_quasar(
     uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
-    constexpr uint32_t first_chunk_threshold = 64 * 1024;
-    constexpr uint32_t first_chunk_size = 32 * 1024;
+    // constexpr uint32_t first_chunk_threshold = 64 * 1024;
+    // constexpr uint32_t first_chunk_size = 32 * 1024;
 
-    // Give the dispatcher an early 32KB chunk, then keep the remaining transfer large
-    if (amt_to_write >= first_chunk_threshold) {
-        uint32_t npages =
-            write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, first_chunk_size);
-        scratch_write_addr += first_chunk_size;
-        amt_to_write -= first_chunk_size;
+    // // iDMA's own native design (not the NoC-mechanism early-release experiment, which was tried and
+    // // reverted there): give the dispatcher an early 32KB chunk, then keep the remaining transfer large,
+    // // so it has pages to drain sooner while the rest of a big iDMA transfer is still issuing.
+    // if (amt_to_write >= first_chunk_threshold) {
+    //     uint32_t npages =
+    //         write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, first_chunk_size);
+    //     scratch_write_addr += first_chunk_size;
+    //     amt_to_write -= first_chunk_size;
 
-        {
-            const uint32_t fd_bench_w0 = rdcycle();
-            local_copy_bytes_wait();
-            fd_bench_wait_accum += rdcycle() - fd_bench_w0;
-        }
-        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
-    }
+    //     {
+    //         const uint32_t fd_bench_w0 = rdcycle();
+    //         // local_copy_bytes_wait();
+    //         fd_bench_wait_accum += rdcycle() - fd_bench_w0;
+    //         const uint32_t fd_bench_r0 = rdcycle();
+    //         DispatchRelayInlineState::cb_writer.release_pages(
+    //             npages, downstream_data_ptr, /*round_to_page_size*/ true);
+    //         fd_bench_rel_early_accum += rdcycle() - fd_bench_r0;
+    //         fd_bench_rel_early_count++;
+    //     }
+    // }
 
     if constexpr (final_has_preacquired_page) {
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
         downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+        // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written.
         {
             const uint32_t fd_bench_w0 = rdcycle();
-            local_copy_bytes_wait();
+            // local_copy_bytes_wait();
             fd_bench_wait_accum += rdcycle() - fd_bench_w0;
+            const uint32_t fd_bench_r0 = rdcycle();
+            DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+            fd_bench_rel_main_accum += rdcycle() - fd_bench_r0;
+            fd_bench_rel_main_count++;
         }
-        // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written.
-        DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     } else {
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
         {
             const uint32_t fd_bench_w0 = rdcycle();
-            local_copy_bytes_wait();
+            // local_copy_bytes_wait();
             fd_bench_wait_accum += rdcycle() - fd_bench_w0;
+            const uint32_t fd_bench_r0 = rdcycle();
+            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+            fd_bench_rel_main_accum += rdcycle() - fd_bench_r0;
+            fd_bench_rel_main_count++;
         }
-        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
     }
 }
 #endif
@@ -1250,9 +1399,9 @@ uint32_t process_relay_paged_cmd_large(
     while (read_length != 0) {
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
-#if !defined(ARCH_QUASAR)
+        // #if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
-#endif
+        // #endif
 
         db_toggle ^= 1;
         scratch_read_addr = scratch_db_top[db_toggle];
@@ -1611,9 +1760,9 @@ template <bool is_dram>
 uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t page_id) {
     // This ensures that a previous cmd using the scratch buf has finished
     // Quasar helper waits for iDMA before releasing dispatcher pages.
-#if !defined(ARCH_QUASAR)
+    // #if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
-#endif
+    // #endif
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t base_addr = load_aligned<uint32_t>(&cmd->relay_paged.base_addr);
@@ -1702,7 +1851,6 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
                 db_next = 0;
             }
 
-#if !defined(ARCH_QUASAR)
             // Only the write that previously sourced from buf[db_next] has to be out of the way, not every
             // outstanding write. With more than two buffers that write is several iterations old.
             if constexpr (track_writes_per_buf) {
@@ -1714,7 +1862,6 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             } else {
                 noc_async_writes_flushed();
             }
-#endif
 
             scratch_read_addr = scratch_db_base + db_next * scratch_db_buf_size;
             scratch_write_addr = scratch_db_base + db_cur * scratch_db_buf_size;
@@ -1768,9 +1915,9 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
 void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cache) {
     // This ensures that a previous cmd using the scratch buf has finished
     // Quasar helper waits for iDMA before releasing dispatcher pages.
-#if !defined(ARCH_QUASAR)
+    // #if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
-#endif
+    // #endif
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr*)(l1_cache);
@@ -1820,9 +1967,9 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
         // Quasar helper waits for iDMA before releasing dispatcher pages.
-#if !defined(ARCH_QUASAR)
+        // #if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
-#endif
+        // #endif
 
         db_toggle ^= 1;
         scratch_read_addr = scratch_db_top[db_toggle];
@@ -1962,12 +2109,14 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // Benchmark: record only this command's first publish. Scoped to the function so both the inner-loop
     // and tail publish sites share it.
     bool fd_bench_recorded = false;
+    // Whole-function bracket, to attribute the residual between the command period and publish + dram_read.
+    const uint32_t fd_bench_relay_start = rdcycle();
 
     // This ensures that a previous cmd using the scratch buf has finished
     // Quasar helper waits for iDMA before releasing dispatcher pages.
-#if !defined(ARCH_QUASAR)
+    // #if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
-#endif
+    // #endif
 
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmdLarge>(cmd_ptr);
     uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear.noc_xy_addr);
@@ -1982,11 +2131,16 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
     static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
 
+    // Issue timestamp per half, indexed by db_toggle; used to compute each half's "window" at its barrier
+    // below. See fd_copy_bench.hpp kWindowRingBase.
+    uint32_t fd_bench_issue_ts[2] = {0, 0};
+
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
     noc_async_read_set_trid(RELAY_LINEAR_TRIDS[0]);
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+    fd_bench_issue_ts[0] = rdcycle();
 
     read_addr += amt_to_read;
     wlength -= amt_to_read;
@@ -2004,16 +2158,17 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
             //
             // BENCHMARK: this is BH's DEFERRED DRAIN -- the previous iteration's writes being waited on
             // here rather than at publish time. Timing it measures how much of the drain pipelining failed
-            // to hide: near-zero means the overlap worked. On Quasar the flush is compiled out, so
-            // fd_bench_flush_cycles stays 0, correctly reporting zero deferred cost.
+            // to hide: near-zero means the overlap worked. On Quasar the flush is compiled out on iDMA
+            // (its own completion barrier lives in write_pages_to_dispatcher_and_release_quasar instead),
+            // so fd_bench_flush_cycles stays 0, correctly reporting zero deferred cost for this mechanism.
             uint32_t fd_bench_flush_cycles = 0;
-#if !defined(ARCH_QUASAR)
+            // #if !defined(ARCH_QUASAR)
             {
                 const uint32_t f0 = rdcycle();
                 noc_async_writes_flushed();
                 fd_bench_flush_cycles = rdcycle() - f0;
             }
-#endif
+            // #endif
             db_toggle ^= 1;
             scratch_read_addr = scratch_db_top[db_toggle];
             scratch_write_addr = scratch_db_top[db_toggle ^ 1];
@@ -2022,9 +2177,18 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
             noc_async_read_set_trid(RELAY_LINEAR_TRIDS[db_toggle]);
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+            fd_bench_issue_ts[db_toggle] = rdcycle();
             read_addr += amt_to_read;
 
+            // BENCHMARK: the DRAM read barrier -- the only part of the command period that is not local L1 work.
+            // Double buffering should hide it; if it does not, the prefetcher is read-bound and the dispatcher's
+            // starvation is an upstream problem, not a copy problem.
+            const uint32_t fd_bench_rd0 = rdcycle();
+            // BENCHMARK: window = elapsed cycles since THIS read (db_toggle ^ 1) was issued, i.e. how much
+            // background time it had to progress before we checked on it. See fd_copy_bench.hpp kWindowRingBase.
+            const uint32_t fd_bench_window = fd_bench_rd0 - fd_bench_issue_ts[db_toggle ^ 1];
             noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
+            const uint32_t fd_bench_read_cycles = rdcycle() - fd_bench_rd0;
 
             // Skip the probe entirely on publishes we will not record -- it costs ~42 cycles on Quasar
             // and would perturb the very path being measured.
@@ -2036,17 +2200,34 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 #else
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+            {
+                const uint32_t fd_bench_r0 = rdcycle();
+                DispatchRelayInlineState::cb_writer.release_pages(
+                    npages, downstream_data_ptr, /*round_to_page_size*/ true);
+                fd_bench_rel_main_accum += rdcycle() - fd_bench_r0;
+                fd_bench_rel_main_count++;
+            }
 #endif
             const uint32_t fd_bench_pub_cycles = rdcycle() - fd_bench_pub_start;
-            fd_bench_record_first_issue(fd_bench_recorded, t_issue, amt_to_write);
-            fd_bench_ring_push(fd_bench_flush_cycles, fd_bench_pub_cycles, amt_to_write);
+            {
+                const uint32_t fd_bench_o0 = rdcycle();
+                fd_bench_record_first_issue(fd_bench_recorded, t_issue, amt_to_write);
+                fd_bench_ring_push(
+                    fd_bench_flush_cycles, fd_bench_pub_cycles, amt_to_write, fd_bench_read_cycles, fd_bench_window);
+                fd_bench_overhead_accum += rdcycle() - fd_bench_o0;
+            }
 
             read_length -= amt_to_read;
         }
     }
 
+    // BENCHMARK: final chunk's DRAM read barrier. Unlike the in-loop one this has no successor read to overlap
+    // with, so it is expected to be the largest read wait of the command.
+    const uint32_t fd_bench_rd0 = rdcycle();
+    // BENCHMARK: window for this (last-issued, not-yet-barriered) read. See fd_copy_bench.hpp kWindowRingBase.
+    const uint32_t fd_bench_window = fd_bench_rd0 - fd_bench_issue_ts[db_toggle];
     noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle]);
+    const uint32_t fd_bench_read_cycles = rdcycle() - fd_bench_rd0;
 
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
@@ -2061,12 +2242,33 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+    {
+        const uint32_t fd_bench_r0 = rdcycle();
+        DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+        fd_bench_rel_main_accum += rdcycle() - fd_bench_r0;
+        fd_bench_rel_main_count++;
+    }
 #endif
     const uint32_t fd_bench_pub_cycles = rdcycle() - fd_bench_pub_start;
-    fd_bench_record_first_issue(fd_bench_recorded, t_issue, amt_to_write);
-    fd_bench_ring_push(/*flush_cycles=*/0, fd_bench_pub_cycles, amt_to_write);
+    {
+        const uint32_t fd_bench_o0 = rdcycle();
+        fd_bench_record_first_issue(fd_bench_recorded, t_issue, amt_to_write);
+        fd_bench_ring_push(
+            /*flush_cycles=*/0, fd_bench_pub_cycles, amt_to_write, fd_bench_read_cycles, fd_bench_window);
+        fd_bench_overhead_accum += rdcycle() - fd_bench_o0;
+    }
     noc_async_read_set_trid(0U);
+
+    fd_bench_relay_accum += rdcycle() - fd_bench_relay_start;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotRelayCmdCycles] = fd_bench_relay_accum;
+    // Published AFTER the relay bracket closes, so these stores do not inflate relay_internal. They do add
+    // 4 uncached stores per command to the command PERIOD (~1% on Quasar, where uncached writes are slow).
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseMainCycles] = fd_bench_rel_main_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseMainCount] = fd_bench_rel_main_count;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseEarlyCycles] = fd_bench_rel_early_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotReleaseEarlyCount] = fd_bench_rel_early_count;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotBenchOverheadCycles] = fd_bench_overhead_accum;
+    fd_copy_bench::slots()[fd_copy_bench::kSlotXferBarrierCycles] = fd_bench_xfer_accum;
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -2239,11 +2441,11 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         // fetch more
         // on Quasar: Barrier for the write_downstream() call just above: paged_read_into_cmddat_q() below refills the
         // same cmddat_q region that call just read from
-#if defined(ARCH_QUASAR)
-        local_copy_bytes_wait();
-#else
+        // #if defined(ARCH_QUASAR)
+        //         local_copy_bytes_wait();
+        // #else
         noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
-#endif
+        // #endif
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
@@ -2256,11 +2458,11 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         RelayInlineState::downstream_cb_end_addr,
         RelayInlineState::downstream_noc_encoding);
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
-#if defined(ARCH_QUASAR)
-    local_copy_bytes_wait();
-#else
+    // #if defined(ARCH_QUASAR)
+    //     local_copy_bytes_wait();
+    // #else
     noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
-#endif
+    // #endif
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
 
     return stride;
@@ -2291,8 +2493,8 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+// #elif defined(ARCH_QUASAR)
+//         local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<
             true,
@@ -2308,11 +2510,11 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         cmd_ptr += remaining_stride;
 
         // fetch more
-#if defined(ARCH_QUASAR)
-        local_copy_bytes_wait();
-#else
+        // #if defined(ARCH_QUASAR)
+        //         local_copy_bytes_wait();
+        // #else
         noc_async_writes_flushed();
-#endif
+        // #endif
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
@@ -2321,9 +2523,9 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
-#elif defined(ARCH_QUASAR)
-    // No wait here, matching the BH/WH no-flush contract above
-    local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+// #elif defined(ARCH_QUASAR)
+//     // No wait here, matching the BH/WH no-flush contract above
+//     local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<
         true,
@@ -2439,9 +2641,9 @@ uint32_t process_paged_to_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream
     // This ensures that a previous cmd using the ringbuffer have completed.
     // No iDMA wait is needed here: process_relay_ringbuffer_sub_cmds() waits for each local copy before releasing
     // its dispatcher pages, so no prior transfer can still be reading the ring buffer when it is refilled below.
-#if !defined(ARCH_QUASAR)
+    // #if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
-#endif
+    // #endif
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t start_page = cmd->paged_to_ringbuffer.start_page;
@@ -2586,9 +2788,9 @@ static uint32_t process_exec_buf_relay_ringbuffer_cmd(
 void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_length, uint32_t* l1_cache) {
     // This ensures that a previous cmd using the scratch buf has finished
     // Quasar helper waits for iDMA before releasing dispatcher pages.
-#if !defined(ARCH_QUASAR)
+    // #if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
-#endif
+    // #endif
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
@@ -2639,9 +2841,9 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     while (total_length != 0) {
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
-#if !defined(ARCH_QUASAR)
+        // #if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
-#endif
+        // #endif
 
         scratch_read_addr = scratch_read_start_addr;
         uint32_t scratch_write_addr = scratch_write_start_addr;
@@ -3390,10 +3592,15 @@ void kernel_main_d() {
         num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
+    // On Quasar, relay to the dispatcher is a same-core iDMA copy; no NOC init-state needed for that
+    // path. RELAY_INLINE_NOFLUSH's header write also moved to local_copy_bytes_issue() on this arch, so
+    // nothing here still depends on noc_async_write()'s init state.
+    // #if !defined(ARCH_QUASAR)
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
+// #endif
 #endif
 
     // Initialize cmd_ptr tracking for release_pages synchronization assertions
@@ -3445,26 +3652,43 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
+    // On Quasar, relay to the dispatcher is a same-core iDMA copy; no NOC init-state needed.
+    // #if !defined(ARCH_QUASAR)
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
-#else
-    // Setup iDMA
-    init_iDMA();
-#endif
+    // #else
+    //     // Setup iDMA
+    //     init_iDMA();
+    // #endif
 
     fd_bench_init_prefetch();
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
+        // BENCHMARK: this is the CQ fetch -- DRAM-backed on the Quasar emulator, host hugepages on tt-1xx.
+        // It is the single biggest unknown inside prefetch_external.
+        const uint32_t fd_bench_f0 = rdcycle();
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
+        const uint32_t fd_bench_f = rdcycle() - fd_bench_f0;
+        fd_bench_pf_fetch_cycles += fd_bench_f;
+        if (fd_bench_f > fd_bench_pf_fetch_max) {
+            fd_bench_pf_fetch_max = fd_bench_f;
+        }
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         uint32_t stride;
+        const uint32_t fd_bench_c0 = rdcycle();
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+        fd_bench_pf_cmd_cycles += rdcycle() - fd_bench_c0;
+        ++fd_bench_pf_loop_iters;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotPfFetchCycles] = fd_bench_pf_fetch_cycles;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotPfCmdCycles] = fd_bench_pf_cmd_cycles;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotPfLoopIters] = fd_bench_pf_loop_iters;
+        fd_copy_bench::slots()[fd_copy_bench::kSlotPfFetchMax] = fd_bench_pf_fetch_max;
         cmd_ptr += stride;
     }
 }

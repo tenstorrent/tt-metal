@@ -11,11 +11,13 @@
 #include "cq_commands.hpp"
 #include "cq_helpers.hpp"
 #include "telemetry.hpp"
+#include "tt_metal/impl/dispatch/kernels/fd_copy_bench.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 #include <limits>
 #include <array>
+#include <type_traits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -569,7 +571,18 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
+            // BENCHMARK: isolate time spent waiting specifically for the prefetcher's next credit, separate
+            // from move_rd_to_next_block_and_release_pages() above. Routed by call site (via T, the same tag
+            // callers already pass for telemetry) so different call sites' cycles are never blended into one
+            // number -- see fd_copy_bench.hpp kSlotDispAcquireWaitLoopCycles / kSlotDispAcquireWaitChunkCycles.
+            const uint32_t fd_bench_acq0 = fd_copy_bench::rdcycle();
             this->template acquire_pages<T>();
+            const uint32_t fd_bench_acq_cycles = fd_copy_bench::rdcycle() - fd_bench_acq0;
+            if constexpr (!std::is_same_v<T, NoTelemetryBlockGuard>) {
+                fd_copy_bench::note_acquire_wait_loop(fd_bench_acq_cycles);
+            } else {
+                fd_copy_bench::note_acquire_wait_chunk(fd_bench_acq_cycles);
+            }
         }
         return this->available_bytes(cmd_ptr);
     }

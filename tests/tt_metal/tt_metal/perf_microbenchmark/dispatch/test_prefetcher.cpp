@@ -27,12 +27,16 @@
 
 #include <umd/device/pcie/tlb_window.hpp>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 /*
@@ -3180,6 +3184,8 @@ public:
             "RelayLinearCycleBenchmark payload_bytes={} iterations={}",
             payload_bytes,
             get_num_iterations());
+        warmup_before_snapshot();
+        snapshot_dispatcher_loop();
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
         report_copy_bench();
     }
@@ -3212,6 +3218,15 @@ private:
         uint64_t sum_wait = 0;
         uint64_t sum_pub = 0;
         uint64_t sum_bytes = 0;
+        uint64_t sum_read = 0;
+        uint64_t sum_window = 0;
+        // R-fit: exposed_wait + window should recover one stable R per entry (see fd_copy_bench.hpp
+        // kWindowRingBase). Track sum/sum-of-squares/min/max of (rd + window) across every entry to check
+        // that directly, rather than asserting it from two mechanism-averaged numbers.
+        uint64_t sum_r_est = 0;
+        uint64_t sum_r_est_sq = 0;
+        uint32_t min_r_est = UINT32_MAX;
+        uint32_t max_r_est = 0;
         for (uint32_t i = 0; i < n; i++) {
             const uint32_t* e = pf.data() + fd_copy_bench::kRingBase + i * fd_copy_bench::kRingStride;
             const uint32_t flush = e[fd_copy_bench::kRingOffFlushCycles];
@@ -3220,24 +3235,41 @@ private:
             const uint32_t wait = e[fd_copy_bench::kRingOffWaitCycles];
             const uint32_t pub = e[fd_copy_bench::kRingOffPublishCycles];
             const uint32_t bytes = e[fd_copy_bench::kRingOffBytes];
+            const uint32_t rd = e[fd_copy_bench::kRingOffReadCycles];
+            const uint32_t window = pf[fd_copy_bench::kWindowRingBase + i];
+            sum_read += rd;
+            sum_window += window;
             sum_flush += flush;
             sum_acq += acq;
             sum_issue += issue;
             sum_wait += wait;
             sum_pub += pub;
             sum_bytes += bytes;
-            log_info(
-                tt::LogTest,
-                "CopyBench ring[{:2}]: flush={:5} acquire={:6} issue={:6} wait={:6} publish={:6} total={:6} "
-                "bytes={:6}",
-                i,
-                flush,
-                acq,
-                issue,
-                wait,
-                pub,
-                flush + pub,
-                bytes);
+            const uint32_t r_est = rd + window;
+            sum_r_est += r_est;
+            sum_r_est_sq += static_cast<uint64_t>(r_est) * r_est;
+            min_r_est = std::min(min_r_est, r_est);
+            max_r_est = std::max(max_r_est, r_est);
+            // Per-entry lines exist to spot a cold first iteration or a periodic outlier; the first handful
+            // shows that. The SUMMARY below covers every entry regardless, so the cap loses no accounting.
+            constexpr uint32_t kMaxLoggedEntries = 12;
+            if (i < kMaxLoggedEntries) {
+                log_info(
+                    tt::LogTest,
+                    "CopyBench ring[{:2}]: flush={:5} acquire={:6} issue={:6} wait={:6} publish={:6} total={:6} "
+                    "bytes={:6} dram_read={:6} window={:6} (R_est={:6})",
+                    i,
+                    flush,
+                    acq,
+                    issue,
+                    wait,
+                    pub,
+                    flush + pub,
+                    bytes,
+                    rd,
+                    window,
+                    r_est);
+            }
         }
         if (n == 0) {
             return;
@@ -3267,6 +3299,854 @@ private:
             sum_wait,
             pct(sum_wait),
             unaccounted);
+
+        // Carried to report_period_attribution (which runs later) so the residual can be split without
+        // re-walking the ring.
+        ring_publish_total_ = sum_pub;
+        ring_read_total_ = sum_read;
+
+        // DRAM read wait, reported SEPARATELY from the copy-path total on purpose. It is not part of
+        // prefetcher-L1 -> dispatcher-L1, so folding it into `total` would contaminate the copy numbers. But it
+        // is part of the command period, so it is what decides whether the dispatcher gets fed. If this rivals or
+        // exceeds the copy total, the prefetcher is read-bound and optimizing the copy cannot help.
+        log_info(
+            tt::LogTest,
+            "CopyBench ring DRAM READ (not part of the copy path): {} cyc over {} entries => {:.1f} cyc/publish, "
+            "{:.2f}x the copy total ({}) -- double buffering should keep this small",
+            sum_read,
+            n,
+            static_cast<double>(sum_read) / static_cast<double>(n),
+            total ? static_cast<double>(sum_read) / static_cast<double>(total) : 0.0,
+            total);
+
+        // R-fit: does exposed_wait + window recover ONE stable value (the true unhidden DRAM read latency),
+        // consistently across every entry? This is the direct, per-sample proof (not an inference from two
+        // mechanism-averaged numbers) that dram_read's variation between NoC and iDMA is fully explained by
+        // how much background time each entry's read had before its barrier was checked -- nothing else.
+        // A tight mean with low relative stddev, stable across payload sizes and mechanisms, confirms it;
+        // a wide spread or a size/mechanism-dependent shift would falsify it.
+        const double r_mean = static_cast<double>(sum_r_est) / static_cast<double>(n);
+        const double r_var = static_cast<double>(sum_r_est_sq) / static_cast<double>(n) - r_mean * r_mean;
+        const double r_stddev = r_var > 0.0 ? std::sqrt(r_var) : 0.0;
+        log_info(
+            tt::LogTest,
+            "CopyBench R-fit (dram_read + window, should be ~constant if hiding fully explains the "
+            "variation): mean={:.1f} stddev={:.1f} ({:.1f}% of mean) min={} max={} over {} entries | "
+            "sum_window={} => mean_window={:.1f} cyc/entry",
+            r_mean,
+            r_stddev,
+            r_mean > 0.0 ? 100.0 * r_stddev / r_mean : 0.0,
+            min_r_est,
+            max_r_est,
+            n,
+            sum_window,
+            static_cast<double>(sum_window) / static_cast<double>(n));
+
+        // Isolated calibration -- see fd_copy_bench.hpp kSlotCalib*. Single-read is the true baseline R,
+        // zero concurrency. Concurrent read1/read2 reproduce the real code's back-to-back issue pattern
+        // with nothing else in between (no publish), isolating DRAM-address-vs-contention as the cause of
+        // read2 costing more than read1 for the same byte count in the real command data.
+        const uint32_t calib_single_cyc = pf[fd_copy_bench::kSlotCalibSingleReadCycles];
+        const uint32_t calib_single_bytes = pf[fd_copy_bench::kSlotCalibSingleReadBytes];
+        const uint32_t calib_c1_cyc = pf[fd_copy_bench::kSlotCalibConcurrentRead1Cycles];
+        const uint32_t calib_c1_bytes = pf[fd_copy_bench::kSlotCalibConcurrentRead1Bytes];
+        const uint32_t calib_c2_cyc = pf[fd_copy_bench::kSlotCalibConcurrentRead2Cycles];
+        const uint32_t calib_c2_bytes = pf[fd_copy_bench::kSlotCalibConcurrentRead2Bytes];
+        if (calib_c1_bytes != 0) {
+            log_info(
+                tt::LogTest,
+                "CopyBench CALIBRATION: single_read={} cyc @ {} bytes ({:.2f} B/cyc) | concurrent_read1={} "
+                "cyc @ {} bytes ({:.2f} B/cyc) | concurrent_read2={} cyc @ {} bytes ({:.2f} B/cyc) -- if "
+                "read1 already jumped vs single_read, suspect DRAM address/bank; if read2 specifically "
+                "jumped vs read1/single_read despite resolving after read1, suspect TRID/read-engine "
+                "contention",
+                calib_single_cyc,
+                calib_single_bytes,
+                calib_single_bytes ? static_cast<double>(calib_single_bytes) / calib_single_cyc : 0.0,
+                calib_c1_cyc,
+                calib_c1_bytes,
+                calib_c1_bytes ? static_cast<double>(calib_c1_bytes) / calib_c1_cyc : 0.0,
+                calib_c2_cyc,
+                calib_c2_bytes,
+                calib_c2_bytes ? static_cast<double>(calib_c2_bytes) / calib_c2_cyc : 0.0);
+        } else {
+            log_info(
+                tt::LogTest,
+                "CopyBench CALIBRATION: single_read={} cyc @ {} bytes ({:.2f} B/cyc) | no second chunk at "
+                "this payload -- concurrent_read1/2 not exercised",
+                calib_single_cyc,
+                calib_single_bytes,
+                calib_single_bytes ? static_cast<double>(calib_single_bytes) / calib_single_cyc : 0.0);
+        }
+
+        // Same isolated read, but with concurrent NoC WRITE + ATOMIC traffic (mimicking a NoC-mechanism
+        // publish's payload write + credit) instead of a second read. Compare against calib_single_cyc
+        // (same size, zero concurrent traffic): a jump here NOT explained by the read-vs-read contention
+        // above implicates NoC write/atomic traffic specifically -- exactly what iDMA's copy+credit path
+        // structurally cannot cause, since it never touches the NoC fabric.
+        const uint32_t calib_noc_cyc = pf[fd_copy_bench::kSlotCalibReadWithNocTrafficCycles];
+        const uint32_t calib_noc_bytes = pf[fd_copy_bench::kSlotCalibReadWithNocTrafficBytes];
+        log_info(
+            tt::LogTest,
+            "CopyBench CALIBRATION (read + concurrent NoC write/atomic): {} cyc @ {} bytes ({:.2f} B/cyc) "
+            "vs single_read baseline {} cyc @ {} bytes -- delta {:+d} cyc ({:+.1f}% of baseline)",
+            calib_noc_cyc,
+            calib_noc_bytes,
+            calib_noc_bytes ? static_cast<double>(calib_noc_bytes) / calib_noc_cyc : 0.0,
+            calib_single_cyc,
+            calib_single_bytes,
+            static_cast<int32_t>(calib_noc_cyc) - static_cast<int32_t>(calib_single_cyc),
+            calib_single_cyc ? 100.0 * (static_cast<double>(calib_noc_cyc) - static_cast<double>(calib_single_cyc)) /
+                                   static_cast<double>(calib_single_cyc)
+                             : 0.0);
+    }
+
+    // Averaged Metric A. The single-sample version below reports one last-vs-last pair, which on a
+    // deterministic emulator is reproducible but is still one draw: it cannot show whether the first command
+    // (cold caches, cold CB) differs from steady state, nor how much spread there is. These arrays carry one
+    // issue/observe pair per command, so the average is over the whole run and the min/max bracket exposes any
+    // cold-start outlier instead of hiding it in a single number.
+    //
+    // Pairs are index-by-index. That is only legitimate because each side records exactly one event per
+    // command; the caller verifies publishes == observes before trusting anything here, and a negative delta
+    // is the visible symptom if that ever breaks.
+    // STEADY-STATE COMMAND PERIOD -- the most trustworthy number here, and the only one valid at every payload
+    // size. One timestamp per command, so consecutive differences are the true command period; each spans a whole
+    // payload on both arches, needing no tranche normalization. Both endpoints come from the dispatcher's own
+    // clock, so there is no cross-core clock assumption and the probe cost cancels. It telescopes, so only the
+    // endpoints matter. Command 0 is dropped as the cold one.
+    //
+    // Caveat worth keeping in view: a command spans the prefetcher's DRAM read into scratch as well as the local
+    // copy, so this is command throughput, not isolated copy throughput. It answers "is the dispatcher fed",
+    // not "how fast is iDMA" -- the producer ring's issue/wait/acquire split answers the latter.
+    void report_steady_state_period(const std::vector<uint32_t>& dp, uint32_t cmds) {
+        const uint32_t n = std::min(cmds, fd_copy_bench::kPairEntries);
+        if (n < 3) {
+            log_warning(tt::LogTest, "CopyBench steady-state period: need >= 3 commands, got {}", n);
+            return;
+        }
+        const uint32_t t_first = dp[fd_copy_bench::kCmdTimePairBase + 1];
+        const uint32_t t_last = dp[fd_copy_bench::kCmdTimePairBase + n - 1];
+        const uint32_t span = t_last - t_first;  // unsigned: wrap-safe
+        const uint32_t periods = n - 2;
+        const double cyc_per_cmd = static_cast<double>(span) / static_cast<double>(periods);
+        const uint32_t payload_bytes = get_page_size() * get_num_pages();
+        log_info(
+            tt::LogTest,
+            "CopyBench steady-state period: {} cyc over {} command intervals => {:.1f} cyc/command => {:.2f} B/cyc "
+            "on {} B payloads (dispatcher clock only; spans DRAM read + copy)",
+            span,
+            periods,
+            cyc_per_cmd,
+            cyc_per_cmd > 0.0 ? static_cast<double>(payload_bytes) / cyc_per_cmd : 0.0,
+            payload_bytes);
+    }
+
+    // Attributes the command period. Comparing the period against publish + dram_read leaves a large residual
+    // (~2200 cyc/command on Quasar, ~1100 on BH) that is flat across payload size, i.e. a fixed per-command cost.
+    // It is NOT all prefetcher overhead: the period is timestamped on the dispatcher, so it also holds dispatcher
+    // work outside process_write_linear. This splits it four ways:
+    //
+    //   prefetcher_period  = issue[i+1] - issue[i]   (free -- one issue timestamp already exists per command)
+    //   relay_cmd                                    (whole process_relay_linear_cmd)
+    //   relay_internal     = relay_cmd - publish - dram_read
+    //   prefetch_external  = prefetcher_period - relay_cmd     (command fetch, RELAY_INLINE)
+    //
+    // prefetcher_period vs dispatcher_period also tests lockstep: in steady state they must match, since neither
+    // side can run ahead indefinitely. A mismatch means one of the two timestamps is not once-per-command.
+    //
+    // CAVEAT on relay_internal: it contains the benchmark's OWN ring push -- 7 uncached stores per publish, which
+    // on Quasar are individually expensive. Treat relay_internal as an upper bound on real relay overhead, and
+    // subtract roughly the cost of 7 uncached writes per publish before acting on it.
+    uint64_t ring_publish_total_ = 0;  // set by report_copy_bench_ring, which runs first
+    uint64_t ring_read_total_ = 0;
+
+    void report_period_attribution(const std::vector<uint32_t>& pf, const std::vector<uint32_t>& dp, uint32_t cmds) {
+        const uint32_t publishes = pf[fd_copy_bench::kSlotPublishCount];
+        const uint32_t n = std::min(publishes, fd_copy_bench::kPairEntries);
+        const uint32_t relay_total = pf[fd_copy_bench::kSlotRelayCmdCycles];
+        if (n < 3 || cmds == 0 || relay_total == 0) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench period attribution: unavailable (issue_samples={} cmds={} relay_cycles={})",
+                n,
+                cmds,
+                relay_total);
+            return;
+        }
+
+        // Same telescoping form as the dispatcher period, and cmd 0 dropped for the same reason.
+        const uint32_t pf_span = pf[fd_copy_bench::kIssuePairBase + n - 1] - pf[fd_copy_bench::kIssuePairBase + 1];
+        const double pf_period = static_cast<double>(pf_span) / static_cast<double>(n - 2);
+        const uint32_t dp_span = dp[fd_copy_bench::kCmdTimePairBase + std::min(cmds, fd_copy_bench::kPairEntries) - 1] -
+                                 dp[fd_copy_bench::kCmdTimePairBase + 1];
+        const double dp_period =
+            static_cast<double>(dp_span) / static_cast<double>(std::min(cmds, fd_copy_bench::kPairEntries) - 2);
+
+        const double relay_per_cmd = static_cast<double>(relay_total) / static_cast<double>(cmds);
+        const double pub_per_cmd = static_cast<double>(ring_publish_total_) / static_cast<double>(cmds);
+        const double read_per_cmd = static_cast<double>(ring_read_total_) / static_cast<double>(cmds);
+        log_info(
+            tt::LogTest,
+            "CopyBench period attribution: prefetcher_period={:.1f} dispatcher_period={:.1f} (lockstep if equal) | "
+            "relay_cmd={:.1f} = publish {:.1f} + dram_read {:.1f} + relay_internal {:.1f} | "
+            "prefetch_external={:.1f} (fetch + RELAY_INLINE)",
+            pf_period,
+            dp_period,
+            relay_per_cmd,
+            pub_per_cmd,
+            read_per_cmd,
+            relay_per_cmd - pub_per_cmd - read_per_cmd,
+            pf_period - relay_per_cmd);
+        report_prefetcher_loop(pf, cmds, relay_per_cmd);
+    }
+
+    // BENCHMARK: splits the publish residual (publish - acquire - issue - wait) into the credit release and
+    // everything else. That residual -- ~434 cyc/command on Quasar, ~103 on BH at 128 KB -- was previously
+    // ATTRIBUTED to release_pages without being measured; this tests the attribution.
+    //
+    // Report cycles/CALL, not cycles/command: Quasar's helper does an extra early-32KB release per publish, so
+    // it makes ~2x the calls and the raw per-command totals are not comparable. Roughly half of the 4x gap is
+    // expected to be call count.
+    //
+    // Each figure includes 2 rdcycle reads (~2 cyc Quasar, ~8 BH per §3.1). Subtract before quoting -- against
+    // a ~51 cyc BH call that is ~16%.
+    void report_release_pages(const std::vector<uint32_t>& pf, uint32_t cmds) {
+        const uint32_t main_cyc = pf[fd_copy_bench::kSlotReleaseMainCycles];
+        const uint32_t main_n = pf[fd_copy_bench::kSlotReleaseMainCount];
+        const uint32_t early_cyc = pf[fd_copy_bench::kSlotReleaseEarlyCycles];
+        const uint32_t early_n = pf[fd_copy_bench::kSlotReleaseEarlyCount];
+        if (main_n == 0 || cmds == 0) {
+            log_warning(tt::LogTest, "CopyBench release_pages: unavailable (main_count={} cmds={})", main_n, cmds);
+            return;
+        }
+        log_info(
+            tt::LogTest,
+            "CopyBench release_pages: {:.1f} cyc/command over {:.2f} calls/command | "
+            "main {:.1f} cyc/call ({} calls) | early {:.1f} cyc/call ({} calls) | "
+            "compare against publish residual to size the unmeasured arithmetic",
+            static_cast<double>(main_cyc + early_cyc) / static_cast<double>(cmds),
+            static_cast<double>(main_n + early_n) / static_cast<double>(cmds),
+            static_cast<double>(main_cyc) / static_cast<double>(main_n),
+            main_n,
+            early_n > 0 ? static_cast<double>(early_cyc) / static_cast<double>(early_n) : 0.0,
+            early_n);
+    }
+
+    // The dispatcher is a PERSISTENT kernel: it starts at device init and parks in the top-of-loop wait until
+    // the host issues its first command. Measuring from kernel start therefore charges it for all the host-side
+    // setup time, which is unrelated to the benchmark and on the emulator dwarfs everything real (one such wait
+    // exceeded the entire measured run). Trimming the largest sample is not enough -- there are ~4 non-benchmark
+    // iterations, any of which can idle.
+    //
+    // So window it: the accumulators are monotonic, so snapshot them immediately before the iteration loop and
+    // subtract. Everything before the snapshot -- init, setup, whatever commands the harness sent -- is excluded
+    // by construction, and the iteration delta shows how many iterations actually fell inside the window.
+    uint32_t snap_loop_wait_ = 0;
+    uint32_t snap_loop_cmd_ = 0;
+    uint32_t snap_loop_iters_ = 0;
+    uint32_t snap_acquire_wait_loop_ = 0;
+    uint32_t snap_acquire_wait_chunk_ = 0;
+    uint32_t snap_pf_fetch_ = 0;
+    uint32_t snap_pf_cmd_ = 0;
+    uint32_t snap_pf_iters_ = 0;
+    bool snap_taken_ = false;
+
+    // Snapshotting alone is NOT enough. loop_wait / fetch are only ADDED when the wait returns, so at
+    // device-init time the accumulators are legitimately 0 -- both kernels are still parked inside their
+    // FIRST wait, which spans all of host setup (~1.27M cycles measured). That wait then completes on the
+    // first in-window command and lands entirely inside the window.
+    //
+    // So drain one command through the FD path first: Finish() pushes a command down, both kernels complete
+    // their cold iteration, and the cold wait is booked BEFORE the snapshot rather than after it.
+    void warmup_before_snapshot() { distributed::Finish(mesh_device_->mesh_command_queue()); }
+
+    void snapshot_dispatcher_loop() {
+        auto& ctx = MetalContext::instance();
+        auto& core_manager = ctx.get_dispatch_core_manager();
+        const auto device_id = device_->id();
+        const uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(device_id);
+        constexpr uint8_t cq_id = 0;
+        const CoreType dispatch_core_type = core_manager.get_dispatch_core_type();
+        const auto dispatch_logical = core_manager.dispatcher_core(device_id, channel, cq_id);
+        const CoreCoord dispatch_virtual = device_->virtual_core_from_logical_core(
+            CoreCoord{dispatch_logical.x, dispatch_logical.y}, dispatch_core_type);
+        const uint32_t base = Common::is_quasar_sim() ? fd_copy_bench::kBaseQuasar : fd_copy_bench::kBaseTt1xx;
+        const auto snap =
+            ctx.get_cluster().read_core<uint32_t>(device_id, dispatch_virtual, base, fd_copy_bench::kTotalBytes);
+        snap_loop_wait_ = snap[fd_copy_bench::kSlotDispLoopWaitCycles];
+        snap_loop_cmd_ = snap[fd_copy_bench::kSlotDispCmdCycles];
+        snap_loop_iters_ = snap[fd_copy_bench::kSlotDispLoopIters];
+        snap_acquire_wait_loop_ = snap[fd_copy_bench::kSlotDispAcquireWaitLoopCycles];
+        snap_acquire_wait_chunk_ = snap[fd_copy_bench::kSlotDispAcquireWaitChunkCycles];
+
+        // The prefetcher is persistent too, so its fetch accumulator needs the same windowing.
+        const auto prefetch_logical = core_manager.prefetcher_core(device_id, channel, cq_id);
+        const CoreCoord prefetch_virtual = device_->virtual_core_from_logical_core(
+            CoreCoord{prefetch_logical.x, prefetch_logical.y}, dispatch_core_type);
+        const auto psnap =
+            ctx.get_cluster().read_core<uint32_t>(device_id, prefetch_virtual, base, fd_copy_bench::kTotalBytes);
+        snap_pf_fetch_ = psnap[fd_copy_bench::kSlotPfFetchCycles];
+        snap_pf_cmd_ = psnap[fd_copy_bench::kSlotPfCmdCycles];
+        snap_pf_iters_ = psnap[fd_copy_bench::kSlotPfLoopIters];
+        snap_taken_ = true;
+    }
+
+    // BENCHMARK: closes the dispatcher-side budget. The existing brackets cover only process_write_linear,
+    // which is ~45% of the command period at 128 KB -- over half was unmeasured on BOTH arches (§4.3a).
+    // Splits the main loop into the top-of-loop wait (where credits are released back to the prefetcher) and
+    // process_cmd, so we can see whether the prefetcher's ~1000 cyc `acquire` is the dispatcher sitting in
+    // that wait rather than any drain or granularity effect.
+    void report_dispatcher_loop(const std::vector<uint32_t>& dp, uint32_t cmds) {
+        const uint32_t iters = dp[fd_copy_bench::kSlotDispLoopIters];
+        const uint32_t n = std::min(cmds, fd_copy_bench::kPairEntries);
+        if (iters == 0 || cmds == 0 || n < 3) {
+            // iters == 0 with a correct-looking ring means a STALE dispatcher kernel: the JIT cache does not
+            // invalidate on fd_copy_bench.hpp edits, so the old kernel writes the pre-existing slots correctly
+            // and simply never touches these appended ones. Touch cq_dispatch.cpp to force a rebuild.
+            log_warning(
+                tt::LogTest,
+                "CopyBench dispatcher loop: unavailable (iters={} cmds={}) -- iters=0 usually means a stale "
+                "dispatcher kernel; force a rebuild",
+                iters,
+                cmds);
+            return;
+        }
+        // Same telescoping form as report_period_attribution, cmd 0 dropped for the same reason.
+        const double dp_period =
+            static_cast<double>(dp[fd_copy_bench::kCmdTimePairBase + n - 1] - dp[fd_copy_bench::kCmdTimePairBase + 1]) /
+            static_cast<double>(n - 2);
+        if (!snap_taken_) {
+            log_warning(tt::LogTest, "CopyBench dispatcher loop: no pre-run snapshot -- values would include setup");
+            return;
+        }
+        const uint32_t win_iters = iters - snap_loop_iters_;
+        const uint32_t win_lw = dp[fd_copy_bench::kSlotDispLoopWaitCycles] - snap_loop_wait_;
+        const uint32_t win_cmd = dp[fd_copy_bench::kSlotDispCmdCycles] - snap_loop_cmd_;
+        const uint32_t win_acquire_loop = dp[fd_copy_bench::kSlotDispAcquireWaitLoopCycles] - snap_acquire_wait_loop_;
+        const uint32_t win_acquire_chunk =
+            dp[fd_copy_bench::kSlotDispAcquireWaitChunkCycles] - snap_acquire_wait_chunk_;
+        const double lw = static_cast<double>(win_lw) / cmds;
+        const double cmd = static_cast<double>(win_cmd) / cmds;
+        // acquire_loop IS a subset of loop_wait (same call, top-of-loop only), so the subtraction below is
+        // valid: it isolates release_block_pages()'s own drain-wait on the dispatcher's outgoing writes,
+        // which has nothing to do with the NoC-vs-iDMA copy choice. acquire_chunk is a SEPARATE call site
+        // (process_write_linear's per-chunk reacquire for RELAY_LINEAR) and is not part of loop_wait at all;
+        // the two acquire figures must be read independently, never summed then compared against loop_wait.
+        const double acquire_loop = static_cast<double>(win_acquire_loop) / cmds;
+        const double acquire_chunk = static_cast<double>(win_acquire_chunk) / cmds;
+        const double release_wait = lw - acquire_loop;
+        const double pwl = static_cast<double>(dp[fd_copy_bench::kSlotDispTotalCycles]) / cmds;
+        if (dp_period <= 0.0) {
+            // The wall clock reads 0 on Quasar dispatch-engine cores (§3.2), so the period is unavailable and
+            // the percentage split cannot be computed. The rdcycle-based absolutes are still valid -- report
+            // those rather than dividing by zero.
+            log_warning(
+                tt::LogTest,
+                "CopyBench dispatcher loop: period unavailable (wall clock reads 0 -- set "
+                "TT_METAL_TENSIX_DISPATCH_CORES=1 on Quasar). Absolutes still valid: loop_wait={:.1f} = "
+                "acquire_wait_loop {:.1f} + release_wait {:.1f} | acquire_wait_chunk={:.1f} (separate call "
+                "site, not part of loop_wait) | process_cmd={:.1f} process_write_linear={:.1f} cyc/command, "
+                "iters={:.2f}/command",
+                lw,
+                acquire_loop,
+                release_wait,
+                acquire_chunk,
+                cmd,
+                pwl,
+                static_cast<double>(iters) / cmds);
+            return;
+        }
+        // The dispatcher is persistent, so its FIRST loop_wait spans device-init to first-command and dwarfs
+        // every steady-state wait (it alone exceeded the whole measured run). Trim the single largest sample;
+        // the raw mean is printed too so the outlier stays visible rather than silently discarded.
+        log_info(
+            tt::LogTest,
+            "CopyBench dispatcher loop (windowed): iters_in_window={} ({:.2f}/command) | period={:.1f} = "
+            "loop_wait {:.1f} ({:.1f}%) + process_cmd {:.1f} ({:.1f}%) + remainder {:.1f} | of which "
+            "process_write_linear={:.1f} | loop_wait = acquire_wait_loop {:.1f} ({:.1f}% of period, genuinely "
+            "starved on the prefetcher's copy) + release_wait {:.1f} ({:.1f}% of period, draining the "
+            "dispatcher's OWN outgoing writes -- unrelated to the copy mechanism) | acquire_wait_chunk {:.1f} "
+            "({:.1f}% of period, SEPARATE call site inside process_write_linear, also genuine copy-starvation "
+            "but NOT part of loop_wait) | excluded pre-run: {} iters / {} cyc loop_wait; whole-run max single "
+            "wait={}",
+            win_iters,
+            static_cast<double>(win_iters) / cmds,
+            dp_period,
+            lw,
+            100.0 * lw / dp_period,
+            cmd,
+            100.0 * cmd / dp_period,
+            dp_period - lw - cmd,
+            pwl,
+            acquire_loop,
+            100.0 * acquire_loop / dp_period,
+            release_wait,
+            100.0 * release_wait / dp_period,
+            acquire_chunk,
+            100.0 * acquire_chunk / dp_period,
+            snap_loop_iters_,
+            snap_loop_wait_,
+            dp[fd_copy_bench::kSlotDispLoopWaitMax]);
+    }
+
+    // BENCHMARK: splits prefetch_external, which was previously derived (period - relay_cmd) and counted
+    // entirely as prefetcher WORK. Most of it is likely the prefetcher WAITING for its next command from the
+    // CQ -- DRAM-backed on the Quasar emulator. This decides whether the prefetcher's work/idle split is real.
+    void report_prefetcher_loop(const std::vector<uint32_t>& pf, uint32_t cmds, double relay_per_cmd) {
+        if (!snap_taken_ || cmds == 0) {
+            return;
+        }
+        const uint32_t iters = pf[fd_copy_bench::kSlotPfLoopIters] - snap_pf_iters_;
+        if (iters == 0) {
+            log_warning(tt::LogTest, "CopyBench prefetcher loop: unavailable (iters=0 -- stale kernel?)");
+            return;
+        }
+        const double fetch = static_cast<double>(pf[fd_copy_bench::kSlotPfFetchCycles] - snap_pf_fetch_) / cmds;
+        const double cmd = static_cast<double>(pf[fd_copy_bench::kSlotPfCmdCycles] - snap_pf_cmd_) / cmds;
+        log_info(
+            tt::LogTest,
+            "CopyBench prefetcher loop (windowed): iters_in_window={} ({:.2f}/command) | fetch_q_get_cmds={:.1f} "
+            "cyc/command (the CQ read -- DRAM-backed on Quasar) | process_cmd={:.1f} of which relay_cmd={:.1f} "
+            "=> other-cmd work {:.1f} | fetch is WAITING, not work: subtract it from the prefetcher's work total",
+            iters,
+            static_cast<double>(iters) / cmds,
+            fetch,
+            cmd,
+            relay_per_cmd,
+            cmd - relay_per_cmd);
+        // Directly measured, not inferred: RELAY_INLINE issues its own small payload through the same
+        // mechanism-dependent write_downstream() path RELAY_LINEAR uses (see fd_copy_bench.hpp
+        // kSlotRelayInlineCmdCycles). If this accounts for most of "other-cmd work" above, that residual
+        // is explained by copy mechanism, not by something else hiding in loop control.
+        const double relay_inline_per_cmd =
+            static_cast<double>(pf[fd_copy_bench::kSlotRelayInlineCmdCycles]) / static_cast<double>(cmds);
+        log_info(
+            tt::LogTest,
+            "CopyBench relay_inline: {:.1f} cyc/command (directly measured) vs other-cmd work {:.1f} cyc/command "
+            "(residual) -- gap {:+.1f} is loop control / anything else not measured directly",
+            relay_inline_per_cmd,
+            cmd - relay_per_cmd,
+            (cmd - relay_per_cmd) - relay_inline_per_cmd);
+        // Splits relay_inline into its two structurally different waits (see fd_copy_bench.hpp
+        // kSlotRelayInlineAcquireCycles/IssueCycles): acquire is dispatcher-CB backpressure, identical code
+        // on NoC/iDMA; issue is the noc_async_write() call, which spins on CB0 (shared with RELAY_LINEAR's
+        // payload writes) before it can even issue. If a scaling effect in relay_inline above is real CB0
+        // contention rather than dispatcher backpressure, it must show up here as issue, not acquire.
+        const double relay_inline_acquire_per_cmd =
+            static_cast<double>(pf[fd_copy_bench::kSlotRelayInlineAcquireCycles]) / static_cast<double>(cmds);
+        const double relay_inline_issue_per_cmd =
+            static_cast<double>(pf[fd_copy_bench::kSlotRelayInlineIssueCycles]) / static_cast<double>(cmds);
+        log_info(
+            tt::LogTest,
+            "CopyBench relay_inline split: acquire(dispatcher backpressure)={:.1f} cyc/command | "
+            "issue(CB0 write, shared w/ RELAY_LINEAR)={:.1f} cyc/command | sum={:.1f} vs relay_inline total "
+            "{:.1f} (residual {:+.1f} is release_pages/other-cmd inline plumbing not bracketed above)",
+            relay_inline_acquire_per_cmd,
+            relay_inline_issue_per_cmd,
+            relay_inline_acquire_per_cmd + relay_inline_issue_per_cmd,
+            relay_inline_per_cmd,
+            relay_inline_per_cmd - relay_inline_acquire_per_cmd - relay_inline_issue_per_cmd);
+        const uint32_t fmax = pf[fd_copy_bench::kSlotPfFetchMax];
+        const uint32_t fsum = pf[fd_copy_bench::kSlotPfFetchCycles] - snap_pf_fetch_;
+        log_info(
+            tt::LogTest,
+            "CopyBench prefetcher fetch detail: max single fetch={} cyc | trimmed mean={:.1f} cyc/iter over {} "
+            "iters -- if max is ~1e6 the cold wait was NOT excluded and the windowed number above is invalid",
+            fmax,
+            iters > 1 && fsum > fmax ? static_cast<double>(fsum - fmax) / (iters - 1) : 0.0,
+            iters);
+    }
+
+    // Event timeline decode (fd_timeline_benchmark_plan.md). Both device logs timestamp with
+    // get_timestamp_32b(), so any two intervals -- prefetcher or dispatcher, same log or not -- are
+    // directly comparable with no clock projection.
+    struct TraceEvent {
+        uint32_t time;
+        fd_copy_bench::TraceTag tag;
+        uint16_t cmd_index;
+        uint32_t arg;
+    };
+    struct TraceInterval {
+        fd_copy_bench::TraceTag start_tag;
+        uint16_t cmd_index;
+        uint32_t start_time;  // raw get_timestamp_32b() samples, NOT probe-corrected
+        uint32_t end_time;
+        uint32_t arg;
+
+        // duration = end - start - probe_cost (fd_timeline_benchmark_plan.md). Clamped to 0: a raw
+        // duration under one probe cost means the interval was too short for the probe to resolve, not
+        // a negative duration.
+        double duration(uint32_t probe_cost) const {
+            const int64_t raw = static_cast<int64_t>(end_time) - static_cast<int64_t>(start_time);
+            return static_cast<double>(std::max<int64_t>(0, raw - static_cast<int64_t>(probe_cost)));
+        }
+        // corrected_start/end per the plan: half the probe cost latches on each side of the boundary, so
+        // overlap math (which cares about WHERE the boundary is, not just interval length) must shrink
+        // the interval from both ends rather than subtract the whole probe from one end.
+        double corrected_start(uint32_t probe_cost) const {
+            return static_cast<double>(start_time) + static_cast<double>(probe_cost) / 2.0;
+        }
+        double corrected_end(uint32_t probe_cost) const {
+            return static_cast<double>(end_time) - static_cast<double>(probe_cost) / 2.0;
+        }
+    };
+
+    // Robust (median) probe-cost estimate from kProbeCalibSamples back-to-back get_timestamp_32b()
+    // deltas, per fd_timeline_benchmark_plan.md -- NOT the single-pair kSlotCorrection, which is kept
+    // only for the pre-existing issue/observe latency metric.
+    uint32_t robust_probe_cost(const std::vector<uint32_t>& slots, uint32_t calib_base) const {
+        std::array<uint32_t, fd_copy_bench::kProbeCalibSamples> samples;
+        for (uint32_t i = 0; i < fd_copy_bench::kProbeCalibSamples; i++) {
+            samples[i] = slots[calib_base + i];
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2];
+    }
+
+    std::vector<TraceEvent> decode_trace(
+        const std::vector<uint32_t>& slots, uint32_t count_slot, uint32_t events_base) const {
+        const uint32_t n = std::min(slots[count_slot], fd_copy_bench::kTraceCapacity);
+        std::vector<TraceEvent> out;
+        out.reserve(n);
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t base = events_base + i * fd_copy_bench::kTraceWordsPerEvent;
+            const uint32_t packed = slots[base + 1];
+            out.push_back(TraceEvent{
+                slots[base + 0],
+                static_cast<fd_copy_bench::TraceTag>(packed & 0xFFFFu),
+                static_cast<uint16_t>(packed >> 16),
+                slots[base + 2]});
+        }
+        return out;
+    }
+
+    // Pairs *_Start with *_End by (tag pair, cmd_index). Single-threaded per DM and never recursive, so
+    // "most recent open start per (start_tag, cmd_index)" is unambiguous -- no stack needed.
+    std::vector<TraceInterval> pair_intervals(const std::vector<TraceEvent>& events) const {
+        static const std::vector<std::pair<fd_copy_bench::TraceTag, fd_copy_bench::TraceTag>> kPairs = {
+            {fd_copy_bench::TraceTag::kPfFetchStart, fd_copy_bench::TraceTag::kPfFetchEnd},
+            {fd_copy_bench::TraceTag::kPfRelayInlineStart, fd_copy_bench::TraceTag::kPfRelayInlineEnd},
+            {fd_copy_bench::TraceTag::kPfRelayInlineAcquireStart, fd_copy_bench::TraceTag::kPfRelayInlineAcquireEnd},
+            {fd_copy_bench::TraceTag::kPfRelayInlineIssueStart, fd_copy_bench::TraceTag::kPfRelayInlineIssueEnd},
+            {fd_copy_bench::TraceTag::kPfRelayLinearStart, fd_copy_bench::TraceTag::kPfRelayLinearEnd},
+            {fd_copy_bench::TraceTag::kPfReadBarrierStart, fd_copy_bench::TraceTag::kPfReadBarrierEnd},
+            {fd_copy_bench::TraceTag::kPfAcquireStart, fd_copy_bench::TraceTag::kPfAcquireEnd},
+            {fd_copy_bench::TraceTag::kPfWriteIssueStart, fd_copy_bench::TraceTag::kPfWriteIssueEnd},
+            {fd_copy_bench::TraceTag::kPfReleaseStart, fd_copy_bench::TraceTag::kPfReleaseEnd},
+            {fd_copy_bench::TraceTag::kPfFlushStart, fd_copy_bench::TraceTag::kPfFlushEnd},
+            {fd_copy_bench::TraceTag::kDpLoopWaitStart, fd_copy_bench::TraceTag::kDpLoopWaitEnd},
+            {fd_copy_bench::TraceTag::kDpCmdStart, fd_copy_bench::TraceTag::kDpCmdEnd},
+            {fd_copy_bench::TraceTag::kDpChunkWaitStart, fd_copy_bench::TraceTag::kDpChunkWaitEnd},
+            {fd_copy_bench::TraceTag::kDpWriteIssueStart, fd_copy_bench::TraceTag::kDpWriteIssueEnd},
+        };
+        std::unordered_map<uint32_t, TraceEvent> open;  // key: start_tag(16) | cmd_index(16)
+        std::vector<TraceInterval> out;
+        for (const auto& e : events) {
+            for (const auto& [start_tag, end_tag] : kPairs) {
+                const uint32_t key = (static_cast<uint32_t>(start_tag) << 16) | static_cast<uint32_t>(e.cmd_index);
+                if (e.tag == start_tag) {
+                    open[key] = e;
+                } else if (e.tag == end_tag) {
+                    auto it = open.find(key);
+                    if (it != open.end()) {
+                        out.push_back(TraceInterval{start_tag, e.cmd_index, it->second.time, e.time, e.arg});
+                        open.erase(it);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    // Total wall-clock covered by intervals of `tag` that overlap `[window_start, window_end]` (both
+    // already probe-corrected by the caller), clipped to the window. max(0, min(ends) - max(starts)) per
+    // the design doc. `probe_cost` corrects each candidate interval's OWN boundaries before comparing --
+    // overlap math needs corrected boundaries on both sides of the comparison, not just a corrected total.
+    double overlap_with_tag(
+        const std::vector<TraceInterval>& intervals,
+        fd_copy_bench::TraceTag tag,
+        uint32_t probe_cost,
+        double window_start,
+        double window_end) const {
+        double total = 0.0;
+        for (const auto& iv : intervals) {
+            if (iv.start_tag != tag) {
+                continue;
+            }
+            const double lo = std::max(window_start, iv.corrected_start(probe_cost));
+            const double hi = std::min(window_end, iv.corrected_end(probe_cost));
+            if (hi > lo) {
+                total += hi - lo;
+            }
+        }
+        return total;
+    }
+
+    // Validates the trace against the scalar totals it should reconstruct (fd_timeline_benchmark_plan.md
+    // success criteria), then answers the open question from this session's investigation directly: during
+    // RELAY_INLINE's acquire_pages(1) wait for the NEXT command's header, is the dispatcher actively
+    // draining (write-issue overlap), or itself idle/blocked -- i.e. is this genuinely a throughput ceiling
+    // or something else.
+    void report_timeline(const std::vector<uint32_t>& pf, const std::vector<uint32_t>& dp, uint32_t cmds) {
+        const uint32_t pf_dropped = pf[fd_copy_bench::kPfTraceDroppedSlot];
+        const uint32_t dp_dropped = dp[fd_copy_bench::kDpTraceDroppedSlot];
+        const auto pf_events = decode_trace(pf, fd_copy_bench::kPfTraceCountSlot, fd_copy_bench::kPfTraceEventsBase);
+        const auto dp_events = decode_trace(dp, fd_copy_bench::kDpTraceCountSlot, fd_copy_bench::kDpTraceEventsBase);
+        log_info(
+            tt::LogTest,
+            "CopyBench timeline: pf_events={} (dropped={}) dp_events={} (dropped={})",
+            pf_events.size(),
+            pf_dropped,
+            dp_events.size(),
+            dp_dropped);
+        if (pf_events.empty() || dp_events.empty()) {
+            return;
+        }
+        if (pf_dropped != 0 || dp_dropped != 0) {
+            // A nonzero drop count means the trace is truncated somewhere mid-run -- whichever commands
+            // got cut off are missing their END (or START) events, so pairing would either leave them
+            // unmatched (silently absent from every sum below) or, worse, look complete while actually
+            // being partial. Either way nothing downstream is trustworthy; report the fact and stop.
+            log_warning(
+                tt::LogTest,
+                "CopyBench timeline: trace truncated (pf_dropped={} dp_dropped={}) -- increase "
+                "fd_copy_bench::kTraceCapacity and rerun; not reporting overlap/self-check on a partial trace",
+                pf_dropped,
+                dp_dropped);
+            return;
+        }
+        const auto pf_intervals = pair_intervals(pf_events);
+        const auto dp_intervals = pair_intervals(dp_events);
+        const uint32_t pf_probe = robust_probe_cost(pf, fd_copy_bench::kPfProbeCalibBase);
+        const uint32_t dp_probe = robust_probe_cost(dp, fd_copy_bench::kDpProbeCalibBase);
+        log_info(
+            tt::LogTest,
+            "CopyBench timeline probe cost: pf={} dp={} cyc (median of {} samples)",
+            pf_probe,
+            dp_probe,
+            fd_copy_bench::kProbeCalibSamples);
+
+        // Self-check: sum of decoded, probe-corrected RELAY_LINEAR intervals vs the existing scalar total
+        // for the same bracket. These should be close -- if they diverge well past probe noise, the trace
+        // is not decoding correctly and nothing else below should be trusted.
+        double relay_linear_sum = 0.0;
+        for (const auto& iv : pf_intervals) {
+            if (iv.start_tag == fd_copy_bench::TraceTag::kPfRelayLinearStart) {
+                relay_linear_sum += iv.duration(pf_probe);
+            }
+        }
+        const uint32_t relay_total = pf[fd_copy_bench::kSlotRelayCmdCycles];
+        log_info(
+            tt::LogTest,
+            "CopyBench timeline self-check: relay_linear sum/cmd={:.1f} vs scalar relay_cmd/cmd={:.1f} "
+            "(probe-corrected; should be close -- both measure the same bracket two different ways)",
+            cmds ? relay_linear_sum / cmds : 0.0,
+            cmds ? static_cast<double>(relay_total) / cmds : 0.0);
+
+        // The open question: for every RELAY_INLINE acquire-wait, how much of it overlapped the dispatcher
+        // actively issuing a write vs. the dispatcher itself waiting on more data. If overlap is near 100%,
+        // the dispatcher was never idle during this wait -- it's a genuine throughput ceiling, not slack
+        // going unused. If overlap is well under 100%, the dispatcher had idle time it could have used.
+        double acquire_wait_total = 0.0;
+        double acquire_overlap_write = 0.0;
+        double acquire_overlap_dp_wait = 0.0;
+        uint32_t acquire_samples = 0;
+        for (const auto& iv : pf_intervals) {
+            if (iv.start_tag != fd_copy_bench::TraceTag::kPfRelayInlineAcquireStart) {
+                continue;
+            }
+            const double dur = iv.duration(pf_probe);
+            if (dur <= 0.0) {
+                continue;
+            }
+            acquire_wait_total += dur;
+            const double window_start = iv.corrected_start(pf_probe);
+            const double window_end = iv.corrected_end(pf_probe);
+            acquire_overlap_write += overlap_with_tag(
+                dp_intervals, fd_copy_bench::TraceTag::kDpWriteIssueStart, dp_probe, window_start, window_end);
+            acquire_overlap_dp_wait += overlap_with_tag(
+                dp_intervals, fd_copy_bench::TraceTag::kDpChunkWaitStart, dp_probe, window_start, window_end);
+            ++acquire_samples;
+        }
+        if (acquire_samples > 0) {
+            log_info(
+                tt::LogTest,
+                "CopyBench timeline RELAY_INLINE acquire-wait vs dispatcher activity: {} samples, "
+                "mean_wait={:.1f} cyc | overlap with dispatcher write-issue={:.1f}% | overlap with dispatcher "
+                "own chunk-wait={:.1f}% (idle time the dispatcher had but the prefetcher's wait didn't use)",
+                acquire_samples,
+                acquire_wait_total / acquire_samples,
+                100.0 * acquire_overlap_write / acquire_wait_total,
+                100.0 * acquire_overlap_dp_wait / acquire_wait_total);
+        }
+    }
+
+    void report_copy_bench_pairs(const std::vector<uint32_t>& pf, const std::vector<uint32_t>& dp) {
+        const uint32_t publishes = pf[fd_copy_bench::kSlotPublishCount];
+        const uint32_t observes = dp[fd_copy_bench::kSlotObserveCount];
+        const uint32_t correction = pf[fd_copy_bench::kSlotCorrection];
+        const uint32_t cmds = dp[fd_copy_bench::kSlotDispCmdCount];
+        const uint32_t waited = dp[fd_copy_bench::kSlotWaitedCount];
+
+        // GUARDRAIL: every log_pf_event/log_dp_event call adds its own cost to whatever whole-bracket
+        // scalar it falls inside (relay_cmd, relay_inline, release_pages, etc. -- see fd_copy_bench.hpp's
+        // FD_BENCH_TIMELINE_ENABLED comment). If tracing was on for this run, every absolute bracket number
+        // printed below is perturbed and must not be quoted as the mechanism's real cost -- only the
+        // timeline's own decoded overlap (report_timeline) is trustworthy on a trace-on run, as causal
+        // evidence, not a throughput figure. Rerun with FD_BENCH_TIMELINE_ENABLED=0 for real magnitudes.
+        const bool timeline_was_active =
+            pf[fd_copy_bench::kPfTraceCountSlot] != 0 || dp[fd_copy_bench::kDpTraceCountSlot] != 0;
+        if (timeline_was_active) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench: FD_BENCH_TIMELINE_ENABLED was 1 for this run -- every absolute bracket value "
+                "below (publish/acquire/issue/release_pages/relay_cmd/relay_inline/period/etc.) is "
+                "perturbed by tracing overhead and is DIAGNOSTIC ONLY, not the mechanism's real cost. Only "
+                "the timeline overlap finding is trustworthy here. Rerun with FD_BENCH_TIMELINE_ENABLED=0 "
+                "for real magnitudes.");
+        }
+
+        // The command period is independent of the pairing, so report it first and unconditionally -- it is the
+        // one number that stays valid at every payload size.
+        report_steady_state_period(dp, cmds);
+        report_period_attribution(pf, dp, cmds);
+        report_release_pages(pf, cmds);
+        report_dispatcher_loop(dp, cmds);
+        report_timeline(pf, dp, cmds);
+
+        // BLOCKED-COMMAND RATE -- a first-class metric, and the unbiased one. `observes` counts commands where the
+        // dispatcher blocked at least once, over every command; one entry per command either way, so unlike the
+        // latency mean it is not self-selected. It answers "was the consumer fed" directly: a low rate means the
+        // payload arrived before it was needed and transport latency was irrelevant on those commands.
+        //
+        // This is also the number that decides whether the latency mean below may be compared across arches at
+        // all -- see the conditional-mean warning there.
+        if (cmds != 0) {
+            log_info(
+                tt::LogTest,
+                "CopyBench blocked_commands={}/{} ({:.1f}%) | total_blocking_waits={} => {:.2f} stalls per command",
+                observes,
+                cmds,
+                100.0 * static_cast<double>(observes) / static_cast<double>(cmds),
+                waited,
+                static_cast<double>(waited) / static_cast<double>(cmds));
+        }
+
+        // Requiring publishes == observes serves TWO purposes, and the second is the stronger one:
+        //
+        //  1. Pairing. If the dispatcher blocked on only a subset (25 of 100 at 32 KB), observe[i] belongs to a
+        //     later command than issue[i] and every delta is wrong -- yet all stay POSITIVE, so the negative-delta
+        //     guard below does NOT catch it. The count comparison is the check that works.
+        //
+        //  2. Selection bias. The dispatcher only timestamps when it was STARVED, so a partial sample is not a
+        //     random subset -- it is precisely the commands where the producer fell behind. Its mean is a
+        //     worst-case conditional, not an average. Two arches with different blocking rates therefore have
+        //     latency means drawn from different populations, and are not comparable even with perfect pairing.
+        //
+        // So a partial sample is not merely unpaired, it is unrepresentative. Refuse it either way and point at
+        // the two unbiased metrics above.
+        if (publishes != observes) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench avg: skipping paired latency -- publishes={} != observes={}. Partial samples are both "
+                "mis-paired AND self-selected for starved commands. Use blocked_commands / steady-state period.",
+                publishes,
+                observes);
+            return;
+        }
+
+        const uint32_t n = std::min({publishes, observes, fd_copy_bench::kPairEntries});
+        if (n == 0) {
+            log_warning(
+                tt::LogTest, "CopyBench avg: no paired samples (publishes={} observes={})", publishes, observes);
+            return;
+        }
+        if (publishes > fd_copy_bench::kPairEntries || observes > fd_copy_bench::kPairEntries) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench avg: {} publishes / {} observes exceed kPairEntries={} -- averaging the first {}; raise "
+                "kPairEntries to cover the whole run",
+                publishes,
+                observes,
+                fd_copy_bench::kPairEntries,
+                n);
+        }
+
+        int64_t sum = 0;
+        int64_t lo = INT64_MAX;
+        int64_t hi = INT64_MIN;
+        uint64_t sum_bytes = 0;
+        uint32_t negatives = 0;
+        std::vector<int64_t> deltas;
+        deltas.reserve(n);
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t t_issue = pf[fd_copy_bench::kIssuePairBase + i];
+            const uint32_t t_obs = dp[fd_copy_bench::kObservePairBase + i];
+            // Unsigned subtraction first so a 32-bit wall-clock wrap between the two samples still yields the
+            // true (small) interval; only then widen and apply the one-probe correction.
+            const int64_t d =
+                static_cast<int64_t>(static_cast<uint32_t>(t_obs - t_issue)) - static_cast<int64_t>(correction);
+            deltas.push_back(d);
+            sum += d;
+            sum_bytes += pf[fd_copy_bench::kIssueBytesPairBase + i];
+            lo = std::min(lo, d);
+            hi = std::max(hi, d);
+            if (d < 0) {
+                negatives++;
+            }
+        }
+        const double mean = static_cast<double>(sum) / static_cast<double>(n);
+        double var = 0.0;
+        for (int64_t d : deltas) {
+            var += (static_cast<double>(d) - mean) * (static_cast<double>(d) - mean);
+        }
+        const double stddev = n > 1 ? std::sqrt(var / static_cast<double>(n - 1)) : 0.0;
+
+        log_info(
+            tt::LogTest,
+            "CopyBench avg (issue->credit, n={}): mean={:.1f} cyc stddev={:.1f} min={} max={} first={} last={}",
+            n,
+            mean,
+            stddev,
+            lo,
+            hi,
+            deltas.front(),
+            deltas.back());
+
+        // Steady state excluding the first command, which pays cold instruction cache, cold CB state and an
+        // empty pipeline. If this differs materially from the full mean, the full mean is the misleading one.
+        if (n > 1) {
+            const int64_t steady_sum = sum - deltas.front();
+            log_info(
+                tt::LogTest,
+                "CopyBench avg steady state (dropping cmd 0): mean={:.1f} cyc over {} samples",
+                static_cast<double>(steady_sum) / static_cast<double>(n - 1),
+                n - 1);
+        }
+        // Normalized form -- READ THE CAVEAT. sum_bytes is amt_to_write as passed to the publish helper, which on
+        // Quasar is NOT the bytes behind the first credit: write_pages_to_dispatcher_and_release_quasar
+        // (cq_prefetch.cpp:1100-1108) releases an early 32 KB chunk whenever amt_to_write >= 64 KB, so a recorded
+        // 65536 actually published 32768 before the credit the dispatcher observed. This figure therefore
+        // OVERSTATES Quasar by 2x at >= 64 KB payloads. Fixing it properly means recording bytes at the release
+        // site rather than the call site.
+        log_info(
+            tt::LogTest,
+            "CopyBench avg normalized: total_issue_bytes={} over {} cyc => {:.2f} B/cyc (mean issue_bytes={:.0f} "
+            "per sample) -- WARNING: on Quasar issue_bytes >= 64K overstates by 2x (early 32K release)",
+            sum_bytes,
+            sum,
+            sum > 0 ? static_cast<double>(sum_bytes) / static_cast<double>(sum) : 0.0,
+            static_cast<double>(sum_bytes) / static_cast<double>(n));
+
+        if (negatives != 0) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench avg: {}/{} deltas are NEGATIVE -- index-by-index pairing is broken, the averages above "
+                "are meaningless",
+                negatives,
+                n);
+        }
     }
 
     // Dispatcher-side stall/work accounting: the direct test of "is the consumer kept fed?".
@@ -3444,6 +4324,8 @@ private:
                 raw - static_cast<int64_t>(correction),
                 avail_bytes);
         }
+
+        report_copy_bench_pairs(pf, dp);
     }
 };
 
@@ -4829,11 +5711,11 @@ INSTANTIATE_TEST_SUITE_P(
     PrefetcherCycleBenchmarkTests,
     PrefetcherRelayLinearCycleBenchmarkFixture,
     ::testing::Values(
-        PagedReadParams{32 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{48 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{64 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{96 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{128 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false}),
+        PagedReadParams{32 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{48 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{64 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{96 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{128 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_relay_linear";
@@ -4873,11 +5755,11 @@ INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherTests,
     PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture,
     ::testing::Values(
-        PagedReadParams{32 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{48 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{64 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{96 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{128 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false}),
+        PagedReadParams{32 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{48 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{64 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{96 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{128 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_relay_linear";
