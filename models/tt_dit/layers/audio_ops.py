@@ -491,7 +491,16 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         cache["cc"] = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
-    conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    # `act_block_h_override` drives the size of conv1d's statically allocated circular buffers, which
+    # is what fails ("... clash with L1 buffers") when L1_FULL is requested at the production shapes --
+    # not the activation itself, which fits comfortably. Exposed so the L1 path can be retried with
+    # smaller blocks; 0 means "let conv2d choose", i.e. today's behaviour.
+    act_block_h = int(os.environ.get("MINIMAX_H3_AUDIO_ACT_BLOCK_H", "0"))
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        act_block_h_override=act_block_h,
+    )
 
     def _run(path: str, taps_v=None, x=None, c=None):
         taps_v = taps if taps_v is None else taps_v
