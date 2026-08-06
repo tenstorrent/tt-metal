@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import torch
 
@@ -30,7 +31,7 @@ CONFIGS = {
     # MAC's ~5e-08 while costing 2.5-6x, so it cannot substitute for the SFPU fix.
 }
 
-OUT_DIR = "/home/rshirvani/.claude/jobs/00644216/tmp/acc"
+OUT_DIR = os.environ.get("AUDIO_PERF_OUT", os.path.join(tempfile.gettempdir(), "audio_perf_acc"))
 FRAMES = int(os.environ.get("ACC_FRAMES", "207"))
 
 
@@ -38,12 +39,10 @@ def run_one(label: str) -> None:
     """Child mode: build the decoder, decode a fixed latent, save the waveform."""
     import time
 
-    import ttnn
     from safetensors.torch import load_file
 
-    from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
-        convert_minimax_h3_audio_state_dict,
-    )
+    import ttnn
+    from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
     from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 
     weights_dir = os.path.join(os.environ["MINIMAX_H3_DIFFUSERS_DIR"], "audio_vae")

@@ -12,11 +12,10 @@ import time
 import torch
 
 import ttnn
-
-from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
-from models.tt_dit.layers.audio_ops import SnakeBeta
 from models.tt_dit.layers import audio_resample
+from models.tt_dit.layers.audio_ops import SnakeBeta
 from models.tt_dit.layers.audio_resample import Activation1d
+from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 
 # (label, C, T) at the tail; T is the band's input length.
 SHAPES = [

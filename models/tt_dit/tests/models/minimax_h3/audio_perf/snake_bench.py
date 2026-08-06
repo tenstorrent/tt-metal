@@ -18,7 +18,6 @@ import time
 import torch
 
 import ttnn
-
 from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 
 # (label, C, T) at the production tail. T values are the post-upsample lengths the snake sees.

@@ -17,9 +17,8 @@ import time
 import torch
 
 import ttnn
-
-from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 from models.tt_dit.layers.audio_ops import _replicate_pad_t
+from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 
 SHAPES = [
     ("s4 C32  T41403", 32, 41403),

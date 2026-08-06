@@ -16,11 +16,10 @@ import time
 import torch
 
 import ttnn
-
+from models.tt_dit.layers import audio_ops
 from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio as dec_mod
 from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
-from models.tt_dit.layers import audio_ops
 
 COUNTS = collections.Counter()
 ENABLED = {"on": False}

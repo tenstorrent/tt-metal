@@ -20,9 +20,8 @@ import time
 import torch
 
 import ttnn
-
-from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 from models.tt_dit.layers.audio_ops import _make_kaiser_sinc_kernel_1d, depthwise_tap_filter
+from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
 
 # (label, C, T_pad, K, stride) -- observed in the verify log of a real decode.
 SHAPES = [

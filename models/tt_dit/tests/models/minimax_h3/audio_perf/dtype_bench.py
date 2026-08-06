@@ -14,10 +14,11 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import torch
 
-OUT = "/home/rshirvani/.claude/jobs/00644216/tmp/dtype"
+OUT = os.environ.get("AUDIO_PERF_OUT", os.path.join(tempfile.gettempdir(), "audio_perf_dtype"))
 FRAMES = int(os.environ.get("DT_FRAMES", "207"))
 
 CONFIGS = {
@@ -30,12 +31,10 @@ CONFIGS = {
 def run_one(label: str) -> None:
     import time
 
-    import ttnn
     from safetensors.torch import load_file
 
-    from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
-        convert_minimax_h3_audio_state_dict,
-    )
+    import ttnn
+    from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
     from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 
     dtype_name, _ = CONFIGS[label]

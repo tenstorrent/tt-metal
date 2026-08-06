@@ -15,11 +15,11 @@ import time
 import torch
 
 import ttnn
+from models.tt_dit.layers.audio_ops import _make_kaiser_sinc_kernel_1d, depthwise_tap_filter
 
 # Import for the side effect the audio tests rely on: registering the H3 conv blockings, without which
 # every conv here measures a different op than production (STATE.md am. 111).
 from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  # noqa: F401
-from models.tt_dit.layers.audio_ops import _make_kaiser_sinc_kernel_1d, depthwise_tap_filter
 
 # (label, C, T_pad, K, stride) -- the §3 table. T_pad is the padded input length the filter sees.
 SHAPES = [

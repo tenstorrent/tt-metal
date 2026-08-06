@@ -10,7 +10,6 @@ different row count. If time falls as C grows, cost is per-row and the kernel mu
 timesteps into channels) as well as reduce op count.
 """
 
-import os
 import statistics
 import time
 
