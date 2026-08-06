@@ -203,12 +203,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// Noinline forces the 3 words into a0/a1/a2
-// (x10/x11/x12); the opcode reads them by hardcoded indices 10/11/12.
-__attribute__((noinline)) static std::uint32_t do_rv_pacr(std::uint32_t a0, std::uint32_t a1, std::uint32_t a2)
+// RV_PACR reads its 3 descriptor words from RISC-V registers a0/a1/a2 (x10/x11/x12) by the
+// register indices baked into the opcode. Bind gpr0/1/2 to a0/a1/a2 via explicit register
+// variables and pass them as "r" inputs so the compiler guarantees they are live in a0/a1/a2.
+__attribute__((noinline)) static std::uint32_t do_rv_pacr(std::uint32_t gpr0, std::uint32_t gpr1, std::uint32_t gpr2)
 {
-    // Index for RISCV register a0/a1/a2 is: 10/11/12
-    TTI_RV_PACR(10, 11, 12);
+    register std::uint32_t a0 asm("a0") = gpr0;
+    register std::uint32_t a1 asm("a1") = gpr1;
+    register std::uint32_t a2 asm("a2") = gpr2;
+    __asm__ __volatile__(".ttinsn %3" : : "r"(a0), "r"(a1), "r"(a2), "n"(TT_OP_RV_PACR(10, 11, 12)));
     return a0 + a1 + a2;
 }
 
