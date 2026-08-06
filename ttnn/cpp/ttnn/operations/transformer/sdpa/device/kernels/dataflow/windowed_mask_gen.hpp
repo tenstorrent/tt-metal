@@ -15,6 +15,7 @@
 #include "api/dataflow/noc.h"
 #include <tt-metalium/constants.hpp>
 #include "dataflow_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
 // Zero a [row,col) sub-rectangle of a Float16_b tile that is otherwise -inf (the partial-window boundary
 // tile). A Float16_b tile is 4 row-major 16x16 faces of 2-byte elements, so this is a direct per-element
@@ -95,6 +96,24 @@ inline void generate_windowed_mask_for_q_chunk(
             break;
         }
     }
+
+    // Narrowed K-chunk range for this Q chunk: the same shared function the reader uses to bound its
+    // K/V streaming and to feed compute — the three kernels' per-Q-chunk counts must agree exactly.
+    // Skipping the out-of-range chunks cannot change the cursor walk below: their tiles all take the
+    // -inf `continue` branches, which never advance `local_window_idx`.
+    const auto k_range = windowed_k_chunk_range(
+        q_chunk,
+        Sq_chunk_t,
+        valid_Sqt,
+        q_tok_offset,
+        cu_ptr,
+        cu_window_seqlens_eles,
+        Sk_chunk_t,
+        k_num_chunks,
+        tt::constants::TILE_HEIGHT);
+    // PHASE-1 (plumbing validation): range computed but the dense loop is kept until the
+    // three-kernel handshake is proven.
+    (void)k_range;
 
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     CircularBuffer cb_mask(cb_mask_in);

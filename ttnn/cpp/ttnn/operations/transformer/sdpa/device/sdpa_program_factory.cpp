@@ -556,6 +556,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
+    reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -565,6 +566,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
+    // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
+    TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(
+        tensor_args.windowed_q_token_offset_tensor.has_value()
+            ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
+            : nullptr)
         .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
@@ -671,6 +681,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
+        static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -780,10 +791,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t windowed_q_token_offset = 0;
     cb_ids.cu_window_seqlens = cb_ids.q_in;
     cb_ids.windowed_q_offset = cb_ids.q_in;
+    cb_ids.windowed_cu_reader = cb_ids.q_in;
+    cb_ids.windowed_k_range = cb_ids.q_in;
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
         tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
         cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        // K-range narrowing: the reader gets its OWN cu_window copy (sharing the writer's CB would put
+        // two producers on one CB), and a small reader->compute ctrl CB carrying each Q chunk's
+        // {k_lo, k_hi} (double-buffered so the reader can run a Q chunk ahead; sparse_sdpa precedent).
+        cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        constexpr uint32_t k_range_page_size = 16;
+        cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
         cu_window_buffer = cu.buffer();
         cu_window_seqlens_eles = cu.logical_shape()[-1];
         windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
@@ -888,7 +907,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked && !has_sliding_window) {
+    // Windowed is excluded like sliding-window: both narrow the per-Q-chunk K range, and chains
+    // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
+    // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
+    // forwarding did.
+    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -1449,6 +1472,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_count);
+
+        // Windowed K-range narrowing tail: same four values the writer gets at slots 10-13, so the
+        // reader resolves each Q chunk's global row range and windows identically.
+        reader_args.push_back(cu_window_buffer);
+        reader_args.push_back(cu_window_seqlens_eles);
+        reader_args.push_back(windowed_q_token_offset);
+        reader_args.push_back(windowed_q_offset_buffer);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
