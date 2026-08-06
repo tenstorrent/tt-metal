@@ -239,6 +239,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the multi-tile walk is narrow-mode only.
     static_assert(!(RV_WHOLE_TILE && FULL_CT_DIM != 1), "RV_WHOLE_TILE mode is single-tile only (use FULL_CT_DIM == 1 / input [32,32]).");
 
+    // TODO: Once we introduce 32-bit format, change the assert to support 4 datums per row (32-bit format).
+    if constexpr (!RV_WHOLE_TILE)
+    {
+        LLK_ASSERT(
+            ckernel::trisc::SCALE_DATUM_SIZE(formats.pack_dst, 8) == 16, "narrow RV_PACR pack assumes a 16-bit format (8 datums == 16B for l1_addr >> 3)");
+        LLK_ASSERT(LAST_TILE_W_DATUMS % 8 == 0 && LAST_TILE_W_DATUMS <= 32, "LAST_TILE_W_DATUMS must be a multiple of 8 (16B) and <= 32");
+    }
+
     // RV_PACR base descriptor. g1 (formats/stride) and g2 (mode config) are constant across the
     // whole tile-row. In narrow mode g0.input_addr / g0.l1_addr are placeholders, recomputed per
     // op by pack_row (below). In whole-tile mode (inc_mode=1) input_addr is counter-driven and
