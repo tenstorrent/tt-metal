@@ -1680,6 +1680,18 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         seq_dim=-1,
     )
     device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_positions = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    model.set_prefill_rope_positions(device_positions)
     model._ring_metadata_external = True
     # logical_n stays per-chunk: the sliding halo layout is built from it at program-create
     # time and needs the capturing chunk's true geometry. The gather extent no longer
@@ -1714,7 +1726,18 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
                 ttnn.reset_global_semaphore_value(_sem, 0)
         # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
         # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
-        model._refresh_rope_prefill(rope_local_seq, (chunk_start // cp))
+        # Absolute global positions for this chunk, CP-sharded the same way tokens are.
+        # Contiguous sharding of [chunk_start, chunk_start+chunk) hands rank r exactly the
+        # rows chunk-major CP assigns it, so the gather inside the trace lands correctly.
+        pos_host = _host_tensor(
+            mesh_device,
+            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         stage_breakdown["rope"] += time.time() - _t
         return chunk_start
 
