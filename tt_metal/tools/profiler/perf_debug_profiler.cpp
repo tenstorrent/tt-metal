@@ -660,6 +660,30 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         kAckProbe,
                         ctx.sockets[d]->has_static_tlb() ? "STATIC window" : "DYNAMIC (reconfigure per access)");
                 }
+                // DEVICE SMALL-READ probe. 4-byte cluster.read_core from the drainer core -- the SAME access
+                // wait_until_cores_done() issues per core and the one that blows the 2 ms budget in the
+                // "MMIO per-op timeout: 4B load took N us" aborts. The write probe above and this read probe
+                // together cover both directions; the flow-control poll probe covers neither (host memory).
+                {
+                    const auto r0 = std::chrono::steady_clock::now();
+                    constexpr uint32_t kRdProbe = 500;
+                    const uint64_t rd_addr = ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]);
+                    const tt_cxy_pair rd_core(device_id, ctx.drisc_virtual[d]);
+                    uint32_t v = 0, acc = 0;
+                    for (uint32_t k = 0; k < kRdProbe; k++) {
+                        cluster.read_core(&v, sizeof(v), rd_core, rd_addr);
+                        acc += v;
+                    }
+                    const double rd_ns =
+                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - r0).count() /
+                        kRdProbe;
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DEVICE-READ probe: {:.0f} ns/read over {} 4B device reads (acc {})",
+                        rd_ns,
+                        kRdProbe,
+                        acc);
+                }
             }
             ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
             ctx.decode[d]->reset(ctx.nl);
