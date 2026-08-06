@@ -224,6 +224,10 @@ union rv_pacr_gpr2_u
     std::uint32_t val;
 };
 
+// RV_PACR GPR2.tile_dim ([22:20]) HW encodings (see assembly.yaml RV_PACR tile-dim table).
+constexpr std::uint32_t TILE_DIM_16x16x4 = 0b000; // full 32x32 tile (whole-tile untilize)
+constexpr std::uint32_t TILE_DIM_16x1x1  = 0b101; // one 16-datum face-row (narrow tile mode)
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -264,7 +268,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     g1.f.input_format    = static_cast<std::uint8_t>(formats.pack_src);
     g1.f.untilize_stride = tensor_shape.num_faces_c_dim * FULL_CT_DIM;
 
-    rv_pacr_gpr2_u g2   = {};
+    rv_pacr_gpr2_u g2 = {};
+    // RV_PACR GPR2.packer_sel encodes Packer[0] as 0 (NOT p_pacr::PACK0, which is 0b011 for the
+    // PACR-instruction packer-sel field — a different encoding that would truncate to RESERVED here).
     g2.f.packer_sel     = 0;
     g2.f.buffer_addr    = params.buffer_Res[0] >> 4;
     g2.f.inc_input_idx  = 0;
@@ -273,14 +279,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Whole-tile "normal" RV_PACR untilize: one HW-streamed untilize op for the full
         // 32x32 tile, HW-computed addressing from buffer base + Z counters. Single-tile scope.
-        g2.f.tile_dim = 0b000; // 16x16x4 (full tile)
+        g2.f.tile_dim = TILE_DIM_16x16x4; // full tile
         g2.f.untilize = 1;
         g2.f.inc_mode = 1; // HW computes L1 addr from buffer_addr + Z counters
     }
     else
     {
         // Narrow per-face-row: tile mode, RAW addressing (input_addr/l1_addr from GPR0 per op).
-        g2.f.tile_dim = 0b101; // 16x1x1 (one face-row)
+        g2.f.tile_dim = TILE_DIM_16x1x1; // one face-row
         g2.f.untilize = 0;
         g2.f.inc_mode = 0;
     }
