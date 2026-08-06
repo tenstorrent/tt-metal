@@ -41,7 +41,14 @@ adding a test" and it touches `.github/workflows/`, something's off.
 
 ## Create a new pipeline
 
-Only when no existing pipeline fits. Create all three artifacts, then a `time_budget.yaml` entry
+**Most devs shouldn't need this.** A new pipeline means a new slice of dedicated machine time and
+ongoing infra maintenance, so check the "Add or change a test" path and the existing pipeline list
+first. If you genuinely think you need a new one, file a request in the
+[MINFRA](https://tenstorrent.atlassian.net/browse/MINFRA) Jira project (under the
+[MINFRA-408](https://tenstorrent.atlassian.net/browse/MINFRA-408) epic) before building anything —
+metal-infra needs to weigh in on machine time and ownership, and may already have a better fit.
+
+Once that's agreed, create all three artifacts, then a `time_budget.yaml` entry
 (`team -> pipeline -> sku: minutes`, where `pipeline` is the `workflow_name` you pass to
 `verify_time_budget.py`, matching the testing level — see Pipeline levels). Only touch
 `sku_config.yaml` if you need a machine config that doesn't already exist there. Copy the closest
