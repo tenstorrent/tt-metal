@@ -1223,29 +1223,36 @@ order-confounded (DRISC got first crack at each new lower delay and hung at 50; 
 Worse, **delay is the wrong axis**: the Tensix drainer only runs under slow dispatch, which de-synchronizes
 producers, so the same delay is not the same load. Matched on the right axis instead:
 
-**ACTIVE EGRESS = payload ÷ (busy sweeps × mean busy sweep)** — bandwidth while the drainer is actually
-draining. Same kernel, same results block, both core types. Payload is fixed at 1,102,970 words (4.41 MB).
+**CORRECTED 2026-08-06 (the first version of this table was WRONG).** I used `words x 4 B` as the payload,
+but `words` counts MARKER words while the drainer ships whole fixed-size span frames. Real shipped bytes are
+`pages x 64 B` — 3.3x larger — and the two drainers batch differently, so they do not even ship the same total
+bytes for one workload. Applying one numerator to both was invalid. Re-measured, `pages x 64` over
+busy-sweep time:
 
-| delay | DRISC (fast dispatch) | Tensix (slow dispatch) |
-|---|---|---|
-| 500 | 2.13 GB/s | 1.61 GB/s |
-| 300 | 3.18 / 3.26 | 2.20 |
-| 200 | **4.92 / 5.08** (clean, 0 stalls) | 2.68 |
-| 150 | **PCIe HANG** | 3.04 |
-| 100 | — | 3.49 / 3.51 |
-| 50 | — | 4.04 / 4.16 |
-| 25 | — | 4.50, **1596 producer stalls** |
-| 0 | — | **4.62**, **1663 producer stalls** |
+| delay | DRISC bytes / busy → rate | Tensix bytes / busy → rate | Tensix max occ |
+|---|---|---|---|
+| 500 | 26.0 MB / 2.05 ms → **12.7 GB/s** | 29.0 MB / 2.74 ms → **10.6 GB/s** | 216 |
+| 300 | 18.0 MB / 1.40 ms → **12.9** | — | — |
+| 200 | 13.8 MB / 0.90 ms → **15.4** (clean, 0 stalls) | 17.5 MB / 1.65 ms → **10.6** | 188 |
+| 150 | **PCIe HANG** | — | — |
+| 100 | — | 11.1 MB / 1.26 ms → **8.8** | 288 |
+| 25 | — | ~ | (1596 producer stalls) |
+| 0 | — | 4.8 MB / 0.93 ms → **5.2** | **511/512** (1663 stalls) |
 
-**The Tensix ceiling is 4.62 GB/s, below the 5.08 GB/s the DRISC sustained cleanly.** And delay 0 is a real
-ceiling, not a limit of how hard it was pushed: the producers STALL there (1663), which means the drainer is
-saturated and backing them up, so more producer pressure buys no more egress. Confirmed with 20 consecutive
-runs at delay 0 — zero hangs, ack write 167–184 ns throughout, full captures.
+**Two things the corrected numbers overturn:**
 
-So the answer is mechanistic rather than statistical: **the Tensix drainer cannot generate the egress rate that
-hangs the card.** Two compounding causes — slow dispatch spreads the payload over 28–50 short busy sweeps where
-the DRISC concentrates it into 13–26 long ones, and the drainer's own throughput ceiling lands under the
-DRISC's demonstrated-safe level.
+1. **Shipped bytes DECREASE as pressure rises** (26.0 → 13.8 MB for the DRISC; 29.0 → 4.8 MB for the Tensix).
+   Frames are fixed-size spans, so denser producer rings mean FEWER frames for the same marker count. Egress
+   bandwidth therefore cannot be what distinguishes delay 200 (clean) from delay 150 (hang) — it goes the wrong
+   way. The original framing of this section, "the Tensix cannot reach the DRISC's egress", was built on a
+   metric that does not track the trigger.
+2. **The Tensix drainer is READ/PROCESS-bound, not egress-bound.** At delay 0 it is fully saturated — ring
+   occupancy 511/512, 1663 producer stalls — while pushing only 5.2 GB/s. It chokes on the per-sweep read and
+   process of 110 cores long before PCIe is stressed. The DRISC pushes 12.7-15.4 GB/s throughout.
+
+What survives: the DRISC sustains a higher egress rate than the Tensix at every measured point, and the Tensix
+saturates without stressing PCIe. What does NOT survive: any claim that ~4.6 vs ~5.1 GB/s is the boundary, or
+that egress rate is the hang trigger.
 
 ### What this does NOT establish
 
