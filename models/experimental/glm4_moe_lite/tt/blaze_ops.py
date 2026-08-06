@@ -28,6 +28,35 @@ from typing import Any
 import ttnn
 from loguru import logger
 
+# ---------------------------------------------------------------------------
+# THE BOUNDARY, and why the forward path is not wired yet.
+#
+# DRAMStreamingMatmul consumes its activation REPLICATED per DRAM-bank worker with a 1x32 decode
+# tile. Building that from what the model holds at the q_kv_a call -- [1,1,32,2048] in standard
+# 32x32 tiles -- measures at only **4.8 us/layer** on device:
+#
+#     slice(row 0) -> to_layout(ROW_MAJOR) -> repeat(x8) -> to_memory_config(height-sharded L1)
+#
+# against ~36 us of headroom (45.1 us ttnn fused q_kv_a vs 9.5 us blaze). So the reshard is cheap
+# and the integration is worth having.
+#
+# What blocks it is the last hop: blaze reads `tensor.get_tile()` and raises
+# "'NoneType' object has no attribute 'height'" on a ROW_MAJOR tensor, so it needs a real
+# TILE-layout tensor whose tile is 1x32. No ttnn op produces one device-side -- all of
+# `tilize(tile=)`, `tilize(output_tile=)` and `to_layout(TILE)` fail, and `ttnn.copy` into a
+# correctly-specced `allocate_tensor_on_device` buffer is rejected because source and destination
+# layouts differ (copy_device_operation.cpp:115). For 1x32 tiles the bytes are identical to
+# row-major, so this is a type-system gap rather than a data problem.
+#
+# The right fix is not to fight ttnn at the tensor boundary but to do the retilize INSIDE the
+# fused op, which is what blaze's `Retilize` micro-op exists for ("convert (1,32) row tiles to
+# (N,32) standard tiles ... pattern from CreateQHeads"). Feeding GLMQKVAProjection the model's
+# native activation and retilizing as its first phase keeps everything in one dispatch and
+# removes the extra ttnn ops entirely.
+#
+# Verified so far: with blaze's own activation the fused op gates at PCC 0.9999 for both outputs.
+# ---------------------------------------------------------------------------
+
 _BLAZE: Any = None
 _BLAZE_IMPORT_TRIED = False
 _PROGRAM_CACHE: dict[int, Any] = {}
