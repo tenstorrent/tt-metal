@@ -8,7 +8,7 @@ Bringup campaign: the metric is gates going green, not a latency.
 
 | Round | Gates green | Baseline | Stall | Target | Gate status |
 |---|---|---|---|---|---|
-| 0 | 0/8 | t2va + fl2va green @ `bd12ad2aeb2` (running) | 0/10 | 8/8 acceptance criteria | none fired |
+| 4 | 4/8 | t2va + fl2va green @ `bd12ad2aeb2` | 0/10 | 8/8 acceptance criteria | none fired |
 
 ## Working point
 
@@ -72,26 +72,30 @@ pitfall, met from the other side.
 
 | Gate | Command | Result |
 |---|---|---|
-| 1 host packing bit-exact | `pytest .../test_packing_ref2va_minimax_h3.py` | not written |
-| 2 both span orders | same, `-k span` | not written |
-| 3 reference encode pcc ≥ 0.99, real media | `pytest .../test_references_minimax_h3.py` | not written |
-| 4 typed condition stream, existing PCCs identical | `pytest .../test_transformer_minimax_h3.py` | not written |
-| 5 t2va + fl2va unchanged | `pytest .../test_pipeline_minimax_h3.py .../test_pipeline_fl2va_minimax_h3.py` | baseline running |
-| 6 ref2va e2e | `pytest .../test_pipeline_ref2va_minimax_h3.py` | not written |
-| 7 conditioning is not a no-op | same, `-k discriminate` | not written |
+| 1 host packing bit-exact | `pytest .../test_packing_ref2va_minimax_h3.py` | **GREEN** — 61 tests, `torch.equal` vs reference on 5 request shapes |
+| 2 both span orders | same, `-k span` | **GREEN** — exact vs both, and they differ at n=16 and n=37 |
+| 3 reference encode pcc ≥ 0.99, real media | `pytest .../test_references_minimax_h3.py` | host half GREEN (27 tests); device half written, not yet run |
+| 4 typed condition stream, existing PCCs identical | `pytest .../test_transformer_minimax_h3.py -k random_weights` | **GREEN** — 12/12 existing PCCs bit-identical; interleaved 99.9974/99.9975 |
+| 5 t2va + fl2va unchanged | `pytest .../test_pipeline_minimax_h3.py .../test_pipeline_fl2va_minimax_h3.py` | not re-run since the pipeline change |
+| 6 ref2va e2e | `pytest .../test_pipeline_ref2va_minimax_h3.py` | written, not run |
+| 7 conditioning is not a no-op | same, `-k discriminate` | written, not run |
 | 8 frames inspected | `artifacts/round-N/frames/` | not run |
+
+Phase 0 shape probe (`-k "real_weights and ref2va"`, `MINIMAX_H3_SUBFOLDER=transformer_ref`): running.
+It also proves `transformer_ref`'s 638 keys all map, since `load_torch_state_dict` is strict.
 
 ## Pending work
 
-1. [#2] Phase 1 fixed baseline — **running**; capture the existing transformer PCCs after it.
-2. [#3] Port host `packing_ref2va.py` + its bit-exact gate (no device). In flight alongside #2.
-3. [#4] Phase 0 shape probe at 46080 / 81664 / 111616 — full depth, real weights, real AdaLN table.
-   **Its verdict sets the Phase 6 case list.**
-4. [#5] `condition_blocks` typed condition stream; existing PCCs must be identical, not merely ≥ 0.9995.
-5. [#6] Reference encode on device (image via `encode_clip`, video via `encode`, audio via the
-   existing `MiniMaxH3AudioEncoder`, zero-padded to a multiple of 800).
-6. [#7] Pipeline plumbing, `transformer_ref` selection, and the three cache-key fixes of am. 118.
-7. [#8] ref2va e2e plus the two-references-identical-geometry discriminator.
+1. [#4] Phase 0 shape probe at 46080 / 81664 / 111616 — **running**. Its verdict sets the Phase 6
+   case list; a shape that does not fit becomes a documented gap with a measured reason.
+2. [#6] Run the Phase 3 device gate: `encode_references` vs `MiniMaxH3Ref2VAReferenceEncoderStep` on
+   real media. Image at production 2048², soundtrack at production duration, video at a reduced frame
+   count on the production canvas (the reference's video VAE runs on CPU).
+3. [#7] Re-run gate 5 — t2va and fl2va e2e — now that the pipeline has changed. This is the
+   no-regression gate and it has not been re-run since round 3.
+4. [#8] ref2va e2e plus the discriminator. Needs 1 and 3 green first.
+5. `warmup()` does not accept `references`, so a ref2va latency number cannot be taken warm yet.
+   Not blocking correctness.
 
 ## Pitfalls
 
