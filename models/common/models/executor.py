@@ -53,6 +53,34 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+def _apply_decode_sampling_state(model, sampling_params, batch_size, start_pos, *, rng_needs_reset: bool) -> bool:
+    """Push per-request sampling params and seeds for one decode step.
+
+    Returns the caller's new RNG-reset flag. The first decode of a lifecycle must reset
+    unconditionally: the conditional helper compares requested against cached seeds and
+    skips when both are None, leaving decode-only sampling with no device seed.
+    """
+    from models.common.sampling import broadcast_sampling_params, format_sampling_params
+
+    per_request_params = format_sampling_params(
+        broadcast_sampling_params(sampling_params, 0, slot_len=batch_size), batch_size
+    )
+    model.sampling.apply_decode_state(
+        [per_request_params],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
+    )
+    seed_manager = model.sampling.seed_manager
+    seed_slots = list(range(batch_size))
+    if rng_needs_reset:
+        seed_manager.reset_seed_from_slots(per_request_params.seed, seed_slots)
+    else:
+        seed_manager.reset_seed_from_slots_if_needed(per_request_params.seed, seed_slots)
+    seed_manager.align_seed_counters_to_positions(per_request_params.seed, seed_slots, start_pos)
+    seed_manager.get_new_values(seed_slots)
+    return False
+
+
 def make_contiguous_page_table(
     batch_size: int,
     max_seq_len: int,
@@ -1264,33 +1292,13 @@ class EagerLLMExecutor:
             # TTTv1 SamplingGenerator pushes per-request k/p/temp into persistent device buffers
             # via apply_decode_state + seed_manager. The TTTv2 Sampling1D module holds no mutable
             # state (k/p/temp are per-call args; greedy/argmax needs none), so skip when absent.
-            from models.common.sampling import broadcast_sampling_params, format_sampling_params
-
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
-            self.model.sampling.apply_decode_state(
-                [per_request_params],
-                reload_sampling_params=True,
-                reset_sampling_state=False,
-            )
-            seed_manager = self.model.sampling.seed_manager
-            seed_slots = list(range(B))
-            if self._decode_rng_needs_reset:
-                seed_manager.reset_seed_from_slots(
-                    per_request_params.seed,
-                    seed_slots,
-                )
-                self._decode_rng_needs_reset = False
-            else:
-                seed_manager.reset_seed_from_slots_if_needed(
-                    per_request_params.seed,
-                    seed_slots,
-                )
-            seed_manager.align_seed_counters_to_positions(
-                per_request_params.seed,
-                seed_slots,
+            self._decode_rng_needs_reset = _apply_decode_sampling_state(
+                self.model,
+                sampling_params,
+                B,
                 start_pos,
+                rng_needs_reset=self._decode_rng_needs_reset,
             )
-            seed_manager.get_new_values(seed_slots)
 
         tt_tokens, tt_current_pos, tt_rot_mat_idxs, tt_page_table = self.prepare_decode_inputs_device(
             tokens, start_pos, page_table
@@ -2197,33 +2205,13 @@ class TracedLLMExecutor:
         ):
             # TTTv1-only: push per-request k/p/temp into persistent device buffers before replay.
             # TTTv2 Sampling1D has no such state (greedy/argmax needs none) — skip when absent.
-            from models.common.sampling import broadcast_sampling_params, format_sampling_params
-
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
-            self.model.sampling.apply_decode_state(
-                [per_request_params],
-                reload_sampling_params=True,
-                reset_sampling_state=False,
-            )
-            seed_manager = self.model.sampling.seed_manager
-            seed_slots = list(range(B))
-            if self._decode_rng_needs_reset[sampling_on_device]:
-                seed_manager.reset_seed_from_slots(
-                    per_request_params.seed,
-                    seed_slots,
-                )
-                self._decode_rng_needs_reset[sampling_on_device] = False
-            else:
-                seed_manager.reset_seed_from_slots_if_needed(
-                    per_request_params.seed,
-                    seed_slots,
-                )
-            seed_manager.align_seed_counters_to_positions(
-                per_request_params.seed,
-                seed_slots,
+            self._decode_rng_needs_reset[sampling_on_device] = _apply_decode_sampling_state(
+                self.model,
+                sampling_params,
+                B,
                 start_pos,
+                rng_needs_reset=self._decode_rng_needs_reset[sampling_on_device],
             )
-            seed_manager.get_new_values(seed_slots)
 
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
