@@ -1281,6 +1281,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        # EXPERIMENT ONLY (#52176) — do not merge. Force the on_device_logits trace variant even
+        # though the demo is doing host argmax (sampling_params is None here). Separates "the
+        # on_device_logits decode trace is itself broken" from "the on-device sampling ops are".
+        # Paired with the forced input re-stage below, since nothing writes tokens on device now.
+        on_device_sampling = True
         B = tokens.shape[0]
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -1572,6 +1577,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._prev_on_device_sampling = on_device_sampling
         sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
         reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
+        # EXPERIMENT ONLY (#52176) — see the forced on_device_sampling above. Host stays
+        # authoritative for tokens and positions since no device sampling writes them back.
+        reset_inputs = True
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
