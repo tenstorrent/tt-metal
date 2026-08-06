@@ -1057,10 +1057,18 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self._to_local_sampling_params(sampling_params),
             len(user_slots),
         )
+        # Slots outside user_slots hold running requests. A parameter upload writes the
+        # whole batch, so filling them with a new request's value would silently change a
+        # running request's sampling; carry their current values forward instead.
+        cached = getattr(self, "sampling_params", None)
         stable_fields = {}
         for field_name in SAMPLING_PARAM_FIELDS:
             compact_values = list(getattr(compact, field_name))
-            stable_values = [compact_values[-1]] * self.batch_size
+            cached_values = list(getattr(cached, field_name)) if cached is not None else []
+            stable_values = [
+                cached_values[slot] if slot < len(cached_values) else compact_values[-1]
+                for slot in range(self.batch_size)
+            ]
             for request_index, stable_slot in enumerate(user_slots):
                 stable_values[stable_slot] = compact_values[request_index]
             stable_fields[field_name] = stable_values

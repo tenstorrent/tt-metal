@@ -294,9 +294,41 @@ def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
     assert active_slots == [33, 0]
     assert seeds[33] == 111
     assert seeds[0] == 222
-    [(_, commands)] = generator.sampling_generator.decode_state_calls
+    [(chunks, commands)] = generator.sampling_generator.decode_state_calls
     assert commands["prompt_tokens"][33].tolist() == [10, 11]
     assert commands["prompt_tokens"][0].tolist() == [20, -1]
+
+    # Every field, not just the seed, has to land on the stable slot: the whole batch is
+    # uploaded, so a misplaced temperature or penalty silently samples the wrong request.
+    # Slot 17 is row 1 user 1, i.e. the second chunk's local slot 1.
+    for field, first_request, second_request in [
+        ("temperature", 0.6, 0.8),
+        ("top_k", 16, 32),
+        ("top_p", 0.9, 0.95),
+    ]:
+        assert getattr(chunks[1], field)[1] == first_request
+        assert getattr(chunks[0], field)[0] == second_request
+
+
+def test_deepseek_prefill_preserves_running_slot_sampling_params():
+    generator = _fake_deepseek_generator(batch_size_per_row=2, sampling_dp=2)
+    running = DeepseekGenerator._normalize_sampling_params_for_batch(
+        SamplingParams(temperature=[0.1, 0.2, 0.3, 0.4], top_k=[1, 2, 3, 4], top_p=[0.5, 0.6, 0.7, 0.8]),
+        generator.batch_size,
+    )
+    generator.sampling_params = running
+
+    stable_params = DeepseekGenerator._sampling_params_for_user_slots(
+        generator,
+        SamplingParams(temperature=[0.9], top_k=[9], top_p=[0.99]),
+        [1],
+    )
+
+    # Only slot 1 prefills; the other three carry running requests whose params must not
+    # be overwritten by the new request's values.
+    assert stable_params.temperature == [0.1, 0.9, 0.3, 0.4]
+    assert stable_params.top_k == [1, 9, 3, 4]
+    assert stable_params.top_p == [0.5, 0.99, 0.7, 0.8]
 
 
 def test_deepseek_prompt_history_excludes_padding_tokens():
