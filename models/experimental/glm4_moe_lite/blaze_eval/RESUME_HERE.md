@@ -620,3 +620,32 @@ directory — the tt-blaze working tree holds uncommitted F3/F11 work).
 2. Sync `models/experimental/glm4_moe_lite` into the blaze tree.
 3. `GLM4_MOE_LITE_BLAZE_QKV_A=1 BLAZE_DSM_WORKERS_PER_BANK=4`, traced, vs **34.8 ms**.
 4. Restore the per-row loop in the gather for batch > 1 before this is anything but a bs=1 demo.
+
+### The weight layouts do not match — and the simpler op may be the better one
+
+The model's **default** decode path holds `w_q_kv_a`, a single **concatenated** 2048x1344 weight
+(`decoder_layer_tt.py:913`, `attention_decode.py:143`). `w.w_q_a` / `w.w_kv_a` exist only on the
+non-default unfused branch. `GLMQKVAProjection` is built around **two separate** weights, so it
+does not match what the model actually carries.
+
+Two ways out, and the second is probably better:
+
+1. Split `w_q_kv_a` into its two column ranges at load time and keep the two-matmul fused op.
+2. **Drop `GLMQKVAProjection` for this call site and emit a single `DRAMStreamingMatmul` over the
+   concatenated 2048x1344 weight**, which is exactly what the ttnn path does — and exactly what
+   the 1.29x was measured against.
+
+Option 2 is simpler and likely faster: `GLMQKVAProjection`'s only structural advantage is sharing
+one activation between two matmuls, and a concatenated weight already shares it by construction,
+in one matmul instead of two serialised on the same cores. The op's own docstring concedes the
+two matmuls "serialise on it rather than overlapping", and that fusing shared-input projections
+contributed only ~4% — the rest was `DRAMStreamingMatmul` beating ttnn. All of the measured win
+comes from the streaming matmul plus the three boundary fixes, none of which need the two-weight
+structure.
+
+That also removes the padding penalty: concatenated N=1344 pads to 2048 at W=4 (N % 1024 == 0),
+against 768->1024 plus 576->1024 separately, i.e. one 2048-wide matmul instead of two 1024s.
+
+**Recommended next session:** implement option 2 behind the existing flag, prepare the
+concatenated weight once at load time, then measure e2e. It is less code than the weight plumbing
+option 1 needs, and it is closer to what the model already does.
