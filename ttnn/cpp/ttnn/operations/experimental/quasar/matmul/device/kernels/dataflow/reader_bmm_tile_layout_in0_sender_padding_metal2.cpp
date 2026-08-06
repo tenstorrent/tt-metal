@@ -44,7 +44,6 @@
 
 void kernel_main() {
     DPRINT("IN0 start\n");  // DEBUG: matmul layer3 hang
-    return;  // [#48552 DIAG - REVERT AFTER] short-circuit the in0 reader: do nothing, to isolate the compute fault.
     uint32_t rt_args_idx = 0;
     // in0 tensor args (in0_tensor_addr is now the tensor::in0 binding)
     uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
@@ -133,21 +132,6 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::cb_in0);
-#if defined(ARCH_QUASAR)
-    // [#48552 DIAG - remove after] see the in1 reader: print the Neo/counter id each cb_in0 tile-counter slot
-    // targets. neo!=0 on any slot => host-side wrong-Neo; all neo==0 => UNPACR overlay / tt-emule runtime.
-    {
-        auto& _i0 = cb_in0.dbg_local_dfb_interface();
-        DPRINT("[tc] cb_in0 ntc={} idx={}\n", (uint32_t)_i0.num_tcs_to_rr, (uint32_t)_i0.tc_idx);
-        for (uint8_t _i = 0; _i < _i0.num_tcs_to_rr; _i++) {
-            DPRINT(
-                "[tc] cb_in0 slot={} neo={} tc={}\n",
-                (uint32_t)_i,
-                (uint32_t)dfb::get_tensix_id(_i0.tc_slots[_i].packed_tile_counter),
-                (uint32_t)dfb::get_counter_id(_i0.tc_slots[_i].packed_tile_counter));
-        }
-    }
-#endif
     Semaphore sender_sem(sem::in0_sender);
     Semaphore receiver_sem(sem::in0_receiver);
 
@@ -279,9 +263,7 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        // [#48552 DIAG - REVERT AFTER] cb_in0 PRODUCE reserve disabled (gather/read below kept;
-                        // get_write_ptr stays valid). Paired with the compute wait/pop + push below.
-                        // cb_in0.reserve_back(in0_block_num_tiles);
+                        cb_in0.reserve_back(in0_block_num_tiles);
                         DPRINT("IN0R reserved\n");  // DEBUG #48552
 #ifndef IN0_SHARDED
 
@@ -468,8 +450,7 @@ void kernel_main() {
 
                         // Common for sharded and interleaved paths
                         DPRINT("IN0R pre-push\n");  // DEBUG #48552
-                        // [#48552 DIAG - REVERT AFTER] cb_in0 PRODUCE push disabled (see reserve above).
-                        // cb_in0.push_back(in0_block_num_tiles);
+                        cb_in0.push_back(in0_block_num_tiles);
                         DPRINT("IN0R pushed\n");  // DEBUG #48552
                     }
                 }
@@ -492,9 +473,8 @@ void kernel_main() {
         if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
-                    // [#48552 DIAG - REVERT AFTER] cb_in0 fake-push (in0_reuse_in_CB) disabled with the rest.
-                    // cb_in0.reserve_back(in0_block_num_tiles);
-                    // cb_in0.push_back(in0_block_num_tiles);
+                    cb_in0.reserve_back(in0_block_num_tiles);
+                    cb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }

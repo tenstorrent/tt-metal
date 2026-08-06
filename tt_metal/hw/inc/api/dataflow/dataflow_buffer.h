@@ -306,14 +306,6 @@ public:
         return Lock([this]() { release_scoped_lock(); });
     }
 
-#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
-    // [#48552 DIAG - remove after] Expose the local DFB interface so kernels can print each tile-counter slot's
-    // Neo id / counter id (dfb::get_tensix_id / dfb::get_counter_id of tc_slots[i].packed_tile_counter) while
-    // debugging the DRAM-weight K-spill matmul TILE_COUNTERS 0x0f00 (wrong-Neo target 0x10000) fault. Non-MATH
-    // threads only. The interface type is not nameable in kernel scope -- use `auto&` at the call site.
-    auto& dbg_local_dfb_interface() { return local_dfb_interface_; }
-#endif
-
 private:
     void reserve_back_impl(uint16_t num_entries);
     void push_back_impl(uint16_t num_entries);

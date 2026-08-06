@@ -279,11 +279,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-    // [#48552 DIAG - REVERT AFTER] Early return right after init: skips ALL CB/DFB calls + the entire matmul loop.
-    // If TILE_COUNTERS 0x10000 STILL faults with this in place (and both DMs short-circuited) -> the faulting
-    // tile-counter op is in compute_kernel_hw_startup / matmul_block_init (the tile-counter descriptor setup),
-    // not any CB op or loop body. If it runs clean (no fault) -> the fault is later in the loop.
-    return;
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -343,19 +338,10 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
-                    // [#48552 DIAG - REVERT AFTER] cb_in0 CONSUME wait disabled (with cb_in1 already off): remove
-                    // ALL input-CB tile-counter waits. If the compute STILL faults TILE_COUNTERS 0x10000 -> the
-                    // faulting counter op is NOT an input-CB wait (matmul_block internal unpack / mm_partials /
-                    // interm), narrowing the culprit. matmul_block reads in0 unsynced -> garbage, but no hang.
-                    // in0_cb.wait_front(in0_block_num_tiles);
+                    in0_cb.wait_front(in0_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
-                    // [#48552 DIAG - REVERT AFTER] cb_in1 CONSUME wait disabled: this is the exact tile-counter
-                    // WAIT (TT_WAIT_TILES on cb_in1's counter) that hangs (craq-sim resolves it to the wrong Neo
-                    // for the streamed DRAM cb_in1). Removing it (+ pop_front below + the reader produce credit)
-                    // isolates whether cb_in1's tile-counter flow-control is the culprit. matmul_block still
-                    // unpacks in1 from the CB (unsynced -> wrong output, but no hang if cb_in1's wait was it).
-                    // in1_cb.wait_front(in1_block_num_tiles);
+                    in1_cb.wait_front(in1_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
@@ -521,10 +507,8 @@ void kernel_main() {
                     }
 #endif
 
-                    // [#48552 DIAG - REVERT AFTER] cb_in0 CONSUME pop disabled (see wait_front above).
-                    // in0_cb.pop_front(in0_block_num_tiles);
-                    // [#48552 DIAG - REVERT AFTER] cb_in1 CONSUME pop disabled (see wait_front above).
-                    // in1_cb.pop_front(in1_block_num_tiles);
+                    in0_cb.pop_front(in0_block_num_tiles);
+                    in1_cb.pop_front(in1_block_num_tiles);
                     DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 

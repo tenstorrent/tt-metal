@@ -33,7 +33,6 @@
 
 void kernel_main() {
     DPRINT("WSM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
-    return;  // [#48552 DIAG - REVERT AFTER] short-circuit the in1 reader/writer: do nothing, isolate compute fault.
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args (in1_tensor_addr is now the tensor::in1 binding)
@@ -181,32 +180,6 @@ void kernel_main() {
         in1_mcast_dest_noc_end_y);
     DataflowBuffer cb_in1(dfb::cb_in1);
     DataflowBuffer cb_out(dfb::cb_out);
-#if defined(ARCH_QUASAR)
-    // [#48552 DIAG - remove after] Print the Neo id + counter id each cb_in1 / cb_out tile-counter slot targets.
-    // The fault is a Neo0-UNPACK tile-counter op resolving to Neo 1 (index 0x10000 = 1x NEO_TILE_COUNTERS_STRIDE).
-    // If ANY slot prints neo!=0 -> the wrong Neo is baked into the host DFB config for this streamed (DRAM,
-    // non-borrowed) cb_in1 (fix host-side). If all neo==0 -> the wrong Neo is injected at runtime by the UNPACR
-    // END_OP overlay routing (llk_unpack_unary_operand.h) / tt-emule, not the static config.
-    {
-        auto& _i1 = cb_in1.dbg_local_dfb_interface();
-        DPRINT("[tc] cb_in1 ntc={} idx={}\n", (uint32_t)_i1.num_tcs_to_rr, (uint32_t)_i1.tc_idx);
-        for (uint8_t _i = 0; _i < _i1.num_tcs_to_rr; _i++) {
-            DPRINT(
-                "[tc] cb_in1 slot={} neo={} tc={}\n",
-                (uint32_t)_i,
-                (uint32_t)dfb::get_tensix_id(_i1.tc_slots[_i].packed_tile_counter),
-                (uint32_t)dfb::get_counter_id(_i1.tc_slots[_i].packed_tile_counter));
-        }
-        auto& _io = cb_out.dbg_local_dfb_interface();
-        for (uint8_t _i = 0; _i < _io.num_tcs_to_rr; _i++) {
-            DPRINT(
-                "[tc] cb_out slot={} neo={} tc={}\n",
-                (uint32_t)_i,
-                (uint32_t)dfb::get_tensix_id(_io.tc_slots[_i].packed_tile_counter),
-                (uint32_t)dfb::get_counter_id(_io.tc_slots[_i].packed_tile_counter));
-        }
-    }
-#endif
     Semaphore sender_sem(sem::in1_sender);
     Semaphore receiver_sem(sem::in1_receiver);
 #ifdef FUSE_BIAS
@@ -290,12 +263,7 @@ void kernel_main() {
                         }
 #if !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
-                        // [#48552 DIAG - REVERT AFTER] cb_in1 PRODUCE credit disabled to test whether cb_in1's
-                        // tile-counter flow-control is the TILE_COUNTERS/hang culprit. The DRAM read + mcast sem
-                        // handshake below stay intact (get_write_ptr still returns a valid L1 base), so no
-                        // receiver-VALID or reserve-fill side-hang is introduced; only the cb_in1 credit traffic
-                        // is removed. Paired with the compute's wait_front/pop_front (also disabled).
-                        // cb_in1.reserve_back(in1_block_num_tiles);
+                        cb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
                         uint64_t in1_start_address =
                             cb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
@@ -369,8 +337,7 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
 #ifndef IN1_SHARDED
-                        // [#48552 DIAG - REVERT AFTER] cb_in1 PRODUCE credit disabled (see reserve_back above).
-                        // cb_in1.push_back(in1_block_num_tiles);
+                        cb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS
