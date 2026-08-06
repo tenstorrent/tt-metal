@@ -16,19 +16,25 @@ writing a paragraph in a `.py` file, it belongs in `NOTES.md` under a new ID.**
 
 ### Quick reference
 
+> **THIS IS THE BLACKHOLE p150 FORK.** Everything below that carries a number was measured on a
+> Wormhole N150 unless it says otherwise; `STATUS.md §6.39+` is the p150 re-derivation. The port
+> runs on Blackhole with zero source changes, but **the tuned constants do not transfer** — see
+> §1's hardware note and §6.39/§6.40 for two that have already reversed.
+
 ```bash
 cd /localdev/lserbedzija/repos/tt-metal
-source /localdev/lserbedzija/repos/xtts_ref_venv/bin/activate    # NOT the repo's python_env — see §2
-export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export TT_METAL_HOME=$PWD
+export PYTHONPATH=$PWD/ttnn:$PWD/tools:$PWD          # all three — see §2, $PWD alone is WRONG
 
 V=models/experimental/voxtral_tts
-python -m pytest $V/tests/ -q --noconftest                 # 122 tests, ~45 s   (--noconftest REQUIRED)
+python -m pytest $V/tests/ -q --noconftest                 # 122 tests, ~50 s   (--noconftest REQUIRED)
 python $V/tests/tt_gates.py --gate codes                   # blocks 1+2, integer codes
 python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes results{tag}.json
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current: **long-form RTF 0.57–0.64, ~48 ms/frame, 0 WER errors.** Beat that without breaking it.
+Current on the **p150**: **long-form RTF 0.71–0.78, ~57 ms/frame, 0 WER errors** (N150 was
+0.57–0.64 / ~48). Beat that without breaking it.
 
 ---
 
@@ -60,16 +66,31 @@ implementation — **it is the ground truth, not the device.**
 
 ## 2. Setup — the trap that will cost you an hour
 
-**There are two virtualenvs and the obvious one is wrong.** Use
-`/localdev/lserbedzija/repos/xtts_ref_venv`. The repo's own `python_env/` is a **docs** environment
-with no `torch` and no `ttnn`. Two symptoms of getting it wrong:
+**`PYTHONPATH=$PWD` IS NOT ENOUGH, and this section used to say it was.** The `ttnn` package root
+is `$PWD/ttnn/ttnn`, so `$PWD` alone resolves `ttnn` to the *outer* directory — a namespace package
+with no `__init__.py` — and you get:
 
-- `ModuleNotFoundError: No module named 'torch'`
-- `AttributeError: module 'ttnn' has no attribute 'L1_MEMORY_CONFIG'` — this one means `PYTHONPATH`
-  picked up the repo's `ttnn/` *source directory* as an empty namespace package instead of the built
-  module.
+- `AttributeError: module 'ttnn' has no attribute 'L1_MEMORY_CONFIG'`, or, once a real build
+  exists, `ttnn.__file__ is None`.
 
-`PYTHONPATH=$PWD` is required for `models.*` imports and must be set from the repo root.
+Note `pytest.importorskip("ttnn")` does **not** protect against this: the shadowing package imports
+fine, it is merely empty, so `test_tt_defaults.py` errors at collection instead of skipping. The
+working setting is all three entries, `tools` included (it holds the `tracy` module, without which
+`import ttnn` raises `ModuleNotFoundError: No module named 'tracy'`):
+
+```bash
+export PYTHONPATH=$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME
+```
+
+**Python env, on this p150 box:** `/opt/venv` already carries torch, transformers and the Whisper
+caches; no separate venv is needed and `xtts_ref_venv` does not exist here. One package must be
+added — `ttnn.graph` imports `graphviz` unconditionally (`uv pip install graphviz`). **Do NOT
+install `torchaudio`**: the wheel's ABI is broken against this torch, and merely having it importable
+breaks `transformers` too, which takes `scripts/score_quality_set.py` down with it — that script
+needs torchaudio only to resample 24 kHz to 16 kHz, so scipy's `resample_poly` is the way round it.
+
+**A fresh clone needs a build**, and `git submodule update --init --recursive` first: `./build_metal.sh
+--release --enable-ccache` is ~13 min on 8 cores here and picks the clang-20 toolchain by itself.
 
 ---
 

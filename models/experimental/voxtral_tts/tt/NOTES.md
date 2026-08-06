@@ -259,7 +259,36 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # memory-config change the smallest valid unit of measurement is the whole step.
 ```
 
-### [gpt-04] `module level` — RMSNORM, WIDTH-SHARDED, for the DECODE shape. The...
+### [gpt-04] `module level` — the decode RMSNorm is NOT sharded on Blackhole (p150 fork)
+
+**THIS ENTRY REVERSED ON BLACKHOLE. STATUS.md §6.39 is the current answer; everything below it
+is the N150 record, kept because the contrast is the finding.**
+
+On this p150 the decode norm is the plain interleaved `_norm`, the same op prefill uses.
+`_NORM_SHARD`, `_NORM_PRG`, the three `_NORM_GRID_*` constants and `_norm_dec` are deleted.
+Width-sharding is worth **−4.381 ms/step** here, against **+4.4 ms/frame** on the N150 — same
+code, opposite sign. The isolated op says why, and §6.9's own words survive intact ("the
+reshard is the tax, not the reduction"): only the tax made the trip.
+
+```text
+                    N150 (6.9/6.18)   p150 (6.39)
+    interleaved         115.5 us          63.7 us
+    sharded 8x4          54.6 us          93.5 us
+```
+
+Two further N150 claims below do not hold here. The core-count curve has **no interior
+minimum** on Blackhole — it is monotone, fewer cores is uniformly better, and 96 cores (newly
+reachable on a 13x10 grid, impossible on 8x8) is the worst config measured. The divisor rule
+IS unchanged and is a property of the tensor, not the chip: `block_w` is tiles-per-core and a
+32x3072 tensor is 1 x 96 tiles, so the count must divide 96.
+
+Gated before shipping: decode gate better on every stable column (mean 0.94→0.91%, p90
+1.35→1.30%, min PCC 0.999260→0.999302), long-form WER 1 wrong of 894 over three seeds against
+0 of 894 — the same `"I am"→"I'm"` contraction §6.9 already accepted at 1/1/0.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
 
 ```text
 # RMSNORM, WIDTH-SHARDED, for the DECODE shape. The interleaved op costs 115 us on a [1,1,3072] row

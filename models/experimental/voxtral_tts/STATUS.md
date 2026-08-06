@@ -4,8 +4,32 @@
 measurements, the traps that cost time, and what to do next. Architecture detail and the
 reference-side findings live in `reference/PROVENANCE.md`; this file is the *work* state.
 
-Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
+Branch: `lserbedzija/voxtral-tts-ttnn_p150` (pushed). All work is under
 `models/experimental/voxtral_tts/`. Nothing else in the repo is touched.
+
+> ## ⚠ THIS IS THE BLACKHOLE p150 FORK. §1–§6.38 ARE WORMHOLE N150 NUMBERS.
+>
+> Forked from `lserbedzija/voxtral-tts-ttnn` at `a3b4569021` and retargeted to a **Blackhole
+> p150b**: `Arch.BLACKHOLE`, compute grid **13×10 = 130 Tensix** against the N150's 8×8 = 64,
+> 8 DRAM banks of GDDR6 against 12, L1 1.5 MB/core. **Every performance number and every tuned
+> constant recorded in §1–§6.38 was measured on the N150 and does not transfer.** The port
+> itself does: it ran on the p150 with ZERO source changes at 0 long-form WER errors, and the
+> §6.39+ sections are the re-derivation.
+>
+> Current on the p150: **long-form RTF 0.71–0.78, ~57 ms/frame** (N150: 0.57–0.64, ~48).
+> Divergence from the N150 branch is deliberate and expected — a loser here can be a winner
+> there, so changes are DELETED rather than flagged, and the two branches are not merging back.
+>
+> | | N150 (§1–§6.38) | p150 (§6.39+) |
+> |---|---|---|
+> | Block 1 decode step | 23.15 ms | **21.4 ms** |
+> | Block 1 decode RMSNorm | width-sharded 8×4 | **interleaved** (§6.39) |
+> | long-form RTF | 0.57–0.64 | 0.71–0.78 |
+>
+> Environment differs too, and `ONBOARDING §2`'s recipe is wrong here: `PYTHONPATH` must be
+> `$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME`. `$TT_METAL_HOME` alone resolves
+> `ttnn` to the empty outer namespace directory and produces exactly the
+> `AttributeError: module 'ttnn' has no attribute 'L1_MEMORY_CONFIG'` that §2 warns about.
 
 ---
 
@@ -2711,6 +2735,126 @@ constants) green, 122 tests green. Five module-level names in `reference/` are u
 **deliberately kept** — they document checkpoint architecture, and deleting model facts from the fp32
 ground truth to satisfy a linter is a bad trade.
 
+### 6.39 — p150: the sharded norm REVERSES. Block 1 drops it, +4.6 ms/frame
+
+First re-derivation on the Blackhole fork, and it overturns §6.9 and §6.18 rather than refining
+them. Method is §6.18's unchanged: the WHOLE 26-layer step (never the isolated norm — §6.18
+showed that metric is anti-correlated), interleaved round-robin, and the shipped config entered
+**twice** so the gap between its copies is a measured noise floor.
+
+**Legality is a property of the TENSOR, not the chip, and is unchanged.** `block_w` is
+tiles-per-core, a 32x3072 tensor is 1 x 96 tiles, a tile is indivisible, so the count must divide
+96. What Blackhole changes is the ceiling: 13x10 = 130 cores makes **96 cores reachable for the
+first time** — 8x8 could not express it.
+
+| config | cores | block_w | ms/step | vs 8x4 |
+|---|---|---|---|---|
+| **interleaved ← SHIPS** | — | — | **21.406** | **+4.381** |
+| 2x1 | 2 | 48 | 24.711 | +1.076 |
+| 8x1 | 8 | 12 | 24.936 | +0.851 |
+| 4x1 | 4 | 24 | 24.945 | +0.842 |
+| 12x1 | 12 | 8 | 24.965 | +0.821 |
+| 8x2 | 16 | 6 | 25.174 | +0.613 |
+| 8x3 | 24 | 4 | 25.390 | +0.397 |
+| 6x4 | 24 | 4 | 25.477 | +0.310 |
+| 8x4 ← was shipped | 32 | 3 | 25.787 | — |
+| 8x4#control | 32 | 3 | 25.937 | noise floor **0.151** |
+| 8x6 | 48 | 2 | 26.241 | −0.454 |
+| 12x4 | 48 | 2 | 26.344 | −0.558 |
+| 12x8 | 96 | 1 | 28.345 | −2.558 |
+
+**TWO N150 CLAIMS DIE HERE.** §6.18 found an interior MINIMUM at 32 cores; on Blackhole the
+sharded curve is **monotone** and fewer cores is uniformly better, so the newly-reachable 96 is
+the worst config measured. And §6.9's premise inverts outright: sharding is **−4.381 ms/step**,
+not +4.4. Reproduced independently at −4.276 in a second script.
+
+**THE MECHANISM, and §6.9's own sentence survives it** — *"the reshard is the tax, not the
+reduction"*. Only the tax made the trip:
+
+| one call, `[1,1,3072]` | N150 (§6.9/6.18) | p150 |
+|---|---|---|
+| interleaved | 115.5 µs | **63.7 µs** |
+| sharded 8x4 | 54.6 µs | **93.5 µs** |
+
+The p150's interleaved kernel made the reduction cheap enough that two `to_memory_config`
+reshards per call stop paying for themselves. Ordering measured; the causal story inferred.
+
+**GATED, and it is BETTER upstream rather than merely equal.** Paired, same session, 15 prompts
+x 22 teacher-forced frames:
+
+| | sharded 8x4 | interleaved |
+|---|---|---|
+| mean worst-sample | 0.94% | **0.91%** |
+| p90 worst-sample | 1.35% | **1.30%** |
+| min PCC | 0.999260 | **0.999302** |
+| per-case p90 spread | 0.58 pp | **0.48 pp** |
+
+End to end, 15 cases x 3 seeds, **one process per (arm, seed)** because §6.21 showed a case's
+frame count depends on what ran before it:
+
+| | seed 0 | seed 1 | seed 2 | total |
+|---|---|---|---|---|
+| sharded, long-form WER | 0 wrong | 0 wrong | 0 wrong | 0 of 894 |
+| interleaved, long-form WER | 1 wrong | 0 wrong | 0 wrong | **1 of 894** |
+
+15/15 `[END_AUDIO]` in all six runs. Long-form RTF (>=100 frames, case 0 excluded per §6.21):
+**0.77–0.90 -> 0.71–0.78**, gen 62.0 -> 57.4 ms/frame, i.e. **−4.6 ms/frame** — essentially the
+whole isolated win, unlike §6.17/§6.18 where ~1/3 showed up.
+
+**THE ONE WORD IS THE CONTRACTION §6.9 ALREADY ADJUDICATED** — `"I am"` -> `"I'm"` in *"…now
+that I have it, I am not going to be silent"*, same word, same sentence. §6.9 shipped the
+sharded norm at 1/1/0 across seeds 0/1/2; this is 1/0/0. And §6.37's test cuts our way rather
+than against: sdpa was rejected because the deterministic gate AGREED with the WER word (6.48x
+worse vs fp64), so the prior was "worse". Here the gate improves on every stable column, so the
+prior is "different".
+
+**TWO HARNESS ERRORS OF MINE, and either would have produced a wrong answer:**
+1. timing `gen.step()` put 3–4 ms of host spread (a float64 RoPE build + two uploads per call)
+   on a <2 ms effect — inconclusive by construction, §6.33's trap exactly.
+2. the replacement timed `gen.caches[gen.layers.index(lw)]`, a linear scan over dicts of ttnn
+   tensors 26x per step. That added **~20 ms/step of my own host time** (45.4 measured against
+   25.8 without it) and flattened every arm into a false "inert". Same class as §6.35's probe
+   bug. **Hoist everything out of the timed callable, and suspect the harness before the chip.**
+
+Only the third harness is reported above.
+
+### 6.40 — p150: the same reversal in Block 2, +4.17 ms/frame. NOT YET SHIPPED
+
+§6.39 rerun against Block 2's norm, which is called **49x per frame** (2 per `_block` x 3 layers
+x 7 Euler steps, plus `_trunk`'s final norm x7) against Block 1's 52. Unit is the whole Block 2
+frame (`decode_frame` on a REAL hidden state from case 2, fixed `x_0`), per §6.30.
+
+| config | cores | block_w | ms/frame | vs 8x4 | codes != 8x4 |
+|---|---|---|---|---|---|
+| **interleaved** | — | — | **28.626** | **+4.173** | 1 / 36 |
+| 4x1 | 4 | 24 | 31.800 | +0.998 | 0 / 36 |
+| 2x1 | 2 | 48 | 31.849 | +0.950 | 1 / 36 |
+| 8x1 | 8 | 12 | 31.902 | +0.897 | 0 / 36 |
+| 12x1 | 12 | 8 | 31.983 | +0.816 | 0 / 36 |
+| 8x2 | 16 | 6 | 32.441 | +0.357 | 1 / 36 |
+| 8x4#control | 32 | 3 | 32.555 | +0.243 | noise floor **0.243** |
+| 8x3 | 24 | 4 | 32.624 | +0.175 | 1 / 36 |
+| 8x4 ← ships | 32 | 3 | 32.799 | — | — |
+| 6x4 | 24 | 4 | 32.875 | −0.076 | 0 / 36 |
+| 12x4 | 48 | 2 | 32.986 | −0.187 | 0 / 36 |
+| 8x6 | 48 | 2 | 33.096 | −0.297 | 2 / 36 |
+| 12x8 | 96 | 1 | 34.908 | −2.109 | 0 / 36 |
+
+Same shape as §6.39 in every respect: interleaved wins by ~4 ms (17x the noise floor), the
+sharded curve is monotone with fewer cores better, and the newly-reachable 96 cores is worst.
+**So the reversal is a property of the CHIP, not of Block 1** — two independent blocks, two
+different call counts, same answer.
+
+**NOT SHIPPED YET.** It needs the Block 2 gate before it can: `--gate flow` (velocity PCC,
+semantic exactness, frame codes) plus long-form WER over >=3 seeds, the same ladder §6.39
+cleared. The 1-of-36 acoustic code difference on a real hidden state is small but a code is what
+reaches the audio, so it is not self-certifying.
+
+**Note also what this says about the p150 gap.** Block 2 measures 32.8 ms/frame sharded / 28.6
+interleaved here against §6.31's **20.8 ms on the N150** — so after §6.39 fixed Block 1 (now
+21.4 ms against the N150's 23.15, i.e. FASTER than Wormhole), essentially the whole remaining
+p150 deficit is Block 2.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
@@ -2722,30 +2866,40 @@ ground truth to satisfy a linter is a bad trade.
 
 ## 7. Suggested order when resuming
 
-**All three blocks work, quality is good, and the port is no longer the bottleneck — the model is.**
+**REWRITTEN FOR THE p150 FORK.** The N150 version of this section is in the parent branch; it
+pointed at Block 3 as "~9% of wall and least explored", a figure §6.10 had already corrected to
+**0.4%**, and quoted a 77 ms frame that three sweeps had superseded. Do not resurrect it.
 
-Per frame, steady state on one N150: **Block 1 ~35 ms, Block 2 ~42.5 ms, host 0.2 ms, ~77 ms
-total, RTF ~1.0.** Both hot modules open with a "where the time goes" map giving the ceiling for
-each line item; read those before optimizing anything.
+Per frame, steady state on this p150: **Block 1 ~21.4 ms, Block 2 ~32.8 ms, ~57 ms total,
+long-form RTF 0.71–0.78.** Real time is 80 ms/frame.
 
-1. Re-read this file. Recreate the venvs (§2). Run the tests, then
-   `generate_quality_set.py --cases 0,1` to confirm the device path still speaks.
-2. **BLOCK 3 IS THE LEAST EXPLORED THING LEFT — ~9% of wall time and never swept.** Both hot
-   blocks have had two optimization passes; the codec has had none since its own bring-up.
-   `ign/voxtral_opt` has a `keep_sharded_splits` commit claiming ~18 ms → ~6 ms on their conv
-   stack by removing ~104 layout conversions, which is exactly the class of thing that pays here.
-3. **Both hot blocks are near their floors, for different reasons.** Block 1 (~31.4 ms): every
-   weight matmul is at the 194 GB/s ceiling and the only bf16 weight left is w2, the pinned hang
-   trigger — worth ~3.6 ms if it can ever be moved. Block 2 (~28 ms): sits ~2x above its 13.4 ms
-   weight-read floor on device-side per-kernel cost, and everything op-level has been tried. The
-   two ideas left there are structural — fewer Euler steps, or concurrent requests.
-4. **Gate on the DETERMINISTIC metrics, not on WER.** This is the most expensive lesson in the
+1. Re-read §1's fork banner. `PYTHONPATH` needs `ttnn` and `tools` on it, not just the repo root
+   (§1). Run the tests (122), then `generate_quality_set.py --cases 0,2` to confirm the device
+   path still speaks.
+2. **BLOCK 2 IS THE WHOLE REMAINING GAP.** After §6.39, Block 1 is 21.4 ms against the N150's
+   23.15 — *faster* than Wormhole. Block 2 is 32.8 ms against the N150's 20.8. Start with
+   §6.40's interleaved norm (+4.17 ms/frame, swept, gate not yet run), then re-derive the rest
+   of Block 2's constants, all of which were tuned against a 194 GB/s roofline that does not
+   apply to GDDR6.
+3. **EVERY "AT THE ROOFLINE" CLAIM IN §1–§6.38 IS SUSPECT HERE.** The floor method is still the
+   right method, but 194–202 GB/s is an N150 measurement. Re-measure the ceiling on this card
+   before ranking anything by `overhead x calls`, or you will rank against the wrong floor —
+   §6.25's near-miss is what that costs.
+4. **Two constants that ARE now questionable and were never re-swept**: `_WO_PRG`'s
+   `in0_block_w=2` (§6.25 swept it on an 8x8 grid) and `_SDPA_PRG`'s `k_chunk_size=512` / 8x2
+   grid (§6.27, and §6.27's own warning stands — a position sweep, not a gate run, is what makes
+   an sdpa config safe).
+5. **§6.35's 3.4x batching lead is more attractive here, not less.** 130 cores and the same 32
+   unused tile rows. The blocker §6.38 named — a row-count-aware norm shard — partly dissolves if
+   §6.40 lands, since an interleaved norm has no hardcoded shard shape to raise on 48 rows.
+6. **Gate on the DETERMINISTIC metrics, not on WER.** This is the most expensive lesson in the
    file and it was learned twice. End-to-end WER cannot resolve a numerical change: the same code
    at seeds 0/1/2 spans 0.88–2.06% (§6.7). Worst-sample read as a MAX is also unreliable — it
    moved 1.28–4.28% non-monotonically across configs (§6.8). What works: teacher-forced MEAN and
    P90 worst-sample against the fp32 reference (`tests/tt_gates.py`), long-form WER for gross
-   breakage, and integer-code counts over several draws for Block 2.
-5. `tests/test_tt_defaults.py` pins the shipped configuration with the reason for each choice. If
+   breakage, and integer-code counts over several draws for Block 2. Both §6.39 arms were run in
+   ONE session with one process per (arm, seed); anything less is not a valid A/B here.
+7. `tests/test_tt_defaults.py` pins the shipped configuration with the reason for each choice. If
    you change a default, change that test in the same commit.
 
 **Deferred and still worth doing:**
