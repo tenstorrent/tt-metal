@@ -1992,6 +1992,151 @@ holds"** on the strength of it. It had not been tested at all. Attempt 2 left th
 to BUILD has told you nothing about whether it is fast** — and I recorded the opposite once already
 today (§6.27's `to_memory_config` reading). Read the assertion before writing the conclusion.
 
+### 6.29 — Block 2's overhead map: 40% reachable, and NONE of it is in the matmuls
+
+§6.27's method applied to Block 2. Every op isolated at its real shape and memory config, floor =
+bytes / 194 GB/s, ranked by overhead x how many times it runs. `_block` runs **21x** a frame (3 layers
+x 7 Euler steps); the `_solve`/`_trunk` ops run 7x; two run once.
+
+Block 2 is shaped nothing like Block 1. **All five matmuls are AT the roofline** -- wqkv measures 1.8 us
+BELOW its floor, w3 7.7 us below (i.e. above 194 GB/s, consistent with the true ceiling being ~202),
+w1 +2.9, wo +12.6, w2 +23.8. So there is no matmul work left, and yet **8.99 of 22.55 ms/frame is not
+weight reads** -- 40%, against Block 1's 12%. Every recoverable microsecond is in a small op.
+
+| op | x/frame | floor us | actual us | ovhd us | ms/frame | recoverable |
+|---|---|---|---|---|---|---|
+| `nlp_create_qkv_heads` (transpose_k) | 21 | 0.0 | 122.1 | 122.1 | 2.564 | **2.564 ms** |
+| `semantic_code` | 1 | 0.0 | 1241.3 | 1241.3 | 1.241 | **1.241 ms** |
+| CFG combine + Euler (2 slice 3 mul 2 add) | 7 | 0.0 | 148.2 | 148.2 | 1.038 | 1.038 ms |
+| ffn norm x3 (shard+norm+DRAM) | 21 | 2.0 | 47.5 | 45.5 | 0.998 | 0.955 ms |
+| reshape+permute+reshape unfold heads | 21 | 0.0 | 43.7 | 43.7 | 0.918 | 0.918 ms |
+| `_trunk` 3 reshape + concat + reshape | 7 | 0.0 | 129.8 | 129.8 | 0.909 | 0.909 ms |
+| matmul q(row-fold) @ kT | 21 | 0.0 | 30.5 | 30.5 | 0.641 | 0.641 ms |
+| add residual (ffn) | 21 | 0.0 | 26.9 | 26.9 | 0.565 | 0.565 ms |
+| add residual (attn) | 21 | 0.0 | 26.7 | 26.7 | 0.560 | 0.560 ms |
+| multiply(g, w3) | 21 | 0.0 | 26.6 | 26.6 | 0.558 | 0.558 ms |
+| **linear w2** 9216x3072 BFP8 | 21 | 155.1 | 178.9 | 23.8 | 3.757 | 0.500 ms |
+| attn norm 2/3 rms_norm sharded | 21 | 0.0 | 20.0 | 20.0 | 0.419 | 0.419 ms |
+| softmax numeric_stable | 21 | 0.0 | 19.2 | 19.2 | 0.403 | 0.403 ms |
+| `_trunk` final norm x3 | 7 | 2.0 | 53.0 | 51.0 | 0.371 | 0.357 ms |
+| attn norm 1/3 -> width-sharded | 21 | 1.0 | 17.5 | 16.5 | 0.367 | 0.346 ms |
+| matmul a @ v | 21 | 0.0 | 15.6 | 15.6 | 0.328 | 0.328 ms |
+| **linear wo** 4096x3072 BFP8 | 21 | 68.9 | 81.5 | 12.6 | 1.712 | 0.265 ms |
+| `_trunk` linear acoustic_codebook_output | 7 | 1.1 | 33.0 | 31.9 | 0.231 | 0.224 ms |
+| attn norm 3/3 -> DRAM | 21 | 1.0 | 10.5 | 9.5 | 0.220 | 0.199 ms |
+| `_solve` concat([x,x]) + typecast | 7 | 0.0 | 25.1 | 25.1 | 0.176 | 0.176 ms |
+| `_trunk` reshape + slice (36 wide) | 7 | 0.0 | 22.1 | 22.1 | 0.155 | 0.155 ms |
+| `_solve` linear input_projection | 7 | 1.1 | 17.5 | 16.4 | 0.122 | 0.115 ms |
+| `_solve` typecast v -> fp32 | 7 | 0.0 | 9.7 | 9.7 | 0.068 | 0.068 ms |
+| **linear w1** 3072x9216 BFP8 +silu | 21 | 155.1 | 158.0 | 2.9 | 3.317 | 0.061 ms |
+| `_solve` linear llm_projection | 1 | 51.7 | 65.2 | 13.5 | 0.065 | 0.014 ms |
+| **linear wqkv** 3072x6144 BFP8 | 21 | 103.4 | 101.6 | **-1.8** | 2.134 | -0.037 ms |
+| **linear w3** 3072x9216 BFP8 | 21 | 155.1 | 147.4 | **-7.7** | 3.095 | -0.161 ms |
+| TOTAL (isolated, sums high) | | | | | 26.931 | 13.379 ms |
+
+Shipped Block 2 frame end to end: **22.545 ms**. Weight-read floor **13.553 ms**. The isolated sum
+(26.93) exceeds the real frame by 4.4 ms, which is the overlap the live graph gets and the reason the
+per-op column is an upper bound -- same caveat as §6.27.
+
+**The two biggest single items:**
+- `nlp_create_qkv_heads` at 2.56 ms/frame confirms NOTES [flow-10]'s recorded ~97 us floor. §6.30 splits
+  it and shows the kernel really is that slow. This is the upstream issue still unwritten.
+- `semantic_code` at **1241 us for one call** is the largest untouched item in the model. It is a
+  host->device upload, an fp32 matmul against the semantic head, a mask add, an argmax and a
+  device->host download. Not yet swept.
+
+### 6.30 — Block 2 sweep: five candidates, ONE ships, and one of the three refutals is of my own theory
+
+**A hypothesis I had before measuring, which the split killed.** Block 2 folds the CFG batch into 6 rows
+so each weight is read once (NOTES [flow-11]), but `nlp_create_qkv_heads` needs 4D [B,1,S,QW], so the
+fold must be undone: [1,6,6144] -> [2,1,3,6144]. In TILE_LAYOUT the first pads to [1,32,6144] -- one tile
+row -- and the second to [2,1,32,6144] -- two. Different physical sizes, so that "reshape" moves data. I
+expected the repack to be most of the 122 us.
+
+    SPLIT: the reshape alone 25.9 us; the op on a pre-reshaped tensor 96.6 us  (together 122.5)
+
+So the repack is **a fifth** of it, not most, and the kernel genuinely costs ~97 us. The row fold is not
+quietly paying its weight-read win back in padding.
+
+| sweep | shipped | best alternative | verdict |
+|---|---|---|---|
+| 1. rms_norm, 49 calls/frame | 47.5 us (3 ops) | one-op interleaved **115.1** | **rejected** -- 2.4x slower AND 4.8e-03 off |
+| 2. qkv head split | 122.0 us | manual 3 slice+3 reshape+3 permute, L1 **112.4** | **1.086x, open** -- see the correction below |
+| 3. unfold heads | 43.2 us | permute-straight-from-av 24.9 | **rejected** -- 1.77x but **1.4e+00 WRONG** |
+| 4. CFG combine + Euler | 160.0 us | weighted reduce **112.6** | 1.363x isolated, **then rejected on the block** |
+| 5. `_trunk` sequence build | 124.5 us | hoist the reshapes **105.8** | **SHIPS** -- bit-exact |
+
+Notes on the rejections, because each says something:
+- **the one-op norm is much worse.** Three sharded ops (17.5 shard + 20.0 norm + 10.5 unshard) beat one
+  interleaved `rms_norm` by 2.4x. Sharding is not overhead here, it is the fast path.
+- **the hand-rolled split, CORRECTED, is 1.086x FASTER** -- and my first reading of it was invalid.
+  I gave the shipped op `memory_config=_L1` and let my slices and permutes take the default, so they
+  landed in DRAM. NOTES [flow-10] measured exactly that difference and found the L1 output worth
+  **2.5 ms/frame**, not on the op (~7 us) but on the four downstream consumers that then keep q/k/v in
+  L1. So the manual route was being credited for skipping work the shipped one does. Like-for-like:
+
+      shipped: nlp_create_qkv_heads(memory_config=L1)   122.0 us   1.001x   L1/L1/L1  bit-exact
+      manual, DEFAULT mc  (what the first pass timed)   122.4 us   0.998x   DR/DR/DR  bit-exact
+      manual, memory_config=L1  (like-for-like)         112.4 us   1.086x   L1/L1/L1  bit-exact
+
+  0.202 ms/frame isolated, bit-exact, in the right memory. NOTE THIS CONTRADICTS [flow-10]'s recorded
+  158 us for a hand-rolled split, so one of the two measurements is of a different construction -- that
+  is unreconciled. And it trades 1 op for 9, i.e. more host dispatch, so on this session's record it is
+  a candidate and not a win until the whole block says so.
+- **the fastest unfold is wrong.** Permuting straight from `av` skips the [B,32,3,HD] regroup, is 1.77x
+  faster, and returns garbage (1.4e+00 relative). §6.25's lesson, again, caught by the numerics column.
+
+**SWEEP 5 CORRECTED, and this is the substantive error of the pass.** The first reading measured
+`concat([p0, p12])` against a `p12 = concat(p1s[i], p2)` built once OUTSIDE the timed loop and reported
+1.461x, +0.279 ms/frame. That is not shippable: p1s[i] varies per step, so in the real graph that concat
+does not vanish, it MOVES -- 7 new concats a frame to save 7 cheaper ones, and the op count goes UP.
+Re-measured against only spellings that could really ship:
+
+    p0  = linear(x_t, input_projection)   changes every STEP   -- and is ALREADY [B,1,3072], no-op reshape
+    p1s = the time schedule               constant for the model's life -- hoist into _schedule
+    p2  = linear(h, llm_projection)       changes once per FRAME       -- hoist to once per frame
+
+    shipped: 3 reshape + concat(3) + reshape        115.9 us   1.010x
+    hoist p1,p2 reshapes                            105.8 us   1.107x   +0.079 ms/frame  bit-exact
+    + drop p0's reshape too                         105.7 us   1.108x   (p0's was already free)
+    concat(2) vs hoisted p12 (NOT shippable)         81.2 us   1.442x
+
+So the real win is **+0.079 ms/frame, not +0.279** -- the 1.461x was the unshippable hoist.
+
+**AND THEN THE BLOCK REFUSED TO PAY FOR THE CFG FOLD.** A/B on the whole Block 2 frame, same session:
+
+| build | ms/frame | codes differing from the fp32 reference (of 37) |
+|---|---|---|
+| baseline | 22.583 | 1 |
+| **sequence hoist only** | **22.476** | **1** |
+| both wins | 22.483 | **2** |
+
+The sequence hoist takes the **entire** 0.107 ms and leaves the numerics alone. The CFG fold -- 1.543x in
+isolation, 7 ops down to 5 -- contributes **nothing** on the whole block and flips a discrete code, since
+its 1.6e-04 reassociation is enough to cross an FSQ quantization boundary. Reverted, helper deleted.
+
+That is the **fourth** time this session an isolated win vanished on the whole unit (§6.18, §6.19, §6.27's
+`to_memory_config` reading, now this). The rule has earned its keep: **for anything touching memory
+config, layout, or op count on small tensors, the smallest honest unit of measurement is the whole
+block.** Isolation is for choosing what to try, never for deciding what to ship.
+
+**GATED AND SHIPPED.** The sequence hoist is bit-exact end to end, verified as a paired A/B in one
+session with the tree stashed and restored between halves:
+
+| gate | before | after |
+|---|---|---|
+| flow: velocity PCC | 0.99998480, maxabs 2.833e-02 | identical |
+| flow: semantic code | exact match `[262, 3346]` | identical |
+| flow: full frame | 2 of 74 codes differ | identical |
+| codes: semantic / acoustic | 1, 97/288 (33.7%) | identical |
+| codes: the whole per-frame code table | | **byte-identical, every frame** |
+| Block 2 alone | 22.583 ms/frame | **22.476** |
+
+Byte-identical codes is a stronger statement than any PCC: if the integer codes do not move, the
+waveform does not move, so WER cannot move. `--gate decode` was also run (pooled mean 0.92%, p90 1.28%,
+max 3.05%, min PCC 0.999040, 15 prompts x 22 frames) and matches §6.13's recorded level -- expected,
+since this change does not touch Block 1, and worth having as the check that it does not.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

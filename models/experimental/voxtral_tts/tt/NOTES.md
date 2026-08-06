@@ -992,6 +992,33 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
 
 ---
 
+### [flow-19] `_trunk` — the caller supplies [B,1,3072]; hoisting the reshapes is worth 0.107 ms/frame
+
+```text
+        CALLER SUPPLIES [B,1,3072], not [B,3072]. The three reshapes used to live here, inside the
+        per-step loop, and cost 10.1 us a step for nothing. What each operand actually does:
+
+            p0  = linear(x_t, input_projection)   changes every STEP
+                  -- and arrives ALREADY [B,1,3072], so its reshape was a pure no-op
+            p1s = the time schedule               constant for the model's life
+                  -- hoisted into _schedule's cache, paid once ever
+            p2  = linear(h, llm_projection)       changes once per FRAME
+                  -- hoisted to once per frame in _solve, alongside the matmul that builds it
+
+            shipped:  3 reshape + concat(3) + reshape        115.9 us
+            hoisted:      0 or 1 + concat(3) + reshape       105.8 us   1.107x, bit-exact
+
+        On the whole Block 2 frame: 22.583 -> 22.476 ms, and the entire gain survives, which is rare
+        for a small-op change (see STATUS.md 6.30). Bit-exact: same ops in the same order, just
+        without the redundant ones.
+
+        A NEARBY IDEA THAT DOES NOT WORK, recorded so it is not retried. Pre-concatenating p1++p2
+        into a [B,2,3072] and making this a concat(2) measures 81.2 us, 1.442x -- but p1s[i] varies
+        per step, so that concat does not vanish, it MOVES. Seven new concats a frame to save seven
+        cheaper ones; the op count goes UP. Only operands that change LESS OFTEN than this runs are
+        hoistable, which is the whole content of the list above.
+```
+
 ## `ttnn_voxtral_codec.py`
 
 *Block 3 -- codec decoder, codes to waveform*
