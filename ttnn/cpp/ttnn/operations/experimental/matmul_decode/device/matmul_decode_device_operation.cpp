@@ -48,12 +48,13 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     if (operation_attributes.global_cb.has_value()) {
         // Prefetcher-fed weights live in DRAM as an ND-sharded (receiver-contiguous) tensor:
         // one contiguous slab per receiver core, whose shape depends on the factory that will
-        // consume it. There is no legacy shard spec on such a tensor, so the receiver grid
-        // comes from the GCB.
-        TT_FATAL(
-            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
-            "matmul_decode with global_cb requires input tensor B to be ND_SHARDED, but got {}",
-            input_tensor_b.memory_config().memory_layout());
+        // consume it. The receiver grid comes from the GCB, not from a legacy shard spec.
+        //
+        // memory_layout() is deliberately not checked: TensorSpec back-fills an equivalent legacy
+        // spec whenever the ND spec happens to be expressible as one (a full-height ROUND_ROBIN_1D
+        // shard whose shard count fits the DRAM grid, i.e. num_receivers <= num_dram_banks), which
+        // reports the layout as WIDTH_SHARDED even though the tensor was created ND-sharded. The
+        // NdShardSpec below is the property this path actually needs.
         TT_FATAL(
             input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "matmul_decode with global_cb requires input tensor B to live in DRAM (the prefetcher reads DRAM), "
