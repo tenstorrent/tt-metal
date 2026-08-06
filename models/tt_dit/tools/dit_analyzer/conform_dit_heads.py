@@ -2,27 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conform the `unused_gather` finding on the DiT audio head (phase 11 / 10c).
+"""Conform the DiT output-head redundancy findings on the 2x4 Loudbox (phase 11 / 10c).
 
-The MiniMax-H3 DiT output head (transformer_minimax_h3.py:405-419) projects the packed
-[text|audio|video] sequence to the narrow audio head, all-gathers it across the SP axis to
-reassemble the full sequence, then slices out the audio rows. ditcheck reports that gather as
-`unused_gather`: the audio rows are the contiguous block [text_len : text_len+audio_len) =
-[512:926), which lives entirely in the *first* SP shard, and the audio decode reads device 0
-(pipeline `_project_latents_device` does get_device_tensors[0]). So the all-gather's
-contribution from every other SP shard is never read by the audio consumer.
+The MiniMax-H3 DiT output head (transformer_minimax_h3.py:405-419) gathers the packed
+[text|audio|video] hidden across TP, projects it to the two narrow heads, gathers those
+across SP, and slices each modality out. ditcheck flags two redundancies there; this harness
+conforms both against real ttnn collectives, on a sequence/hidden sharded as the DiT shards it.
 
-That claim rests on layout, not on the projection values: run the *real* ttnn SP all-gather on
-a sequence sharded exactly as the DiT shards it, then verify on hardware that
+A) node_360 -- audio `unused_gather`. The audio rows are the contiguous block
+   [text_len : text_len+audio_len) = [512:926), which lives entirely in the *first* SP shard,
+   and the audio decode reads device 0. So the SP all_gather's contribution from every other
+   SP shard is never read by the audio consumer. Verified with a row-identified sequence.
 
-  1. the gather is correct (the reassembled sequence is the row-identified reference), and
-  2. the audio slice [512:926) is bit-for-bit what device 0 *already held before the gather*
-     (device 0's shard covers [0, seq/sp) ⊇ [512:926)), and
-  3. no other SP shard holds any audio row — so only device 0 supplies the audio slice.
-
-If all three hold, gathering to the other sp-1 shards is exactly redundant for the audio
-consumer, which is what the finding says. Row-identified values (row r -> value r) make the
-provenance checkable, so this conforms the shim's region reasoning, not just a shape.
+B) node_348 -- output-head `participant_shrink`. proj_out / audio_proj_out are plain Linear
+   (replicated weights, transformer_minimax_h3.py:306-307). After the TP all_gather makes the
+   hidden replicated across TP, both projections compute bit-identically on every TP device, so
+   only one TP row's result is ever read -- the TP all_gather delivers to 4 when 1 would do.
+   Verified by running the real projections on the gathered hidden and diffing the TP rows.
 
     python3 models/tt_dit/tools/dit_analyzer/conform_dit_heads.py --mesh 2 4
 """
@@ -35,31 +31,37 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Real packed-sequence head: text then audio then video. The audio block is [512:926).
 TEXT, AUDIO = 512, 414
 A_LO, A_HI = TEXT, TEXT + AUDIO  # audio rows [512, 926)
-SEQ = 4096  # packed sequence (text+audio+video, padded); small enough to run, > sp*audio-end
-CH = 32  # audio head width (audio_proj_out output channels)
+SEQ = 4096  # packed sequence for check A (text+audio+video, padded)
+HID = 5376  # DiT hidden width
+VIDEO_CH, AUDIO_CH = 96, 32  # proj_out / audio_proj_out output widths
+
+
+def _load_random_weights(module, torch, _top=True) -> int:
+    count = 0
+    for _name, p in module.named_parameters():
+        p.load_torch_tensor(torch.randn(tuple(p.total_shape), dtype=torch.float32))
+        count += 1
+    for _name, child in module.named_children():
+        count += _load_random_weights(child, torch, _top=False)
+    if _top:
+        module._mark_loaded()  # noqa: SLF001
+    return count
 
 
 def run(mesh_shape) -> int:
     import torch
 
     import ttnn
+    from models.tt_dit.layers.linear import Linear
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils.tensor import bf16_tensor
 
-    # SP shards the sequence; put it on the larger mesh axis so more shards are exposed as
-    # wasted (3 of 4 here, vs 7 of 8 at the real 4x8). TP (the other axis) just replicates.
+    # SP shards the sequence (larger axis, so more shards show as wasted); TP is the other axis.
     sp_axis = 1 if mesh_shape[1] >= mesh_shape[0] else 0
-    sp_f = mesh_shape[sp_axis]
-    assert SEQ % sp_f == 0
-    shard = SEQ // sp_f  # rows per SP device
-    if A_HI > shard:
-        print(
-            "!! audio [%d:%d) does not fit in the first SP shard of %d rows — pick a larger SEQ" % (A_LO, A_HI, shard)
-        )
-        return 1
+    tp_axis = 1 - sp_axis
+    sp_f, tp_f = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_1D,
@@ -70,22 +72,73 @@ def run(mesh_shape) -> int:
         ttnn.FabricManagerMode.DEFAULT,
     )
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+    a_ok = b_ok = False
     try:
         ccl = CCLManager(mesh_device=mesh, num_links=1, topology=ttnn.Topology.Linear)
-        # row-identified sequence: value at row r is r (broadcast across channels), so a gathered
-        # row's provenance is its own value. Shard the sequence (dim 2) over the SP axis.
-        full = torch.arange(SEQ, dtype=torch.float32).view(1, 1, SEQ, 1).expand(1, 1, SEQ, CH).contiguous()
-        seq_sharded = bf16_tensor(full, device=mesh, mesh_axis=sp_axis, shard_dim=2)
-        print(
-            "built SP-sharded audio head on %s: SP=%d(axis%d), seq %d -> %d rows/shard, audio [%d:%d)"
-            % (tuple(mesh_shape), sp_f, sp_axis, SEQ, shard, A_LO, A_HI)
-        )
+        devs = list(range(mesh_shape[0] * mesh_shape[1]))
 
-        # device 0's shard BEFORE the gather: rows [0, shard)
+        # ---- A) node_360: the audio SP all_gather is unused (audio ⊂ shard 0) ----
+        shard = SEQ // sp_f
+        assert A_HI <= shard, "audio must fit in the first SP shard"
+        full = torch.arange(SEQ, dtype=torch.float32).view(1, 1, SEQ, 1).expand(1, 1, SEQ, AUDIO_CH).contiguous()
+        seq_sharded = bf16_tensor(full, device=mesh, mesh_axis=sp_axis, shard_dim=2)
         pre0 = ttnn.to_torch(ttnn.get_device_tensors(seq_sharded)[0]).float()
         gathered = ccl.all_gather_persistent_buffer(seq_sharded, dim=2, mesh_axis=sp_axis)
         ttnn.synchronize_device(mesh)
-        post = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(gathered)]
+        g0 = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0]).float()
+        ref = torch.arange(SEQ, dtype=torch.float32).to(torch.bfloat16).to(torch.float32)
+        gather_ok = g0.shape[2] == SEQ and torch.equal(g0[0, 0, :, 0], ref)
+        d_audio = (g0[:, :, A_LO:A_HI, :] - pre0[:, :, A_LO:A_HI, :]).abs().max().item()
+        a_ok = gather_ok and d_audio == 0.0 and A_HI <= shard
+        print(
+            "A) node_360 audio unused_gather  (SP=%d, seq %d -> %d/shard, audio [%d:%d))"
+            % (sp_f, SEQ, shard, A_LO, A_HI)
+        )
+        print(
+            "   gather reassembles: %s   audio slice == device-0 pre-gather: max|Δ|=%.3g   audio ⊂ shard 0: %s"
+            % ("OK" if gather_ok else "MISMATCH", d_audio, A_HI <= shard)
+        )
+        print(
+            "   => %s: %d of %d SP shards never read for audio\n" % ("CONFIRMED" if a_ok else "REFUTED", sp_f - 1, sp_f)
+        )
+
+        # ---- B) node_348: the output head is replicated across TP (only 1 TP row read) ----
+        proj = Linear(
+            HID, VIDEO_CH, bias=True, mesh_device=mesh
+        )  # plain Linear == the DiT's proj_out (replicated weight)
+        aproj = Linear(HID, AUDIO_CH, bias=True, mesh_device=mesh)  # == audio_proj_out
+        _load_random_weights(proj, torch)
+        _load_random_weights(aproj, torch)
+        hidden = torch.randn(1, 1, 64, HID, dtype=torch.float32)  # small seq; replication is per-row
+        hidden_tp = bf16_tensor(hidden, device=mesh, mesh_axis=tp_axis, shard_dim=3)  # TP-fractured hidden
+        hidden_full = ccl.all_gather_persistent_buffer(
+            hidden_tp, dim=3, mesh_axis=tp_axis
+        )  # node_348: replicate over TP
+        video_all = proj(hidden_full)
+        audio_all = aproj(hidden_full)
+        ttnn.synchronize_device(mesh)
+
+        def rows(t):
+            return [ttnn.to_torch(s).float() for s in ttnn.get_device_tensors(t)]
+
+        vids, auds = rows(video_all), rows(audio_all)
+        spread = vids[0].std().item()
+        # every device must hold the identical projection (⊇ identical across each TP row group)
+        worst = max((vids[d] - vids[0]).abs().max().item() for d in devs)
+        worst = max(worst, max((auds[d] - auds[0]).abs().max().item() for d in devs))
+        b_ok = spread > 0 and worst == 0.0
+        print(
+            "B) node_348 output-head participant_shrink  (TP=%d, proj_out %d / audio_proj_out %d)"
+            % (tp_f, VIDEO_CH, AUDIO_CH)
+        )
+        print(
+            "   within-output std %.4g (non-degenerate)   max|Δ| of projection across all devices = %.3g"
+            % (spread, worst)
+        )
+        print(
+            "   => %s: the projection is identical on every TP row; %d of %d TP copies are never read"
+            % ("CONFIRMED" if b_ok else "REFUTED", tp_f - 1, tp_f)
+        )
     finally:
         ttnn.close_mesh_device(mesh)
         try:
@@ -93,48 +146,13 @@ def run(mesh_shape) -> int:
         except Exception:  # noqa: BLE001
             pass
 
-    g0 = post[0]  # device 0's gathered result: should be the full [1,1,SEQ,CH]
-    # reference in bf16 precision: the row-id values round-trip through bf16, so row r carries
-    # bf16(r) (bf16 represents integers exactly only up to 256 — compare against the rounded value,
-    # not a raw arange). The gather places rows, it does not compute, so this must be exact.
-    ref_rows = torch.arange(SEQ, dtype=torch.float32).to(torch.bfloat16).to(torch.float32)
-
-    # 1. the gather is correct: every reassembled row carries its own (bf16) index
-    gathered_rows = g0[0, 0, :, 0]
-    gather_ok = gathered_rows.shape[0] == SEQ and torch.equal(gathered_rows, ref_rows)
-    print(
-        "\n1) gather correctness: reassembled %d rows, row r == value r ... %s"
-        % (g0.shape[2], "OK" if gather_ok else "MISMATCH")
-    )
-
-    # 2. the audio slice equals what device 0 already held pre-gather (bit-for-bit)
-    aud_post = g0[:, :, A_LO:A_HI, :]
-    aud_pre0 = pre0[:, :, A_LO:A_HI, :]
-    d_audio = (aud_post - aud_pre0).abs().max().item()
-    print(
-        "2) audio slice [%d:%d) post-gather vs device-0 pre-gather: max|Δ| = %.3g ... %s"
-        % (A_LO, A_HI, d_audio, "EXACT" if d_audio == 0 else "DIFFERS")
-    )
-
-    # 3. no other SP shard holds any audio row (only device 0 supplies the slice)
-    others_clear = A_HI <= shard  # audio end within the first shard
-    print(
-        "3) audio confined to shard 0 ([0:%d) ⊇ [%d:%d)) — shards 1..%d hold no audio row ... %s"
-        % (shard, A_LO, A_HI, sp_f - 1, "OK" if others_clear else "NO")
-    )
-
-    wasted = sp_f - 1
-    wasted_bytes = wasted * AUDIO * CH * 2 / 1024.0  # KiB the gather moves that the audio consumer never reads
-    print("\nSHIM BELIEVED: the audio SP all_gather is unused — audio lives in shard 0, only device 0 is read.")
-    if gather_ok and d_audio == 0.0 and others_clear:
-        print("DEVICE CONFIRMS: device 0 already held every audio row; the other %d SP shards are never read." % wasted)
+    print("\nSHIM BELIEVED: audio SP-gather unused (A); output head TP-replicated, 1 row read (B).")
+    if a_ok and b_ok:
         print(
-            "  → gathering them is exactly redundant for the audio consumer (%d of %d shards, %.1f KiB/head here;"
-            % (wasted, sp_f, wasted_bytes)
+            "DEVICE CONFIRMS BOTH. Fixes: slice audio on device 0 (A); gather-to-subset / TP-submesh for the head (B)."
         )
-        print("    at the real 4×8 that is 7 of 8). Fix: slice audio on device 0 / broadcast, don't SP-all-gather.")
         return 0
-    print("DEVICE REFUTES: one of the checks failed — investigate before trusting the finding.")
+    print("DEVICE REFUTES: A=%s B=%s — investigate before trusting." % (a_ok, b_ok))
     return 1
 
 
