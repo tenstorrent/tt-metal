@@ -17,7 +17,7 @@
 #   docker buildx bake ci-build         # Build CI build image
 #   docker buildx bake basic-dev        # Build basic dev image
 #   docker buildx bake manylinux        # Build manylinux image
-#   GH_TOKEN=<pat> docker buildx bake prefill-worker  # Needs a tt-llm-engine read token
+#   docker buildx bake prefill-worker   # COPYs _migration_client from a prebuilt tt-llm-engine image (docker login ghcr.io)
 #   docker buildx bake tools            # Build just the tool images
 #   docker buildx bake venvs            # Build just the venv images
 #   docker buildx bake all              # Build everything
