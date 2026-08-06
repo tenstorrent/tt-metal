@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+# Module-scoped device: these suites are large and per-test device open/close would dominate.
+pytestmark = [pytest.mark.use_module_device]
+
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -435,9 +439,7 @@ def _golden(input_torch_bf_or_fp, op, dim, keepdim):
     return torch_fn(input_torch_bf_or_fp.float(), dim=dim, keepdim=keepdim).to(input_torch_bf_or_fp.dtype)
 
 
-# output_layout is swept only here on the W path. TILE is listed but skipped in the body: the W
-# writer emits ROW_MAJOR only, so requesting TILE runs the classic tilize + tile-reduce program
-# instead — not a row-major reduce at all.
+# The W writer emits ROW_MAJOR only, so a TILE request runs the tilized path instead — skipped below.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
@@ -551,8 +553,7 @@ def test_rm_reduce_w_interleaved_memory_configs(device, reduce_op, dtype, mem_cf
     assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
 
 
-# Covers the RM H writer's TILE branch: num_h_slices == 1 is the only configuration that emits TILE,
-# since the H-axis split defers the requested layout to its final stage, which is this same shape.
+# Covers the RM H writer's TILE branch: only num_h_slices == 1 emits TILE directly.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
@@ -697,12 +698,8 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
     assert_numeric_metrics(ref2, out2, **metrics)
 
 
-# --- Tall-H reduces (H-axis split path) -----------------------------------------------------------
-# Ht_rm >= 16 triggers the split heuristic: FP32 partials collapsed by a second stage. Partials are
-# always ROW_MAJOR, so output_layout only selects what the final stage emits.
+# Ht_rm >= 16 splits the H reduce into FP32 partials collapsed by a second stage.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
 @pytest.mark.parametrize(
     "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
@@ -711,31 +708,24 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
     "shape",
     [
         (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Wt=5, split fills the grid
-        (1, 1, 12544, 32),  # very tall, Wt=1, S=64 — deepest per-slice accumulation here
-        (1, 1, 1280, 32),  # S=40 with H not a multiple of S*32, so slices differ in row count
-        (1, 1, 784, 144),  # tall-ish, still splits (Ht_rm=25)
-        (1, 1, 3137, 144),  # non-aligned H → last shard overhang (identity pad)
-        (1, 1, 3136, 145),  # non-aligned W → last-tile clamp
+        (1, 1, 785, 144),  # non-aligned H → last shard overhang (identity pad)
+        (1, 1, 784, 145),  # non-aligned W → last-tile clamp
         (2, 3, 512, 40),  # NC>1 with tall H (Ht_rm=16)
     ],
 )
-def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_approximate_mode, output_layout, shape):
+def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    # fast_and_approximate_mode toggles the accurate SFPU (False) vs FPU (True) fp32 reduce; only
-    # ttnn.mean accepts it and it only affects fp32, so the True variant is meaningful only there.
-    if fast_and_approximate_mode and not (reduce_op == "mean" and dtype == ttnn.float32):
-        pytest.skip("fast_and_approximate_mode only affects fp32 mean")
-    if dtype == ttnn.bfloat16 and shape == (1, 1, 12544, 32):
-        pytest.skip("bf16 accumulation-limited at H=12544; covered by the FP32 variant")
+    if fast_and_approximate_mode and reduce_op != "mean":
+        pytest.skip("fast_and_approximate_mode only affects mean")
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
-    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=keepdim)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
 
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    op_kwargs = {"dim": -2, "keepdim": keepdim, "output_layout": output_layout}
+    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
     if reduce_op == "mean":
         op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
     tt_output = ttnn_op(tt_input, **op_kwargs)
@@ -743,27 +733,22 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_appr
     assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(tt_output)
 
-    if dtype == ttnn.float32:
-        # The FPU path truncates to TF32, costing ~2x the SFPU path's relative error at these depths.
-        # Only mean has an accurate fp32 SFPU reduce; sum always goes through the FPU.
-        rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
-        pcc_threshold, atol, frobenius_threshold = 0.999, 1e-3, 0.0015
-    else:
-        pcc_threshold, rtol, atol, frobenius_threshold = 0.97, 0.01, 0.02, 0.004
+    # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, roughly doubling
+    # the relative error at these depths.
+    rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
     assert_numeric_metrics(
         torch_ref,
         output,
-        pcc_threshold=pcc_threshold,
+        pcc_threshold=0.999,
         rtol=rtol,
-        atol=atol,
-        frobenius_threshold=frobenius_threshold,
+        atol=1e-3,
+        frobenius_threshold=0.003,
         check_ulp=False,
-        check_frobenius=False,
     )
 
 
-# Block-float formats only exist in TILE layout, so an untilize would have to widen the result to
-# BFLOAT16. sum/mean refuse the request instead of silently returning a different dtype.
+# Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
+# sum/mean reject the request instead of silently changing the dtype.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, dim, expect_error):

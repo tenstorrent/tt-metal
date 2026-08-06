@@ -24,7 +24,9 @@ Tensor reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     bool negate = false,
-    // When true, eligible sum/mean reduces take ROW_MAJOR input directly; otherwise the op tilizes.
+    // When true, eligible mean/sum reduces consume ROW_MAJOR input directly via the dense
+    // row-major fast path. When false (default), the op always tilizes and uses the classic
+    // tile-reduce kernels. See reduce_op.cpp for the eligibility constraints.
     bool use_row_major_support = false,
     // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
     // non-fp32/non-AVG.

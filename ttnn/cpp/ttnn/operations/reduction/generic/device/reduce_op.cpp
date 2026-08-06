@@ -147,7 +147,8 @@ Tensor reduce(
     // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
     // accumulation through that pipeline is doable but not yet done; for now they tilize.
     //
-    // Opt-in via use_row_major_support; only ttnn::sum / ttnn::mean enable it.
+    // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
+    // off and the op always tilizes through the classic tile-reduce kernels.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
