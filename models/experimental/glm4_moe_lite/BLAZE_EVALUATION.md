@@ -1,13 +1,18 @@
 # tt-blaze evaluation for GLM-4.7-Flash on Blackhole Galaxy
 
-**Status:** `DRAMStreamingMatmul` is correct and faster on kernel time at **all six** of the
-model's decode matmul shapes (1.75x–9.17x, every PCC 0.9999) — the adoption surface is the whole
-dense matmul set, not one op. But the per-call wins sum to more than the model's entire measured
-weight-bandwidth budget, so most of it cannot be on the critical path: the next milestone is a
-**step-level** measurement, not more cluster A/Bs. `glm_moe_router` and `glm_routed_expert` run
-on this grid at GLM-5 dims; at GLM-4.7-Flash dims the routed expert hangs, now localised to the
-gather (F11). Fused ops beyond that are blocked on layout assumptions in blaze — narrowed to the shared
-expert's *down* projection (F4 revised) — documented below with evidence.
+**Status:** The routed MoE path is now **numerically correct at GLM-4.7-Flash's dims**. F11's hang
+is fixed (17.8 s against >700 s), and the PCC 0.0235 that replaced it is fixed too — traced to
+uninitialised L1 being ranked as an expert (F14) and then to a golden that asserted an ordering
+the kernel does not promise (F15). F3 is **resolved, not worked around**: GLM's 20 heads do fit,
+and the Q-branch grid is now solved rather than assumed.
+
+Against that, one new blocker and one hard number. **`DRAMStreamingMatmul` stalls under
+multi-device mesh execution** (F17) — measured on the *stock, unmodified* op, so every fused op
+built on it is blocked at the 32-device model boundary, and that is now the critical path rather
+than any layout question. And at the real integration boundary — the model's native TILE DRAM
+tensors in and out — the fused QKV-A cluster measures **0.53x, nearly 2x slower than ttnn**, against
+4.76x on blaze-native tensors. Three clusters are correctness-gated in isolation and there is still
+**zero measured end-to-end gain**. Read section 7 before planning adoption.
 
 **Hardware:** 32-chip Blackhole Galaxy, every chip 1x-harvested → **12x10 = 120 cores** per
 device, 8 DRAM banks. This matters throughout: blaze's model layouts are written for an
@@ -264,24 +269,65 @@ also on `PYTHONPATH` — a regular package terminates the namespace search and s
 The harness is unusable out of the box. Fix upstream is adding `tests/__init__.py` and
 `tests/blaze/__init__.py`; we worked around it by registering the module by path.
 
-### F3 — MLA layout cannot express GLM-4.7-Flash's head count
+### F3 (resolved, rewritten) — GLM's 20 heads do fit; the original finding blamed the wrong file
 
-`tests/blaze/backed/layout_plan.py:186` requires `n_heads_per_device % 8 == 0`
-(`_QB_GRID_ROWS = 8`). GLM has **20 heads**, and no TP divisor works:
+**Superseded.** The earlier version of this finding said MLA "cannot express" 20 heads and named
+`tests/blaze/backed/layout_plan.py:186`'s `n_heads_per_device % 8 == 0` as the blocker. That
+requirement is real but it is **not a production constraint**: `layout_plan.py` lives under
+`tests/`, and production derives the Q-branch geometry from the *weight shard spec* —
+`q_heads/op.py:155-157` takes `qnope_grid` from `kv_b1_proj_weights.core_ranges` (or its
+`shard_spec.grid`), and `create_q_heads/op.py:67` reads `qnope_cols` off that grid's width. The
+`_QB_GRID_ROWS = 8` was a hand-written constant in a test helper, not an invariant of the ops.
 
-| tp | heads/device | %8 | %(8x3) |
-|---|---|---|---|
-| 1 | 20 | 4 ✗ | 20 ✗ |
-| 2 | 10 | 2 ✗ | 10 ✗ |
-| 4 | 5 | 5 ✗ | 5 ✗ |
-| 5 | 4 | 4 ✗ | 4 ✗ |
+The two constraints that **are** binding, both verified in source:
 
-Worse, GLM's nope:rope ratio is **192:64 = 3:1** (vs 2:1 for DSv3/Kimi), so
-`qrope_grid_cols = heads/(8*3)` needs a multiple of **24**. DSv3's 64 and Kimi's 32 satisfy
-both; 20 satisfies neither. Unblocking needs `_QB_GRID_ROWS` made config-driven **and**
-`qb_per_core` decoupled from `qk_nope_head_dim` — both feed kernel compile-time args, and
-the 8 is a deliberate invariant (`n_sdpa_cores = heads//8`, *"derive such that
-heads_per_receiver = 8 (see PR #1063)"*).
+1. **`create_q_heads/kernels/op.hpp` hardcodes two RoPE heads per core.** At HEAD, `:253`
+   computes the destination as `2 * qrope_col * qrope_head_size_bytes` and `:255-260` transfers
+   `double_qrope_head_size_bytes = qrope_head_size_bytes * 2` under a `NOC_MAX_BURST_SIZE`
+   static_assert. This — not `qb_per_core` — is the true source of the 2:1 nope:rope assumption.
+   `layout_plan.py:199` at HEAD derived `qrope_heads_per_core = qk_nope_head_dim //
+   qk_rope_head_dim`, which is 2 for DSv3 and Kimi and therefore *coincidentally* matched the
+   kernel's literal. The real relation is a layout one — a sender row lays down `qnope_cols` RoPE
+   parts, so `qrope_cols * qrope_heads_per_core == qnope_cols` — and it has nothing to do with the
+   dimension ratio.
+2. **`flash_mla/op.py:535` asserts `B == grid.CORES_PER_BLOCK`**, and only two SDPA grids exist:
+   `FlashMLAOptimalGridNOC0` with 8 (`:95`) and `FlashMLAOptimal4CoreGridNOC0` with 4 (`:260`),
+   with `select_flash_mla_grid` (`:299-305`) choosing between them. So the receiver count has
+   exactly **two legal values**.
+
+Under those, GLM-4.7-Flash's 20 heads fit: **4 sender rows × (5 NoPE + 1 RoPE) columns, B=4**,
+`qrope_heads_per_core = 5`, `heads_per_receiver = 5`. `blaze/models/config/mla_q_grid.py`
+searches that constraint set instead of assuming a shape, and its preference order is chosen so
+DSv3 (8 rows × (8+4), B=8) and Kimi (8 rows × (4+2), B=4) come out exactly as the hand-written
+constants gave them. **CPU-only, 20/20 pass** (`tests/blaze/backed/test_mla_q_grid.py`); the
+kernel side is **NOT silicon-validated** — `qrope_heads_per_core` is now a real CT arg
+(`create_q_heads/op.py:277`) with `MAX_WORKERS = 8` and `MAX_QNOPE_COLS = 8` enforced
+(`:225-262`), but nobody has run MLA at GLM's shape on hardware.
+
+**GLM needs `scattered_q_heads`, and for a reason worth stating precisely.** A ttnn shard spec
+carries one shard shape, so a single `q_b` tensor can only span the NoPE and RoPE core sets when
+they want the same per-core width — `qk_nope_head_dim == qrope_heads_per_core * qk_rope_head_dim`.
+Every 2:1 model satisfies that at `qrope_heads_per_core = 2` (128 either side). GLM lands on 192
+NoPE columns against 5×64 = **320** RoPE columns, so `q_b` runs on its own uniform grid and
+`ScatterOffset` routes the blocks out (`scattered_q_heads/op.py:6-30`). The cost is the lost DEST
+fusion that `QHeads` gets. `MLAQGridLayout.q_b_shard_is_uniform` is the predicate.
+
+Separately true and separately notable: GLM is the first model in this tree where **`v_head_dim`
+(256) differs from `qk_nope_head_dim` (192)** — DSv3 and both Kimis are 128/128. GLM-5.1 and
+GLM-5.2 share GLM-4.7-Flash's 192/64/256, so the 3:1 ratio is **not** unique to this model, which
+makes the hardcoded 2 a live problem for the GLM family generally rather than a one-off. Note the
+v_head_dim asymmetry is *not* what forces `scattered_q_heads` — the non-uniform `q_b` shard above
+is — and an earlier draft of this note conflated the two.
+
+**One pre-existing failure surfaced, unrelated to the solver.**
+`tests/blaze/backed/test_layout_plan.py:187-189` asserts Kimi's `heads_per_receiver == 4`, but
+HEAD's own arithmetic gives **8** (`n_sdpa_cores = max(1, 32//8) = 4` receivers, `32//4 = 8` heads
+each — `layout_plan.py:183-192`, comment *"derive such that heads_per_receiver = 8"*). So that
+test fails at HEAD, before any change here, and the solver reproduces HEAD's 8 rather than the
+test's 4. Meanwhile `create_q_heads/op.py:25` and `flash_mla/op.py:498-499` both describe Kimi as
+`heads_per_receiver=4`. Three places in tt-blaze disagree about what Kimi runs; we have not
+resolved it and deliberately did not pick a side (`mla_q_grid.py:26-32`). **Someone with a Kimi
+device should settle it** — the answer changes the SDPA grid.
 
 ### F4 (revised) — gate/up is already solved upstream; only `down` is blocked
 
@@ -358,10 +404,14 @@ this only works when `num_experts` exactly fills a 16x16 face — GLM-5's 256 do
 64 does not, and it raised `shape '[1, 16, 16]' is invalid for input of size 64`. The op
 itself is parameterized by `num_experts`; only the test was fixed to 256.
 
-Fixed by zero-padding to a `face_h x face_w` face, which is byte-identical for 256 experts.
-Patch preserved at
-[`blaze_eval/glm5_routed_expert_gate_bias_dim_general.patch`](blaze_eval/glm5_routed_expert_gate_bias_dim_general.patch)
-— small and self-contained, **worth upstreaming** alongside F1/F2.
+Fixed by padding to a `face_h x face_w` face, which is byte-identical for 256 experts.
+
+**Corrected since first written:** the original patch padded with **zeros**, and that is wrong.
+The gate ranks `act + bias` over every lane, so a zero-act zero-bias padding lane scores 0 and
+beats any real expert whose score went negative. The pad value must be a large negative bias —
+`-100.0`, which is what blaze's own `create_gate_tensors` uses (`generic_moe_gate/op.py:93`). This
+is the caller half of the contract F14 describes; neither half is sufficient alone. Patch now at
+[`blaze_eval/upstream/03-glm5-gate-bias-face-dim-general.patch`](blaze_eval/upstream/03-glm5-gate-bias-face-dim-general.patch).
 
 ### F11 — `glm_routed_expert` still hangs at GLM-4.7-Flash dims, with a valid config
 

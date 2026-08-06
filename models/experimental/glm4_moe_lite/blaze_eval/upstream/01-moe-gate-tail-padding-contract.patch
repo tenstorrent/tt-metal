@@ -1,0 +1,659 @@
+Subject: [PATCH 1/6] moe gate: initialise the face lanes the kernel ranks but the gather never writes
+
+`round_up_num_total_experts` did not exist; `glm_moe_router` passed
+`num_total_experts=256` as a literal (`glm_moe_router/op.py:137` at HEAD) while
+the gather filled only as many lanes as the gate MM produced. On a 64-expert
+model the gate ranked 128 lanes over 64 written ones and the other 64 were
+whatever the shared scratch arena last held.
+
+WHY THE EXISTING -100 BIAS SENTINEL IS NOT ENOUGH
+
+blaze's own reference tensor builder pads both halves —
+`generic_moe_gate/op.py:92-93` fills the act face with `0.0` and the bias face
+with `-100.0`. That is the contract, and it is a *pair*: the gate ranks
+`act + bias` per lane, so bounding one side alone bounds nothing. The router
+path had no act pad at all, and its logits are post-sigmoid, so real lanes sit
+in (0, 1) and score at most ~1. Any stale bf16 word above ~100 in the tail
+outranks every real expert even after the sentinel.
+
+WHY IT PRODUCED GARBAGE RATHER THAN A FAULT
+
+A winning padding lane yields an expert id in [num_experts, num_total_experts),
+which has no weights behind it. `dram_streaming_matmul/kernels/op.hpp:182-191`
+takes that id from the index CB and computes
+`expert_offset_bytes = expert_idx * expert_size_bytes` with no bounds check. At
+GLM-4.7-Flash's dims the per-bank expert stride happens to land the read inside
+a *different real* weight tensor, so it is a legal DRAM read returning finite
+numbers. MEASURED on silicon: `glm_moe_router` PCC 0.0235 — wrong, but neither
+hanging nor faulting, which is what made it hard to attribute.
+
+THE FIX
+
+* `round_up_num_total_experts(num_experts)` — rounds to a kernel-supported
+  block. The SFPU sorts whole 128-lane blocks and static_asserts
+  `>= 128 && % 128 == 0` (`ckernel_sfpu_generic_moe_gate_topk.h:176-177`,
+  `..._top8.h:178-179`), so an unrounded count is a *compile* error, not a slow
+  path. Its docstring states the pad-both-sides contract.
+* `gate_face_padding_plan(num_experts)` — pure-Python bookkeeping separating
+  lanes *written* (`ceil(num_experts/32)*32`, a property of the gather: one
+  32-wide page per gate-MM core) from lanes *ranked* (`num_total_experts`, a
+  property of the kernel). Asserting on this needs no device.
+* `make_gate_gather_dst(...)` — returns the existing `f.cb_scratch` CB unchanged
+  when the two agree, and a zero-filled `f.named_tensor`-backed face when they
+  do not. Three properties make the zeros persist where a scratch slot's would
+  not: named tensors are pinned in the compiled program's `lifetime_tensors`
+  (`blaze/compiler.py:317-329`) so the buffer is never re-let; the gather writes
+  only `sender_idx * data_size_bytes` from the base
+  (`gather/kernels/op.hpp:108`); and the one-page CB is popped every iteration
+  (`generic_moe_gate/kernels/op.hpp:92`) so the write pointer returns to base.
+* `GenericMoeGate.emit` now rejects an out-of-block `num_total_experts` in
+  Python, naming the helper that fixes it, instead of letting it reach a
+  static_assert inside a JIT build.
+* Both GLM and DeepSeek-V4 routers derive `num_total_experts` from the plan.
+
+NO-OP FOR EVERY SHIPPING CONFIG. At 128 and 256 experts the plan reports no
+tail, `make_gate_gather_dst` returns the same `f.cb_scratch` with the same name,
+page size, tile and core ranges, and `plan.num_total_experts == num_experts`.
+GLM-5 and DeepSeek-V4 take a byte-identical path.
+
+Also drops `pop_act=True` from both call sites. It is inert: the compute kernel
+declares the CT arg at `generic_moe_gate/kernels/op.hpp:47` and that is its only
+occurrence in the file — act and bias are popped unconditionally at lines 92-93.
+The stale comment claiming it controlled popping the gathered CB is removed.
+Retiring the parameter properly means deleting the kernel-side declaration too,
+which this patch does not do.
+
+STATUS
+* Fix VERIFIED on silicon (Blackhole Galaxy, harvested 12x10 grid): with the
+  zero-filled face the device selected expert 44, a real lane, where before it
+  selected a padding lane.
+* `tests/blaze/micro_ops/moe/test_gate_tail_padding_contract.py` is CPU-only
+  (`pytest.mark.device("cpu")`) and NOT RUN ON HARDWARE — it needs no device. It
+  reproduces the half-padded configuration through `GenericMoeGate.golden` and
+  shows the sentinel failing, then passing once the act tail is zeroed,
+  parametrised over values a live arena plausibly holds (1e4, bf16 max, NaN, and
+  two values small enough that the sentinel alone would have coped).
+* The DeepSeek-V4 router change is source-reviewed only; NOT RUN, we have no
+  DeepSeek-V4 numerics gate here.
+
+Apply before patch 2 of 6.
+---
+diff --git a/blaze/ops/generic_moe_gate/op.py b/blaze/ops/generic_moe_gate/op.py
+index 06eadbd11..43bab2305 100644
+--- a/blaze/ops/generic_moe_gate/op.py
++++ b/blaze/ops/generic_moe_gate/op.py
+@@ -8,8 +8,21 @@
+     normalization = True, False
+     zero_tail = True, False (pack 0s to position k...15 of output cb)
+     full_sort = True, False (emit top-k scores/indices in descending order at positions 0..k-1)
++
++Two contracts callers get wrong, documented here because neither is enforced:
++
++* **Lane order.** With ``full_sort=False`` the kernel promises only the top-k
++  *set*; output lane ``i`` is NOT guaranteed to be the i-th largest. Every test
++  in this family compares sorted sets for that reason
++  (``test_generic_moe_gate.py:252-258``); only the ``full_sort=True`` branch
++  asserts descending order (lines 229-241). Set ``full_sort=True`` if you need
++  lane 0 to be the max, as ``gptoss_moe_router`` does.
++* **Padded lanes.** See :func:`round_up_num_total_experts` and
++  :func:`gate_face_padding_plan`.
+ """
+ 
++from dataclasses import dataclass
++
+ import torch
+ import ttnn
+ 
+@@ -17,6 +30,165 @@ from ...blaze_op import BlazeOp, Input, MicroOp, Output
+ from ...fused_program import CBHandle, FusedProgram, MultiOutput
+ from ...utils import _float_to_bits
+ 
++#: ``num_total_experts`` values the top-k kernel accepts. The SFPU sorts whole
++#: 128-lane blocks and static_asserts ``>= 128`` and ``% 128 == 0``
++#: (``ckernel_sfpu_generic_moe_gate_topk.h:176``,
++#: ``ckernel_sfpu_generic_moe_gate_topk_top8.h:178``), so a smaller expert count
++#: is a *compile* error, not a slow path.
++GENERIC_GATE_SUPPORTED_EXPERTS = (128, 256, 384, 512)
++
++
++def round_up_num_total_experts(num_experts: int) -> int:
++    """Round a model's real expert count up to a kernel-supported ``num_total_experts``.
++
++    Callers must pad the gate inputs over ``[num_experts, num_total_experts)``:
++    the kernel unconditionally ranks every lane it is told about and never
++    initialises the tail itself. Pad ``act`` with ``0.0`` and ``bias`` with a
++    large negative value, as :func:`create_gate_tensors` does, so padding lanes
++    can never win top-k and route to an expert that has no weights.
++    """
++    for size in GENERIC_GATE_SUPPORTED_EXPERTS:
++        if num_experts <= size:
++            return size
++    raise ValueError(
++        f"num_experts={num_experts} exceeds the largest supported num_total_experts "
++        f"{GENERIC_GATE_SUPPORTED_EXPERTS[-1]}"
++    )
++
++
++#: The routers assemble gate logits into one 16x16 bf16 face on the sender.
++GATE_FACE_HEIGHT = 16
++GATE_FACE_WIDTH = 16
++GATE_FACE_LANES = GATE_FACE_HEIGHT * GATE_FACE_WIDTH
++
++#: Expert columns one gate-MM core owns (its weight shard is ``[K, 32]``).
++GATE_MM_LANES_PER_CORE = 32
++
++
++@dataclass(frozen=True)
++class GateFacePaddingPlan:
++    """How many gate-face lanes get written vs. how many the kernel ranks.
++
++    The two numbers are set by different things and they do not have to agree:
++
++    * ``gathered_lanes`` is a property of the *gather* — one 32-wide page per
++      gate-MM core, so ``ceil(num_experts/32) * 32``.
++    * ``num_total_experts`` is a property of the *kernel*, which sorts whole
++      128-lane blocks and so must be rounded up to a supported block size.
++
++    When they differ, the lanes in between are ranked but never written, and
++    the caller must initialise them. This dataclass is pure Python so it can be
++    asserted on a CPU-only runner.
++    """
++
++    num_experts: int
++    num_total_experts: int
++    gathered_lanes: int
++    face_lanes: int
++
++    @property
++    def needs_zeroed_tail(self) -> bool:
++        """True when the gate ranks lanes the gather never writes."""
++        return self.num_total_experts > self.gathered_lanes
++
++    @property
++    def tail_lanes(self) -> int:
++        return max(0, self.num_total_experts - self.gathered_lanes)
++
++
++def gate_face_padding_plan(
++    num_experts: int,
++    *,
++    lanes_per_gate_core: int = GATE_MM_LANES_PER_CORE,
++    face_lanes: int = GATE_FACE_LANES,
++) -> GateFacePaddingPlan:
++    """Resolve the gate face's written / ranked lane counts for ``num_experts``."""
++    if num_experts <= 0:
++        raise ValueError(f"num_experts must be positive; got {num_experts}")
++    if num_experts > face_lanes:
++        raise ValueError(
++            f"num_experts={num_experts} does not fit the {face_lanes}-lane gate face "
++            f"the routers assemble on the sender; a larger face needs a different "
++            f"gather destination geometry."
++        )
++    num_total_experts = round_up_num_total_experts(num_experts)
++    gathered = -(-num_experts // lanes_per_gate_core) * lanes_per_gate_core
++    if num_total_experts > face_lanes:
++        raise ValueError(
++            f"num_experts={num_experts} rounds up to num_total_experts={num_total_experts}, "
++            f"which exceeds the {face_lanes}-lane gate face."
++        )
++    return GateFacePaddingPlan(
++        num_experts=num_experts,
++        num_total_experts=num_total_experts,
++        gathered_lanes=gathered,
++        face_lanes=face_lanes,
++    )
++
++
++def make_gate_gather_dst(
++    f: FusedProgram,
++    *,
++    name: str,
++    core_ranges: ttnn.CoreRangeSet,
++    plan: GateFacePaddingPlan,
++) -> CBHandle:
++    """Gather destination for the gate logit face, zero-backed when it must be.
++
++    ``plan.needs_zeroed_tail == False`` (every model whose experts fill the
++    ranked block: 128, 256, ...) returns exactly the ``f.cb_scratch`` CB this
++    used to be — same name, page size, tile and core ranges.
++
++    Otherwise the face is backed by a dedicated zero-filled L1 tensor instead of
++    a scratch arena slot. Three properties make that hold across invocations,
++    which a scratch slot does not have:
++
++    * ``f.named_tensor`` allocations are folded into the compiled program's
++      ``lifetime_tensors`` GC pin list (``blaze/compiler.py:317-329``), so the
++      buffer is never returned to the allocator and never re-let to another CB.
++      Scratch CBs are arena slots with documented temporal reuse, which is
++      exactly why their tail holds whatever shared them last.
++    * The gather writes ``sender_idx * data_size_bytes`` bytes from the base
++      (``ops/gather/kernels/op.hpp:108``), i.e. only the leading
++      ``gathered_lanes``; nothing else writes this buffer after ``from_torch``
++      uploads the zeros at compile time.
++    * The CB is one page deep and the gate pops that page every iteration
++      (``generic_moe_gate/kernels/op.hpp:92``), so the write pointer returns to
++      the base rather than advancing over the tail.
++
++    The caller still owns the *bias* tail over ``[num_experts,
++    num_total_experts)``: zeroed act lanes make the biased score exactly the pad
++    bias, which only loses top-k if that bias is negative.
++    """
++    tile = ttnn.Tile([GATE_FACE_HEIGHT, GATE_FACE_WIDTH])
++    tile_desc = ttnn.TileDescriptor(tile)
++    page_size = tile.get_tile_size(ttnn.bfloat16)
++
++    if not plan.needs_zeroed_tail:
++        return f.cb_scratch(
++            name=name,
++            num_pages=1,
++            core_ranges=core_ranges,
++            data_format=ttnn.bfloat16,
++            tile=tile_desc,
++            page_size=page_size,
++        )
++
++    num_cores = core_ranges.num_cores()
++    backing = f.named_tensor(
++        name=f"{name}_zeros",
++        torch_tensor=torch.zeros(num_cores * GATE_FACE_HEIGHT, GATE_FACE_WIDTH, dtype=torch.bfloat16),
++        dtype=ttnn.bfloat16,
++        layout=ttnn.TILE_LAYOUT,
++        memory_config=ttnn.MemoryConfig(
++            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
++            ttnn.BufferType.L1,
++            ttnn.ShardSpec(core_ranges, [GATE_FACE_HEIGHT, GATE_FACE_WIDTH], ttnn.ShardOrientation.ROW_MAJOR),
++        ),
++        tile=tile,
++    )
++    return f.cb_from_tensor(backing, tile=tile_desc, page_size=page_size)
++
+ 
+ def create_gate_tensors(
+     act_torch: torch.Tensor,
+@@ -171,7 +343,25 @@ class GenericMoeGate(MicroOp):
+         zero_tail: bool = False,
+         full_sort: bool = False,
+     ) -> MultiOutput:
+-        """Emit Generic MoE gate. Returns MultiOutput with .out_scores and .out_indices."""
++        """Emit Generic MoE gate. Returns MultiOutput with .out_scores and .out_indices.
++
++        ``pop_act`` is INERT and kept only so the CT-arg list matches the kernel.
++        ``kernels/op.hpp:47`` declares it and never reads it; act and bias are
++        popped unconditionally at ``kernels/op.hpp:92-93``. Retiring it means
++        deleting the declaration too, so both sides stay in sync. Do not add
++        call sites that pass it expecting an effect — a parameter that looks
++        live but is not is how ``num_total_experts=256`` stayed hardcoded here.
++        """
++        # Mirror the kernel's own bound (ckernel_sfpu_generic_moe_gate_topk.h:176-177)
++        # so an unrounded model expert count fails here with the name of the
++        # helper that fixes it, not as a static_assert deep in a JIT build.
++        if num_total_experts % 128 != 0 or not (128 <= num_total_experts <= 1024):
++            raise ValueError(
++                f"num_total_experts={num_total_experts} is not a multiple of 128 in [128, 1024]. "
++                f"Pass round_up_num_total_experts(num_experts) and pad the gate act and bias "
++                f"over the lanes it adds -- see gate_face_padding_plan."
++            )
++
+         if isinstance(act, CBHandle):
+             act_handle = act
+         else:
+diff --git a/blaze/ops/glm_moe_router/op.py b/blaze/ops/glm_moe_router/op.py
+index 2b6347ced..54bcdc93c 100644
+--- a/blaze/ops/glm_moe_router/op.py
++++ b/blaze/ops/glm_moe_router/op.py
+@@ -4,7 +4,7 @@
+ """GLM MoE router fused path: gate MM (+sigmoid) -> gather -> GLM MoE gate.
+ 
+ This router implements GLM-style routing (C1 gate type) with:
+-- Global top-k across all 256 experts (no grouping constraints like DeepSeek)
++- Global top-k across all ``num_experts`` experts (no grouping constraints like DeepSeek)
+ - Sigmoid activation on gate logits (applied in fused matmul)
+ - Normalized scores (C1 type uses normalization)
+ """
+@@ -14,6 +14,7 @@ import ttnn
+ from ...blaze_op import BlazeOp, FusedOp, Input, Output
+ from ...fused_program import CBHandle, MultiOutput
+ from ..generic_moe_gate import GenericMoeGate
++from ..generic_moe_gate.op import gate_face_padding_plan, make_gate_gather_dst
+ from ..gather import Gather
+ from ..matmul_fused_act import Activation, MatmulFusedAct
+ 
+@@ -93,6 +94,8 @@ class GLMMoERouter(FusedOp):
+         pop_act: bool,
+         num_experts: int = 256,
+     ) -> MultiOutput:
++        plan = gate_face_padding_plan(num_experts)
++
+         gate_mm_handle = MatmulFusedAct.emit(
+             f,
+             act,
+@@ -103,17 +106,22 @@ class GLMMoERouter(FusedOp):
+             pop_act=pop_act,
+         )
+         gather_dst_ranges = ttnn.CoreRangeSet(list(gate_mm_handle.core_ranges.ranges()) + list(f.sender_grid.ranges()))
+-        gate_face_tile = ttnn.Tile([16, 16])
+-        gate_face_desc = ttnn.TileDescriptor(gate_face_tile)
+-        gate_face_page_size = gate_face_tile.get_tile_size(ttnn.bfloat16)
+ 
+-        gate_gather_dst = f.cb_scratch(
++        # The gather writes one 32-wide page per gate-MM core, so it fills
++        # ``plan.gathered_lanes`` of the face; the gate ranks
++        # ``plan.num_total_experts``. GLM-5's 256 experts make those equal and
++        # this is byte-identical to the f.cb_scratch it replaces. GLM-4.7-Flash's
++        # 64 experts over 2 gate cores fill 64 of 128 ranked lanes, and the
++        # remaining 64 would otherwise be arena bytes: the logits are
++        # post-sigmoid and bounded by (0,1), so the -100 pad the caller puts in
++        # the bias tail only keeps a padding lane out of top-k if that lane's
++        # activation is bounded too. round_up_num_total_experts' contract is to
++        # pad BOTH.
++        gate_gather_dst = make_gate_gather_dst(
++            f,
+             name=BlazeOp.cb_name(prefix, "gate_gather_dst"),
+-            num_pages=1,
+             core_ranges=gather_dst_ranges,
+-            data_format=ttnn.bfloat16,
+-            tile=gate_face_desc,
+-            page_size=gate_face_page_size,
++            plan=plan,
+         )
+         gathered_handle = Gather.emit(
+             f,
+@@ -134,6 +142,21 @@ class GLMMoERouter(FusedOp):
+             scaling_factor=scaling_factor,
+             normalize=normalize,
+             num_selected_experts=num_selected_experts,
+-            num_total_experts=256,
+-            pop_act=True,
++            # Must track the model's expert count, rounded up to a kernel-supported
++            # block size (64 real experts -> 128). Baking in 256 makes the gate rank
++            # 256 lanes when only ``num_experts`` were gathered, so top-k can return
++            # an expert id with no weights behind it; the DRAM reader applies that id
++            # unchecked (dram_streaming_matmul/kernels/op.hpp:182-191).
++            num_total_experts=plan.num_total_experts,
++            # ``pop_act`` is deliberately NOT passed: it is inert here. The gate's
++            # compute kernel declares the CT arg and never reads it
++            # (generic_moe_gate/kernels/op.hpp:47), popping act and bias
++            # unconditionally at lines 92-93. An earlier comment claimed this
++            # controlled popping the gathered CB; it never did.
++            #
++            # Clear output lanes [k, 16) so a downstream lane-offset consumer never
++            # reads a stale top-(k+1..) index. Matches deepseekv4_moe_router. NOTE
++            # this makes lanes [k, 16) read as expert 0 with score 0, which matters
++            # when ``index_offset >= k`` -- see GLMRoutedExpert.emit.
++            zero_tail=True,
+         )
+diff --git a/blaze/ops/deepseekv4_moe_router/op.py b/blaze/ops/deepseekv4_moe_router/op.py
+index b31b54c47..cd2c4b3be 100644
+--- a/blaze/ops/deepseekv4_moe_router/op.py
++++ b/blaze/ops/deepseekv4_moe_router/op.py
+@@ -32,6 +32,7 @@ import ttnn
+ from ...blaze_op import BlazeOp, FusedOp, Input, Output
+ from ...fused_program import CBHandle, MultiOutput
+ from ..generic_moe_gate import GenericMoeGate
++from ..generic_moe_gate.op import gate_face_padding_plan, make_gate_gather_dst
+ from ..gather import Gather
+ from ..matmul_fused_act import Activation, MatmulFusedAct, SoftplusActivationParams
+ 
+@@ -127,6 +128,8 @@ class DeepseekV4MoERouter(FusedOp):
+         if weight.memory_config().shard_spec is None:
+             raise ValueError("deepseekv4_moe_router: weight must be sharded.")
+ 
++        plan = gate_face_padding_plan(num_experts)
++
+         gate_mm_handle = MatmulFusedAct.emit(
+             f,
+             act,
+@@ -139,17 +142,16 @@ class DeepseekV4MoERouter(FusedOp):
+         )
+ 
+         gather_dst_ranges = ttnn.CoreRangeSet(list(gate_mm_handle.core_ranges.ranges()) + list(f.sender_grid.ranges()))
+-        gate_face_tile = ttnn.Tile([16, 16])
+-        gate_face_desc = ttnn.TileDescriptor(gate_face_tile)
+-        gate_face_page_size = gate_face_tile.get_tile_size(ttnn.bfloat16)
+ 
+-        gate_gather_dst = f.cb_scratch(
++        # Byte-identical to the f.cb_scratch it replaces at 128 / 256 experts,
++        # where the gather fills every ranked lane. Below a kernel block size the
++        # face would otherwise expose arena bytes to top-k -- see
++        # generic_moe_gate.make_gate_gather_dst.
++        gate_gather_dst = make_gate_gather_dst(
++            f,
+             name=BlazeOp.cb_name(prefix, "gate_gather_dst"),
+-            num_pages=1,
+             core_ranges=gather_dst_ranges,
+-            data_format=ttnn.bfloat16,
+-            tile=gate_face_desc,
+-            page_size=gate_face_page_size,
++            plan=plan,
+         )
+         gathered_handle = Gather.emit(
+             f,
+@@ -169,6 +171,16 @@ class DeepseekV4MoERouter(FusedOp):
+         # (TP index_offset) never reads stale top-(k+1..) values. Expert ids
+         # are derived from lane position by the generic gate (lane i -> expert
+         # i, matching the gather's row-major layout).
++        #
++        # ``num_total_experts`` goes through the plan rather than ``num_experts``
++        # directly: the SFPU sorts whole 128-lane blocks and static_asserts
++        # ``>= 128`` and ``% 128 == 0``, so a raw count that is not already a
++        # supported block size is a compile error rather than a slow path. At
++        # DeepSeek-V4's 256 (and at 128) the plan returns the same number, so
++        # this is a no-op for every shipping config.
++        #
++        # ``pop_act`` is deliberately not passed: it is inert. See
++        # GenericMoeGate.emit's docstring.
+         return GenericMoeGate.emit(
+             f,
+             gathered_handle,
+@@ -179,7 +191,6 @@ class DeepseekV4MoERouter(FusedOp):
+             scaling_factor=scaling_factor,
+             normalize=True,
+             num_selected_experts=num_selected_experts,
+-            num_total_experts=num_experts,
+-            pop_act=True,
++            num_total_experts=plan.num_total_experts,
+             zero_tail=True,
+         )
+diff --git a/tests/blaze/micro_ops/moe/test_gate_tail_padding_contract.py b/tests/blaze/micro_ops/moe/test_gate_tail_padding_contract.py
+new file mode 100644
+index 000000000..3fb384084
+--- /dev/null
++++ b/tests/blaze/micro_ops/moe/test_gate_tail_padding_contract.py
+@@ -0,0 +1,197 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++# SPDX-License-Identifier: Apache-2.0
++
++"""CPU-only guards on the gate face's padded-lane contract.
++
++`round_up_num_total_experts` rounds a model's expert count up to a kernel block
++size and its docstring requires the caller to pad BOTH the activation and the
++bias over the lanes it adds. `glm_moe_router` padded only the bias, and every
++existing test still passed: the device tests all run 128 or 256 experts, where
++the rounding is a no-op and the tail does not exist, and the micro-op tests hand
++the gate a fully populated activation face so there is no unwritten tail either.
++
++These tests fail on the half-padded configuration without a device. They cover
++the two independent halves of the bug:
++
++  * the bookkeeping -- lanes gathered vs. lanes ranked, and whether a tail
++    therefore has to be initialised (`gate_face_padding_plan`);
++  * the numerics -- that a -100 bias sentinel does NOT on its own keep an
++    unwritten lane out of top-k, which is the step the earlier fix assumed.
++
++NOT RUN -- written without device access, but nothing here needs one.
++"""
++
++import pytest
++
++pytestmark = [
++    pytest.mark.device("cpu"),
++    pytest.mark.level("micro"),
++]
++
++import torch
++
++from blaze.ops.generic_moe_gate.op import (
++    GATE_FACE_LANES,
++    GATE_MM_LANES_PER_CORE,
++    GENERIC_GATE_SUPPORTED_EXPERTS,
++    GenericMoeGate,
++    gate_face_padding_plan,
++    round_up_num_total_experts,
++)
++
++PAD_BIAS = -100.0
++"""The sentinel `test_glm5_routed_expert.py` writes into the bias tail."""
++
++
++# ---------------------------------------------------------------------------
++# 1. Bookkeeping: which lanes get written, which get ranked.
++# ---------------------------------------------------------------------------
++
++
++@pytest.mark.parametrize(
++    "num_experts, num_total, gathered, needs_tail",
++    [
++        (32, 128, 32, True),  # 1 gate-MM core
++        (64, 128, 64, True),  # GLM-4.7-Flash: 2 gate-MM cores, the failing case
++        (96, 128, 96, True),
++        (128, 128, 128, False),  # exact block: no tail
++        (160, 256, 160, True),
++        (200, 256, 224, True),  # not a multiple of 32: gather overshoots too
++        (256, 256, 256, False),  # GLM-5 / DeepSeek-V4: no tail
++    ],
++)
++def test_padding_plan_table(num_experts, num_total, gathered, needs_tail):
++    plan = gate_face_padding_plan(num_experts)
++    assert plan.num_total_experts == num_total
++    assert plan.gathered_lanes == gathered
++    assert plan.needs_zeroed_tail is needs_tail
++    assert plan.tail_lanes == max(0, num_total - gathered)
++
++
++def test_shipping_configs_keep_the_plain_scratch_path():
++    """GLM-5 and DeepSeek-V4 must not change: no tail, no dedicated allocation."""
++    for num_experts in (128, 256):
++        plan = gate_face_padding_plan(num_experts)
++        assert not plan.needs_zeroed_tail
++        assert plan.tail_lanes == 0
++        assert plan.num_total_experts == num_experts
++
++
++def test_every_ranked_lane_is_either_written_or_declared_a_tail():
++    """The invariant the routers violated, over every count that fits the face.
++
++    A lane the gate ranks is either filled by the gather or accounted for as a
++    tail the caller has to initialise. There is no third option, and the old
++    code took it anyway.
++    """
++    for num_experts in range(1, GATE_FACE_LANES + 1):
++        plan = gate_face_padding_plan(num_experts)
++        assert plan.gathered_lanes + plan.tail_lanes >= plan.num_total_experts
++        assert plan.gathered_lanes % GATE_MM_LANES_PER_CORE == 0
++        assert plan.gathered_lanes >= plan.num_experts
++        assert plan.num_total_experts in GENERIC_GATE_SUPPORTED_EXPERTS
++
++
++def test_plan_rejects_counts_that_do_not_fit_the_face():
++    with pytest.raises(ValueError, match="gate face"):
++        gate_face_padding_plan(GATE_FACE_LANES + 1)
++    with pytest.raises(ValueError, match="positive"):
++        gate_face_padding_plan(0)
++
++
++def test_round_up_is_unchanged_for_supported_counts():
++    for n in GENERIC_GATE_SUPPORTED_EXPERTS:
++        assert round_up_num_total_experts(n) == n
++
++
++# ---------------------------------------------------------------------------
++# 2. Numerics: why padding the bias alone is not enough.
++# ---------------------------------------------------------------------------
++
++
++def _gate_face(num_experts, num_total, tail_act, *, seed=0):
++    """Build a (1, num_total) act/bias pair in the router's post-sigmoid domain.
++
++    Real lanes carry sigmoid outputs, so they live in (0, 1) -- that bound is
++    the whole reason a -100 bias sentinel looks sufficient. Padded lanes carry
++    `tail_act`, which stands in for whatever the shared scratch arena last held.
++    """
++    g = torch.Generator().manual_seed(seed)
++    act = torch.empty(1, num_total, dtype=torch.float32)
++    act[0, :num_experts] = torch.sigmoid(torch.randn(num_experts, generator=g))
++    act[0, num_experts:] = tail_act
++
++    bias = torch.zeros(1, num_total, dtype=torch.float32)
++    bias[0, :num_experts] = torch.randn(num_experts, generator=g) * 0.01
++    bias[0, num_experts:] = PAD_BIAS
++    return act, bias
++
++
++@pytest.mark.parametrize("k", [4, 8])
++def test_bias_sentinel_alone_does_not_protect_an_uninitialised_tail(k):
++    """The half-fix, reproduced: -100 in the bias does not bound act + bias.
++
++    Scratch L1 is not small. Any tail lane above ~100 outranks every real lane
++    even after the sentinel, and top-k then returns expert ids in [64, 128) --
++    ids with no weights behind them. This is the state `glm_moe_router` was in
++    when it returned PCC 0.0235.
++    """
++    num_experts, num_total = 64, 128
++    tail = torch.full((num_total - num_experts,), 1.0e4)
++    act, bias = _gate_face(num_experts, num_total, tail)
++
++    _, indices = GenericMoeGate.golden(act, bias, num_selected_experts=k)
++    selected = indices[0].tolist()
++    assert all(e >= num_experts for e in selected), (
++        f"expected the padded lanes to win top-{k} and prove the sentinel " f"insufficient, got {selected}"
++    )
++
++
++@pytest.mark.parametrize("k", [4, 8])
++@pytest.mark.parametrize("tail_value", [1.0e4, 3.402823e38, float("nan"), 1.0, 0.51])
++def test_zeroed_tail_makes_the_sentinel_sufficient_for_any_garbage(k, tail_value):
++    """With the act tail zeroed, a padded lane scores exactly PAD_BIAS and loses.
++
++    Parametrised over values a live arena plausibly holds -- a large float, a
++    bf16 max, a NaN, and two values small enough that the sentinel alone would
++    have coped -- to show the fix does not depend on how big the garbage is.
++    """
++    num_experts, num_total = 64, 128
++    tail = torch.full((num_total - num_experts,), tail_value)
++
++    dirty_act, bias = _gate_face(num_experts, num_total, tail)
++    clean_act = dirty_act.clone()
++    clean_act[0, num_experts:] = 0.0
++
++    _, indices = GenericMoeGate.golden(clean_act, bias, num_selected_experts=k)
++    selected = indices[0].tolist()
++    assert all(e < num_experts for e in selected), f"padded lane still selected: {selected}"
++
++
++@pytest.mark.parametrize("k", [4, 8])
++def test_zeroed_tail_reproduces_the_unpadded_result_exactly(k):
++    """Padding must be inert, not merely safe: same experts, same scores."""
++    num_experts, num_total = 64, 128
++    act, bias = _gate_face(num_experts, num_total, torch.zeros(num_total - num_experts))
++
++    padded_scores, padded_idx = GenericMoeGate.golden(act, bias, num_selected_experts=k)
++    ref_scores, ref_idx = GenericMoeGate.golden(
++        act[:, :num_experts].contiguous(), bias[:, :num_experts].contiguous(), num_selected_experts=k
++    )
++    assert padded_idx.tolist() == ref_idx.tolist()
++    torch.testing.assert_close(padded_scores, ref_scores)
++
++
++def test_normalization_denominator_only_sums_the_k_selected():
++    """A padded lane that loses top-k cannot leak into the normalized score.
++
++    Worth pinning: `normalize=True` dividing by a sum over all ranked lanes
++    rather than the k winners would make the tail matter even when it never
++    wins, and that would need a different fix from zeroing it.
++    """
++    num_experts, num_total, k = 64, 128, 4
++    act, bias = _gate_face(num_experts, num_total, torch.zeros(num_total - num_experts))
++
++    scores, idx = GenericMoeGate.golden(act, bias, num_selected_experts=k, scaling_factor=1.8, normalize=True)
++    picked = act[0, idx[0]]
++    torch.testing.assert_close(scores[0], picked / picked.sum() * 1.8)

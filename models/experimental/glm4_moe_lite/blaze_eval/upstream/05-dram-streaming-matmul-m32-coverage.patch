@@ -1,0 +1,66 @@
+Subject: [PATCH 5/6] tests: cover DRAMStreamingMatmul at m=32, which is numerically wrong
+
+`test_dram_streaming_matmul_blaze` parametrises `m` over {1, 4, 8}
+(`test_dram_streaming_matmul.py:440`). Every other test in the file uses {1, 8},
+{1}, or {1, 4, 8}. m=32 — a full tile of rows — is never exercised anywhere in
+the suite.
+
+MEASURED: PCC 0.0074 at k=5120, n=2048 with bf8 weights, m=32. Not a tolerance
+question; the output is uncorrelated with the reference. m=1 and m=8 at the same
+shape pass at PCC 0.9999. Reproduced through the file's own `_run_and_compare`,
+not a custom harness, so the comparison path is identical to the passing cases.
+
+Why the gap matters beyond a missing corner: at batch size 1 only one row is
+real and m=1 is the right shape, which is where this op's headline win against
+ttnn's DRAM-sharded matmul comes from (we measure 2.45x at GLM-4.7-Flash's
+o_proj, 58.4 -> 23.8 us, both sides PCC 0.9999). At real batch, m=32 is the
+shape you need, and it does not work. The op's advantage as measured is
+therefore specific to bs=1 decode and does not currently extend to batched
+throughput.
+
+This patch adds coverage only; it does not fix the op. Added as a separate
+xfail(strict=False) case rather than by extending the existing parametrisation,
+so the current signal stays green and the fix gate is deleting the marker. Also
+adds the 5120x2048 shape the failure was measured at, which the file does not
+otherwise cover.
+
+STATUS: the PCC number is MEASURED (Blackhole, single device, via
+`blaze_eval/ab_m32_check.py`). The test case itself is authored from that
+measurement and has NOT been run in this form — we had no device window. Expect
+it to xfail at all three shapes; if any shape passes, `strict=False` keeps that
+from being an error and the shape list should be narrowed.
+
+Root cause not investigated. Independent of patches 1-4 and 6 of 6.
+---
+diff --git a/tests/blaze/micro_ops/common/test_dram_streaming_matmul.py b/tests/blaze/micro_ops/common/test_dram_streaming_matmul.py
+--- a/tests/blaze/micro_ops/common/test_dram_streaming_matmul.py
++++ b/tests/blaze/micro_ops/common/test_dram_streaming_matmul.py
+@@ -441,6 +441,28 @@
+ @pytest.mark.parametrize("fused_activation", [None, "silu"])
+ def test_dram_streaming_matmul_blaze(device, k, n, m, fused_activation):
+     _run_and_compare(device, k=k, n=n, m=m, fused_activation=fused_activation)
++
++
++# ---------------------------------------------------------------------------
++# Test 1b: m=32, a full tile of rows — currently numerically wrong
++# ---------------------------------------------------------------------------
++# Test 1 covers m in {1, 4, 8} only. At m=32 the op returns garbage: measured
++# PCC 0.0074 at k=5120, n=2048 with bf8 weights, through this same
++# `_run_and_compare` path that the m in {1, 4, 8} cases pass on. m=32 is a full
++# tile of rows and is what a batched decode step needs, so the gap is not just
++# an untested corner.
++#
++# Kept as a separate xfail case rather than added to Test 1's parametrization
++# so the existing signal stays green. The fix gate is deleting the marker.
++@pytest.mark.xfail(
++    reason="m=32 is numerically wrong: PCC 0.0074 at k=5120, n=2048, bf8",
++    strict=False,
++)
++@pytest.mark.parametrize("k, n", [(5120, 2048), (7168, 2048), (2048, 7168)])
++@pytest.mark.parametrize("m", [32])
++@pytest.mark.parametrize("fused_activation", [None])
++def test_dram_streaming_matmul_m32_blaze(device, k, n, m, fused_activation):
++    _run_and_compare(device, k=k, n=n, m=m, fused_activation=fused_activation)
+ 
+ 
+ # ---------------------------------------------------------------------------

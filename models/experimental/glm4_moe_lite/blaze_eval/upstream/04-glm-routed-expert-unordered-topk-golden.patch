@@ -1,0 +1,257 @@
+Subject: [PATCH 4/6] glm_routed_expert: golden asserts a lane order full_sort=False does not promise
+
+`GLMRoutedExpert.golden` reads `top_indices[0, lane]` — it assumes output lane
+`i` holds the i-th largest expert. `GLMMoERouter` runs `GenericMoeGate` with
+`full_sort=False`, and that mode promises the top-k *set* and nothing about
+order or tie-breaking. `test_generic_moe_gate.py:252-258` already compares
+sorted sets for exactly this reason; only the `full_sort=True` branch at
+`:229-241` asserts descending order. The routed-expert golden is the one place
+in the family that forgot.
+
+HOW IT SURFACED (measured, Blackhole Galaxy, GLM-4.7-Flash dims, k=4)
+
+With patch 1 of 6 applied the gate selects real experts, and the test then
+failed on a tie: experts 44 and 35 both scored exactly `1.0234375` — the bf16
+value at the k-th rank cutoff. Torch's `topk` broke the tie toward one, the SFPU
+toward the other. Both selections are correct. bf16 has ~8 bits of mantissa and
+64 post-sigmoid scores in (0, 1); exact ties at the cutoff are not a freak
+event, they are the expected case at this width.
+
+This is a GOLDEN defect, not a device defect. Nothing was wrong on hardware. It
+is worth fixing rather than working around because any future numerics gate on
+this op hits it, and the natural reaction — loosening the PCC threshold — hides
+real errors while not actually fixing the tie.
+
+THE FIX
+
+`golden_lane_candidates()` returns every output a correct lane may produce:
+the strict top-(k - ties) winners plus each way the tied cutoff can be resolved,
+with each candidate carrying its own routing weight. The test asserts membership
+instead of equality.
+
+Carrying the score per candidate matters. A PCC comparison is scale-invariant,
+so comparing against a single candidate cannot tell whether the device paired
+the right weight with the right expert; pairing each candidate output with the
+score that expert would have earned restores that check. That is not
+hypothetical — see the `scaling_factor` fix in the same hunk below.
+
+ALSO IN THIS PATCH, a fifth instance of patch 2 of 6's bug class, this one in the
+test: it passed `"routing_scaling_factor"` in `user_args`, but
+`GLMRoutedExpert.compose` reads `"scaling_factor"`. The key was never consumed,
+so the device ran the 2.5 default while the golden used GLM-5's real factor.
+PCC's scale invariance is precisely why nobody noticed for the life of the test.
+
+`golden()` is kept and now delegates, with its ordering assumption documented as
+a caveat and valid only under `full_sort=True`. It also now raises on
+`device_id >= num_selected_experts` rather than returning a silently wrong
+reference — on device that same condition reads a `zero_tail` lane and yields
+expert 0 scaled by 0 (see patch 2 of 6's UNRESOLVED note).
+
+STATUS: VERIFIED on silicon — this is the change that took the GLM-4.7-Flash
+`glm_routed_expert` probe from failing on the 44-vs-35 tie to passing. The GLM-5
+k=8 path is unchanged in outcome (it happens to come out ordered) and was
+re-run.
+
+Apply after patch 3 of 6.
+---
+diff --git a/blaze/ops/glm_routed_expert/op.py b/blaze/ops/glm_routed_expert/op.py
+index c5bf3e4b5..667dc3ff9 100644
+--- a/blaze/ops/glm_routed_expert/op.py
++++ b/blaze/ops/glm_routed_expert/op.py
+@@ -26,6 +26,83 @@ class GLMRoutedExpert(FusedOp):
+     swiglu_down_weights: Input = Input()
+     out: Output = Output()
+ 
++    @staticmethod
++    def golden_lane_candidates(
++        act,
++        gate_weight,
++        gate_bias,
++        wu_stacked,
++        wg_stacked,
++        w2_stacked,
++        *,
++        eps,
++        scaling_factor,
++        num_selected_experts,
++    ):
++        """Every output a correct device lane is allowed to produce.
++
++        This, not :meth:`golden`, is the reference the kernel actually promises.
++        ``GLMMoERouter`` runs ``GenericMoeGate`` with ``full_sort=False``
++        (``glm_moe_router/op.py``), and that mode guarantees only the top-k
++        *set*: which of the k winners lands in which output lane is an artefact
++        of the SFPU's bitonic merge, and the merge takes a different, shorter
++        path at k<=4 than at k=8
++        (``ckernel_sfpu_generic_moe_gate_topk_top8.h``,
++        ``_generic_moe_gate_top8_sort_rows_``). GLM-5 runs k=8 and happens to
++        come out ordered; GLM-4.7-Flash runs k=4 and has no such guarantee.
++        ``test_generic_moe_gate.py:252-258`` already compares sorted sets for
++        exactly this reason.
++
++        Returns ``(outputs, indices, scores)``: ``outputs[i]`` is the expected
++        result if the device's lane selected ``indices[i]``, scaled by that
++        expert's own routing weight ``scores[i]``. The candidates include every
++        expert tied with the k-th rank score: bf16 ties may be broken differently
++        by Torch and the SFPU, and either selection is valid. A lane is correct
++        iff it matches one entry -- and because each candidate carries its own
++        score, matching also checks that the device paired the right weight with
++        the right expert, which a scale-invariant PCC against a single candidate
++        cannot.
++        """
++        import itertools
++
++        import torch
++
++        x = act.reshape(-1, act.shape[-1])[0:1, :].float()
++        gate_w = gate_weight.reshape(gate_weight.shape[-2], gate_weight.shape[-1])
++        logits = (x @ gate_w.float()).to(torch.bfloat16)
++        route_values = torch.sigmoid(logits.float()).to(torch.bfloat16).reshape(-1)
++        bias_values = gate_bias.flatten()[: route_values.numel()]
++        rank_values = route_values + bias_values
++
++        k = int(num_selected_experts)
++        cutoff = torch.topk(rank_values, k, sorted=True).values[-1]
++        strict = torch.nonzero(rank_values > cutoff, as_tuple=False).flatten().tolist()
++        tied = torch.nonzero(rank_values == cutoff, as_tuple=False).flatten().tolist()
++        tie_slots = k - len(strict)
++        if not 0 <= tie_slots <= len(tied):
++            raise AssertionError(
++                f"invalid top-k tie partition: strict={len(strict)}, tied={len(tied)}, k={k}"
++            )
++
++        outputs, indices, scores = [], [], []
++        seen = set()
++        for tied_selection in itertools.combinations(tied, tie_slots):
++            selected = strict + list(tied_selection)
++            selected_values = route_values[selected]
++            selected_scores = selected_values / (selected_values.sum() + eps) * scaling_factor
++            for expert_idx, expert_scale in zip(selected, selected_scores):
++                key = (expert_idx, int(expert_scale.view(torch.uint16).item()))
++                if key in seen:
++                    continue
++                seen.add(key)
++                up_proj = x @ wu_stacked[expert_idx].float()
++                gate_proj = torch.nn.functional.silu(x @ wg_stacked[expert_idx].float())
++                hidden = up_proj * gate_proj * expert_scale.float()
++                outputs.append((hidden @ w2_stacked[expert_idx].float()).reshape(1, 1, 1, -1))
++                indices.append(expert_idx)
++                scores.append(float(expert_scale.item()))
++        return outputs, indices, scores
++
+     @staticmethod
+     def golden(
+         act,
+@@ -40,26 +117,43 @@ class GLMRoutedExpert(FusedOp):
+         num_selected_experts,
+         device_id,
+     ):
+-        """Torch reference: GLM gate -> lane-selected expert SwiGLU @ down.
++        """Torch reference for the lane that got the ``device_id``-th largest expert.
+ 
+         The gate reuses ``GLMMoERouter.golden`` (sigmoid gate MM + GLM
+         routing). ``device_id`` picks which of the top-k routed experts drives
+         this lane (the uint16 slot read by the DRAM streaming matmul); its
+-        normalized score scales the SwiGLU hidden before the down projection."""
+-        import torch
++        normalized score scales the SwiGLU hidden before the down projection.
+ 
+-        top_scores, top_indices = GLMMoERouter.golden(
+-            act, gate_weight, gate_bias, eps, scaling_factor, num_selected_experts
+-        )
++        CAVEAT -- this asserts an ordering the device does not promise. It is
++        only a valid point comparison when the router runs with
++        ``full_sort=True``, which ``GLMMoERouter`` does not. Prefer
++        :meth:`golden_lane_candidates` and assert set membership; keep this for
++        the GLM-5 k=8 path, where it is the historically passing reference.
++        """
+         lane = int(device_id)
+-        expert_idx = int(top_indices[0, lane].item())
+-        expert_scale = top_scores[0, lane].float()
+-
+-        x = act.reshape(-1, act.shape[-1])[0:1, :].float()
+-        up_proj = x @ wu_stacked[expert_idx].float()
+-        gate_proj = torch.nn.functional.silu(x @ wg_stacked[expert_idx].float())
+-        hidden = up_proj * gate_proj * expert_scale
+-        return (hidden @ w2_stacked[expert_idx].float()).reshape(1, 1, 1, -1)
++        k = int(num_selected_experts)
++        if lane >= k:
++            # Not a golden limitation -- the device has nothing to return here
++            # either. glm_moe derives index_offset from mesh position (0..31 on a
++            # 4x8 mesh) but the gate only fills lanes [0, k), and zero_tail=True
++            # blanks [k, 16), so such a lane reads expert id 0 with score 0.
++            raise ValueError(
++                f"device_id={lane} >= num_selected_experts={k}: this lane has no routed "
++                f"expert. On device the same condition silently yields expert 0 scaled by "
++                f"0 (zero_tail). See GLMRoutedExpert.emit's index_offset note."
++            )
++        outputs, _, _ = GLMRoutedExpert.golden_lane_candidates(
++            act,
++            gate_weight,
++            gate_bias,
++            wu_stacked,
++            wg_stacked,
++            w2_stacked,
++            eps=eps,
++            scaling_factor=scaling_factor,
++            num_selected_experts=k,
++        )
++        return outputs[lane]
+ 
+     @classmethod
+     def compose(cls, f, tensors, output, user_args):
+diff --git a/tests/blaze/glm5_1/test_glm5_routed_expert.py b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+index 7c29f54c0..d3c0ba1c7 100644
+--- a/tests/blaze/glm5_1/test_glm5_routed_expert.py
++++ b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+@@ -358,9 +372,15 @@ def test_glm5_routed_expert_blaze(
+         user_args={
+             # GLM5 Router args (C1 type)
+             "eps": eps,
+-            "routing_scaling_factor": GLM5_BLAZE_CONFIG.model_config["ffn"]["moe"]["routed_scaling_factor"],
++            # GLMRoutedExpert.compose reads "scaling_factor"; "routing_scaling_factor" was
++            # never consumed, so the device silently used the 2.5 default while the golden
++            # used the real factor. PCC is scale-invariant, which is why it went unnoticed.
++            "scaling_factor": scaling_factor,
+             "normalize": True,
+             "num_selected_experts": GLM5_BLAZE_CONFIG.model_config["ffn"]["moe"]["selected_experts"],
++            # Drives the gate's num_total_experts (rounded up to a kernel block size).
++            # Without it the router falls back to 256 and ranks lanes no gather filled.
++            "num_experts": num_experts,
+             "pop_router_act": False,
+             # SwiGLU args.
+             "index_offset": device_id,
+@@ -381,7 +401,7 @@ def test_glm5_routed_expert_blaze(
+     # -------------------------------------------------------------------------
+     out_tt = ttnn.to_torch(ttnn_result)
+ 
+-    expected = GLMRoutedExpert.golden(
++    candidates, candidate_indices, candidate_scores = GLMRoutedExpert.golden_lane_candidates(
+         act_torch,
+         gate_mm_weight_torch,
+         gate_mm_bias_torch,
+@@ -391,10 +411,20 @@ def test_glm5_routed_expert_blaze(
+         eps=eps,
+         scaling_factor=scaling_factor,
+         num_selected_experts=GLM5_BLAZE_CONFIG.model_config["ffn"]["moe"]["selected_experts"],
+-        device_id=device_id,
+     )
+ 
+-    ok, msg = comp_pcc(expected, out_tt, 0.97)
+-    assert ok, msg
++    candidate_results = [comp_pcc(expected, out_tt, 0.97) for expected in candidates]
++    matching = next((i for i, (ok, _) in enumerate(candidate_results) if ok), None)
++    assert matching is not None, (
++        "device output matched no legal unordered top-k candidate: "
++        + "; ".join(
++            f"expert={expert}, score={score:+.4f}: {msg}"
++            for expert, score, (_, msg) in zip(candidate_indices, candidate_scores, candidate_results)
++        )
++    )
++    msg = candidate_results[matching][1]
+     assert len(dram_expert_weights_keepalive) == 3 * num_experts
+-    logger.info(f"✅ test_glm5_routed_expert_blaze passed with PCC {msg}")
++    logger.info(
++        f"✅ test_glm5_routed_expert_blaze passed with expert "
++        f"{candidate_indices[matching]}, score {candidate_scores[matching]:+.4f}, PCC {msg}"
++    )

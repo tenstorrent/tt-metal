@@ -1,0 +1,62 @@
+Subject: [PATCH 3/6] tests/glm5_1: make the routed-expert gate bias face dim-general
+
+`test_glm5_routed_expert.py:206` built the gate bias as
+`gate_mm_bias_torch.reshape(-1).reshape(1, 16, 16)`. The 16x16 is the gate face
+geometry, already available as `face_h, face_w` at `:85` and used at `:134` and
+`:147`; only this one line hardcodes it. Any model with fewer experts than the
+face holds raises
+
+    RuntimeError: shape '[1, 16, 16]' is invalid for input of size 64
+
+which is what GLM-4.7-Flash's 64 experts do. Nothing about the op is
+256-specific — the test is.
+
+Pads the tail to `face_h * face_w` and asserts the count fits. Padding with
+`-100.0`, not zeros: the gate ranks `act + bias` over every lane in
+`num_total_experts`, so a padded lane needs a bias that loses top-k on its own
+merit. `-100.0` is the value blaze's own `create_gate_tensors` uses for the same
+purpose (`generic_moe_gate/op.py:93`). Byte-identical for GLM-5, whose 256
+experts fill the face exactly and leave no tail to pad.
+
+This is the caller half of the two-sided contract in patch 1 of 6, which owns
+the activation half. Neither is sufficient alone.
+
+STATUS: VERIFIED on silicon at GLM-5 dims (the pad is inert there) and at
+GLM-4.7-Flash dims, where it is what lets the test construct at all.
+
+Supersedes `blaze_eval/glm5_routed_expert_gate_bias_dim_general.patch`, which
+padded with zeros. Zeros are wrong: a zero-act, zero-bias padding lane scores 0
+and beats any real expert whose sigmoid-times-bias score went negative.
+
+Apply after patch 2 of 6 (independent in content, ordered only because patch 4
+of 6 touches the same file).
+---
+diff --git a/tests/blaze/glm5_1/test_glm5_routed_expert.py b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+index 7c29f54c0..d3c0ba1c7 100644
+--- a/tests/blaze/glm5_1/test_glm5_routed_expert.py
++++ b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+@@ -205,8 +205,22 @@ def test_glm5_routed_expert_blaze(
+         mesh_mapper=mesh_mapper,
+     )
+ 
+-    # MoE gate runs on sender after gather; bias is a 16x16 face (same as matmul_fused_act_gather test).
+-    gate_bias_torch = gate_mm_bias_torch.reshape(-1).reshape(1, 16, 16)
++    # MoE gate runs on sender after gather; bias occupies one face_h x face_w face (same as
++    # the matmul_fused_act_gather test). Zero-pad when the model has fewer experts than the
++    # face holds: GLM-5's 256 fills it exactly, GLM-4.7-Flash's 64 does not, and the hardcoded
++    # reshape(1, 16, 16) then raised "shape '[1, 16, 16]' is invalid for input of size 64".
++    _bias_flat = gate_mm_bias_torch.reshape(-1)
++    assert _bias_flat.numel() <= face_h * face_w, (
++        f"{_bias_flat.numel()} experts exceed the {face_h}x{face_w} gate-bias face"
++    )
++    # Pad the tail with a large negative bias, not zeros: the gate ranks on act+bias over
++    # every lane in num_total_experts, and the gathered act tail is shared scratch arena
++    # whose contents are not guaranteed. -100.0 is the same pad value
++    # ``generic_moe_gate.create_gate_tensors`` uses, and keeps padding lanes out of top-k
++    # regardless of what the act tail holds. Byte-identical for GLM-5, which fills the face.
++    _bias_face = torch.full((face_h * face_w,), -100.0, dtype=_bias_flat.dtype)
++    _bias_face[: _bias_flat.numel()] = _bias_flat
++    gate_bias_torch = _bias_face.reshape(1, face_h, face_w)
+     gate_bias_config = ttnn.MemoryConfig(
+         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+         ttnn.BufferType.L1,

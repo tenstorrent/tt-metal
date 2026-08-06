@@ -3,6 +3,36 @@
 Written at a context checkpoint. Everything below is measured on the 32-chip BH Galaxy unless
 marked otherwise. Full context: [`../BLAZE_EVALUATION.md`](../BLAZE_EVALUATION.md).
 
+## HEADLINE: the boundary blocker is CLOSED; the boundary cost is still unmeasured
+
+A second agent added `TileRowReplicate` (input) and `GatherRowToDRAM` (output) and wired them into
+`GLMQKVAProjection`, so it now consumes the model's native 32x32 TILE DRAM tensor and writes DRAM
+outputs. **This closes the one open blocker described below** — the section that follows is kept
+for its findings but its conclusion is superseded. Gated on hardware:
+**q_a PCC 0.999916, kv_a PCC 0.999910**.
+
+The boundary *cost* is NOT yet known. A first A/B read 47.4 us ttnn vs 89.5 us blaze (0.53x), but
+that measurement is **invalid**: `blaze_fn` rebuilt the `FusedProgram` and re-ran `emit()` inside
+the timed callable, while the ttnn side paid no equivalent cost because ttnn caches programs. The
+bench skill warns about exactly this. Do not cite 0.53x.
+
+Corrected bench: `blaze_eval/native_boundary_ab.py`. Two fixes are already in it, both verified:
+
+- the `FusedProgram` build is hoisted out of the timed callable, and **repeated `run()` on one
+  program is confirmed stable** (3 runs bit-identical) — so hoisting is legitimate here even
+  though `run()` mutates `_prepare_for_build`/`_compaction_applied` state;
+- `ab_harness.set_profiler_env()` now runs **before** the ttnn import. It did not, and without it
+  `_measure()` returns `None` rather than raising — a silent no-samples result, not an error.
+
+**The re-measurement has not completed yet**, blocked only by the concurrent-edit note below.
+
+### Blocked on a concurrent edit in the tt-blaze tree
+
+`blaze/ops/glm_oproj_residual/__init__.py` exists without its `op.py`. `blaze/ops/__init__.py`
+imports every op package eagerly at `import blaze`, so this one partial package breaks **all**
+blaze imports tree-wide, not just that op. It is another agent mid-write on a new o_proj+residual
+fused op; leave it alone and re-run when their file lands.
+
 ## State of the two GLM fused ops
 
 Both are **correctness-gated and cluster-measured**. Neither is in the model yet.

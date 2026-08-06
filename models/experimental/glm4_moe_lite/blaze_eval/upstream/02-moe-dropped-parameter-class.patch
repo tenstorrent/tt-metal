@@ -1,0 +1,348 @@
+Subject: [PATCH 2/6] moe: a parameter accepted in compose()/emit() and then dropped at the call
+
+Not four bugs — one bug class, four instances, in a single op family. The shape
+is always the same: a parameter is threaded through the public surface, has a
+default that is correct for the model the op was written against, and is then
+either ignored or replaced by a literal at the inner call. Nothing fails. The
+model runs with the default.
+
+INSTANCES (all `blaze/ops/`, line numbers at HEAD)
+
+1. `glm_moe_router/op.py:137` — `num_total_experts=256` as a literal, while
+   `num_experts` is accepted at `:94`, read from user args at `:63` and passed
+   down at `:71`. The parameter arrives and is discarded one line short of use.
+   Consequence: a 64-expert model ranks 256 gate lanes over 64 written ones.
+   Fixed by patch 1 of 6.
+2. `glm_moe_router/op.py:138` — `pop_act=True` as a literal at the gate call,
+   while `pop_act` is a real parameter used for the gate MM at `:103`. Same name,
+   two meanings, one of them a constant. Compounding this, the gate's `pop_act`
+   is INERT: `generic_moe_gate/kernels/op.hpp:47` is its only occurrence in the
+   kernel, which pops act and bias unconditionally at lines 92-93. Fixed by
+   patch 1 of 6 (call site) and documented in `GenericMoeGate.emit`.
+3. `glm_moe/op.py` — never accepted `num_experts` at all, in `compose()` or
+   `emit()`, so no caller could set it and `GLMRoutedExpert`'s 256 default always
+   won. Fixed here.
+4. `glm_moe_no_shared/op.py` — accepted `num_experts` in BOTH `compose()` and
+   `emit()`, then omitted it from the `GLMRoutedExpert.emit` call. The most
+   legible instance of the class: the plumbing is complete except for the last
+   hop. Fixed here.
+
+`glm_routed_expert/op.py` is the intermediate hop and never had the parameter
+either; added here so 3 and 4 have somewhere to send it.
+
+THREE FURTHER SITES, SAME DEFECT, DIFFERENT OUTCOME
+
+`gptoss_moe_router/op.py:162`, `ffn_interleaved/op.py:476` and
+`deepseekv4_moe_large_router/op.py:156` pass `num_total_experts=num_experts` —
+the raw model count, unrounded. These are not silent: below 128, or at any count
+that is not a multiple of 128, the kernel's static_assert
+(`ckernel_sfpu_generic_moe_gate_topk.h:176-177`) fails the JIT build. They are
+included here because they make the point. The same mistake is safe when it
+trips a bound and unsafe when it hits a default, and which one you get is
+incidental. All three also pass the inert `pop_act=True`
+(`:163`, `:477`, `:157`). Patch 1 of 6 turns their failure mode into a Python
+`ValueError` that names the helper to call; none of the three is otherwise
+changed, since we have no numerics gate for those models — NOT RUN.
+
+WHAT WOULD HAVE CAUGHT IT
+
+Nothing in the existing suite, which is the point worth acting on. Every device
+test for this family runs 128 or 256 experts, where the wrong value equals the
+right one. `tests/blaze/micro_ops/moe/test_moe_router_gate_wiring.py`, added
+here, parses the router and MoE sources with `ast` and asserts the wiring
+directly: that `num_total_experts` is derived from a plan rather than a literal,
+that `num_experts` reaches every inner call that accepts it, and that the inert
+`pop_act` is not passed. It is CPU-only (`pytest.mark.device("cpu")`), needs no
+device, and would have failed on all four instances above.
+
+ALSO IN THIS PATCH, AND NOT FIXED
+
+`glm_moe/op.py:170` derives the routed-expert output lane from mesh position:
+`index_offset = (row * cols + col) // routed_expert_tp + routed_index_offset`.
+That ranges over `[0, num_devices/tp)` — 0..31 on a 4x8 mesh — while the gate
+only fills lanes `[0, num_selected_experts)` and `zero_tail=True` blanks the
+rest. Beyond k, a device reads expert id 0 with score 0: it recomputes expert 0
+and multiplies the result by zero. At GLM-4.7-Flash's k=4 on 32 devices that is
+28 of 32 devices doing silent no-op work; VERIFIED by reading the derivation and
+the `zero_tail` semantics, not measured. The condition for validity is
+`num_devices / routed_expert_tp <= k`. We deliberately do NOT patch it: the
+correct behaviour is an expert-parallel mapping decision (k devices per expert
+group with the group id folded in, or a lane->device assignment the router emits)
+and not something this op can decide locally. Both `glm_moe.emit` and
+`GLMRoutedExpert.emit` gain comments marking it UNRESOLVED so the next reader
+does not have to rediscover it.
+
+STATUS
+* `num_experts` threading VERIFIED on silicon as part of the GLM-4.7-Flash
+  `glm_routed_expert` run that patch 1 of 6 fixed; without it the router keeps
+  ranking 256 lanes regardless of patch 1.
+* Wiring test CPU-only, NOT RUN ON HARDWARE, needs no device.
+
+Apply after patch 1 of 6.
+---
+diff --git a/blaze/ops/glm_moe/op.py b/blaze/ops/glm_moe/op.py
+index e45da6ddc..c0f236124 100644
+--- a/blaze/ops/glm_moe/op.py
++++ b/blaze/ops/glm_moe/op.py
+@@ -80,6 +80,10 @@ class GLMMoE(FusedOp):
+             routing_scaling_factor=ua.get("routing_scaling_factor", 2.5),
+             normalize=ua.get("normalize", True),
+             num_selected_experts=ua.get("num_selected_experts", 8),
++            # Must reach the router: it sizes the gate's ranked lane block from
++            # this. Defaulting to 256 while running a 64-expert model makes the
++            # gate rank 128 lanes over 64 gathered ones (glm_moe_router).
++            num_experts=ua.get("num_experts", 256),
+             routed_index_offset=ua.get("routed_index_offset", 0),
+             routed_expert_tp=ua.get("routed_expert_tp", 1),
+             routed_fp32_dest_acc_en=ua.get("routed_fp32_dest_acc_en", False),
+@@ -116,6 +120,7 @@ class GLMMoE(FusedOp):
+         routing_scaling_factor: float,
+         normalize: bool,
+         num_selected_experts: int,
++        num_experts: int = 256,
+         routed_index_offset: int,
+         routed_expert_tp: int = 1,
+         routed_fp32_dest_acc_en: bool,
+@@ -168,6 +173,14 @@ class GLMMoE(FusedOp):
+         # index (= row), each holding half the expert's hidden dim; the tail
+         # ReduceToOne re-adds the column-halves.
+         index_offset = (row * cols + col) // routed_expert_tp + routed_index_offset
++        # UNRESOLVED (not fixed here -- the correct behaviour is a modelling
++        # decision, not a local one): this ranges over [0, num_devices/tp) but the
++        # gate only fills lanes [0, num_selected_experts). On a 4x8 mesh with tp=1
++        # that is 0..31 against k=8 (GLM-5) or k=4 (GLM-4.7-Flash), so most devices
++        # index a zero_tail lane and compute expert 0 scaled by 0. Works only when
++        # num_devices/tp <= k. A real EP map needs either k devices per expert
++        # group with the group id folded in, or a lane->device assignment the
++        # router emits rather than one derived from mesh position.
+ 
+         routed_out = GLMRoutedExpert.emit(
+             f,
+@@ -182,6 +195,7 @@ class GLMMoE(FusedOp):
+             scaling_factor=routing_scaling_factor,
+             normalize=normalize,
+             num_selected_experts=num_selected_experts,
++            num_experts=num_experts,
+             pop_router_act=False,
+             index_offset=index_offset,
+             fp32_dest_acc_en=routed_fp32_dest_acc_en,
+diff --git a/blaze/ops/glm_moe_no_shared/op.py b/blaze/ops/glm_moe_no_shared/op.py
+index aed762db1..37f92d533 100644
+--- a/blaze/ops/glm_moe_no_shared/op.py
++++ b/blaze/ops/glm_moe_no_shared/op.py
+@@ -174,6 +174,9 @@ class GLMMoENoShared(FusedOp):
+             scaling_factor=routing_scaling_factor,
+             normalize=normalize,
+             num_selected_experts=num_selected_experts,
++            # Accepted at compose() and in this signature but previously dropped
++            # here, so the router always saw the 256 default.
++            num_experts=num_experts,
+             pop_router_act=False,
+             index_offset=index_offset,
+             fp32_dest_acc_en=routed_fp32_dest_acc_en,
+diff --git a/blaze/ops/glm_routed_expert/op.py b/blaze/ops/glm_routed_expert/op.py
+index c5bf3e4b5..667dc3ff9 100644
+--- a/blaze/ops/glm_routed_expert/op.py
++++ b/blaze/ops/glm_routed_expert/op.py
+@@ -79,6 +173,7 @@ class GLMRoutedExpert(FusedOp):
+             scaling_factor=ua.get("scaling_factor", 2.5),
+             normalize=ua.get("normalize", True),
+             num_selected_experts=ua.get("num_selected_experts", 8),
++            num_experts=ua.get("num_experts", 256),
+             pop_router_act=ua.get("pop_router_act", False),
+             # SwiGLU args.
+             index_offset=ua.get("index_offset", 0),
+@@ -107,6 +202,7 @@ class GLMRoutedExpert(FusedOp):
+         normalize: bool,
+         num_selected_experts: int,
+         pop_router_act: bool,
++        num_experts: int = 256,
+         index_offset: int,
+         fp32_dest_acc_en: bool,
+         fused_activation: str,
+@@ -116,7 +212,16 @@ class GLMRoutedExpert(FusedOp):
+         pop_index: bool,
+         pop_swiglu_act: bool,
+     ) -> CBHandle:
+-        """Emit GLM routed-expert chain with explicit router->SwiGLU wiring."""
++        """Emit GLM routed-expert chain with explicit router->SwiGLU wiring.
++
++        ``index_offset`` is the gate output lane this device reads its expert id
++        and score from, and it MUST be ``< num_selected_experts``. It is not
++        checked here because the correct clamp depends on the deployment's
++        expert-parallel factor, which this op does not see -- see
++        ``glm_moe.emit``, which derives it from mesh position and can exceed k.
++        Beyond k, ``zero_tail=True`` makes the lane read expert id 0 with score
++        0: the device silently recomputes expert 0 and multiplies it by zero.
++        """
+         router_out = GLMMoERouter.emit(
+             f,
+             act,
+@@ -127,6 +232,7 @@ class GLMRoutedExpert(FusedOp):
+             scaling_factor=scaling_factor,
+             normalize=normalize,
+             num_selected_experts=num_selected_experts,
++            num_experts=num_experts,
+             pop_act=pop_router_act,
+         )
+         gate_scores = router_out.out_scores
+diff --git a/tests/blaze/micro_ops/moe/test_moe_router_gate_wiring.py b/tests/blaze/micro_ops/moe/test_moe_router_gate_wiring.py
+new file mode 100644
+index 000000000..97febbcbb
+--- /dev/null
++++ b/tests/blaze/micro_ops/moe/test_moe_router_gate_wiring.py
+@@ -0,0 +1,154 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++# SPDX-License-Identifier: Apache-2.0
++
++"""CPU-only structural guards on how the MoE routers wire up their gate.
++
++The gate-face padding bug was not a numerical mistake, it was a wiring one: a
++parameter accepted at `compose()` and then dropped before the call that needed
++it, and a destination buffer allocated from the wrong pool. Neither shows up in
++a device test that only runs the expert counts where both happen to be
++harmless, which is why `glm_moe_router` shipped broken with a green suite.
++
++These tests read the call graph with `ast` -- no device, no emit, no tracing --
++and assert the two wiring facts that must hold. They are deliberately
++structural: the numerical consequence is covered by
++`test_gate_tail_padding_contract.py`, and by the time you can observe it you
++need a Galaxy.
++
++NOT RUN -- written without device access, but nothing here needs one.
++"""
++
++import ast
++import inspect
++from pathlib import Path
++
++import pytest
++
++pytestmark = [
++    pytest.mark.device("cpu"),
++    pytest.mark.level("micro"),
++]
++
++from blaze.ops.deepseekv4_moe_router.op import DeepseekV4MoERouter
++from blaze.ops.glm_moe.op import GLMMoE
++from blaze.ops.glm_moe_no_shared.op import GLMMoENoShared
++from blaze.ops.glm_moe_router.op import GLMMoERouter
++from blaze.ops.glm_routed_expert.op import GLMRoutedExpert
++
++#: Routers fixed by the gate-tail work. `gptoss_moe_router`,
++#: `deepseekv4_moe_large_router` and `ffn_interleaved`'s GLM branch still build
++#: the face from `f.cb_scratch` and pass an unrounded `num_total_experts`; that
++#: combination cannot corrupt silently because an unrounded count trips the
++#: kernel's `static_assert(num_total_experts % 128 == 0)` first. Add them here
++#: if they are ever routed through `round_up_num_total_experts`.
++_PLANNED_ROUTERS = [GLMMoERouter, DeepseekV4MoERouter]
++
++
++def _emit_ast(cls) -> ast.AST:
++    return ast.parse(inspect.cleandoc(inspect.getsource(cls.emit)))
++
++
++def _called_names(tree: ast.AST) -> set[str]:
++    out = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Call):
++            fn = node.func
++            if isinstance(fn, ast.Name):
++                out.add(fn.id)
++            elif isinstance(fn, ast.Attribute):
++                out.add(fn.attr)
++    return out
++
++
++def _calls_to(tree: ast.AST, qualname: str) -> list[ast.Call]:
++    """Every `X.y(...)` call in `tree` matching the dotted `qualname`."""
++    want = qualname.split(".")
++    found = []
++    for node in ast.walk(tree):
++        if not isinstance(node, ast.Call):
++            continue
++        parts, fn = [], node.func
++        while isinstance(fn, ast.Attribute):
++            parts.append(fn.attr)
++            fn = fn.value
++        if isinstance(fn, ast.Name):
++            parts.append(fn.id)
++        if list(reversed(parts))[-len(want) :] == want:
++            found.append(node)
++    return found
++
++
++def _kwarg(call: ast.Call, name: str) -> ast.expr | None:
++    return next((kw.value for kw in call.keywords if kw.arg == name), None)
++
++
++@pytest.mark.parametrize("cls", _PLANNED_ROUTERS, ids=lambda c: c.__name__)
++def test_gate_face_comes_from_the_planned_allocator(cls):
++    """The gate face must not be an arena slot the gate can rank past.
++
++    `f.cb_scratch` hands out a temporally reused arena slot, so any lane the
++    gather does not write holds whatever shared that slot last. Below a kernel
++    block size the gate ranks exactly those lanes.
++    """
++    called = _called_names(_emit_ast(cls))
++    assert "make_gate_gather_dst" in called
++    assert "cb_scratch" not in called, "gate face is back on the scratch arena; its tail is not zero"
++
++
++@pytest.mark.parametrize("cls", _PLANNED_ROUTERS, ids=lambda c: c.__name__)
++def test_num_total_experts_is_derived_not_literal(cls):
++    """`num_total_experts` must track the model, and must come from the plan.
++
++    The original defect was the literal 256. Passing `num_experts` raw is the
++    other half: it is what the plan rounds, not the rounded result.
++    """
++    call = _calls_to(_emit_ast(cls), "GenericMoeGate.emit")
++    assert len(call) == 1
++    arg = _kwarg(call[0], "num_total_experts")
++    assert isinstance(arg, ast.Attribute) and arg.attr == "num_total_experts", (
++        "expected num_total_experts=plan.num_total_experts, got " f"{ast.dump(arg) if arg else None}"
++    )
++    assert isinstance(arg.value, ast.Name) and arg.value.id == "plan"
++
++
++@pytest.mark.parametrize("cls", _PLANNED_ROUTERS, ids=lambda c: c.__name__)
++def test_dead_pop_act_is_not_passed_to_the_gate(cls):
++    """`pop_act` is declared by the gate kernel and never read (op.hpp:47).
++
++    Passing it reads as a live control on whether the gathered CB is popped.
++    It is not one, and a comment here once claimed it was.
++    """
++    call = _calls_to(_emit_ast(cls), "GenericMoeGate.emit")[0]
++    assert _kwarg(call, "pop_act") is None
++
++
++@pytest.mark.parametrize("cls", [GLMMoE, GLMMoENoShared], ids=lambda c: c.__name__)
++def test_num_experts_reaches_the_routed_expert(cls):
++    """Accepting `num_experts` at compose() and dropping it is the whole bug.
++
++    Both wrappers took the parameter, defaulted it to 256, and never forwarded
++    it, so the production op sized its gate for 256 experts regardless of the
++    model. Every hop has to pass it.
++    """
++    call = _calls_to(_emit_ast(cls), "GLMRoutedExpert.emit")
++    assert len(call) == 1
++    arg = _kwarg(call[0], "num_experts")
++    assert isinstance(arg, ast.Name) and arg.id == "num_experts", "num_experts is dropped before GLMRoutedExpert.emit"
++
++
++def test_routed_expert_forwards_num_experts_to_the_router():
++    call = _calls_to(_emit_ast(GLMRoutedExpert), "GLMMoERouter.emit")
++    assert len(call) == 1
++    arg = _kwarg(call[0], "num_experts")
++    assert isinstance(arg, ast.Name) and arg.id == "num_experts"
++
++
++def test_no_router_reintroduces_a_hardcoded_expert_count():
++    """Catch the literal itself, anywhere in the fixed routers' emit bodies."""
++    for cls in _PLANNED_ROUTERS:
++        src = Path(inspect.getfile(cls)).read_text()
++        for node in ast.walk(ast.parse(src)):
++            if isinstance(node, ast.Call):
++                arg = _kwarg(node, "num_total_experts")
++                if isinstance(arg, ast.Constant):
++                    pytest.fail(f"{inspect.getfile(cls)}:{node.lineno} passes a literal num_total_experts={arg.value}")

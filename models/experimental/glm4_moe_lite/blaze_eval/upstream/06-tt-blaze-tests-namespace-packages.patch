@@ -1,0 +1,49 @@
+Subject: [PATCH 6/6] tests: make tt-blaze's `tests` package importable at all
+
+`from tests.blaze.utils.torch_golden import comp_pcc` can never resolve from a
+tt-blaze checkout, no matter the `PYTHONPATH` order.
+
+`tt-blaze/tests/` has no `__init__.py`, so it can only ever contribute a
+*namespace portion*. `tt-blaze/tt-metal/tests/` does have one (it is an empty
+file, but it exists), and `env.sh` puts both on `sys.path`. Python's finder
+scans the path in order, and the first *regular* package it finds terminates the
+search and wins outright — namespace portions are only merged among themselves
+and never merged with a regular package. So `import tests` binds to
+`tt-blaze/tt-metal/tests`, which has no `blaze` subpackage, and
+`tests.blaze.anything` raises `ModuleNotFoundError: No module named
+'tests.blaze'`. Reordering `sys.path` does not help: putting the namespace
+portion first still leaves the regular package to be found and preferred.
+
+Adding the two `__init__.py` files makes `tt-blaze/tests` a regular package too,
+at which point path order decides and tt-blaze's own comes first.
+
+CONFIRMED EMPIRICALLY, off-device: reproduced the shadowing with a minimal
+directory pair, and verified the two files fix it.
+
+Who this affects: `blaze-vs-ttnn-bench/scripts/ab_harness.py:132` does exactly
+this import and is unusable out of the box. We worked around it by registering
+the module by file path, which is why our archived benchmark scripts do not use
+the documented import. Pytest itself is unaffected — it uses rootdir-relative
+collection, not this import path — which is presumably why this has survived.
+
+Contents are an SPDX header and nothing else, matching `tt-metal/tests/__init__.py`
+(empty) and the header convention of tt-blaze's other `__init__.py` files.
+
+Independent of patches 1-5 of 6.
+---
+diff --git a/tests/__init__.py b/tests/__init__.py
+new file mode 100644
+index 000000000..955944f30
+--- /dev/null
++++ b/tests/__init__.py
+@@ -0,0 +1,2 @@
++# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
++# SPDX-License-Identifier: Apache-2.0
+diff --git a/tests/blaze/__init__.py b/tests/blaze/__init__.py
+new file mode 100644
+index 000000000..955944f30
+--- /dev/null
++++ b/tests/blaze/__init__.py
+@@ -0,0 +1,2 @@
++# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
++# SPDX-License-Identifier: Apache-2.0
