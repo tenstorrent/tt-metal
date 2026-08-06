@@ -196,7 +196,7 @@ jobs:
       # Direct push has no inputs, so treat it as in-place too.
       build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'push' }}
       build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'push' }}
-      tracy: false
+      tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
