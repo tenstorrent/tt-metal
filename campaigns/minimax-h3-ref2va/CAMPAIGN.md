@@ -45,10 +45,28 @@ timeout 9000 scripts/run_safe_pytest.sh --run-all \
   models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
 ```
 
-Frozen output: `artifacts/round-0/{t2va,fl2va}/`. Result: **pending** (running).
-t2va no-regression fingerprint on this base (from STATE.md): std 45.78 · frame delta 8.59 · audio
-peak 0.095 · CLIP 37.38. **Only CLIP is a quality signal**; the other three catch an *unexplained*
-move and are re-pinned whenever the base moves.
+Result: **GREEN — t2va 1 passed (560 s), fl2va 4 passed (645 s), exit 0.** Frozen output in
+`artifacts/round-0/e2e/`. Measured on this SHA, not carried over:
+
+| Gate | Measured | Bar |
+|---|---|---|
+| CLIP prompt alignment | **37.38** (min 36.79, max 37.82) | 33.0 |
+| audio | peak **0.095**, rms 0.0154, 2ch 5.175 s @ 32 kHz, 0 % clipped | — |
+| VBench subject / background consistency | 0.9804 / 0.9812 | 0.95 |
+| VBench motion_smoothness / dynamic_degree | 0.9914 / 1.0000 | 0.97 / 1.0 |
+| VBench imaging_quality | 0.6925 | 0.64 |
+| fl2va first-keyframe anchor | 0.9971 | 0.95 |
+| fl2va fractal discriminator | 0.9963 to the keyframe vs **0.2972** to t2va's own frame 0 | — |
+
+CLIP 37.38 and audio peak 0.095 match STATE.md's fingerprint exactly, and the fractal discriminator
+reproduces its 0.9963 / 0.2972. **Only CLIP is a quality signal**; the rest catch an *unexplained*
+move. The fl2va half ran on `5c8adce1e85`, which adds new files only and touches no shared path.
+
+Caveat worth keeping: the first attempt had all four fl2va cases **skip silently** because
+`MINIMAX_H3_ARTIFACT_DIR` and `MINIMAX_H3_T2VA_ARTIFACT_DIR` pointed at different directories, so the
+fl2va gate could not find the calibrated `t2va.mp4` it keys its thresholds to. Point both at one
+directory. This is STATE.md's "a test reading its input from the directory it writes skips silently"
+pitfall, met from the other side.
 
 ## Gates
 
