@@ -338,7 +338,11 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
-                    in0_cb.wait_front(in0_block_num_tiles);
+                    // [#48552 DIAG - REVERT AFTER] cb_in0 CONSUME wait disabled (with cb_in1 already off): remove
+                    // ALL input-CB tile-counter waits. If the compute STILL faults TILE_COUNTERS 0x10000 -> the
+                    // faulting counter op is NOT an input-CB wait (matmul_block internal unpack / mm_partials /
+                    // interm), narrowing the culprit. matmul_block reads in0 unsynced -> garbage, but no hang.
+                    // in0_cb.wait_front(in0_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     // [#48552 DIAG - REVERT AFTER] cb_in1 CONSUME wait disabled: this is the exact tile-counter
@@ -512,7 +516,8 @@ void kernel_main() {
                     }
 #endif
 
-                    in0_cb.pop_front(in0_block_num_tiles);
+                    // [#48552 DIAG - REVERT AFTER] cb_in0 CONSUME pop disabled (see wait_front above).
+                    // in0_cb.pop_front(in0_block_num_tiles);
                     // [#48552 DIAG - REVERT AFTER] cb_in1 CONSUME pop disabled (see wait_front above).
                     // in1_cb.pop_front(in1_block_num_tiles);
                     DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete

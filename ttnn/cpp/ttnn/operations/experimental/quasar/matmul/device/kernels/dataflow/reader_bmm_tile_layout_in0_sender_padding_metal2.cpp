@@ -278,7 +278,9 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        cb_in0.reserve_back(in0_block_num_tiles);
+                        // [#48552 DIAG - REVERT AFTER] cb_in0 PRODUCE reserve disabled (gather/read below kept;
+                        // get_write_ptr stays valid). Paired with the compute wait/pop + push below.
+                        // cb_in0.reserve_back(in0_block_num_tiles);
                         DPRINT("IN0R reserved\n");  // DEBUG #48552
 #ifndef IN0_SHARDED
 
@@ -465,7 +467,8 @@ void kernel_main() {
 
                         // Common for sharded and interleaved paths
                         DPRINT("IN0R pre-push\n");  // DEBUG #48552
-                        cb_in0.push_back(in0_block_num_tiles);
+                        // [#48552 DIAG - REVERT AFTER] cb_in0 PRODUCE push disabled (see reserve above).
+                        // cb_in0.push_back(in0_block_num_tiles);
                         DPRINT("IN0R pushed\n");  // DEBUG #48552
                     }
                 }
@@ -488,8 +491,9 @@ void kernel_main() {
         if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
-                    cb_in0.reserve_back(in0_block_num_tiles);
-                    cb_in0.push_back(in0_block_num_tiles);
+                    // [#48552 DIAG - REVERT AFTER] cb_in0 fake-push (in0_reuse_in_CB) disabled with the rest.
+                    // cb_in0.reserve_back(in0_block_num_tiles);
+                    // cb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }
