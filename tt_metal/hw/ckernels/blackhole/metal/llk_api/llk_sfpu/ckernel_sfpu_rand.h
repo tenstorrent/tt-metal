@@ -38,8 +38,11 @@ inline void rand_init(std::uint32_t seed) {
 inline void make_lane_salt() {
     // rand_tile is a shared API and other SFPU operations may clobber every
     // mutable LREG between calls. Reconstruct a lane-specific salt from the
-    // read-only lane ID at the start of each tile instead of carrying it in an
+    // read-only lane ID at the start of each face instead of carrying it in an
     // LREG. Offset LTILEID first so lane zero also receives a nonzero salt.
+    // All lane PRNGs receive the same seed, while nearby cores receive related
+    // seeds. Salting before a bijective finalizer diffuses those relationships
+    // through the 31 bits consumed by SFPCAST without biasing a lane's output.
     TTI_SFPIADD(407, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPSHFT(14, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
@@ -48,6 +51,15 @@ inline void make_lane_salt() {
 }
 
 inline void begin_mix_uint32_mul24() {
+    // Custom bijective 32-bit finalizer (not a named hash):
+    //   x ^= x >> 8; x ^= x >> 16;
+    //   x[22:0] *= 0x56594B (mod 2^23), preserving x[31:23];
+    //   x ^= x << 8; x ^= x >> 14.
+    // Blackhole's SFPMUL24 provides better diffusion than same-cost pure-ARX
+    // candidates. LCONST_0_8373 has FP32 bits 0x3F56594B; its low 23 bits form
+    // the odd multiplier above, so the modular multiply is bijective. The salt
+    // and shift counts were selected by bounded search, scored for integer
+    // avalanche and lane/offset correlation after FP32 conversion.
     TTI_SFPSHFT((-8) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
 }
 
@@ -56,8 +68,7 @@ inline void finish_mix_uint32_mul24() {
     TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
 
-    // Multiply the low 23 bits modulo 2^23 by the low 23 bits of
-    // LCONST_0_8373. Preserve the mixed input's upper nine bits.
+    // LOWER computes the low 23-bit product; SFPSETMAN below restores x[31:23].
     TTI_SFPMUL24(p_sfpu::LREG5, p_sfpu::LCONST_0_8373, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_LOWER);
     // This independent PRNG read fills SFPMUL24's dependency slot.
     rand_prng<p_sfpu::LREG0>();

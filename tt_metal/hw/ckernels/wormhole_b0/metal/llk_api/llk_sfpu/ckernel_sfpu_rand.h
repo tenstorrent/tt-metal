@@ -34,12 +34,15 @@ inline void rand_init(std::uint32_t seed) {
 }
 
 inline void make_lane_salt() {
-    // Reconstruct the salt for every tile so rand_tile remains valid after
+    // Reconstruct the salt for every face so rand_tile remains valid after
     // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
     // the ISA-defined LREG15, whose lane i contains 2*i. Offset LTILEID first
     // so lane zero also receives a nonzero salt. Load the shift counts into
     // LREG0 because TTSim does not yet support SFPSHFT2's immediate mode.
-    // TODO: Switch back to immediate mode, saving two cycles per tile, once
+    // All lane PRNGs receive the same seed, while nearby cores receive related
+    // seeds. Salting before a bijective finalizer diffuses those relationships
+    // through the 31 bits consumed by SFPCAST without biasing a lane's output.
+    // TODO: Switch back to immediate mode, saving two cycles per face, once
     // https://github.com/tenstorrent/ttsim/issues/11 is resolved.
     TTI_SFPIADD(
         (-151) & 0xFFF, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -52,10 +55,18 @@ inline void make_lane_salt() {
 }
 
 inline void begin_mix_uint32_fast() {
-    // A bijective ARX permutation scheduled around SFPSHFT2's independent
-    // source and destination registers. LREG4, LREG7, LREG12, and LREG13 hold
-    // -16, 10, -6, and 13, respectively. LREG1 holds x on entry and LREG0 holds
-    // the result on exit.
+    // Custom bijective 32-bit ARX finalizer (not a named hash):
+    //   x ^= x >> 16; x += x << 10; x ^= x >> 6;
+    //   x += x << 13; x ^= x >> 16.
+    // Wormhole has no SFPMUL24, so this uses only shift, XOR, and modular add;
+    // every stage is bijective. The salt and shift counts were selected by
+    // bounded search, scored for integer avalanche and lane/offset correlation
+    // after FP32 conversion. Reusing shift 16 limits setup to four counts and
+    // keeps the replayed row at 18 instructions.
+    //
+    // SFPSHFT2's independent source and destination registers avoid staging
+    // each input. LREG4, LREG7, LREG12, and LREG13 hold -16, 10, -6, and 13,
+    // respectively. LREG1 holds x on entry and LREG0 holds the result on exit.
     TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 }
 
