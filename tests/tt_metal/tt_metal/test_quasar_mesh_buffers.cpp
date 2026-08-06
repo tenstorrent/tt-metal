@@ -44,15 +44,16 @@ TEST_F(QuasarUnitMeshFixture, MeshBufferWriteReadDRAM) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_mesh_buffer(BufferType::DRAM, this->device());
 
     std::vector<uint32_t> src(num_elems);
     std::iota(src.begin(), src.end(), 0xabcd0000u);
 
-    this->WriteBuffer(buf, src);
+    distributed::EnqueueWriteMeshBuffer(cq, buf, src);
 
     std::vector<uint32_t> dst;
-    this->ReadBuffer(buf, dst);
+    distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
 
     ASSERT_EQ(dst.size(), src.size());
     ASSERT_EQ(dst, src);
@@ -64,16 +65,17 @@ TEST_F(QuasarUnitMeshFixture, MeshBufferMultipleWriteReadRoundsDRAM) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_mesh_buffer(BufferType::DRAM, this->device());
 
     for (uint32_t round = 0; round < 10; round++) {
         std::vector<uint32_t> src(num_elems);
         std::iota(src.begin(), src.end(), round * 1000u);
 
-        this->WriteBuffer(buf, src);
+        distributed::EnqueueWriteMeshBuffer(cq, buf, src);
 
         std::vector<uint32_t> dst;
-        this->ReadBuffer(buf, dst);
+        distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
 
         ASSERT_EQ(dst, src);
     }
@@ -85,15 +87,16 @@ TEST_F(QuasarUnitMeshFixture, MeshBufferWriteReadL1) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_mesh_buffer(BufferType::L1, this->device());
 
     std::vector<uint32_t> src(num_elems);
     std::iota(src.begin(), src.end(), 0xabcd0000u);
 
-    this->WriteBuffer(buf, src);
+    distributed::EnqueueWriteMeshBuffer(cq, buf, src);
 
     std::vector<uint32_t> dst;
-    this->ReadBuffer(buf, dst);
+    distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
 
     ASSERT_EQ(dst.size(), src.size());
     ASSERT_EQ(dst, src);
@@ -105,13 +108,14 @@ TEST_F(QuasarUnitMeshFixture, MeshBufferMultipleWriteReadRoundsL1) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_mesh_buffer(BufferType::L1, this->device());
 
     for (uint32_t round = 0; round < 10; round++) {
         std::vector<uint32_t> src(num_elems);
         std::iota(src.begin(), src.end(), round * 1000u);
 
-        this->WriteBuffer(buf, src);
+        distributed::EnqueueWriteMeshBuffer(cq, buf, src);
 
         std::vector<uint32_t> dst;
         this->ReadBuffer(buf, dst);
