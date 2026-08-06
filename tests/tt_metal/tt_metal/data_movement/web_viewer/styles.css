@@ -539,6 +539,17 @@ header h1 {
     display: block;
 }
 
+.faq-tag-label {
+    margin-top: 12px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border-color);
+}
+
 /* Scrollbar styling */
 
 ::-webkit-scrollbar {

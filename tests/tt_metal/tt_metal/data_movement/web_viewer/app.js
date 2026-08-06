@@ -3,13 +3,13 @@
 
 // ── Configuration ──────────────────────────────────────────────────
 
-const FETCH_YAML_FROM_GITHUB = true;
+const FETCH_YAML_FROM_GITHUB = false;
 const GITHUB_YAML_BRANCH = "ryanzhu/dm-web";
 const GITHUB_RAW_BASE =
     `https://raw.githubusercontent.com/tenstorrent/tt-metal/${GITHUB_YAML_BRANCH}/tests/tt_metal/tt_metal/data_movement`;
 
 // for testing github pages deployment, currently done on my personal repo
-const GITHUB_PAGES = true;
+const GITHUB_PAGES = false;
 const GITHUB_PAGES_DATA_BASE =
     "https://raw.githubusercontent.com/ryanzhuTT/dm_viewer/main/data";
 
@@ -110,7 +110,7 @@ async function loadYamlConfig() {
 
     if (testInfoResp && testInfoResp.ok) {
         const testInfo = jsyaml.load(await testInfoResp.text());
-        testGroups = buildTestGroups(testInfo.tests, state.groupsYaml || {});
+        testGroups = buildTestGroups(testInfo.tests, state.groupsYaml?.groups || {});
     }
 }
 
@@ -144,22 +144,8 @@ function buildTestGroups(tests, groups) {
     return result;
 }
 
-function renderFAQ(group) {
-    const section = document.getElementById("faq-section");
-    const list = document.getElementById("faq-list");
-    list.innerHTML = "";
-
-    const yamlEntry = state.groupsYaml && state.groupsYaml[group.directory];
-    const faq = yamlEntry && yamlEntry.faq;
-
-    if (!faq || faq.length === 0) {
-        section.style.display = "none";
-        return;
-    }
-
-    section.style.display = "";
-
-    for (const item of faq) {
+function renderFAQItems(container, items) {
+    for (const item of items) {
         const div = document.createElement("div");
         div.className = "faq-item";
 
@@ -186,7 +172,55 @@ function renderFAQ(group) {
 
         div.appendChild(question);
         div.appendChild(answer);
-        list.appendChild(div);
+        container.appendChild(div);
+    }
+}
+
+function renderFAQ(group) {
+    const section = document.getElementById("faq-section");
+    const list = document.getElementById("faq-list");
+    list.innerHTML = "";
+
+    const groups = state.groupsYaml?.groups;
+    const yamlEntry = groups && groups[group.directory];
+    const groupFaq = yamlEntry?.faq || [];
+
+    const tagsYaml = state.groupsYaml?.tags || {};
+    const tagSections = [];
+    for (const tag of group.tags) {
+        const tagEntry = tagsYaml[tag];
+        if (tagEntry?.faq?.length) {
+            tagSections.push({ tag, faq: tagEntry.faq });
+        }
+    }
+
+    const universalFaq = state.groupsYaml?.universal?.faq || [];
+
+    if (groupFaq.length === 0 && tagSections.length === 0 && universalFaq.length === 0) {
+        section.style.display = "none";
+        return;
+    }
+
+    section.style.display = "";
+
+    if (groupFaq.length > 0) {
+        renderFAQItems(list, groupFaq);
+    }
+
+    for (const { tag, faq } of tagSections) {
+        const label = document.createElement("div");
+        label.className = "faq-tag-label";
+        label.textContent = tag;
+        list.appendChild(label);
+        renderFAQItems(list, faq);
+    }
+
+    if (universalFaq.length > 0) {
+        const label = document.createElement("div");
+        label.className = "faq-tag-label";
+        label.textContent = "General";
+        list.appendChild(label);
+        renderFAQItems(list, universalFaq);
     }
 }
 
@@ -195,8 +229,8 @@ function renderDiagram(group) {
     const img = document.getElementById("diagram-img");
     const item = document.getElementById("diagram-item");
 
-    const yamlEntry = state.groupsYaml && state.groupsYaml[group.directory];
-    const imagePath = yamlEntry && yamlEntry.image;
+    const yamlEntry = state.groupsYaml?.groups?.[group.directory];
+    const imagePath = yamlEntry?.image;
 
     if (!imagePath) {
         section.style.display = "none";
