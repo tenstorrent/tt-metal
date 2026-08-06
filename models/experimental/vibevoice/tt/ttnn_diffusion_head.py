@@ -125,6 +125,39 @@ class DiffusionHeadWeights:
     norm_eps: float = 1e-5
 
 
+@dataclass
+class ModSchedule:
+    """All DPM steps' adaLN modulations, stacked on the batch axis.
+
+    layer_mod[i]: [batch*steps, 1, 1, 3*hidden]   final_mod: [batch*steps, 1, 1, 2*hidden]
+    Step ``s`` occupies rows ``[s*batch, (s+1)*batch)``.
+    """
+
+    layer_mod: List[ttnn.Tensor]
+    final_mod: ttnn.Tensor
+    steps: int
+    batch: int
+
+    def rows(self, step_idx: int) -> tuple:
+        """Half-open row range holding step ``step_idx``."""
+        return step_idx * self.batch, (step_idx + 1) * self.batch
+
+
+def _mod_batch_cfg(cfg, per_core_m: int):
+    """A per-step modulation progcfg re-issued for the step-batched M (per_core_M only)."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
+        in0_block_w=cfg.in0_block_w,
+        out_subblock_h=cfg.out_subblock_h,
+        out_subblock_w=cfg.out_subblock_w,
+        per_core_M=per_core_m,
+        per_core_N=cfg.per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def _build_freq_table(frequency_embedding_size: int, max_period: int = 10000) -> torch.Tensor:
     """Precompute frequency table for sin timestep embeddings (host)."""
     half = frequency_embedding_size // 2
@@ -329,27 +362,100 @@ class TTDiffusionHead:
         )
         return out
 
-    def _head_layer(self, x: ttnn.Tensor, sc: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
+    def precompute_modulations(self, cond_proj: ttnn.Tensor, t_embs: List[ttnn.Tensor]) -> "ModSchedule":
+        """Compute EVERY DPM step's adaLN modulation up front — one matmul per layer, not per step.
+
+        The adaLN input is ``sc_s = silu(cond_proj + t_embs[s])``.  ``cond_proj`` is frame-constant
+        (already hoisted out of the DPM loop) and ``t_embs`` is schedule-constant, so all
+        ``num_steps`` of ``sc`` are known *before* the loop runs.  One matmul per layer then
+        produces every step's modulation, so each adaLN weight is read once per frame instead of
+        once per step (40 -> 4 layer modulation matmuls, 10 -> 1 final; measured 400.5 -> 45.6 µs
+        for a layer's ten calls).
+
+        The steps stack on the BATCH axis, giving ``[2*S, 1, 1, hidden]``, so every per-step chunk
+        slice below stays tile-aligned.  Two other layouts were measured end-to-end and lost:
+        stacking on the tile HEIGHT axis makes the matmul far cheaper (Mt stays 2: 45.6 vs 400.5 µs
+        for a layer's ten calls, against ~262 µs for this layout's Mt=2*S) but every chunk read
+        becomes an unaligned intra-tile row slice (115 vs 65 µs) — with 3 chunks x S steps x 5
+        modulations that was 3.6% SLOWER than not batching at all (42.02 vs 40.56 ms/tok), and
+        extracting each step's row once before chunking still lost (36.91 vs 36.41).  The frame is
+        op-count-bound at this scale: 50 extra slice ops outweigh the cheaper matmul.
+
+        Byte-identical: matmul output rows are independent and ``in0_block_w`` (hence the K
+        reduction order) is unchanged.  Verified ``maxabsdiff == 0`` against the per-step path.
+        """
+        w = self.w
+        steps = len(t_embs)
+        b = cond_proj.shape[0]
+        # Broadcast the frame-constant condition across the step axis, then add the per-step
+        # timestep embeddings in one shot.  Same values, same ops as the per-step add+silu.
+        cond_all = ttnn.concat([cond_proj] * steps, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        t_all = ttnn.concat(list(t_embs), dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sc_all = ttnn.silu(
+            ttnn.add(cond_all, t_all, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Same configs as the per-step path with per_core_M raised from b to b*steps (M is now
+        # b*steps tiles).  in0_block_w is untouched, so the K reduction — and the output bits —
+        # are unchanged.
+        layer_cfg = _mod_batch_cfg(_DIFF_N4608_B2, b * steps) if b == 2 else None
+        final_cfg = _mod_batch_cfg(_DIFF_N3072_B2, b * steps) if b == 2 else None
+        layer_mod = [
+            ttnn.linear(
+                sc_all,
+                w.layer_adaLN_w[i],
+                compute_kernel_config=_COMPUTE_KERNEL_FP32,
+                program_config=layer_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for i in range(len(w.layer_adaLN_w))
+        ]
+        final_mod = ttnn.linear(
+            sc_all,
+            w.final_adaLN_w,
+            compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=final_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ModSchedule(layer_mod=layer_mod, final_mod=final_mod, steps=steps, batch=b)
+
+    def _head_layer(
+        self,
+        x: ttnn.Tensor,
+        sc: ttnn.Tensor,
+        layer_idx: int,
+        mod: Optional["ModSchedule"] = None,
+        step_idx: int = 0,
+    ) -> ttnn.Tensor:
         """Single HeadLayer: adaLN + SwiGLU residual.
 
         x:  [B, T, 1, hidden]  or [B, 1, 1, hidden] for latent
         sc: [B, 1, 1, hidden]  = silu(conditioning), precomputed once per step (dedup) and shared
             across all HeadLayers + FinalLayer (byte-identical to computing silu(c) per layer).
+            Unused (may be None) when ``mod`` carries a precomputed modulation schedule.
+        mod/step_idx: optional ``precompute_modulations`` output + which step's row to read.
         """
         w = self.w
-        # adaLN_modulation(silu(c)) → [B, 1, 1, 3*hidden]
-        modulation = ttnn.linear(
-            sc,
-            w.layer_adaLN_w[layer_idx],
-            compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            program_config=_DIFF_N4608_B2 if sc.shape[0] == 2 else None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if mod is not None:
+            # Step ``step_idx``'s rows of the batch-stacked modulation.  The three chunk slices
+            # below then carry the same [B, 1, 1, *] shapes as the per-step path.
+            modulation = mod.layer_mod[layer_idx]
+            r0, r1 = mod.rows(step_idx)
+        else:
+            # adaLN_modulation(silu(c)) → [B, 1, 1, 3*hidden]
+            modulation = ttnn.linear(
+                sc,
+                w.layer_adaLN_w[layer_idx],
+                compute_kernel_config=_COMPUTE_KERNEL_FP32,
+                program_config=_DIFF_N4608_B2 if sc.shape[0] == 2 else None,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            r0, r1 = 0, modulation.shape[0]
         # chunk into 3 parts along last dim
         hidden_size = w.hidden_size
-        shift = ttnn.slice(modulation, [0, 0, 0, 0], [modulation.shape[0], 1, 1, hidden_size])
-        scale = ttnn.slice(modulation, [0, 0, 0, hidden_size], [modulation.shape[0], 1, 1, 2 * hidden_size])
-        gate = ttnn.slice(modulation, [0, 0, 0, 2 * hidden_size], [modulation.shape[0], 1, 1, 3 * hidden_size])
+        shift = ttnn.slice(modulation, [r0, 0, 0, 0], [r1, 1, 1, hidden_size])
+        scale = ttnn.slice(modulation, [r0, 0, 0, hidden_size], [r1, 1, 1, 2 * hidden_size])
+        gate = ttnn.slice(modulation, [r0, 0, 0, 2 * hidden_size], [r1, 1, 1, 3 * hidden_size])
 
         # RMSNorm(x)
         x_norm = ttnn.rms_norm(
@@ -379,21 +485,28 @@ class TTDiffusionHead:
         out = ttnn.add(x, gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return out
 
-    def _final_layer(self, x: ttnn.Tensor, sc: ttnn.Tensor) -> ttnn.Tensor:
+    def _final_layer(
+        self, x: ttnn.Tensor, sc: ttnn.Tensor, mod: Optional["ModSchedule"] = None, step_idx: int = 0
+    ) -> ttnn.Tensor:
         """FinalLayer: adaLN (shift/scale, no gate) + linear → latent_size.
 
         ``sc`` = silu(conditioning), shared with the HeadLayers (see _head_layer)."""
         w = self.w
-        modulation = ttnn.linear(
-            sc,
-            w.final_adaLN_w,
-            compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            program_config=_DIFF_N3072_B2 if sc.shape[0] == 2 else None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if mod is not None:
+            modulation = mod.final_mod
+            r0, r1 = mod.rows(step_idx)
+        else:
+            modulation = ttnn.linear(
+                sc,
+                w.final_adaLN_w,
+                compute_kernel_config=_COMPUTE_KERNEL_FP32,
+                program_config=_DIFF_N3072_B2 if sc.shape[0] == 2 else None,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            r0, r1 = 0, modulation.shape[0]
         hidden_size = w.hidden_size
-        shift = ttnn.slice(modulation, [0, 0, 0, 0], [modulation.shape[0], 1, 1, hidden_size])
-        scale = ttnn.slice(modulation, [0, 0, 0, hidden_size], [modulation.shape[0], 1, 1, 2 * hidden_size])
+        shift = ttnn.slice(modulation, [r0, 0, 0, 0], [r1, 1, 1, hidden_size])
+        scale = ttnn.slice(modulation, [r0, 0, 0, hidden_size], [r1, 1, 1, 2 * hidden_size])
 
         # RMSNorm without learnable weight (elementwise_affine=False in reference)
         x_norm = ttnn.rms_norm(
@@ -439,6 +552,8 @@ class TTDiffusionHead:
         timesteps: ttnn.Tensor,
         cond_proj: ttnn.Tensor,
         t_emb: ttnn.Tensor = None,
+        mod: Optional["ModSchedule"] = None,
+        step_idx: int = 0,
     ) -> ttnn.Tensor:
         """Head forward given the ALREADY-projected condition (cond_proj = project_condition(cond)).
 
@@ -459,23 +574,28 @@ class TTDiffusionHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Timestep embedding (or reuse a schedule-constant precompute)
-        if t_emb is None:
-            t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
+        if mod is None:
+            # Timestep embedding (or reuse a schedule-constant precompute)
+            if t_emb is None:
+                t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
 
-        # Combine: c = cond_proj + t_emb
-        c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # silu(c) is the adaLN input for every HeadLayer + FinalLayer — compute it ONCE per step and
-        # share (byte-identical to the per-layer silu, saves 4 redundant silus/step).
-        sc = ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Combine: c = cond_proj + t_emb
+            c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # silu(c) is the adaLN input for every HeadLayer + FinalLayer — compute it ONCE per step
+            # and share (byte-identical to the per-layer silu, saves 4 redundant silus/step).
+            sc = ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # Every step's adaLN modulation was batched into one matmul per layer before the loop
+            # (see precompute_modulations); this step only reads row ``step_idx``.
+            sc = None
 
         # HeadLayers
         num_layers = len(w.layer_adaLN_w)
         for i in range(num_layers):
-            x = self._head_layer(x, sc, i)
+            x = self._head_layer(x, sc, i, mod=mod, step_idx=step_idx)
 
         # FinalLayer
-        x = self._final_layer(x, sc)
+        x = self._final_layer(x, sc, mod=mod, step_idx=step_idx)
         return x
 
     def forward(
