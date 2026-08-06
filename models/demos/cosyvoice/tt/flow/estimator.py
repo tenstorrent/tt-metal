@@ -409,10 +409,37 @@ class TtConditionalDecoder:
             ttnn.deallocate(parts[2])
         return out
 
-    def __call__(self, x, mu, t, spks=None, cond=None, mask=None, batch: int = 2):
+    def pack_const(self, mu, spks, cond, length: int):
+        """The `[mu | spks broadcast | cond]` tail of `pack_input`, built once.
+
+        Only `x` changes across the solver's Euler steps -- `mu`, `spks` and `cond` are
+        fixed for the whole utterance -- so the broadcast of `spks` over time and the
+        concatenation of the three constant blocks are loop-invariant. Doing them once
+        before trace capture leaves the traced body a single two-way concat with `x`.
+
+        Worth the extra entry point rather than a cache inside `pack_input`, because
+        the tensor is read by a captured trace for the life of that trace: an eviction
+        would be a use-after-free, and the caller here already owns the lifetime.
+        """
+        parts = [mu]
+        if spks is not None:
+            parts.append(ttnn.repeat(spks, ttnn.Shape([1, length, 1])))
+        if cond is not None:
+            parts.append(cond)
+        out = ttnn.concat(parts, dim=-1) if len(parts) > 1 else mu
+        if spks is not None:
+            ttnn.deallocate(parts[1])
+        return out
+
+    def __call__(self, x, mu, t, spks=None, cond=None, mask=None, batch: int = 2, packed_const=None):
         """x/mu/cond: `[B, T, 80]`; spks: `[B, 1, 80]`; t: `[B, 1, 1]`.
 
         Returns `[B, T, 80]`, the estimated dphi/dt.
+
+        `packed_const` is the output of `pack_const` -- the loop-invariant
+        `[mu | spks | cond]` block. Passing it turns the per-step input assembly from a
+        broadcast plus a four-way concat into a single two-way concat; the solver builds
+        it once per utterance. `mu`/`spks`/`cond` are then unused and may be `None`.
         """
         if mask is not None:
             raise NotImplementedError(
@@ -422,7 +449,10 @@ class TtConditionalDecoder:
             )
         length = x.shape[1]
         t_emb = self.time_embedding(t)
-        h = self.pack_input(x, mu, spks, cond, length, batch)
+        if packed_const is not None:
+            h = ttnn.concat([x, packed_const], dim=-1)
+        else:
+            h = self.pack_input(x, mu, spks, cond, length, batch)
 
         # Every hand-off below is explicit about ownership: a sub-module frees only
         # what it allocated, so the caller frees the tensor it passed in once the
