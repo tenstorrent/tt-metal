@@ -36,8 +36,8 @@ import os as _os
 import pathlib as _pathlib
 
 import torch
-import ttnn
 
+import ttnn
 from models.common.utility_functions import comp_pcc
 
 # ── resident weight/input cache ──────────────────────────────────────────────
@@ -69,9 +69,7 @@ def _install_resident_upload_cache():
     def cached_as_tensor(tensor, *args, **kwargs):
         if kwargs.get("cache_file_name") is None:
             try:
-                key = hashlib.sha1(
-                    tensor.detach().to(torch.float32).cpu().contiguous().numpy().tobytes()
-                ).hexdigest()
+                key = hashlib.sha1(tensor.detach().to(torch.float32).cpu().contiguous().numpy().tobytes()).hexdigest()
                 shape = "x".join(str(int(d)) for d in tensor.shape)
                 _WEIGHT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
                 kwargs["cache_file_name"] = str(_WEIGHT_CACHE_DIR / f"w_{shape}_{key}")
@@ -83,6 +81,7 @@ def _install_resident_upload_cache():
     ttnn.as_tensor = cached_as_tensor
     return lambda: setattr(ttnn, "as_tensor", orig)
 
+
 # ── stages, derived from the reference config (encoder-decoder-like + vocode) ──
 PIPELINE_STAGES = ["speaker_encode", "conditioning_encode", "gpt_prefill", "gpt_decode", "gpt_latents", "vocode"]
 
@@ -90,17 +89,38 @@ PIPELINE_STAGES = ["speaker_encode", "conditioning_encode", "gpt_prefill", "gpt_
 #    the invocation tracker patches a child's build BEFORE a composite imports it.
 _STUB_ORDER = [
     # GPT leaves -> composites
-    "conv1_d", "learned_position_embeddings", "dropout1d",
-    "g_p_t2_block", "g_p_t2_model", "g_p_t2_inference_model", "g_p_t",
+    "conv1_d",
+    "learned_position_embeddings",
+    "dropout1d",
+    "g_p_t2_block",
+    "g_p_t2_model",
+    "g_p_t2_inference_model",
+    "g_p_t",
     # conditioning leaves -> composites
-    "group_norm32", "q_k_v_attention_legacy", "attend", "g_e_g_l_u",
-    "attention_block", "conditioning_encoder", "perceiver_resampler",
+    "group_norm32",
+    "q_k_v_attention_legacy",
+    "attend",
+    "g_e_g_l_u",
+    "attention_block",
+    "conditioning_encoder",
+    "perceiver_resampler",
     # speaker-encoder leaves -> composite
-    "adaptive_avg_pool2d", "s_e_layer", "s_e_basic_block", "instance_norm1d",
-    "mel_scale", "mel_spectrogram", "pre_emphasis", "res_net_speaker_encoder",
+    "adaptive_avg_pool2d",
+    "s_e_layer",
+    "s_e_basic_block",
+    "instance_norm1d",
+    "mel_scale",
+    "mel_spectrogram",
+    "pre_emphasis",
+    "res_net_speaker_encoder",
     # vocoder leaves -> composites
-    "weight_norm", "parametrization_list", "parametrized_conv1d",
-    "parametrized_conv_transpose1d", "res_block1", "hifigan_generator", "hifi_decoder",
+    "weight_norm",
+    "parametrization_list",
+    "parametrized_conv1d",
+    "parametrized_conv_transpose1d",
+    "res_block1",
+    "hifigan_generator",
+    "hifi_decoder",
 ]
 assert len(_STUB_ORDER) == 29
 
@@ -136,6 +156,9 @@ def instrument_stubs():
                 INVOKED[name] = INVOKED.get(name, 0) + 1
                 return fwd(*fa, **fk)
 
+            # preserve attributes hung on the built forward (e.g. set_prefix) so they
+            # survive instrumentation — the e2e gate runs instrumented.
+            wrapped_fwd.__dict__.update(getattr(fwd, "__dict__", {}))
             return wrapped_fwd
 
         return wrapped
@@ -223,16 +246,16 @@ def default_reference_wav(seconds=6.0, sr=22050):
     torch.manual_seed(0)
     n = int(seconds * sr)
     t = torch.arange(n, dtype=torch.float32) / sr
-    f0 = 110.0 + 25.0 * torch.sin(2 * torch.pi * 2.3 * t)          # pitch contour
+    f0 = 110.0 + 25.0 * torch.sin(2 * torch.pi * 2.3 * t)  # pitch contour
     phase = 2 * torch.pi * torch.cumsum(f0, 0) / sr
     sig = torch.zeros(n)
-    for k in range(1, 41):                                          # glottal buzz harmonics
+    for k in range(1, 41):  # glottal buzz harmonics
         sig = sig + (1.0 / k) * torch.sin(k * phase)
     # three moving formants (vowel-like resonances)
     for fc, bw in [(600.0, 0.4), (1400.0, 0.3), (2600.0, 0.2)]:
         fcm = fc * (1.0 + 0.15 * torch.sin(2 * torch.pi * 1.7 * t))
         sig = sig + bw * torch.sin(2 * torch.pi * torch.cumsum(fcm, 0) / sr)
-    env = 0.7 + 0.3 * torch.sin(2 * torch.pi * 4.5 * t)              # always-voiced ~4.5 Hz AM (no silent gaps)
+    env = 0.7 + 0.3 * torch.sin(2 * torch.pi * 4.5 * t)  # always-voiced ~4.5 Hz AM (no silent gaps)
     sig = sig * env
     sig = sig / sig.abs().max() * 0.6
     return sig.unsqueeze(0)
@@ -241,14 +264,23 @@ def default_reference_wav(seconds=6.0, sr=22050):
 # ────────────────────────────── reference frontend ──────────────────────────
 def make_reference_inputs(model, text, language, ref_wav_22k, mel_norms):
     """Host-side HF/Coqui feature extraction (allowed: this is the processor)."""
-    from TTS.tts.models.xtts import wav_to_mel_cloning
     import torchaudio
+    from TTS.tts.models.xtts import wav_to_mel_cloning
 
     text_tokens = torch.IntTensor(model.tokenizer.encode(text.strip().lower(), lang=language)).unsqueeze(0)
     # single ~<=6s chunk -> one perceiver mel (deterministic, no chunk mean)
     mel_chunk = wav_to_mel_cloning(
-        ref_wav_22k, mel_norms=mel_norms, n_fft=2048, hop_length=256, win_length=1024,
-        power=2, normalized=False, sample_rate=22050, f_min=0, f_max=8000, n_mels=80,
+        ref_wav_22k,
+        mel_norms=mel_norms,
+        n_fft=2048,
+        hop_length=256,
+        win_length=1024,
+        power=2,
+        normalized=False,
+        sample_rate=22050,
+        f_min=0,
+        f_max=8000,
+        n_mels=80,
     )
     wav_16k = torchaudio.functional.resample(ref_wav_22k, 22050, 16000)
     return {"text_tokens": text_tokens, "mel_chunk": mel_chunk, "wav_16k": wav_16k, "language": language}
@@ -259,8 +291,8 @@ def _l2norm_device(g_emb):
     """L2-normalise a [1, C] d-vector on device (matches reference l2_norm); -> [1, C, 1]."""
     C = int(g_emb.shape[1])
     gf = g_emb if g_emb.get_dtype() == ttnn.float32 else ttnn.typecast(g_emb, ttnn.float32)
-    ss = ttnn.sum(ttnn.multiply(gf, gf), dim=1, keepdim=True)          # [1,1]
-    normed = ttnn.multiply(gf, ttnn.rsqrt(ss))                         # [1,C] broadcast
+    ss = ttnn.sum(ttnn.multiply(gf, gf), dim=1, keepdim=True)  # [1,1]
+    normed = ttnn.multiply(gf, ttnn.rsqrt(ss))  # [1,C] broadcast
     return ttnn.reshape(normed, [1, C, 1])
 
 
@@ -279,25 +311,165 @@ def _select_next_on_device(last, gen_ids, base_mask, eye_v, penalty):
     # presence over V = base (prefix) + one-hot(gen_ids) summed over the sequence.
     # ttnn.embedding requires a bf16 table; one-hot values (0/1) and small counts are
     # exact in bf16, so the presence mask is exact.
-    oh = ttnn.embedding(gen_ids, eye_v, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)   # [1,L,V]
+    oh = ttnn.embedding(gen_ids, eye_v, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1,L,V]
     counts = ttnn.reshape(ttnn.sum(oh, dim=1), [1, V])
-    present = ttnn.typecast(ttnn.gtz(ttnn.add(counts, base_mask)), ttnn.float32)        # 1.0 where present
+    present = ttnn.typecast(ttnn.gtz(ttnn.add(counts, base_mask)), ttnn.float32)  # 1.0 where present
     if penalty and penalty != 1.0:
-        pen_val = ttnn.where(ttnn.ltz(lastf),
-                             ttnn.multiply(lastf, penalty),            # logits < 0 -> * penalty
-                             ttnn.multiply(lastf, 1.0 / penalty))      # logits >= 0 -> / penalty
+        pen_val = ttnn.where(
+            ttnn.ltz(lastf),
+            ttnn.multiply(lastf, penalty),  # logits < 0 -> * penalty
+            ttnn.multiply(lastf, 1.0 / penalty),
+        )  # logits >= 0 -> / penalty
         scored = ttnn.where(present, pen_val, lastf)
     else:
         scored = lastf
-    idx = ttnn.argmax(scored, dim=-1)                                 # [1] on-device argmax
+    idx = ttnn.argmax(scored, dim=-1)  # [1] on-device argmax
     nxt = ttnn.reshape(idx, [1, 1])
     if nxt.get_dtype() != ttnn.uint32:
         nxt = ttnn.typecast(nxt, ttnn.uint32)
     return ttnn.to_layout(nxt, ttnn.ROW_MAJOR_LAYOUT)
 
 
-def forward_on_device(device, model, text="hello world.", language="en", ref_wav_22k=None,
-                      N=40, repetition_penalty=5.0, collect=False):
+class BuiltPipeline:
+    """Weight-resident XTTS-v2 pipeline: the graduated stubs are built ONCE, then
+    reused for any number of utterances.
+
+    Building uploads all 466.87 M parameters; doing that per utterance is the single
+    largest cost of a repeated forward (measured: ~53% of a cold call). A served
+    model pays it once. `forward` runs the identical math to the one-shot
+    `forward_on_device` — only the build is hoisted; per-utterance host setup
+    (feature extraction + the fixed HF prefix seed) is unchanged.
+    """
+
+    def __init__(self, device, model):
+        self.device = device
+        self.model = model
+        _restore_cache = _install_resident_upload_cache()
+        try:
+            gpt = model.gpt
+            # ── build the graduated native stubs (weights uploaded via as_tensor) ─────
+            self.se_fwd = _build("res_net_speaker_encoder")(device, _resolve(model, "hifigan_decoder.speaker_encoder"))
+            self.cond_fwd = _build("conditioning_encoder")(device, _resolve(model, "gpt.conditioning_encoder"))
+            self.perc_fwd = _build("perceiver_resampler")(device, _resolve(model, "gpt.conditioning_perceiver"))
+            self.drop_fwd = _build("dropout1d")(device, _resolve(model, "gpt.conditioning_dropout"))
+            self.infer_fwd = _build("g_p_t2_inference_model")(device, gpt.gpt_inference)
+            self.gpt_fwd = _build("g_p_t")(device, gpt)
+            self.hifi_fwd = _build("hifi_decoder")(device, _resolve(model, "hifigan_decoder"))
+
+            # on-device penalty constants (bf16 identity table for one-hot via ttnn.embedding)
+            V = int(gpt.gpt_inference.lm_head[1].weight.shape[0])
+            self.eye_v = _tt(torch.eye(V), dtype=ttnn.bfloat16, device=device)
+            _base = torch.zeros(1, V, dtype=torch.float32)
+            _base[0, 1] = 1.0  # prefix placeholder id == 1 (see compute_embeddings)
+            self.base_mask = _tt(_base, dtype=ttnn.bfloat16, device=device)
+        finally:
+            _restore_cache()
+
+    def forward(
+        self, text="hello world.", language="en", ref_wav_22k=None, N=40, repetition_penalty=5.0, collect=False
+    ):
+        """One utterance on the resident weights; same result dict as the one-shot path."""
+        _restore_cache = _install_resident_upload_cache()
+        try:
+            return self._forward_impl(text, language, ref_wav_22k, N, repetition_penalty, collect)
+        finally:
+            _restore_cache()
+
+    def _forward_impl(self, text, language, ref_wav_22k, N, repetition_penalty, collect):
+        device, model = self.device, self.model
+        gpt = model.gpt
+        mel_norms = model.mel_stats.detach().cpu().float()
+        if ref_wav_22k is None:
+            ref_wav_22k = default_reference_wav()
+
+        # ── SETUP (host / torch; HF allowed for fixed-input seeding) ─────────
+        ins = make_reference_inputs(model, text, language, ref_wav_22k, mel_norms)
+        text_tokens = ins["text_tokens"]
+        code_stride = int(gpt.code_stride_len)
+        text_len = torch.tensor([text_tokens.shape[-1]])
+        exp_len = torch.tensor([N * code_stride])
+        start_audio = int(gpt.start_audio_token)
+        stop_audio = int(gpt.stop_audio_token)
+        # Seed the (fixed) decoder prefix from the HF conditioning latent — a persistent
+        # buffer snapshotted into the inference stub at build time (host-free thereafter).
+        with torch.no_grad():
+            cond_seed = _hf_cond_latent(model, ins["mel_chunk"]).to(torch.float32)  # [1,32,1024]
+            gpt_inputs = gpt.compute_embeddings(cond_seed, text_tokens)
+        prefix_len = int(gpt.gpt_inference.cached_prefix_emb.shape[1])
+        # Refresh the per-utterance prefix in the resident inference stub: the build is
+        # reused across utterances, only this one buffer is re-uploaded (same as_tensor
+        # upload path as the build-time snapshot, so numerics are identical).
+        self.infer_fwd.set_prefix(gpt.gpt_inference.cached_prefix_emb)
+
+        # ── Stage A: speaker encoder -> d-vector g [1,512,1] (l2-norm on device) ──
+        wav16 = _tt(ins["wav_16k"], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        g = _l2norm_device(self.se_fwd(wav16))  # ttnn [1,512,1]
+
+        # ── Stage B: conditioning -> cond_latent [1,32,1024] ──────────────────
+        mel_tt = _tt(ins["mel_chunk"], device=device)  # [1,80,S]
+        conds = ttnn.permute(self.cond_fwd(mel_tt), (0, 2, 1))  # [1,S,1024]
+        cond_lat = self.drop_fwd(self.perc_fwd(conds))  # [1,32,1024] (dropout=identity)
+
+        # ── Stage C: on-device autoregressive greedy decode -> codes ──────────
+        gen_ids = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)  # [1,1] uint32
+        step_logits = []
+        for _ in range(N):
+            logits = self.infer_fwd(gen_ids_tt=gen_ids)  # [1, seq, V]
+            seq = int(logits.shape[1])
+            V = int(logits.shape[-1])
+            last = ttnn.reshape(ttnn.slice(logits, [0, seq - 1, 0], [1, seq, V]), [1, V])
+            ttnn.deallocate(logits)
+            if collect:
+                step_logits.append(last)
+            nxt = _select_next_on_device(last, gen_ids, self.base_mask, self.eye_v, repetition_penalty)
+            if not collect:
+                ttnn.deallocate(last)
+            gen_ids = ttnn.concat([gen_ids, nxt], dim=1)  # grow on device
+        codes = ttnn.slice(gen_ids, [0, 1], [1, N + 1])  # drop start_audio -> [1,N]
+
+        # ── Stage D: latents (device codes -> mel ids on device, self-fed) ────
+        start_tok = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)
+        stop_toks = _tt_ids(torch.full((1, 3 + 1), stop_audio, dtype=torch.int32), device)
+        audio_ids = ttnn.concat([start_tok, codes, stop_toks], dim=1)  # [1, N+5] = start, codes, stop*4
+        lat = self.gpt_fwd(
+            text_inputs=text_tokens,
+            text_lengths=text_len,
+            wav_lengths=exp_len,
+            audio_ids_tt=audio_ids,
+            cond_latents_tt=cond_lat,
+        )  # [1, N, 1024]
+
+        # ── Stage E: vocode -> waveform (device) ──────────────────────────────
+        wav = self.hifi_fwd(lat, g=g)  # [1, S, 1]
+
+        return {
+            "waveform": wav,
+            "codes": codes,
+            "latents": lat,
+            "g": g,
+            "cond_lat": cond_lat,
+            "step_logits": step_logits,
+            "gpt_inputs": gpt_inputs,
+            "prefix_len": prefix_len,
+            "ins": ins,
+            "text_len": text_len,
+            "exp_len": exp_len,
+            "N": N,
+        }
+
+
+def build_pipeline(device, model=None):
+    """Build the weight-resident pipeline ONCE; reuse it across utterances via
+    `.forward(...)`. The perf harness and any serving loop should call this and keep
+    the object; `forward_on_device` is the one-shot build-then-run form."""
+    if model is None:
+        model = _load_reference_model()
+    return BuiltPipeline(device, model)
+
+
+def forward_on_device(
+    device, model, text="hello world.", language="en", ref_wav_22k=None, N=40, repetition_penalty=5.0, collect=False
+):
     """The REAL end-to-end forward, fully resident on device (host-free).
 
     Everything numeric runs in ttnn; all uploads route through the resident on-disk
@@ -309,105 +481,27 @@ def forward_on_device(device, model, text="hello world.", language="en", ref_wav
     <stage>_trace_setup pattern) and is pure torch (invisible to the device op
     stream). `run_tts` wraps this with reference goldens + PCC for the correctness
     gate; the forward-only e2e test drives this directly to prove on-device residency.
+
+    This one-shot form rebuilds every stub per call; callers running more than one
+    utterance should hold a `build_pipeline` object and call `.forward` instead.
     """
-    _restore_cache = _install_resident_upload_cache()
-    try:
-        return _forward_on_device_impl(device, model, text, language, ref_wav_22k, N,
-                                       repetition_penalty, collect)
-    finally:
-        _restore_cache()
-
-
-def _forward_on_device_impl(device, model, text, language, ref_wav_22k, N, repetition_penalty, collect):
-    gpt = model.gpt
-    mel_norms = model.mel_stats.detach().cpu().float()
-    if ref_wav_22k is None:
-        ref_wav_22k = default_reference_wav()
-
-    # ── SETUP (host / torch; HF allowed for fixed-input seeding) ──────────────
-    ins = make_reference_inputs(model, text, language, ref_wav_22k, mel_norms)
-    text_tokens = ins["text_tokens"]
-    code_stride = int(gpt.code_stride_len)
-    text_len = torch.tensor([text_tokens.shape[-1]])
-    exp_len = torch.tensor([N * code_stride])
-    start_audio = int(gpt.start_audio_token)
-    stop_audio = int(gpt.stop_audio_token)
-    V = int(gpt.gpt_inference.lm_head[1].weight.shape[0])
-    # Seed the (fixed) decoder prefix from the HF conditioning latent — a persistent
-    # buffer snapshotted into the inference stub at build time (host-free thereafter).
-    with torch.no_grad():
-        cond_seed = _hf_cond_latent(model, ins["mel_chunk"]).to(torch.float32)   # [1,32,1024]
-        gpt_inputs = gpt.compute_embeddings(cond_seed, text_tokens)
-    prefix_len = int(gpt.gpt_inference.cached_prefix_emb.shape[1])
-
-    # ── build the graduated native stubs (weights uploaded via as_tensor) ─────
-    se_fwd = _build("res_net_speaker_encoder")(device, _resolve(model, "hifigan_decoder.speaker_encoder"))
-    cond_fwd = _build("conditioning_encoder")(device, _resolve(model, "gpt.conditioning_encoder"))
-    perc_fwd = _build("perceiver_resampler")(device, _resolve(model, "gpt.conditioning_perceiver"))
-    drop_fwd = _build("dropout1d")(device, _resolve(model, "gpt.conditioning_dropout"))
-    infer_fwd = _build("g_p_t2_inference_model")(device, gpt.gpt_inference)
-    gpt_fwd = _build("g_p_t")(device, gpt)
-    hifi_fwd = _build("hifi_decoder")(device, _resolve(model, "hifigan_decoder"))
-
-    # on-device penalty constants (bf16 identity table for one-hot via ttnn.embedding)
-    eye_v = _tt(torch.eye(V), dtype=ttnn.bfloat16, device=device)
-    _base = torch.zeros(1, V, dtype=torch.float32)
-    _base[0, 1] = 1.0                                     # prefix placeholder id == 1 (see compute_embeddings)
-    base_mask = _tt(_base, dtype=ttnn.bfloat16, device=device)
-
-    # ── Stage A: speaker encoder -> d-vector g [1,512,1] (l2-norm on device) ──
-    wav16 = _tt(ins["wav_16k"], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    g = _l2norm_device(se_fwd(wav16))                     # ttnn [1,512,1]
-
-    # ── Stage B: conditioning -> cond_latent [1,32,1024] ──────────────────────
-    mel_tt = _tt(ins["mel_chunk"], device=device)                     # [1,80,S]
-    conds = ttnn.permute(cond_fwd(mel_tt), (0, 2, 1))                 # [1,S,1024]
-    cond_lat = drop_fwd(perc_fwd(conds))                             # [1,32,1024] (dropout=identity)
-
-    # ── Stage C: on-device autoregressive greedy decode -> codes ──────────────
-    gen_ids = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)   # [1,1] uint32
-    step_logits = []
-    for _ in range(N):
-        logits = infer_fwd(gen_ids_tt=gen_ids)                        # [1, seq, V]
-        seq = int(logits.shape[1])
-        last = ttnn.reshape(ttnn.slice(logits, [0, seq - 1, 0], [1, seq, V]), [1, V])
-        ttnn.deallocate(logits)
-        if collect:
-            step_logits.append(last)
-        nxt = _select_next_on_device(last, gen_ids, base_mask, eye_v, repetition_penalty)
-        if not collect:
-            ttnn.deallocate(last)
-        gen_ids = ttnn.concat([gen_ids, nxt], dim=1)                  # grow on device
-    codes = ttnn.slice(gen_ids, [0, 1], [1, N + 1])                  # drop start_audio -> [1,N]
-
-    # ── Stage D: latents (device codes -> mel ids on device, self-fed) ────────
-    start_tok = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)
-    stop_toks = _tt_ids(torch.full((1, 3 + 1), stop_audio, dtype=torch.int32), device)
-    audio_ids = ttnn.concat([start_tok, codes, stop_toks], dim=1)    # [1, N+5] = start, codes, stop*4
-    lat = gpt_fwd(
-        text_inputs=text_tokens, text_lengths=text_len, wav_lengths=exp_len,
-        audio_ids_tt=audio_ids, cond_latents_tt=cond_lat,
-    )                                                                 # [1, N, 1024]
-
-    # ── Stage E: vocode -> waveform (device) ──────────────────────────────────
-    wav = hifi_fwd(lat, g=g)                                          # [1, S, 1]
-
-    return {
-        "waveform": wav, "codes": codes, "latents": lat, "g": g, "cond_lat": cond_lat,
-        "step_logits": step_logits, "gpt_inputs": gpt_inputs, "prefix_len": prefix_len,
-        "ins": ins, "text_len": text_len, "exp_len": exp_len, "N": N,
-    }
+    return build_pipeline(device, model).forward(text, language, ref_wav_22k, N, repetition_penalty, collect)
 
 
 def _tt_ids(t, device):
     """Upload an int id row as a device uint32 ROW_MAJOR tensor (for ttnn.embedding)."""
-    return ttnn.as_tensor(t.to(torch.int32).contiguous(), dtype=ttnn.uint32,
-                          layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-                          memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.as_tensor(
+        t.to(torch.int32).contiguous(),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
-def run_tts(device, model, text="hello world.", language="en", ref_wav_22k=None, N=40,
-            repetition_penalty=5.0, verbose=True):
+def run_tts(
+    device, model, text="hello world.", language="en", ref_wav_22k=None, N=40, repetition_penalty=5.0, verbose=True
+):
     """Run the on-device forward + HF goldens; return a results dict of PCCs+tensors.
 
     The forward itself is `forward_on_device` (host-free, everything resident); this
@@ -420,21 +514,22 @@ def run_tts(device, model, text="hello world.", language="en", ref_wav_22k=None,
     res = {}
 
     # ── Stage A ── speaker embedding
-    g_tt = _th(fo["g"])                                                # [1,512,1]
+    g_tt = _th(fo["g"])  # [1,512,1]
     g_hf = _hf_speaker_embedding(model, ins["wav_16k"])
     res["speaker_embedding_pcc"] = comp_pcc(g_hf, g_tt, 0.95)[1]
 
     # ── Stage B ── conditioning latent
-    cond_latent_tt = _th(fo["cond_lat"])                               # [1,32,1024]
+    cond_latent_tt = _th(fo["cond_lat"])  # [1,32,1024]
     cond_hf = _hf_cond_latent(model, ins["mel_chunk"])
     res["cond_latent_pcc"] = comp_pcc(cond_hf, cond_latent_tt, 0.95)[1]
 
     # ── Stage C ── AR codes + per-step logits vs HF golden (same seeded prefix)
-    codes_tt = _th(fo["codes"]).round().to(torch.long)                 # [1,N]
+    codes_tt = _th(fo["codes"]).round().to(torch.long)  # [1,N]
     res["codes_tt"] = codes_tt
     tt_step_logits = [_th(l).reshape(1, -1) for l in fo["step_logits"]]
-    codes_hf, logits_hf = _hf_ar_golden(model, fo["gpt_inputs"], fo["prefix_len"],
-                                        n_steps=int(codes_tt.shape[1]), repetition_penalty=repetition_penalty)
+    codes_hf, logits_hf = _hf_ar_golden(
+        model, fo["gpt_inputs"], fo["prefix_len"], n_steps=int(codes_tt.shape[1]), repetition_penalty=repetition_penalty
+    )
     k = min(codes_tt.shape[1], codes_hf.shape[1])
     res["ar_token_match"] = float((codes_tt[0, :k] == codes_hf[0, :k]).float().mean()) if k else 0.0
     if tt_step_logits and logits_hf is not None:
@@ -444,12 +539,12 @@ def run_tts(device, model, text="hello world.", language="en", ref_wav_22k=None,
         res["ar_per_step_logits_pcc"] = 0.0
 
     # ── Stage D ── latents (HF golden re-runs on the SAME TT codes + TT cond latent)
-    latents_tt = _th(fo["latents"])                                    # [1, N, 1024]
+    latents_tt = _th(fo["latents"])  # [1, N, 1024]
     latents_hf = _hf_latents(model, ins["text_tokens"], fo["text_len"], codes_tt, fo["exp_len"], cond_latent_tt)
     res["latents_pcc"] = comp_pcc(latents_hf, latents_tt, 0.95)[1]
 
     # ── Stage E ── waveform
-    g_tt_np = g_tt                                                     # [1,512,1] for the vocoder golden
+    g_tt_np = g_tt  # [1,512,1] for the vocoder golden
     wav_tt = _th(fo["waveform"]).reshape(-1)
     wav_hf_tt_in = _hf_vocode(model, latents_tt, g_tt_np).reshape(-1)  # HF vocoder on TT latents + TT g
     mm = min(wav_tt.shape[0], wav_hf_tt_in.shape[0])
@@ -464,9 +559,16 @@ def run_tts(device, model, text="hello world.", language="en", ref_wav_22k=None,
     res["e2e_pcc"] = min(res["generative_pcc"], res["waveform_pcc"])
 
     if verbose:
-        for k_ in ["speaker_embedding_pcc", "cond_latent_pcc", "ar_token_match",
-                   "ar_per_step_logits_pcc", "latents_pcc", "waveform_pcc",
-                   "full_chain_waveform_pcc", "generative_pcc"]:
+        for k_ in [
+            "speaker_embedding_pcc",
+            "cond_latent_pcc",
+            "ar_token_match",
+            "ar_per_step_logits_pcc",
+            "latents_pcc",
+            "waveform_pcc",
+            "full_chain_waveform_pcc",
+            "generative_pcc",
+        ]:
             print(f"  {k_} = {res[k_]}")
     return res
 
@@ -479,8 +581,8 @@ def _hf_speaker_embedding(model, wav_16k):
 
 def _hf_cond_latent(model, mel_chunk):
     with torch.no_grad():
-        style = model.gpt.get_style_emb(mel_chunk.to(model.device), None)   # [1,1024,32]
-    return style.transpose(1, 2).cpu()                                      # [1,32,1024]
+        style = model.gpt.get_style_emb(mel_chunk.to(model.device), None)  # [1,1024,32]
+    return style.transpose(1, 2).cpu()  # [1,32,1024]
 
 
 def _hf_ar_golden(model, gpt_inputs, prefix_len, n_steps, repetition_penalty=5.0):
@@ -507,14 +609,14 @@ def _hf_ar_golden(model, gpt_inputs, prefix_len, n_steps, repetition_penalty=5.0
         return torch.zeros(1, 1, dtype=torch.long), None
     infer = gpt.gpt_inference
     start_audio = int(gpt.start_audio_token)
-    prefix_ids = gpt_inputs[:, :prefix_len]                     # [1, prefix_len] placeholder ids
+    prefix_ids = gpt_inputs[:, :prefix_len]  # [1, prefix_len] placeholder ids
     gen = [start_audio]
     raw_logits = []
     with torch.no_grad():
         for _ in range(n_steps):
             full_ids = torch.hstack([prefix_ids, torch.tensor([gen], dtype=gpt_inputs.dtype, device=gpt_inputs.device)])
             out = infer(input_ids=full_ids, past_key_values=None, use_cache=False, return_dict=True)
-            raw = out.logits[0, -1, :].float()                 # last-position raw logits [V]
+            raw = out.logits[0, -1, :].float()  # last-position raw logits [V]
             raw_logits.append(raw.clone())
             scored = raw.clone()
             if repetition_penalty and repetition_penalty != 1.0:
@@ -522,17 +624,21 @@ def _hf_ar_golden(model, gpt_inputs, prefix_len, n_steps, repetition_penalty=5.0
                 s = scored[ids]
                 scored[ids] = torch.where(s < 0, s * repetition_penalty, s / repetition_penalty)
             gen.append(int(scored.argmax()))
-    codes_hf = torch.tensor([gen[1:]], dtype=torch.long)       # drop the seed start_audio
-    logits = torch.vstack(raw_logits)                          # [n_steps, V]
+    codes_hf = torch.tensor([gen[1:]], dtype=torch.long)  # drop the seed start_audio
+    logits = torch.vstack(raw_logits)  # [n_steps, V]
     return codes_hf.cpu(), logits.float().cpu()
 
 
 def _hf_latents(model, text_tokens, text_len, codes, exp_len, cond_latent):
     with torch.no_grad():
         lat = model.gpt(
-            text_tokens.to(model.device), text_len.to(model.device), codes.to(model.device),
-            exp_len.to(model.device), cond_latents=cond_latent.to(torch.float32).to(model.device),
-            return_attentions=False, return_latent=True,
+            text_tokens.to(model.device),
+            text_len.to(model.device),
+            codes.to(model.device),
+            exp_len.to(model.device),
+            cond_latents=cond_latent.to(torch.float32).to(model.device),
+            return_attentions=False,
+            return_latent=True,
         )
     return lat.float().cpu()
 
@@ -623,7 +729,7 @@ class Pipeline:
     def __init__(self, device, model, capacity=64):
         self.device = device
         self.model = model
-        self.C = int(capacity)                       # pinned sequence capacity
+        self.C = int(capacity)  # pinned sequence capacity
         gpt = model.gpt
         self.model_dim = int(gpt.model_dim)
         # positional bound = the mel absolute-position table length (the decoder
@@ -637,11 +743,13 @@ class Pipeline:
         lm = gpt.gpt_inference.lm_head
         self._lnf_w = _tt(lm[0].weight, device=device)
         self._lnf_b = _tt(lm[0].bias, device=device)
-        self._head_w = _tt(lm[1].weight.t(), device=device)      # [D, V]
+        self._head_w = _tt(lm[1].weight.t(), device=device)  # [D, V]
         self._head_b = _tt(lm[1].bias, device=device)
         self._head_cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
-            fp32_dest_acc_en=True, packer_l1_acc=True,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
         # resident leading-projection weights for the non-GPT stages (host prep once)
         self._proj = {}
@@ -654,9 +762,9 @@ class Pipeline:
             if W is None:
                 W = torch.eye(self.model_dim)
             self._proj[st] = _tt(W, device=device)
-        self._buf = {}      # persistent device buffers, per stage
-        self._ref = {}      # eager reference outputs (torch), per stage
-        self._one = _tt(torch.ones(1, 1), device=device)   # on-device position increment
+        self._buf = {}  # persistent device buffers, per stage
+        self._ref = {}  # eager reference outputs (torch), per stage
+        self._one = _tt(torch.ones(1, 1), device=device)  # on-device position increment
         self._decode_state = None
         self._decode_ref = None
 
@@ -760,7 +868,7 @@ class Pipeline:
         torch.manual_seed(0)
         host = (next_input if next_input is not None else torch.randn(1, self.C, cols) * 0.1).to(torch.bfloat16)
         src = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(src, buf, cq_id=1)   # flips onto the 2CQ path
+        ttnn.copy_host_to_device_tensor(src, buf, cq_id=1)  # flips onto the 2CQ path
 
     # ── generic on-device autoregressive decode contract ─────────────────────
     def decode_prefill(self, input_ids=None):
@@ -785,16 +893,15 @@ class Pipeline:
 
     def _decode_step_impl(self, state):
         C, D = self.C, self.model_dim
-        hidden = self._gpt_core(state["emb"])                        # [1,C,D] host-free
-        last = ttnn.slice(hidden, [0, C - 1, 0], [1, C, D])          # [1,1,D]
+        hidden = self._gpt_core(state["emb"])  # [1,C,D] host-free
+        last = ttnn.slice(hidden, [0, C - 1, 0], [1, C, D])  # [1,1,D]
         normed = ttnn.layer_norm(last, epsilon=_LN_EPS, weight=self._lnf_w, bias=self._lnf_b)
-        logits = ttnn.linear(normed, self._head_w, bias=self._head_b,
-                             compute_kernel_config=self._head_cfg)   # [1,1,V]
+        logits = ttnn.linear(normed, self._head_w, bias=self._head_b, compute_kernel_config=self._head_cfg)  # [1,1,V]
         v = int(logits.shape[-1])
-        tok = ttnn.argmax(ttnn.reshape(logits, [1, v]), dim=-1)      # [1] next token, on device
+        tok = ttnn.argmax(ttnn.reshape(logits, [1, v]), dim=-1)  # [1] next token, on device
         state["logits"] = logits
         state["tok"] = tok
-        state["pos"] = ttnn.add(state["pos"], self._one)             # advance position on device
+        state["pos"] = ttnn.add(state["pos"], self._one)  # advance position on device
         return state
 
     def decode_write_inputs(self, state=None):
@@ -826,16 +933,18 @@ class Pipeline:
                 ttnn.release_trace(device, tid)
                 ok = pcc >= 0.95
                 ok_all = ok_all and ok
-                print(f"[trace] {stage}: captured host-free @ C={self.C}, trace PCC={pcc:.5f} "
-                      f"({'OK' if ok else 'LOW'})")
+                print(
+                    f"[trace] {stage}: captured host-free @ C={self.C}, trace PCC={pcc:.5f} "
+                    f"({'OK' if ok else 'LOW'})"
+                )
             except Exception as e:  # noqa: BLE001
                 ok_all = False
                 print(f"[trace] {stage}: capture FAILED: {type(e).__name__}: {e}")
         # on-device autoregressive decode step (with the CQ1 staging hook exercised)
         try:
             self.decode_prefill()
-            self.decode_write_inputs()          # exercise the CQ1 (2CQ) staging hook
-            self.decode_prefill()               # reset the resident state after the write
+            self.decode_write_inputs()  # exercise the CQ1 (2CQ) staging hook
+            self.decode_prefill()  # reset the resident state after the write
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             st = self.decode_step()
             ttnn.end_trace_capture(device, tid, cq_id=0)
@@ -844,8 +953,10 @@ class Pipeline:
             ttnn.release_trace(device, tid)
             ok = pcc >= 0.95
             ok_all = ok_all and ok
-            print(f"[trace] decode_step: captured host-free @ C={self.C}, trace PCC={pcc:.5f} "
-                  f"({'OK' if ok else 'LOW'})")
+            print(
+                f"[trace] decode_step: captured host-free @ C={self.C}, trace PCC={pcc:.5f} "
+                f"({'OK' if ok else 'LOW'})"
+            )
         except Exception as e:  # noqa: BLE001
             ok_all = False
             print(f"[trace] decode_step: capture FAILED: {type(e).__name__}: {e}")
@@ -878,9 +989,7 @@ def trace_capture_selftest(device=None):
     step per stage + one on-device decode_step. Returns True only if all match."""
     close = False
     if device is None:
-        device = ttnn.open_device(
-            device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2
-        )
+        device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2)
         close = True
     try:
         model = _load_reference_model()
