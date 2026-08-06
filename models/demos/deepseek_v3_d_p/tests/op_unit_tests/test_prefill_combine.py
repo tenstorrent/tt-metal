@@ -117,11 +117,11 @@ def run_combine(
     production_num_devices = production_mesh[0] * production_mesh[1]
     production_num_dispatch_groups = production_mesh[1]
 
-    # scale down top-K in the test by the factor between production and test number of dispatch groups, to get more representative test on smaller meshes.
-    num_experts_per_tok = num_experts_per_tok * num_dispatch_groups // production_num_dispatch_groups
-
-    # scale down total number of experts by the factor between production and test number of chips, to get more representative test on smaller meshes.
-    num_routed_experts = num_routed_experts * num_devices // production_num_devices
+    # Scale the model onto the test mesh: hold production experts-per-chip constant (keeps
+    # num_routed_experts a multiple of num_devices, as ExpertMapping's layout requires), and
+    # scale top-K by the dispatch-group ratio. Both floor at 1 on small meshes.
+    num_routed_experts = max(1, num_routed_experts // production_num_devices) * num_devices
+    num_experts_per_tok = max(1, num_experts_per_tok * num_dispatch_groups // production_num_dispatch_groups)
 
     logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -376,8 +376,6 @@ def combine_shape_params():
                 "pcc",
                 128,
                 config.NUM_ROUTED_EXPERTS // 8,  # reduced seq/experts for faster correctness check.
-                # further reducing num_experts would yield 0 experts on 8x4 mesh, thus effectively
-                # skipping the test on the intended production mesh.
                 config.NUM_EXPERTS_PER_TOKEN // 2,
                 4,
                 True,
