@@ -4,6 +4,11 @@
 
 #include "ttnn/common/queue_id.hpp"
 
+#include <mutex>
+#include <set>
+#include <tuple>
+#include <tt-logger/tt-logger.hpp>
+
 #include "reduce_scatter.hpp"
 #include "device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -47,6 +52,20 @@ namespace {
 // 3.95x at 25M. bf8 is still break-even at 544 KB, so a single byte-based gate is slightly
 // conservative for it; that costs nothing, since it is a tie there anyway.
 constexpr uint64_t k_direct_rs_max_input_bytes = 512ull << 10;
+
+// tt::tt_fabric::Topology is a scoped enum with no fmt formatter, and Ring-vs-Torus is worth reading in
+// the dispatch warning below: it separates the 1D hop-count routing regime from the 2D
+// destination-node one, which the direct op handles along different code paths.
+const char* direct_rs_topology_name(tt::tt_fabric::Topology topology) {
+    switch (topology) {
+        case tt::tt_fabric::Topology::Ring: return "Ring";
+        case tt::tt_fabric::Topology::Torus: return "Torus";
+        case tt::tt_fabric::Topology::Linear: return "Linear";
+        case tt::tt_fabric::Topology::Mesh: return "Mesh";
+        case tt::tt_fabric::Topology::NeighborExchange: return "NeighborExchange";
+    }
+    return "unknown";
+}
 
 bool use_direct_reduce_scatter(
     const ttnn::Tensor& input_tensor,
@@ -163,6 +182,42 @@ ttnn::Tensor reduce_scatter(
             num_workers_per_link,
             num_buffers_per_channel,
             compute_kernel_config)) {
+        // Diagnostic: the direct path is otherwise completely silent (no logging, and no perf model, so
+        // it reports PM_IDEAL 0.0), which makes "did this shape take the fast path?" unanswerable from a
+        // CI log. Warning level so it survives default log filtering. Deduplicated by shape rather than
+        // emitted once per process: reduce_scatter runs inside per-step model loops, so an unconditional
+        // warning would flood, but one line per distinct call site is bounded and says which shapes hit.
+        {
+            // Non-const so decltype(key) is a valid std::set value_type.
+            auto key = std::make_tuple(
+                ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis),
+                input_tensor.buffer()->size(),
+                static_cast<int>(input_tensor.dtype()),
+                normalized_dim);
+            static std::mutex direct_warned_mutex;
+            static std::set<decltype(key)> direct_warned;
+            bool first_for_shape = false;
+            {
+                std::lock_guard<std::mutex> lock(direct_warned_mutex);
+                first_for_shape = direct_warned.insert(key).second;
+            }
+            if (first_for_shape) {
+                log_warning(
+                    tt::LogOp,
+                    "reduce_scatter: taking the DIRECT (one-shot) path -- num_devices={}, per-device input "
+                    "{} B (gate {} B), dtype={}, scatter dim={}, shape={}, topology={}. The {} B gate is "
+                    "calibrated on a 1x8 Blackhole ring at 2 links only; other ring sizes and link counts "
+                    "are unvalidated. Emitted once per distinct shape.",
+                    std::get<0>(key),
+                    input_tensor.buffer()->size(),
+                    k_direct_rs_max_input_bytes,
+                    input_tensor.dtype(),
+                    normalized_dim,
+                    input_tensor.padded_shape(),
+                    direct_rs_topology_name(topology_),
+                    k_direct_rs_max_input_bytes);
+            }
+        }
         return ttnn::prim::reduce_scatter_minimal_direct(
                    input_tensor,
                    static_cast<int32_t>(normalized_dim),
