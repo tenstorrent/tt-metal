@@ -16,6 +16,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     run_sharded_norm_logical_width_multicore,
     cores_of,
     non_rectangular_width_shard_config,
+    NON_RECTANGULAR_GRID_CASES,
+    NON_RECTANGULAR_GRID_IDS,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
@@ -552,20 +554,38 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, 
 
 
 @pytest.mark.parametrize(
-    ("full_rows", "cores_in_last_row"), [(1, 1), (2, 3), (4, 1)], ids=["1_row_plus_1", "2_rows_plus_3", "4_rows_plus_1"]
+    ("full_lines", "cores_in_last_line", "origin", "line_length"),
+    NON_RECTANGULAR_GRID_CASES,
+    ids=NON_RECTANGULAR_GRID_IDS,
+)
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("use_weight_bias", [False, True], ids=["no_weight_bias", "weight_bias"])
 def test_layer_norm_sharded_width_non_rectangular_grid(
-    device, full_rows, cores_in_last_row, use_welford, use_weight_bias
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias
 ):
-    """A shard grid with a partially-filled last row is not a rectangle, so the reduction multicasts over
-    a bounding box that is wider than the active cores. The result must still match torch."""
+    """A shard grid with a partially-filled trailing line is not a rectangle, so the reduction multicasts
+    over a bounding box larger than the active cores. The result must still match torch, including when the
+    grid does not start at (0, 0), when its lines do not span the whole device grid, and under both shard
+    orientations (which select different mcast core-range topologies in the factory)."""
     torch.manual_seed(0)
 
     h = 32
     shard_width = 32
-    _, sharded_mem_config, w = non_rectangular_width_shard_config(device, full_rows, cores_in_last_row, h, shard_width)
+    _, sharded_mem_config, w = non_rectangular_width_shard_config(
+        device,
+        full_lines,
+        cores_in_last_line,
+        h,
+        shard_width,
+        origin=origin,
+        line_length=line_length,
+        orientation=orientation,
+    )
 
     torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
 
@@ -619,17 +639,40 @@ def test_layer_norm_sharded_width_non_rectangular_grid(
     )
 
 
+@pytest.mark.parametrize(
+    ("full_lines", "cores_in_last_line", "origin", "line_length"),
+    NON_RECTANGULAR_GRID_CASES,
+    ids=NON_RECTANGULAR_GRID_IDS,
+)
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
-def test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(device, use_welford, expect_error):
+def test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, expect_error
+):
     """The reduction multicasts over the bounding box of the shard grid, so a non-rectangular grid also
     places kernels, CBs and semaphores on the holes inside that box. create_descriptor must therefore
     reject a core_range_set that omits those holes instead of silently scheduling work on cores the
-    caller excluded, which could collide with another program."""
+    caller excluded, which could collide with another program. Covers grids that do not start at (0, 0),
+    grids whose lines do not span the whole device grid, and both shard orientations, since the holes are
+    found from the grid's own bounding box rather than the device grid or the traversal order."""
     torch.manual_seed(0)
 
     h = 32
     shard_width = 32
-    grid, sharded_mem_config, w = non_rectangular_width_shard_config(device, 1, 3, h, shard_width)
+    grid, sharded_mem_config, w = non_rectangular_width_shard_config(
+        device,
+        full_lines,
+        cores_in_last_line,
+        h,
+        shard_width,
+        origin=origin,
+        line_length=line_length,
+        orientation=orientation,
+    )
 
     input_tensor = ttnn.from_torch(
         generate_input_tensor(h, w, "random", torch.bfloat16),
@@ -676,13 +719,18 @@ def test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(dev
         params, tensor_args, output_tensor, bounding_box_set
     )
 
-    allowed_cores = cores_of(bounding_box_set)
+    # The multicast footprint is exactly the bounding box: nothing outside it (which is what the
+    # validation protects), and every core inside it, since the holes get idle kernels and the
+    # reduction semaphores span the whole box. Equality also pins the grid offset, so kernels landing
+    # at the origin instead of the grid's actual position would fail here.
+    expected_cores = cores_of(bounding_box_set)
     scheduled_cores = set()
     for kernel in descriptor.kernels:
         scheduled_cores |= cores_of(kernel.core_ranges)
     for semaphore in descriptor.semaphores:
         scheduled_cores |= cores_of(semaphore.core_ranges)
 
-    assert (
-        not scheduled_cores - allowed_cores
-    ), f"cores scheduled outside core_range_set: {sorted(scheduled_cores - allowed_cores)}"
+    assert scheduled_cores == expected_cores, (
+        f"cores scheduled outside the bounding box: {sorted(scheduled_cores - expected_cores)}; "
+        f"bounding box cores left unscheduled: {sorted(expected_cores - scheduled_cores)}"
+    )

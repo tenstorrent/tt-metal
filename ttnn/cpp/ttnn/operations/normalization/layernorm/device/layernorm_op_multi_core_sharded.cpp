@@ -312,8 +312,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Pack eps for later use
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
-    // Build runtime args using helper
-    const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
+    // Build runtime args using helper.
+    // Enumerate the shard grid as given, not core_ranges.all_cores: that is merge_ranges()'d, and merging
+    // can re-partition a non-rectangular grid into different rectangles whose traversal order no longer
+    // matches the tensor's shard order. Per-core index drives the gamma/beta offset, so a mismatch feeds
+    // cores the wrong weight slice.
+    const auto& shard_grid = grid.shard_spec.grid;
+    const auto& cores = corerange_to_cores(shard_grid, shard_grid.num_cores(), grid.row_wise);
 
     uint32_t last_core_width_index =
         grid.mcast_1d ? (cores.size() - 1) : (grid.row_wise ? (grid.grid_size.x - 1) : (grid.grid_size.y - 1));
