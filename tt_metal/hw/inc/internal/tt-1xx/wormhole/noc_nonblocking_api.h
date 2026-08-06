@@ -41,6 +41,16 @@ constexpr uint32_t DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF = 0;
 constexpr uint32_t DYNAMIC_NOC_BRISC_AT_CMD_BUF = 1;
 constexpr uint32_t DYNAMIC_NOC_BRISC_RD_CMD_BUF = 1;
 
+// No-op on tt-1xx: this NoC has no packet-tag flush bit. Present so that shared dispatch kernel code
+// can order a credit behind its payload on Quasar without an #ifdef at the call site.
+//
+// NOTE: tt-1xx therefore has NO mechanism to guarantee a payload commits to L1 before a following
+// credit atomic. Per HW, same-VC traffic arrives in order but may commit to L1 out of order, and
+// this race "exists on WH/BH without a workaround" -- the window is roughly one L1 latency. This
+// shim documents that gap; it does not close it. Tracked separately from the Quasar NoC-copy work.
+template <uint32_t cmd_buf>
+inline void noc_set_packet_flush(bool) {}
+
 constexpr uint32_t NCRISC_WR_CMD_BUF = 0;      // for large writes
 constexpr uint32_t NCRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
