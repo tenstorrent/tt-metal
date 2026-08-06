@@ -1989,7 +1989,20 @@ def test_prefill_execution_len_rejects_shape_smaller_than_logical_cache(expect_e
         prefill_prompt_tokens(object(), torch.ones((1, 33), dtype=torch.long), execution_len=32)
 
 
-def test_prefill_bucket_above_32k_uses_fixed_bounded_chunks(monkeypatch):
+@pytest.mark.parametrize(
+    ("prompt_len", "execution_len", "expected_cache_len", "expected_compute_len"),
+    [
+        pytest.param(32768, 32768, 32768, 32768, id="exact-32k-boundary"),
+        pytest.param(32769, 65536, 32800, 36864, id="above-32k-boundary"),
+    ],
+)
+def test_prefill_bucket_at_or_above_32k_uses_fixed_bounded_chunks(
+    monkeypatch,
+    prompt_len,
+    execution_len,
+    expected_cache_len,
+    expected_compute_len,
+):
     from models.experimental.diffusion_gemma.tt import chunked_prefill as CP
 
     calls = []
@@ -2007,20 +2020,20 @@ def test_prefill_bucket_above_32k_uses_fixed_bounded_chunks(monkeypatch):
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
-    prompt = torch.ones((1, 32769), dtype=torch.long)
+    prompt = torch.ones((1, prompt_len), dtype=torch.long)
     result = prefill_prompt_tokens(
         model,
         prompt,
         page_tables_per_layer=["device-pages"],
-        execution_len=65536,
+        execution_len=execution_len,
     )
 
-    assert result == PromptPrefill(prompt_len=32769, cache_len=32800)
+    assert result == PromptPrefill(prompt_len=prompt_len, cache_len=expected_cache_len)
     assert len(calls) == 1
     args, kwargs = calls[0]
     assert args == (model,)
-    assert kwargs["input_ids_torch"].shape == (1, 36864)
-    assert kwargs["valid_prompt_len"] == 32769
+    assert kwargs["input_ids_torch"].shape == (1, expected_compute_len)
+    assert kwargs["valid_prompt_len"] == prompt_len
     assert kwargs["chunk_size"] == 4096
     assert kwargs["return_last_logits"] is False
     assert kwargs["page_tables_torch_per_layer"] == ["host-pages"]
