@@ -337,14 +337,18 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def _meta1_host(self, val: int) -> ttnn.Tensor:
-        """Host-side 1-element uint32 tensor for the cheap in-place metadata update (copy_host_to_device)."""
-        return ttnn.from_torch(
-            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+    def _metadata_from_msg(self, metadata_msg: ttnn.Tensor) -> None:
+        """Populate the persistent per-element metadata (slot_id, actual_start, actual_end) IN PLACE from
+        the packed [1,1,1,3] socket message ON DEVICE — no device->host->device round trip.
+
+        The socket already delivers metadata_msg on device; the traced ops read each field from its own
+        captured-address 1-element buffer (metadata[0/1/2]), so the packed words are sliced out and copied
+        into those fixed buffers. ttnn.copy writes into the pre-allocated dst in place, preserving its
+        captured address. metadata_msg itself cannot BE the captured buffer: its address changes per chunk."""
+        for i, dst in enumerate(self._trace_metadata):
+            word = ttnn.slice(metadata_msg, [0, 0, 0, i], [1, 1, 1, i + 1])
+            ttnn.copy(word, dst)
+            ttnn.deallocate(word)
 
     def _forward_traced(self, kv_cache: ttnn.Tensor):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
@@ -389,9 +393,9 @@ class TtPrefillRuntime:
         self,
         input_tensor: ttnn.Tensor,
         kv_caches: MlaKvCaches,
-        slot_id: int,
-        actual_start: int,
-        actual_end: int,
+        slot_id: Optional[int],
+        actual_start: Optional[int],
+        actual_end: Optional[int],
         request_id: int = 0,
         d2h_service=None,
         metadata_msg: Optional[ttnn.Tensor] = None,
@@ -426,28 +430,37 @@ class TtPrefillRuntime:
             kv_caches: the engine-owned KV cache (from the adapter's allocate_kv_cache): ``.kvpe`` is the
                 primary cache this chunk's KV is written into; ``.index`` is the sparse/DSA indexer cache
                 (None for dense). The same object is passed on every call; the runtime holds none of it.
-            slot_id: cache user slot to fill, in [0, num_users).
-            actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
-            actual_end: absolute KV pos past the chunk's last real token.
+            slot_id: cache user slot to fill, in [0, num_users). None on the traced path (read on-device
+                from metadata_msg instead — see below).
+            actual_start: absolute KV pos of the chunk's first real token (the cache write offset). None
+                on the traced path.
+            actual_end: absolute KV pos past the chunk's last real token. None on the traced path.
             request_id: this chunk's request/chunk id. Only the pipelined layer-completion sink uses it
                 (to build the globally-dense ordering key); the single-host layer-ack paths ignore it.
             d2h_service: optional service used to send a layer-ack completion signal back to host once
                 each layer's KV cache has been populated on device. When set, each block zeros the cache
                 pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
-                CQ (no host sync). When None, no ack or zeroing.
-            metadata_msg: the chunk's PrefillMetadata device tensor sent as each ack record; required when
-                d2h_service is set.
+                CQ (no host sync). When None, no ack or zeroing. Not supported with use_trace.
+            metadata_msg: the chunk's packed [1,1,1,3] PrefillMetadata device tensor. On the traced path
+                it is REQUIRED and carries (slot_id, actual_start, actual_end): its words are copied
+                on-device into the persistent per-element buffers, replacing the host round trip. On the
+                eager path it is the ack record sent per layer, required only when d2h_service is set.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
         assert self.model_built, "build the model before prefill_chunk()"
-        assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
-        assert (
-            actual_start + self.config.chunk_size <= self.config.max_seq_len
-        ), f"chunk at actual_start={actual_start} exceeds per-user cache {self.config.max_seq_len}"
-        assert (
-            actual_start <= actual_end <= actual_start + self.config.chunk_size
-        ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+        # Host-side scalars are validated only when supplied. On the traced serving path they arrive
+        # None: the per-chunk (slot_id, actual_start, actual_end) live on-device in metadata_msg and are
+        # copied into the persistent buffers below, so there are no host ints to range-check.
+        if slot_id is not None:
+            assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
+        if actual_start is not None:
+            assert (
+                actual_start + self.config.chunk_size <= self.config.max_seq_len
+            ), f"chunk at actual_start={actual_start} exceeds per-user cache {self.config.max_seq_len}"
+            assert (
+                actual_start <= actual_end <= actual_start + self.config.chunk_size
+            ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
@@ -477,9 +490,12 @@ class TtPrefillRuntime:
             # path does below — publish this chunk's id instead; the captured callback built by
             # set_layer_completion_sink() reads it at replay time.
             self._trace_request_id = request_id
+            assert metadata_msg is not None, (
+                "use_trace: prefill_chunk needs the packed metadata_msg to populate the per-chunk metadata "
+                "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
+            )
             ttnn.copy(input_tensor, self._trace_input)
-            for dst, val in zip(self._trace_metadata, (slot_id, actual_start, actual_end)):
-                ttnn.copy_host_to_device_tensor(self._meta1_host(val), dst)
+            self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the

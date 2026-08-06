@@ -33,6 +33,7 @@ import json
 import os
 import signal
 import time
+from typing import Optional
 
 from loguru import logger
 
@@ -237,6 +238,15 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 # ---------------------------------------------------------------------------
 
 
+def _decode_metadata(metadata_msg) -> dict:
+    """Read the packed [1,1,1,3] metadata device tensor to host: {slot_id, actual_start, actual_end}.
+    This is the device->host half of the round trip the traced path avoids (see _socket_next)."""
+    import torch
+
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
+    return {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+
+
 def _is_shutdown_sentinel(meta: dict) -> bool:
     """True for the all -1 end-of-stream sentinel (see SHUTDOWN_METADATA_WORD); false for every real
     chunk, whose slot_id and KV positions are non-negative and in range."""
@@ -247,17 +257,17 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service) -> tuple:
-    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
-    metadata_msg). The device metadata tensor is returned (not discarded) so it can be propagated into
-    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
-    import torch
+def _socket_next(h2d_service, *, decode_meta: bool) -> tuple:
+    """Block on the next producer push: returns (tt_tokens, meta, metadata_msg). The device metadata
+    tensor is returned (not discarded) so it can be propagated into the model's per-layer ack send.
+    Used only by the unbounded request loop (rank 0 input).
 
+    decode_meta=False (traced path) skips the device->host read of the metadata: the per-chunk scalars
+    are consumed on-device straight from metadata_msg, so meta is returned None and no to_torch runs."""
     tt_tokens, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, metadata_msg
+    return tt_tokens, _decode_metadata(metadata_msg) if decode_meta else None, metadata_msg
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -307,57 +317,65 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
-    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
-    decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
-    feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
-    import torch
+def _d2d_recv(inbound, *, decode_meta: bool) -> tuple:
+    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor. The
+    returned tensor already has the embedding-output sharding, so it feeds runtime.prefill with no
+    reshard. Pairs with the upstream rank's _d2d_send.
 
+    decode_meta=False (traced path) skips the device->host read of the inline metadata: meta is returned
+    None and the per-chunk scalars are consumed on-device straight from metadata_msg."""
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
-    logger.info(
-        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
-        f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
+    meta = _decode_metadata(metadata_msg) if decode_meta else None
+    where = (
+        f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}" if meta is not None else "(on-device)"
     )
+    logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta, metadata_msg
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
+def _d2d_send(
+    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
     TT_FATALs on any spec mismatch, so no host-side relayout is needed.
+
+    metadata_msg (traced path): the packed device tensor received on this rank is forwarded downstream
+    verbatim — it is already the [1,1,1,3] uint32 replicated form the op expects, so no host rebuild
+    runs (meta may be None). When metadata_msg is None (eager path) the tensor is rebuilt from meta.
 
     deallocate=False when the activation is the traced path's persistent _trace_output buffer: the socket
     sync copies it into the sender backing on the CQ (before the next replay, which reuses the same buffer,
     is enqueued), so it must NOT be freed — the next chunk's replay writes into it in place."""
     t0 = time.perf_counter()
-    backing = outbound.get_backing_tensor()
-    import torch
 
-    words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-    # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
-    md_tensor = ttnn.from_torch(
-        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=backing.device(),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            backing.device(),
-            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-        ),
-    )
+    if metadata_msg is not None:
+        md_tensor = metadata_msg
+    else:
+        import torch
+
+        backing = outbound.get_backing_tensor()
+        words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
+        # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
+        md_tensor = ttnn.from_torch(
+            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=backing.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                backing.device(),
+                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+            ),
+        )
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
-    logger.info(
-        f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
-        f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
-    )
+    where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
+    logger.info(f"[pp rank {rank}] SEND-d2d {where} [xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms")
 
 
 def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
@@ -400,24 +418,25 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, metadata_msg=None
+    runtime, kv_caches, rank: int, c: int, inp, meta: Optional[dict], d2d_out, d2h_service=None, metadata_msg=None
 ) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
-    (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
-    slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
-    compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
+    (NTP-comparable). CHUNK_START is logged BEFORE the forward, so the slot/KV-range is visible per rank
+    even if prefill_chunk hangs. The trailing metadata is kept after compute_start so the
+    c=/compute_start= fields stay parseable (plot_pipeline_trace.py). On the traced path meta is None
+    (the scalars live on-device in metadata_msg), so the range is logged as (on-device)."""
     t_start = time.time()
-    logger.info(
-        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
-        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    where = (
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
     )
+    logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
+        slot_id=meta["slot_id"] if meta is not None else None,
+        actual_start=meta["actual_start"] if meta is not None else None,
+        actual_end=meta["actual_end"] if meta is not None else None,
         request_id=c,
         d2h_service=d2h_service,
         metadata_msg=metadata_msg,
@@ -429,8 +448,16 @@ def _compute_and_send(
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
-        # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
-        _d2d_send(d2d_out, out, rank, meta, deallocate=not runtime.config.use_trace)  # grant below ships it
+        # so the send copies it into the socket backing but must not free it; the received metadata_msg is
+        # forwarded verbatim (no host rebuild, meta is None). Eager: `out` is fresh — free it, rebuild md.
+        _d2d_send(
+            d2d_out,
+            out,
+            rank,
+            meta,
+            deallocate=not runtime.config.use_trace,
+            metadata_msg=metadata_msg if runtime.config.use_trace else None,
+        )  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -466,13 +493,21 @@ def run_request_loop(
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
     as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC, no
-    migration — the runner serves; migration is issued from outside (migration_driver.py)."""
+    migration — the runner serves; migration is issued from outside (migration_driver.py).
+
+    Traced path (cfg.use_trace): the per-chunk metadata is consumed on-device straight from metadata_msg
+    (no device->host->device round trip), so the host never sees the scalars and the in-band shutdown
+    sentinel cannot be detected. Trace serving therefore relies ONLY on SIGTERM/SIGKILL for teardown —
+    the producer's PREFILL_SEND_SHUTDOWN sentinel is ignored. Run untraced if graceful in-band shutdown
+    is required."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
+    decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
-        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
+        f"metadata={'host' if decode_meta else 'on-device'})"
     )
     t0 = time.perf_counter()
     c = 0
@@ -480,10 +515,10 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, metadata_msg = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_msg = _socket_next(h2d_service, decode_meta=decode_meta)  # slot/start/end from producer
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
-        if _is_shutdown_sentinel(meta):
+            inp, meta, metadata_msg = _d2d_recv(d2d_in, decode_meta=decode_meta)
+        if meta is not None and _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
