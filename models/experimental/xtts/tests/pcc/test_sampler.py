@@ -11,7 +11,7 @@ suppressing an otherwise-dominant token after it is drawn once.
 Run:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd); export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/test_sampler.py -s
+    pytest models/experimental/xtts/tests/pcc/test_sampler.py -s
 """
 
 import torch

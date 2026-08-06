@@ -4,7 +4,7 @@
 measurement. Not a correctness test. Run under tracy:
 
     python -m tracy -v -r -p -o gpt_prefill \\
-        -m "pytest models/experimental/xtts/tests/test_prefill_profile.py -k hello"
+        -m "pytest models/experimental/xtts/tests/pcc/test_prefill_profile.py -k hello"
 
 then summarise the emitted ops_perf_results CSV with scratch/perf_summary.py.
 One pass only (keeps the ~640 ops under the on-device profiler buffer; 2+ passes drop

@@ -30,6 +30,8 @@ from models.experimental.xtts.reference.xtts_hifigan import (
 from models.experimental.xtts.tt.xtts_conv import (
     TtConv1d,
     TtConvTranspose1d,
+    block_chain_fits_l1,
+    block_shard_l1,
     height_shard_l1,
     sharded_chain_fits_l1,
 )
@@ -39,6 +41,24 @@ FINAL_LRELU_SLOPE = 0.01  # coqui's pre-conv_post activation uses F.leaky_relu d
 # Keep each resblock's residual chain L1-sharded (collapse the per-conv Interleaved<->Sharded
 # round-trips). Global off-switch for A/B and trace bring-up.
 _SHARD_RESBLOCKS = True
+
+# Upsample stages whose resident chain uses a BLOCK rather than HEIGHT shard (see block_shard_grid).
+# Stage 0 only -- it is the one stage wide enough (256 ch = 8 channel tiles) for block to score MORE
+# cores than height (80 vs 35; height is capped by tile alignment at a 32-row shard), and its smaller
+# per-core tile (16 vs 32 KB) is what lets the k7/k11 convs build resident AT ALL. Stages 1-3 are
+# narrower (128/64/32 ch) so block would cap at 40/20/10 cores against height's 93-110.
+#
+# Worth -285us of device time (2512 -> 2227us, -11.3%): stage-0 convs 489 -> 433us and the whole
+# stage-0 MRF goes L1-resident, deleting 12 I2S, 12 S2I, 12 Move and 6 DRAM residual adds. Needs the
+# double buffering that _shard_plan/db_ov grant block stages -- without it k7/k11 run 33/48us instead
+# of 21/29us and the win collapses to -98us.
+#
+# NOT bit-exact: PCC moves 0.993110 -> 0.993252 (len 32) because the MRF sum accumulates in a
+# different order. Given this model's history of audible artifacts that aggregate PCC did not predict
+# (see the bf16_stages note above), listen before shipping.
+#
+# Empty set reverts every stage to height sharding.
+_BLOCK_SHARD_STAGES = {0}
 
 # Conv math fidelity. The bf16 stages run HiFi2 (2x math throughput vs HiFi4): validated on REAL
 # GPT latents (a full sampled utterance) to be perceptually identical to HiFi4 — spectrogram-mag
@@ -151,6 +171,20 @@ class TtCondProj(LightweightModule):
         )
 
 
+# Lowest upsample stage that emits its residual pre-activation as a second fused add instead of a
+# standalone unary (see TtResBlock1._forward_sharded). Stage 0's shard geometry inverts the win —
+# A/B'd end-to-end at 2520us with stage 0 included vs 2512us without — so it stays on the unary.
+# Set to 0 to re-run that A/B, or to num_upsamples to disable the trick entirely.
+_FUSED_PRE_ACT_MIN_STAGE = 1
+
+
+def _fused_pre_act_plan(stage_i, sharded):
+    """Whether resblocks at upsample ``stage_i`` should use the second-add pre-activation.
+    Only meaningful on the L1-sharded path — an interleaved block's adds are DRAM-priced
+    (~10us), so a second one there would cost far more than the unary it replaces."""
+    return sharded and stage_i >= _FUSED_PRE_ACT_MIN_STAGE
+
+
 def _shard_plan(stage_i, kernel_size):
     """(sharded, act_double_buffer) for a resblock at upsample ``stage_i`` with ``kernel_size``.
 
@@ -165,6 +199,13 @@ def _shard_plan(stage_i, kernel_size):
     round-trip, so this is safe to widen further once a shape is verified to fit."""
     if not _SHARD_RESBLOCKS:
         return False, True
+    if stage_i in _BLOCK_SHARD_STAGES:
+        # The BLOCK placement fits every kernel at this stage (see block_shard_grid), including the
+        # k7/k11 blocks that clash L1 height-sharded, so the whole stage can go resident -- and at
+        # half the per-core footprint of the height placement (16 vs 32 KB), which leaves room to keep
+        # full double buffering. That is not optional: without it the k7/k11 convs measured 33/48us
+        # against 21/29us with it.
+        return True, True
     if kernel_size <= 3:
         return True, True
     return stage_i >= 1, False  # k7 and k11 shard from stage 1 on (ch<=128 fits); stage-0 k7/k11 clash
@@ -185,9 +226,20 @@ class TtResBlock1(LightweightModule):
         act_double_buffer=True,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         conv_config_overrides=None,
+        fused_pre_act=False,
+        block_shard=False,
     ):
         super().__init__()
         self.device = device
+        # ``block_shard``: this stage's resident chain is BLOCK- rather than HEIGHT-sharded. Both are
+        # "one spec for the whole chain"; they differ only in how the activation is cut. See
+        # block_shard_grid in xtts_conv.py for why stage 0 wants block and the rest want height.
+        self.block_shard = block_shard
+        # ``fused_pre_act`` (sharded path only): produce the next residual iteration's
+        # ``leaky_relu(x)`` as a SECOND fused add over the same operands rather than as a
+        # standalone unary — see ``_forward_sharded``. Tuned per stage by _fused_pre_act_plan.
+        self.fused_pre_act = fused_pre_act
+        self._pre_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
         # ``sharded``: this block is *capable* of keeping its whole residual chain L1-sharded —
         # shard the input once on entry, run all 6 convs + eltwise in L1 (no per-conv
         # Interleaved<->Sharded), gather once on exit. Every op is the same [1, L, C] shape, so
@@ -236,43 +288,50 @@ class TtResBlock1(LightweightModule):
             for j in range(len(dilation))
         ]
 
+    def shard(self, x, channels):
+        """Bring ``x`` to this block's L1 chain placement (block or height)."""
+        return (block_shard_l1 if self.block_shard else height_shard_l1)(self.device, x, channels)
+
+    def chain_fits_l1(self, length, channels):
+        return (block_chain_fits_l1 if self.block_shard else sharded_chain_fits_l1)(self.device, length, channels)
+
     def will_shard(self, length, channels):
         """Whether forward WILL take the L1-sharded path for this shape (same gate as ``forward``).
         Lets the MRF caller keep the whole fusion L1-resident only when all its resblocks shard."""
-        return (
-            self.sharded
-            and length not in self._blocked_lengths
-            and sharded_chain_fits_l1(self.device, length, channels)
-        )
+        return self.sharded and length not in self._blocked_lengths and self.chain_fits_l1(length, channels)
 
-    def forward(self, x):
+    def forward(self, x, pre_act=None):
         # Shard only when this block is capable AND the activation at *this* sequence length
         # fits L1 (short decodes shard, long ones fall back). The try/except is a safety net:
         # a circular-buffer clash is thrown at program-compile time (before enqueue), so the
         # device is unharmed — we memoize the length and use the interleaved path. This keeps
         # the demo (long sequences) working where the static length gate is too optimistic.
         length = x.shape[1]
-        if (
-            self.sharded
-            and length not in self._blocked_lengths
-            and sharded_chain_fits_l1(self.device, length, x.shape[2])
-        ):
+        if self.sharded and length not in self._blocked_lengths and self.chain_fits_l1(length, x.shape[2]):
             try:
-                return self._forward_sharded(x)
+                return self._forward_sharded(x, pre_act=pre_act)
             except RuntimeError as e:
                 if "circular buffer" not in str(e).lower() and "clash" not in str(e).lower():
                     raise
                 self._blocked_lengths.add(length)
-        return self._forward_interleaved(x)
+        return self._forward_interleaved(x, pre_act=pre_act)
 
-    def _forward_interleaved(self, x):
+    # ``pre_act`` (both paths): ``leaky_relu(x)`` precomputed by the MRF caller. Every resblock
+    # in a stage starts by activating the SAME stage activation with the same slope, so the caller
+    # computes it once and lends it to all of them instead of each recomputing it (saves 2 of the
+    # 3 per stage). Borrowed — never freed here; the caller frees it once every sibling is done.
+
+    def _forward_interleaved(self, x, pre_act=None):
         # Free each conv/activation temporary as soon as it is consumed. The block's
         # input ``x`` is preserved on the first iteration (the caller reuses it for the
         # other MRF resblocks); later residuals are internal and freed.
         for idx, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
-            a = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
-            b = c1(a)  # leaky_relu(0.1) is fused onto this conv's output
-            ttnn.deallocate(a)
+            if idx == 0 and pre_act is not None:
+                b = c1(pre_act)  # borrowed activation; leaky_relu(0.1) fused onto this conv's output
+            else:
+                a = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
+                b = c1(a)  # leaky_relu(0.1) is fused onto this conv's output
+                ttnn.deallocate(a)
             d = c2(b)
             ttnn.deallocate(b)
             nxt = ttnn.add(d, x)
@@ -282,42 +341,71 @@ class TtResBlock1(LightweightModule):
             x = nxt
         return x
 
-    def _forward_sharded(self, x, return_sharded=False):
+    def _forward_sharded(self, x, return_sharded=False, pre_sharded=False, pre_act=None):
         # ``return_sharded``: skip the exit gather and hand back the L1-sharded result, so the MRF
         # caller can sum the stage's resblocks in L1 (cheap adds) and gather once instead of per
         # block. The caller then owns the sharded tensor (must free it). On an L1 clash the partials
         # are freed and the exception propagates, so the caller can fall back to the interleaved MRF.
+        # ``pre_sharded``: ``x`` is already an L1-sharded copy the caller owns (the MRF sums several
+        # resblocks over the same activation, so it shards ``o`` once and lends it to each) -- skip
+        # the entry reshard and never free ``x`` itself; the caller frees it once every sibling
+        # resblock is done with it.
         # ``xs`` is our own L1-sharded copy of the block input; the caller's ``x`` is left
         # untouched (reused by the other MRF resblocks). Every intermediate stays sharded
         # with the same spec (same-shape convs), so leaky_relu / residual add run in L1 and
         # no Interleaved<->Sharded reshard happens between ops — only the entry shard and the
         # exit gather. Matches the interleaved path bit-for-bit (verified PCC ~1.0). On an L1
         # clash the partial temporaries are freed so the caller can retry interleaved cleanly.
+        #
+        # ``fused_pre_act``: the next iteration needs BOTH the raw residual sum ``x`` (as its own
+        # addend) and ``leaky_relu(x)`` (to feed convs1), so the activation cannot simply be fused
+        # onto the sum. But a BinaryNg over two tensors with matching shard specs hits a fast path
+        # a UnaryDeviceOperation does not: measured on the stage-1..3 shard (1.14M elems, bf16),
+        # add = 0.9us, add + fused leaky_relu = 2.8us, standalone leaky_relu = 5.1us. So emitting a
+        # SECOND add over the same (d, xs) pair costs 3.7us where add + unary costs 6.0us. On the
+        # stage-0 shard (fp32, 256ch over only 35 cores) the numbers invert (3.0 / 4.4 / 2.6), which
+        # is why _fused_pre_act_plan enables this from stage 1 on only. Peak L1 rises by one tensor,
+        # but only across the two adds -- the convs still see three, exactly as before.
         _, length, channels = x.shape
-        a = b = d = nxt = None
-        xs = height_shard_l1(self.device, x, channels)
+        b = d = nxt = None
+        xs = x if pre_sharded else self.shard(x, channels)
+        entry = xs if pre_sharded else None  # borrowed from the caller -- never ours to free
+        act, own_act = pre_act, False  # iteration 0's activation, borrowed from the MRF caller
+        n_iters = len(self.convs1)
         try:
-            for c1, c2 in zip(self.convs1, self.convs2):
-                a = ttnn.leaky_relu(xs, negative_slope=LRELU_SLOPE)
-                b = c1(a, keep_sharded=True)  # leaky_relu(0.1) fused; L1-sharded in -> L1-sharded out
-                ttnn.deallocate(a)
-                a = None
+            for idx, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
+                if act is None:
+                    act = ttnn.leaky_relu(xs, negative_slope=LRELU_SLOPE)
+                    own_act = True
+                b = c1(act, keep_sharded=True)  # leaky_relu(0.1) fused; L1-sharded in -> L1-sharded out
+                if own_act:
+                    ttnn.deallocate(act)
+                act, own_act = None, False
                 d = c2(b, keep_sharded=True)
                 ttnn.deallocate(b)
                 b = None
                 nxt = ttnn.add(d, xs)
+                if self.fused_pre_act and idx + 1 < n_iters:
+                    act = ttnn.add(d, xs, activations=[self._pre_act])  # == leaky_relu(nxt)
+                    own_act = True
                 ttnn.deallocate(d)
                 d = None
-                ttnn.deallocate(xs)  # always our internal copy
+                if xs is not entry:
+                    ttnn.deallocate(xs)  # our own internal copy; the borrowed entry is left alone
                 xs = nxt
                 nxt = None
         except Exception:
-            for t in (xs, a, b, d, nxt):
+            for t in (b, d, nxt, act if own_act else None):
                 if isinstance(t, ttnn.Tensor) and t.is_allocated():
                     try:
                         ttnn.deallocate(t)
                     except Exception:
                         pass
+            if xs is not entry and isinstance(xs, ttnn.Tensor) and xs.is_allocated():
+                try:
+                    ttnn.deallocate(xs)
+                except Exception:
+                    pass
             raise
         if return_sharded:
             return xs  # caller sums in L1 and gathers once; caller owns xs
@@ -419,9 +507,10 @@ class TtHifiganGenerator(LightweightModule):
             for j, (k, d) in enumerate(zip(RESBLOCK_KERNEL_SIZES, RESBLOCK_DILATION_SIZES)):
                 sharded, act_double_buffer = _shard_plan(i, k)
                 # Non-sharded resblocks run interleaved with L1 room -> full double-buffering (the
-                # measured stage-0 win). Sharded-chain blocks keep their L1-tight tuning (act_double_buffer
-                # from _shard_plan; no weights-db, which would clash the resident chain).
-                db_ov = None if sharded else _INTERLEAVED_CONV_DB
+                # measured stage-0 win), and so do BLOCK-sharded chains, whose per-core tile is half a
+                # height shard's. Only HEIGHT-sharded chains stay L1-tight (act_double_buffer from
+                # _shard_plan; no weights-db, which would clash the resident chain).
+                db_ov = None if (sharded and i not in _BLOCK_SHARD_STAGES) else _INTERLEAVED_CONV_DB
                 self.resblocks.append(
                     TtResBlock1(
                         device,
@@ -434,26 +523,40 @@ class TtHifiganGenerator(LightweightModule):
                         act_double_buffer=act_double_buffer,
                         math_fidelity=conv_fid(i),
                         conv_config_overrides=db_ov,
+                        fused_pre_act=_fused_pre_act_plan(i, sharded),
+                        block_shard=i in _BLOCK_SHARD_STAGES,
                     )
                 )
 
         # conv_post has no bias in XTTS. It consumes the final stage's MRF mean via leaky_relu, so
         # (as with ups[i>=1]) the mean's 1/num_kernels scale folds into its weights — no bias to keep
-        # unscaled here, so the fold is exact and clean.
+        # unscaled here, so the fold is exact and clean. The generator's output ``tanh`` is fused onto
+        # this conv (its output feeds nothing else), removing the standalone unary — the largest
+        # single eltwise op in the profile, 28us on the full-rate waveform.
         self.conv_post = TtConv1d(
             device,
             state_dict["conv_post.weight"],
             None,
             padding=3,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
             math_fidelity=_CONV_FIDELITY_FP32,
             weight_scale=self.inv_num_kernels,
             conv_config_overrides=_INTERLEAVED_CONV_DB,
         )
+        # The stage pre-activations, fused onto the producing add rather than run as their own op:
+        # ``_pre_act`` on the conditioning add (stage 0) and on stages 0-2's MRF sum, ``_final_act``
+        # (coqui's default-slope leaky_relu) on stage 3's, whose consumer is conv_post.
+        self._pre_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
+        self._final_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, FINAL_LRELU_SLOPE)
 
-    def _mrf(self, i, o):
+    def _mrf(self, i, o, post_act):
         """Multi-receptive-field fusion for upsample stage ``i``: sum the stage's ``num_kernels``
         resblocks over ``o`` (the mean's 1/num_kernels is folded into downstream weights, so this
         is a plain sum). Frees ``o``; returns the interleaved-DRAM stage output.
+
+        ``post_act`` is the stage output's consumer-side activation (``leaky_relu``), fused onto the
+        FINAL sum add as a BinaryNg post-activation instead of running as its own op — the sum is
+        the activation's only consumer, so this is exact (verified bit-exact, DRAM and sharded).
 
         Fast path keeps the whole fusion L1-resident — each resblock returns its output sharded, the
         sum runs in L1, and the result is gathered ONCE — replacing the per-block exit gather + the
@@ -464,7 +567,7 @@ class TtHifiganGenerator(LightweightModule):
         length, channels = o.shape[1], o.shape[2]
         if all(rb.will_shard(length, channels) for rb in rbs):
             try:
-                out = self._mrf_sharded(rbs, o)
+                out = self._mrf_sharded(rbs, o, post_act)
                 ttnn.deallocate(o)
                 return out
             except RuntimeError as e:
@@ -472,45 +575,67 @@ class TtHifiganGenerator(LightweightModule):
                     raise
                 for rb in rbs:
                     rb._blocked_lengths.add(length)  # don't retry sharding this length
-        out = self._mrf_interleaved(rbs, o)
+        out = self._mrf_interleaved(rbs, o, post_act)
         ttnn.deallocate(o)
         return out
 
-    def _mrf_sharded(self, rbs, o):
-        """L1-resident MRF sum: each resblock runs in L1 and returns sharded; sum incrementally in
-        L1 (holding at most sum + one block output) and gather once. Does not free ``o``. On a clash
-        the partial sum is freed and the exception propagates for the caller's interleaved fallback."""
-        z_sum = None
-        for rb in rbs:
-            try:
-                res = rb._forward_sharded(o, return_sharded=True)
-            except Exception:
-                if isinstance(z_sum, ttnn.Tensor) and z_sum.is_allocated():
+    def _mrf_sharded(self, rbs, o, post_act):
+        """L1-resident MRF sum: every resblock in the stage reads the same activation, so shard
+        ``o`` ONCE here and lend that single shard to each of them (rather than each resblock
+        re-deriving its own copy of the identical shard) -- each still runs its own conv chain in
+        L1 and returns sharded; sum incrementally in L1 (holding at most sum + one block output)
+        and gather once. Does not free ``o``. On a clash the partial sum and the shared shard are
+        freed and the exception propagates for the caller's interleaved fallback."""
+        channels = o.shape[2]
+        o_shard = rbs[0].shard(o, channels)  # every block in a stage shares one placement
+        pre_act = z_sum = None
+        try:
+            # Every resblock's first op is leaky_relu over this same shard — compute it ONCE in L1
+            # and lend it to all of them (see TtResBlock1's ``pre_act``).
+            pre_act = ttnn.leaky_relu(o_shard, negative_slope=LRELU_SLOPE)
+            for n, rb in enumerate(rbs):
+                try:
+                    res = rb._forward_sharded(o_shard, return_sharded=True, pre_sharded=True, pre_act=pre_act)
+                except Exception:
+                    if isinstance(z_sum, ttnn.Tensor) and z_sum.is_allocated():
+                        ttnn.deallocate(z_sum)
+                    raise
+                if z_sum is None:
+                    z_sum = res
+                else:
+                    # sharded + sharded (same spec) -> L1 add; the last one carries post_act
+                    z_new = ttnn.add(z_sum, res, activations=[post_act] if n == len(rbs) - 1 else [])
                     ttnn.deallocate(z_sum)
-                raise
-            if z_sum is None:
-                z_sum = res
-            else:
-                z_new = ttnn.add(z_sum, res)  # sharded + sharded (same spec) -> L1 add
-                ttnn.deallocate(z_sum)
-                ttnn.deallocate(res)
-                z_sum = z_new
+                    ttnn.deallocate(res)
+                    z_sum = z_new
+        finally:
+            ttnn.deallocate(o_shard)
+            if isinstance(pre_act, ttnn.Tensor) and pre_act.is_allocated():
+                ttnn.deallocate(pre_act)
         out = ttnn.to_memory_config(z_sum, ttnn.DRAM_MEMORY_CONFIG)  # gather once for the whole stage
         ttnn.deallocate(z_sum)
         return out
 
-    def _mrf_interleaved(self, rbs, o):
+    def _mrf_interleaved(self, rbs, o, post_act):
         """Per-block interleaved MRF sum (each resblock gathers to DRAM on exit). Does not free ``o``."""
-        z_sum = None
-        for rb in rbs:
-            res = rb(o)  # does not free o
+        length, channels = o.shape[1], o.shape[2]
+        pre_act = z_sum = None
+        for n, rb in enumerate(rbs):
+            if rb.will_shard(length, channels):
+                res = rb(o)  # re-derives leaky_relu in L1, cheaper than resharding this DRAM copy
+            else:
+                if pre_act is None:  # shared by every interleaved block in this stage
+                    pre_act = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
+                res = rb(o, pre_act=pre_act)  # does not free o
             if z_sum is None:
                 z_sum = res
             else:
-                z_new = ttnn.add(z_sum, res)
+                z_new = ttnn.add(z_sum, res, activations=[post_act] if n == len(rbs) - 1 else [])
                 ttnn.deallocate(z_sum)
                 ttnn.deallocate(res)
                 z_sum = z_new
+        if pre_act is not None:
+            ttnn.deallocate(pre_act)
         return z_sum
 
     def forward(self, x, g):
@@ -531,23 +656,22 @@ class TtHifiganGenerator(LightweightModule):
         ttnn.deallocate(g_l1)
         pre = self.conv_pre(x)
         ttnn.deallocate(x)  # upsampler output, not reused after conv_pre
-        o = ttnn.add(pre, cond_global)
+        # Stage 0's pre-activation is the conditioning add's only consumer, so it rides along as
+        # that add's fused post-activation rather than as its own op.
+        a = ttnn.add(pre, cond_global, activations=[self._pre_act])
         ttnn.deallocate(pre)
         ttnn.deallocate(cond_global)
 
         for i in range(self.num_upsamples):
-            a = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
-            ttnn.deallocate(o)
             # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) + conds[i](g)`` is
             # just a per-channel bias add — fold it into the ups conv's fused bias epilogue.
             o = self.ups[i](a, cond_bias=cond_biases[i])
             ttnn.deallocate(a)
             ttnn.deallocate(cond_biases[i])
-            o = self._mrf(i, o)  # sum the 3 resblocks (mean folded into weights); frees o
-        a = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
-        ttnn.deallocate(o)
-        p = self.conv_post(a)
+            # Sum the 3 resblocks (mean folded into weights) and fuse the NEXT consumer's
+            # pre-activation onto the sum's final add; frees o.
+            last = i == self.num_upsamples - 1
+            a = self._mrf(i, o, self._final_act if last else self._pre_act)
+        out = self.conv_post(a)  # tanh is fused onto conv_post's output
         ttnn.deallocate(a)
-        out = ttnn.tanh(p)
-        ttnn.deallocate(p)
         return out
