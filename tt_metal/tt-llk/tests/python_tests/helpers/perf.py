@@ -22,12 +22,14 @@ from .metrics import compute_metrics, export_counters, export_metrics, print_met
 from .perf_schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
+    INIT_MARKER,
     LOOP_FACTOR_COLUMN,
     MARKER,
     MEAN,
     STD,
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
+    TILE_LOOP_MARKER,
     PerfSchemaError,
     stat_prefix,
     text_size_column,
@@ -40,8 +42,6 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
 # TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
-INIT_MARKER = "INIT"
-TILE_LOOP_MARKER = "TILE_LOOP"
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
