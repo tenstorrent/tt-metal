@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <variant>
 #include <vector>
 #include <algorithm>
 
@@ -24,8 +23,6 @@
 
 namespace tt::tt_metal {
 
-static constexpr std::uint8_t VERSION_ID = 5;
-
 enum class DataType {
     BFLOAT16 = 0,
     FLOAT32 = 1,
@@ -38,7 +35,8 @@ enum class DataType {
     // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
     // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
     FP8_E4M3 = 8,
-    INVALID = 9,
+    INT8 = 9,
+    INVALID = 10,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -47,6 +45,8 @@ template <typename T>
 consteval DataType convert_to_data_type() {
     if constexpr (std::is_same_v<T, uint8_t>) {
         return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, int8_t>) {
+        return DataType::INT8;
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         return DataType::UINT16;
     } else if constexpr (std::is_same_v<T, int32_t>) {
@@ -90,7 +90,6 @@ struct NdShardSpec {
     bool operator!=(const NdShardSpec& other) const = default;
 };
 
-using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal

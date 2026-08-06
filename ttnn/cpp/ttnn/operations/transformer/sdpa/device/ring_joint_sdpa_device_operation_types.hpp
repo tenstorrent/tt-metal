@@ -25,6 +25,7 @@ struct RingJointSDPAParams {
     bool is_balanced = false;
     bool is_cross = false;
     std::size_t logical_n = 0;
+    std::size_t logical_l = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
@@ -35,13 +36,9 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt;
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
     uint32_t latent_v_head_dim = 0;
-    // (user, layer)-major KV-cache batch dim (metadata path). The SDPA + all-gather readers compute the
-    // cache slot on-device as metadata[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
-    // update_padded_kv_cache). Defaults (1, 0) reduce to metadata[0], so existing callers are unaffected.
-    // Hashed by compute_program_hash: each distinct (kv_cache_num_layers, kv_cache_layer_idx) gets its own
-    // cached program, so different layers can't collide onto one cached program and gather the wrong slot.
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
+    std::optional<uint32_t> sliding_window_size = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -51,6 +48,7 @@ struct RingJointSDPAParams {
         bool is_balanced,
         bool is_cross,
         std::size_t logical_n,
+        std::size_t logical_l,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
@@ -62,13 +60,15 @@ struct RingJointSDPAParams {
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
-        uint32_t kv_cache_layer_idx = 0) :
+        uint32_t kv_cache_layer_idx = 0,
+        std::optional<uint32_t> sliding_window_size = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
         is_balanced(is_balanced),
         is_cross(is_cross),
         logical_n(logical_n),
+        logical_l(logical_l),
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
@@ -80,7 +80,8 @@ struct RingJointSDPAParams {
         kv_actual_isl(kv_actual_isl),
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
-        kv_cache_layer_idx(kv_cache_layer_idx) {}
+        kv_cache_layer_idx(kv_cache_layer_idx),
+        sliding_window_size(sliding_window_size) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -90,6 +91,8 @@ struct RingJointSDPAParams {
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
+    bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
@@ -97,6 +100,7 @@ struct RingJointSDPAParams {
         "is_balanced",
         "is_cross",
         "cache_key_logical_n",
+        "logical_l",
         "ring_size",
         "compute_kernel_config",
         "program_config",
@@ -104,6 +108,7 @@ struct RingJointSDPAParams {
         "has_kv_cache_batch_idx",
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
+        "sliding_window_size",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -114,6 +119,7 @@ struct RingJointSDPAParams {
             std::cref(is_balanced),
             std::cref(is_cross),
             has_kv_pad_rotation() ? std::size_t{0} : logical_n,
+            std::cref(logical_l),
             std::cref(ring_size),
             std::cref(compute_kernel_config),
             std::cref(program_config),
@@ -121,6 +127,7 @@ struct RingJointSDPAParams {
             kv_cache_batch_idx.has_value(),
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
+            std::cref(sliding_window_size),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -135,6 +142,12 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
+    std::optional<Tensor> attention_sink;
+
+    // Populated on the sharded-joint path only; nullopt on the replicated path.
+    // Invariant: joint_is_sharded() <=> gathered_joint_k.has_value()
+    std::optional<Tensor> gathered_joint_k;
+    std::optional<Tensor> gathered_joint_v;
 
     // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
     // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
@@ -146,9 +159,6 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
-    // Both metadata tensors are supplied together or not at all (enforced in validate_on_program_cache_miss);
-    // require both here so a caller that set only one takes the scalar path instead of nullopt-derefing the
-    // missing tensor downstream.
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
@@ -169,6 +179,10 @@ struct RingJointSDPAInputs {
     uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
     }
+
+    // True iff the joint/prompt set is sequence-sharded (L/P per device).
+    // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
+    bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
 
 // Index constants for RingJointSDPAResult vector

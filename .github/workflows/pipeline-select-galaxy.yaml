@@ -106,13 +106,10 @@ on:
         options:
           - disabled
           - all
-          - galaxy-ccl
-          - galaxy-moe
           - galaxy-fabric-unit
           - galaxy-fabric-2d-torus-nightly
           - galaxy-fabric-multi-mesh-4x4-2x4s
           - galaxy-fabric-multi-mesh-2x8-2x4s
-          - bh-galaxy-ccl
           - bh-galaxy-fabric-torus-stability
           - bh-galaxy-socket-pipeline
         default: "disabled"
