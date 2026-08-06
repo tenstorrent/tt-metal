@@ -1576,3 +1576,57 @@ cumulative-runs-since-power-cycle as a first-class column. A single cell repeate
 the cleanest form -- 12 such runs at the two "hanging" cells are already the first data point, and they are clean.
 
 Hung-card state confirmed again: `current_link_speed=Unknown`, `width=63`, AER fatal sum 0.
+
+## §N+9 — Fixed config has never hung; every hang came from a VARYING sequence. Rare and stochastic. (bh-05, 2026-08-06)
+
+§N+8 said the hang tracked cumulative runs. That was also wrong, and this isolates it. One cell repeated from a
+fresh `tt-smi -r`, probes captured every run:
+
+| phase | config | runs | result |
+|---|---|---|---|
+| 1 | delay 500, repeat 1 | 50 | clean |
+| 2 | delay 200, repeat 6 (the cell that hung mid-ladder) | 50 | clean |
+| 3 | delay 500, **repeat 16** (max amplification, occ 511) | 50 | clean |
+| 4 | **churn**: repeat 1 -> 2 -> 4 -> 6 at delay 500 | **4** | **HUNG at run 4** |
+
+**150 consecutive fixed-config runs, no hang.** That kills three hypotheses at once:
+- **Cumulative run count** (§N+8) -- 50 > the 31 and ~34 where the ladders died, three times over.
+- **High amplification / sustained load** -- 50 runs at repeat 16, pinned at 511/512 occupancy, are harmless.
+- **A dangerous cell** -- delay 200 repeat 6 is the exact cell that hung mid-ladder; alone it runs 50 times.
+
+The one thing the ladders had that a repeated cell does not is **changing the drainer's configuration between
+runs**, and that hung the card on its FOURTH run.
+
+**No warning signal exists.** Probes are flat across all 150 clean runs -- ack 167-188 ns, drainer-core read
+761-798, worker read 701-738 -- with one paired blip at run 40 of phase 3 (drainer 889 / worker 832, both
+elevated together, recovered by run 50). Nothing trends toward the hang, so latency cannot be used as an early
+warning.
+
+### TRIAL B: churn survived 49 runs. Churn is NOT reliably reproducible.
+
+A second churn trial from a fresh card, identical script, ran the full 49 runs CLEAN. So the phase-4 hang at
+run 4 was not "churn hangs it fast" -- it was a rare event that happened to land early. Standing tally:
+
+| regime | runs | hangs |
+|---|---|---|
+| fixed config (phases 1-3) | 150 | **0** |
+| varying config (churn A+B, ladders §N+8) | ~118 | **3** (at run 4, 31, ~34) |
+
+**What is defensible: fixed config has never hung, and every hang ever observed came from a varying-config
+sequence.** What is NOT defensible: that churn causes hangs on any particular timescale, or that the difference
+is established -- 3/118 vs 0/150 is suggestive (Fisher p ~ 0.08), not significant. The heading of this section
+originally read "It is CONFIG CHURN"; that was overstated on one sample and is corrected here.
+
+The variance is large: run 4, run 31, run ~34 for the three hangs.
+JIT recompilation is NOT the mechanism: every repeat variant in the churn cycle was already built and cached by
+the §N+8 ladder on this same binary, so no run in phase 4 compiled anything new.
+
+What "changing configuration" physically does that a fixed config does not is still unidentified -- each run is
+its own process with its own device open either way. The honest statement is that the CORRELATION is strong
+(150 clean fixed vs a hang at run 4 of churn) and the MECHANISM is unknown.
+
+### The experimental rule this establishes
+
+**Never conclude anything about a cell from a sweep that visits other cells.** Every hang result in this file
+before §N+9 came from a ladder, and ladders confound the swept axis with the act of sweeping. Fixed-config
+repetition from a fresh card is the only sound form for this measurement, and it is cheap (50 runs ~ 3 min).
