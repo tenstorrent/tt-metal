@@ -1483,3 +1483,96 @@ loads the wrong side of the drainer, which is why 16x of it is harmless.
 
 Card left HUNG (`current_link_speed=Unknown`, `width=63`, AER all-zero, `Read 0xffffffff over PCIe`). Needs a
 **cold power cycle**; do NOT `tt-smi -r` a hung card.
+
+## §N+7 — Tensix vs DRISC: every difference in the path, host and device
+
+Both drainers run the SAME kernel source, ship the SAME frame format, over the SAME socket protocol, to the
+SAME destination (the PCIe tile at `PCIE_NOC_X/Y`), issued by the SAME function
+(`write_to_host_chunked` -> `noc_wwrite_with_state`, same `NOC_UNICAST_WRITE_VC`, same `write_cmd_buf`, same
+`NOC_MAX_BURST_SIZE` chunking). Both use `NOC_INDEX` for egress and `kReadNoc = NOC_INDEX ^ 1` for ingest, and
+both are created on NoC 0. So the divergence is NOT in the write code. It is in **who issues it and from where**.
+
+### Device side
+
+| | DRISC | Tensix BRISC |
+|---|---|---|
+| **NIU mode** | **flipped to STREAM mode** (`NIU_CFG_0.AXI_SUBORDINATE_ENABLE` cleared) before the run, restored to NOC2AXI in a tail gated on the host writing `stop=2` | untouched -- a worker NIU is already a NoC master |
+| `cb_interface` | shim defined by the kernel (no CB infra on DRAM cores) | provided by firmware |
+| L1 addressing | needs the `0x2000000000` tag in NOC2AXI mode; plain local addresses in stream mode | plain worker L1 |
+| L1 size | 128 KB total (`MEM_DRISC_L1_SIZE`) | 1.5 MB, staging clamped to the DRISC's 7 slots to stay comparable |
+| kernel config | `DramConfig{.noc = NOC_0}` | `DataMovementConfig{RISCV_0, RISCV_0_default}` + `DRAIN_ON_TENSIX` |
+
+### Host side
+
+| | DRISC | Tensix BRISC |
+|---|---|---|
+| socket `sender_is_l2cpu` | **true** -- physical NoC coord + full L1 address | false -- logical coord, worker-L1 semantics |
+| socket core coord passed | **NOC0 PHYSICAL** (`drisc_phys`) | **LOGICAL** (`drisc_logical`) |
+| static TLB | configured explicitly here (2 MB @ 0, Strict) because the drainer sits on the DRAM channel's *unused* port, which `ll_api::configure_static_tlbs` does not map | free -- metal maps all workers at device init |
+| NIU mode call | `set_drisc_niu_mode(..., 1)` before the socket is built | none |
+| profiler-region zeroing | DRAM `PROFILER` region | TENSIX `PROFILER` region |
+| core placement | unused port of a DRAM bank (die edge) | reserved worker column (gx, d) |
+| dispatch mode | either | slow dispatch ONLY (resident program on a worker) |
+
+### The asymmetries that could plausibly reach card level, ranked
+
+1. **The NIU mode flip is the only difference that writes a persistent chip register.** `NIU_CFG_0` survives
+   program exit and process exit; only a chip reset restores the NOC2AXI default. The restore tail is gated on
+   the host writing `stop=2` with a 200M-spin timeout, so **any run that dies before that handshake leaves a
+   DRAM endpoint parked in stream mode**. In stream mode that endpoint no longer forwards inbound DRAM-range
+   addresses to GDDR -- it terminates them at DRISC L1. Nothing else in either path mutates chip state that
+   outlives the process. This is the single best structural candidate for "why does only the DRISC path leave
+   the card in a bad state", and it costs one run to test: flip to stream mode, restore, and never drain at all.
+2. **The egress route differs.** A DRAM-bank endpoint on the die edge and a worker in column gx reach the PCIe
+   tile over different hop counts and different routers. Same VC, different links.
+3. **Shared DRAM-bank infrastructure.** The drainer's NIU is an unused *port* of a bank whose other ports carry
+   real GDDR traffic. `pick_unused_dram_logical_core` guarantees no one else uses that port, not that the port
+   is isolated from the bank.
+4. Addressing/coordinate differences (`sender_is_l2cpu`, physical vs logical) are ADDRESSING ONLY and are
+   exercised identically on every clean run -- they cannot be rate-dependent, so they do not explain a hang that
+   only appears at low producer delay.
+
+### What this predicts, given §N+6
+
+§N+6 put the trigger on the INGEST axis (producer delay), not egress. Items 2 and 3 above are egress-side and so
+are poor fits. Item 1 is neither -- it is a state the DRISC path enters regardless of rate, which would explain
+*persistence* (why the card stays bad) without explaining *onset*. The honest reading is that onset and
+persistence may be two different mechanisms, and only onset is rate-dependent.
+
+## §N+8 — The hang is CUMULATIVE, not a property of (delay, repeat). §N+6's "ingest axis" is confounded.
+
+Deliberate repro attempt on a freshly cold-booted card, to read the new worker-core control probe on a degraded
+card. It did not go as §N+6 predicted, and the correction matters more than the original result.
+
+**The cells that "hung" do not hang from a fresh card.** 12 consecutive attempts at exactly the two configs
+§N+6 recorded as hanging -- delay 100 repeat 8 (hung run 1 there) and delay 0 repeat 8 (hung run 1 there) --
+all completed rc=0 on a cold-booted card. The card stayed healthy throughout (ack 177 ns, worker 713 ns).
+
+**Replaying the full ascending ladder hung it at run #31, in a cell that had just run clean.** delay 200
+repeat 6 -- and delay 200 at repeats 4, 8 and 16 had all passed x3 earlier in that same ladder and in §N+6.
+
+**Both hangs land at ~the same cumulative run count.** §N+6's hang came after 21 (delay 500) + 9 (delay 200) +
+3 (delay 100 rep 4) = run ~34. This one at run #31. Two independent ladders, hang at 31 and ~34 runs.
+
+### The confound, stated plainly
+
+Every ladder run so far was **ascending in load**, so lower delay ALWAYS came later in the session. Cumulative
+runs and producer delay were perfectly correlated, and §N+6 attributed the hang to the axis it happened to be
+sweeping. The variable that actually predicts the hang is **cumulative runs / sustained time under load**, and
+delay 200 repeat 6 -- mid-ladder, unremarkable, previously clean -- is enough to trigger it once that budget is
+spent.
+
+This is exactly the ordering trap already written down in this file for the Tensix-vs-DRISC comparison ("a sweep
+that runs A then B at each delay gives A the first crack at every new delay"). It was not applied to the delay
+axis itself.
+
+**Retract from §N+6:** "the axis is what the DRISC READS, not what it writes", and the delay/repeat table's
+implication that specific cells hang. What survives from §N+6 is only the egress measurement itself -- egress
+saturates at ~17 GB/s and amplification cannot exceed it (21 clean runs), so egress bandwidth is still not the
+trigger. The positive claim about ingest is withdrawn.
+
+**What a correct experiment looks like:** randomize or alternate cell order within the ladder, and record
+cumulative-runs-since-power-cycle as a first-class column. A single cell repeated N times from a fresh card is
+the cleanest form -- 12 such runs at the two "hanging" cells are already the first data point, and they are clean.
+
+Hung-card state confirmed again: `current_link_speed=Unknown`, `width=63`, AER fatal sum 0.
