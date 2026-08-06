@@ -31,6 +31,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"  // [#48552 DFB-ONLY] per-DFB-call localizer + TDMA interpose
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -114,9 +115,13 @@ void tilize_in(uint32_t in_num_subblocks) {
     DataflowBuffer in_dfb(in_cb_id);
     DataflowBuffer out_dfb(out_cb_id);
     for (uint32_t b = 0; b < in_num_subblocks; ++b) {
+        UNPACK(DPRINT("TZ wf b={}\n", b));
         in_dfb.wait_front(in_block_w);
+        PACK(DPRINT("TZ rb b={}\n", b));
         out_dfb.reserve_back(in_block_w);
+        PACK(DPRINT("TZ pb b={}\n", b));
         out_dfb.push_back(in_block_w);
+        UNPACK(DPRINT("TZ pf b={}\n", b));
         in_dfb.pop_front(in_block_w);
     }
 }
@@ -132,11 +137,15 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
+    UNPACK(DPRINT("RB wf\n"));
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
     for (uint32_t h = 0; h < out_subblock_h; h++) {
+        PACK(DPRINT("RB rb h={}\n", h));
         out_cb.reserve_back(out_block_w);
+        PACK(DPRINT("RB pb h={}\n", h));
         out_cb.push_back(out_block_w);
     }
+    UNPACK(DPRINT("RB pf\n"));
     interm_cb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
@@ -270,15 +279,18 @@ void kernel_main() {
                     // [#48552 DFB-ONLY] reconfig_data_format + matmul_block_init removed.
                 }
 
+                UNPACK(DPRINT("M0 wf kb={}\n", (uint32_t)in0_block_w_i));
                 cb_mm_in0.wait_front(in0_block_num_tiles);
 
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
+                    UNPACK(DPRINT("M0 pf(skip) kb={}\n", (uint32_t)in0_block_w_i));
                     cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
 #endif
 
+                UNPACK(DPRINT("I1 wf kb={}\n", (uint32_t)in0_block_w_i));
                 cb_in1.wait_front(in1_block_num_tiles);
 
                 if (last_inner_dim_block) {
@@ -294,7 +306,17 @@ void kernel_main() {
                         if (enable_reload) {
                             // [#48552 DFB-ONLY] copy_tile_to_dst_init / copy_block / matmul_block_init removed;
                             // keep the partials read handshake.
+                            UNPACK(DPRINT(
+                                "PR wf kb={} i0={} i1={}\n",
+                                (uint32_t)in0_block_w_i,
+                                (uint32_t)in0_subblock_i,
+                                (uint32_t)in1_subblock_i));
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
+                            UNPACK(DPRINT(
+                                "PR pf kb={} i0={} i1={}\n",
+                                (uint32_t)in0_block_w_i,
+                                (uint32_t)in0_subblock_i,
+                                (uint32_t)in1_subblock_i));
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
                         }
 
@@ -303,8 +325,18 @@ void kernel_main() {
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
+                            PACK(DPRINT(
+                                "O rb kb={} i0={} i1={}\n",
+                                (uint32_t)in0_block_w_i,
+                                (uint32_t)in0_subblock_i,
+                                (uint32_t)in1_subblock_i));
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             // [#48552 DFB-ONLY] tile_regs_wait / pack_reconfig_l1_acc / pack_tile removed.
+                            PACK(DPRINT(
+                                "O pb kb={} i0={} i1={}\n",
+                                (uint32_t)in0_block_w_i,
+                                (uint32_t)in0_subblock_i,
+                                (uint32_t)in1_subblock_i));
                             curr_out_cb.push_back(out_subblock_num_tiles);
                         }
                     }  // for in1_num_subblocks
@@ -318,11 +350,13 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
+                            UNPACK(DPRINT("PD wf(b) kb={}\n", (uint32_t)in0_block_w_i));
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
                             // TEN-4746: TDMA interpose between bare wait_front/pop_front (KEPT).
                             UNPACK(TTI_NOP);
 #endif
+                            UNPACK(DPRINT("PD pf(b) kb={}\n", (uint32_t)in0_block_w_i));
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
@@ -332,10 +366,12 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
+                            UNPACK(DPRINT("PD wf kb={}\n", (uint32_t)in0_block_w_i));
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
                             UNPACK(TTI_NOP);
 #endif
+                            UNPACK(DPRINT("PD pf kb={}\n", (uint32_t)in0_block_w_i));
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
@@ -365,7 +401,9 @@ void kernel_main() {
                     }
                 }
 
+                UNPACK(DPRINT("M0 pf kb={}\n", (uint32_t)in0_block_w_i));
                 cb_mm_in0.pop_front(in0_block_num_tiles);
+                UNPACK(DPRINT("I1 pf kb={}\n", (uint32_t)in0_block_w_i));
                 cb_in1.pop_front(in1_block_num_tiles);
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
@@ -379,12 +417,17 @@ void kernel_main() {
 #ifdef FUSE_BIAS
             if constexpr (fuse_bias) {
                 // [#48552 DFB-ONLY] bias pack inits / add_tiles_bcast / pack_tile removed; keep CB flow.
+                UNPACK(DPRINT("B bias-wf\n"));
                 cb_bias.wait_front(bias_ntiles_w);
+                UNPACK(DPRINT("B mp-wf\n"));
                 cb_matmul_partials.wait_front(out_block_num_tiles);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
+                        UNPACK(DPRINT("B mp-pf i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                        PACK(DPRINT("B out-rb i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
+                        PACK(DPRINT("B out-pb i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         cb_untilize_mode_out.push_back(out_subblock_num_tiles);
                     }  // for in1_num_subblocks
                 }  // in0_num_subblocks
@@ -408,9 +451,13 @@ void kernel_main() {
                     // out.push_back(out_block_w); partials.pop_front(out_block_w).
                     const uint32_t untilize_num_blocks = in0_num_subblocks * out_subblock_h;
                     for (uint32_t r = 0; r < untilize_num_blocks; ++r) {
+                        UNPACK(DPRINT("U wf r={}\n", r));
                         cb_matmul_partials.wait_front(out_block_w);
+                        PACK(DPRINT("U rb r={}\n", r));
                         cb_out.reserve_back(out_block_w);
+                        PACK(DPRINT("U pb r={}\n", r));
                         cb_out.push_back(out_block_w);
+                        UNPACK(DPRINT("U pf r={}\n", r));
                         cb_matmul_partials.pop_front(out_block_w);
                     }
                 }
