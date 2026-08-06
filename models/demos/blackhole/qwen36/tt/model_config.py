@@ -135,6 +135,38 @@ class Qwen36ModelArgs(ModelArgs):
         # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
         # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
+        # WORMHOLE: pad this width up so its TILE COUNT factors well for the prefill matmul. The
+        # 2048x4096x6176 in-proj is K-PASS bound, not subblock bound — its cost tracks
+        # per_core_N / out_block_w — and 6176 = 193 tiles is PRIME, so at 8 columns per_core_N=25 whose
+        # only divisors are 1/5/25; out_block_w can only be 5 (five passes over K, each re-reading the
+        # 16MB DRAM-resident in0) because 25 overflows L1. prefill_kpass_width picks the smallest wider
+        # width that minimises those passes: 216 tiles => per_core_N=27, out_block_w=9, 3 passes, still
+        # all 64 cores. See its docstring for the width sweep this is derived from.
+        #
+        # CONFIRMED IN THE REAL LAYER (single-layer GDN prefill, seq 2048, N300):
+        #     op 287  2,155us @ 36.5% of peak FLOPs  ->  1,512us @ 58.3%   (-643us)
+        #     layer   18,644us -> 17,916us  (-728us, -3.9%)
+        # It becomes the most efficient matmul in the layer, above the o_proj's 48.6%. PCC is unchanged:
+        # the pad rows sit past every slice offset in _project_qkvzab, so they are never read.
+        #
+        # KNOWN COST, ACCEPTED: this width also sizes gdn_qkvzab_weight_memcfg and both decode
+        # progcfgs, and the same weight serves decode — so decode's in-proj does ~11.9% more work and
+        # reads ~11.9% more weight bytes. Prefill is the current target and decode is a later pass; when
+        # decode is tuned, re-measure. If the decode cost turns out to matter, the fix is a second
+        # unpadded weight for decode (+~12.6MB/layer of DRAM) rather than giving up the prefill win.
+        #
+        # Deliberately NOT env-gated. Unlike the runtime dtype switches elsewhere in this model
+        # (QWEN35_GDN_OUT_FP32 etc.), this changes weight GEOMETRY — the DRAM-sharded memcfg, both
+        # decode progcfgs and the weight cache key — so a flag would let two processes build different
+        # weights for the same model. To revert, delete this block; prefill_kpass_width() is a no-op on
+        # widths that already factor well, so nothing else needs touching. Blackhole is excluded: its
+        # grid, L1 budget and TP all differ and its blocking was tuned at the unpadded width.
+        self.gdn_qkvzab_pad_tiles = 0
+        if not tpc.is_blackhole():
+            _pad_to = tpc.prefill_kpass_width(self.gdn_qkvzab_dim_tp)
+            if _pad_to > self.gdn_qkvzab_dim_tp:
+                self.gdn_qkvzab_pad_tiles = (_pad_to - self.gdn_qkvzab_dim_tp) // tpc.TILE_SIZE
+                self.gdn_qkvzab_dim_tp = _pad_to
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
