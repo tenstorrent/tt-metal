@@ -213,6 +213,21 @@ public:
     bool is_using_hugepage() const { return using_hugepage_; }
 
     /**
+     * @brief True when this socket got a STATIC TLB window for its sender core, false when it fell back to
+     *        UMD's dynamic TLBs (which reconfigure the window per access). The ack write in
+     *        notify_sender() goes through that path once per read(), so the two differ by roughly the cost
+     *        of a window reconfigure -- the leading suspect for a fixed per-read overhead.
+     */
+    bool has_static_tlb() const { return sender_core_tlb_ != nullptr; }
+
+    /**
+     * @brief Diagnostic: perform one ack write (re-send the CURRENT bytes_acked to the sender core). This is
+     *        the same device write read() issues once per call, so timing it isolates the per-read device
+     *        access cost. Idempotent -- it re-sends a value the socket already holds.
+     */
+    void probe_ack_write() { notify_sender(); }
+
+    /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
      *
      * This address should be passed to the device kernel (typically as a compile-time
