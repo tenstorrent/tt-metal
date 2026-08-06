@@ -128,6 +128,71 @@ def test_device_traced_matches_untraced(device):
 
 
 @needs_weights
+def test_device_fused_attention_matches_explicit(device):
+    """`sdpa_decode` against the explicit rel-pos chain it replaces.
+
+    The two are independently reachable — `COSYVOICE_SDPA_DECODE=0` restores the
+    chain — so the equivalence needs its own gate rather than riding on
+    `test_device_traced_matches_untraced`, which compares each path only to itself.
+
+    Untraced on both sides, because this is a test of the *arithmetic*. The identity
+    it is checking is that at `T = 1` the positional term `(q+v)P^T` is a per-head row
+    vector over the key axis, which is exactly what `attn_mask` accepts — so the four
+    ops the chain spends on it collapse into one kernel. Tracing is a separate
+    question and the two tests either side of this one already answer it.
+
+    0.998 rather than bit-exactness: flash attention reassociates the softmax across
+    k-chunks, so the sums are formed in a different order. That is a real difference
+    and the gate should not pretend otherwise. Per layer it is tiny — F48 measures both
+    paths at 0.99998 against a torch golden — but it compounds twice over, through 14
+    layers and then through the KV cache, which is why the measured spread is
+    0.9988-0.9999 and drifts down with step index rather than staying flat.
+
+    The gate that actually protects the model is `test_token_agreement`, which is
+    exact-token and unmoved at 95.83 %. This one is here to catch a *structural*
+    break — a bias in the wrong convention, a mask in the wrong form — which collapses
+    PCC to 0.7-0.9 rather than nudging the fourth decimal.
+    """
+    ttnn = pytest.importorskip("ttnn")
+    from models.demos.cosyvoice.tt.common import pcc
+    from models.demos.cosyvoice.tt.llm.decoder import TtARDecoder, right_aligned_bias
+
+    def run(fused: bool):
+        dec, caches, d, prefix_len, max_len = _setup(device, ttnn)
+        for layer in dec.layers:
+            layer.attn.sdpa_decode = fused
+        torch.manual_seed(3)
+        out = []
+        for i in range(6):
+            x = torch.randn(1, 1, d) * 0.1
+            ys, caches = dec.forward_chunk_fixed(
+                ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+                caches,
+                max_len,
+                valid=prefix_len + 1 + i,
+                mask=ttnn.from_torch(
+                    right_aligned_bias(max_len, prefix_len + 1 + i, 1, heads=dec.meta["n_head"] if fused else 1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                ),
+            )
+            out.append(ttnn.to_torch(ys).float())
+            ttnn.deallocate(ys)
+        TtARDecoder.free_caches(caches)
+        return out
+
+    got, want = run(True), run(False)
+    print("\n  fused sdpa_decode vs explicit chain")
+    worst = 1.0
+    for i, (a, b) in enumerate(zip(got, want)):
+        p = pcc(a, b)
+        worst = min(worst, p)
+        print(f"    step {i}: PCC {p:.10f}  max|d| {(a - b).abs().max():.3e}")
+    assert worst >= 0.998, f"worst PCC {worst}"
+
+
+@needs_weights
 @needs_big_trace
 def test_device_inplace_matches_untraced(device):
     """The in-place cache, over **enough steps to cross a shift boundary**.
