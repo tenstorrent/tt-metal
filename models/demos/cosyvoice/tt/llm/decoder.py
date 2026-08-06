@@ -68,10 +68,16 @@ class TtTransformerLayer:
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
 
-    def __call__(self, x, pos_emb, mask=None, cache=None, return_cache=True, cache_free=False):
+    def __call__(self, x, pos_emb, mask=None, cache=None, return_cache=True, cache_free=False, bd_offset=None):
         h = ttnn.layer_norm(x, weight=self.g1, bias=self.bt1, epsilon=self.eps)
         a, new_cache = self.attn.forward_cached(
-            h, pos_emb, mask=mask, cache=cache, return_cache=return_cache, cache_free=cache_free
+            h,
+            pos_emb,
+            mask=mask,
+            cache=cache,
+            return_cache=return_cache,
+            cache_free=cache_free,
+            bd_offset=bd_offset,
         )
         ttnn.deallocate(h)
         x1 = ttnn.add(x, a)
