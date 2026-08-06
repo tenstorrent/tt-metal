@@ -10,8 +10,6 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rdiv.h"
-#include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/eltwise_unary/remainder.h"
 #include "api/compute/eltwise_unary/dropout.h"  // Dropout
 
 namespace compute_kernel_lib {
@@ -71,8 +69,7 @@ struct Dropout : UnaryOp<Dropout<Slot>, Slot> {
     uint32_t probability;
     uint32_t scale_factor;
     uint32_t seed;
-    constexpr Dropout(uint32_t p, uint32_t s, uint32_t seed_) noexcept :
-        probability(p), scale_factor(s), seed(seed_) {}
+    constexpr Dropout(uint32_t p, uint32_t s, uint32_t seed_) noexcept : probability(p), scale_factor(s), seed(seed_) {}
     constexpr Dropout() noexcept : probability(0), scale_factor(0), seed(0) {}
     ALWI void init() const { dropout_kernel_init(seed); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
