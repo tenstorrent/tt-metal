@@ -661,6 +661,31 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // A Tensix NIU is already a NoC master, so this (and the kernel's restore tail) is DRISC-only.
         if (!tensix_drain) {
             set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
+
+            // TT_METAL_PERF_DEBUG_NIU_TEST isolates the NIU mode flip from everything else the drainer does.
+            // The flip is the ONLY thing either drainer path writes that outlives the process (NIU_CFG_0
+            // persists until a chip reset), so it is the standing candidate for why the card stays bad after a
+            // DRISC run -- but it has never been tested WITHOUT a drain underneath it. Flip, optionally
+            // restore, then bail before any socket, kernel or egress exists.
+            //   =leave -> stay in stream mode, exactly as a run that dies before the stop=2 handshake leaves it
+            //   =flip  -> restore NOC2AXI immediately (the clean-teardown control)
+            const char* niu_test = std::getenv("TT_METAL_PERF_DEBUG_NIU_TEST");
+            if (niu_test != nullptr && *niu_test != '\0') {
+                const bool restore = std::string_view(niu_test) != "leave";
+                if (restore) {
+                    set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 0);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] NIU TEST: DRISC {} logical ({},{}) flipped to stream mode and {} "
+                    "-- no socket, no kernel, no egress",
+                    d,
+                    ctx.drisc_logical[d].x,
+                    ctx.drisc_logical[d].y,
+                    restore ? "RESTORED to NOC2AXI" : "LEFT IN STREAM MODE");
+                disarm_producers(mesh_device, device_id);
+                return false;
+            }
         }
 
         // Give the DRISC drainer a STATIC TLB window, so the socket's per-read ack write skips UMD's
@@ -775,6 +800,42 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         "[perf-debug profiler] DEVICE-READ probe: {:.0f} ns/read over {} 4B device reads (acc {})",
                         rd_ns,
                         kRdProbe,
+                        acc);
+                }
+                // WORKER-CORE CONTROL PROBE -- the one that makes "degraded" mean something.
+                //
+                // Both probes above target the DRAINER core, which is a DRAM core on the DRISC arm and a
+                // worker on the Tensix arm. So the two arms have never measured the same destination, and
+                // every "the card is degraded" number ever recorded here is really "accesses to the DRAM
+                // endpoint are ~13x slower". Whether a WORKER access on that same card is also slow was never
+                // measured -- and "the Tensix arm never degrades" may just be that it never probes the
+                // endpoint that degrades.
+                //
+                // Probing a fixed worker in EVERY run settles it in one observation:
+                //   worker slow too  => card-wide MMIO degradation, the drainer core is incidental
+                //   worker fine      => the DRAM endpoint alone is sick, and the Tensix arm is BLIND to it
+                {
+                    const auto w0 = std::chrono::steady_clock::now();
+                    constexpr uint32_t kWkProbe = 500;
+                    const tt_cxy_pair wk_core(
+                        device_id, CoreCoord{ctx.core_virt[0].first, ctx.core_virt[0].second});
+                    uint32_t v = 0, acc = 0;
+                    for (uint32_t k = 0; k < kWkProbe; k++) {
+                        cluster.read_core(&v, sizeof(v), wk_core, prof_l1);
+                        acc += v;
+                    }
+                    const double wk_ns =
+                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - w0).count() /
+                        kWkProbe;
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] WORKER-READ control probe: {:.0f} ns/read over {} 4B reads from "
+                        "worker virtual ({},{}) (acc {}) -- compare against DEVICE-READ above: both slow = "
+                        "card-wide, worker fast = the drainer's endpoint alone",
+                        wk_ns,
+                        kWkProbe,
+                        ctx.core_virt[0].first,
+                        ctx.core_virt[0].second,
                         acc);
                 }
             }
