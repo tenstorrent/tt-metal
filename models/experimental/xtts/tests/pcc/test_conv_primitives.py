@@ -13,7 +13,7 @@ Run:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/test_conv_primitives.py
+    pytest models/experimental/xtts/tests/pcc/test_conv_primitives.py
 """
 
 import pytest

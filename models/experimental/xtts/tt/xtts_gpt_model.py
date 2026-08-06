@@ -35,38 +35,6 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
 from models.experimental.xtts.tt.xtts_gpt_block import _mm_1d_config, _to_device, _to_device_w8, sharded_decode_ln
 from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 
-###############################debugging###############################
-
-
-def _tensor_mem_tag(t: ttnn.Tensor) -> str:
-    """Compact memory-config label: buffer (L1/DRAM) + interleaved vs sharded layout."""
-    mem = t.memory_config()
-    buf = "L1" if mem.buffer_type == ttnn.BufferType.L1 else "DRAM"
-    layout = mem.memory_layout
-    if layout == ttnn.TensorMemoryLayout.INTERLEAVED or not mem.is_sharded():
-        placement = "INTERLEAVED"
-    elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        placement = "BLOCK_SHARDED"
-    elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        placement = "WIDTH_SHARDED"
-    elif layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        placement = "HEIGHT_SHARDED"
-    else:
-        placement = str(layout).split(".")[-1] if layout is not None else "UNKNOWN"
-    tag = f"{buf}/{placement}"
-    shard_spec = mem.shard_spec
-    if shard_spec is not None:
-        tag += f" grid={shard_spec.grid} shard={tuple(shard_spec.shape)}"
-    return tag
-
-
-def _debug_tensor_mem(label: str, t: ttnn.Tensor) -> None:
-    """Print tensor shape, dtype, and memory placement between vision-block ops."""
-    print(f"[block] {label}: shape={list(t.shape)} dtype={t.dtype} mem={_tensor_mem_tag(t)}")
-
-
-###############################debugging###############################
-
 
 def _to_device_rm(torch_tensor, device, memory_config=None):
     """torch -> ttnn bf16 ROW_MAJOR tensor on device (weight table for ttnn.embedding).
@@ -118,7 +86,6 @@ class TtXttsGptModel(LightweightModule):
         Token ids arrive from the host; position ids 0..seq-1 are generated on
         device with ``ttnn.arange`` (no torch fallback).
         """
-        print(f"[TtXttsGptModel._embed] ids={list(ids.shape)}")
         seq = ids.shape[1]
         ids_tt = ttnn.from_torch(
             ids.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32
@@ -143,9 +110,6 @@ class TtXttsGptModel(LightweightModule):
         (via ``offset``) after the stack, before the heads. ``n_cond`` should be
         tile-aligned (32 for XTTS). Returns ``(text_logits, mel_logits)`` on device.
         """
-        print(
-            f"[TtXttsGptModel.forward] text_ids={list(text_ids.shape)} mel_ids={list(mel_ids.shape)} cond_latents={list(cond_latents.shape) if cond_latents is not None else None}"
-        )
         text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
 
         text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
@@ -199,9 +163,6 @@ class TtXttsGptModel(LightweightModule):
         ``[cond | text]`` prompt; remember ``prompt_len`` (mel token ``i`` -> cache pos
         ``prompt_len + i``). ``text_ids`` torch ``[1, text_len]``; ``cond_latents`` ttnn
         ``[1, n_cond, hidden]``. Returns the per-layer fixed cache the decode loop updates in place."""
-        print(
-            f"[TtXttsGptModel.prefill] text_ids={list(text_ids.shape)} cond_latents={list(cond_latents.shape) if cond_latents is not None else None} max_seq={max_seq}"
-        )
         self.alloc_static_kv(max_seq)
         self.prompt_len = self.prefill_on_device(self.text_ids_to_device(text_ids), cond_latents)
         return self._static_kv
@@ -227,7 +188,6 @@ class TtXttsGptModel(LightweightModule):
 
     def _pos_ids(self, value):
         """``[1, 1]`` uint32 index tensor (token id or embedding position) on device."""
-        # print(f"[TtXttsGptModel._pos_ids] value={value}")  # per-decode-step: kept quiet on the hot path
         return ttnn.from_torch(
             torch.tensor([[value]], dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -237,7 +197,6 @@ class TtXttsGptModel(LightweightModule):
 
     def cache_pos(self, value):
         """``[1, 1, 1, max_seq]`` tensor filled with the absolute cache position ``value``."""
-        # print(f"[TtXttsGptModel.cache_pos] value={value} max_seq={self.max_seq}")  # per-decode-step: quiet
         return ttnn.from_torch(
             torch.full((1, 1, 1, self.max_seq), float(value), dtype=torch.float32),
             layout=ttnn.TILE_LAYOUT,
@@ -292,7 +251,6 @@ class TtXttsGptModel(LightweightModule):
     def alloc_static_kv(self, max_seq):
         """Enable static decode and pre-allocate the persistent per-layer KV cache (zeros). These
         buffers are seeded by ``prefill_dev`` and updated by ``decode_static`` — both in place."""
-        print(f"[TtXttsGptModel.alloc_static_kv] max_seq={max_seq}")
         self.init_static_decode(max_seq)
         # Precompute text position ids [1, max_seq] uint32 ONCE (host->device write here, outside any
         # capture) so prefill_dev's _embed_dev can SLICE it instead of calling ttnn.arange — arange
@@ -333,7 +291,6 @@ class TtXttsGptModel(LightweightModule):
     def text_ids_to_device(self, text_ids):
         """Host text ids ``[1, seq]`` -> device uint32 ROW_MAJOR (the ``from_torch`` host->device
         write, kept OUTSIDE any trace capture)."""
-        print(f"[TtXttsGptModel.text_ids_to_device] text_ids={list(text_ids.shape)}")
         return ttnn.from_torch(
             text_ids.to(torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -346,9 +303,6 @@ class TtXttsGptModel(LightweightModule):
         """Like ``_embed`` but ``ids_tt`` is an already-on-device uint32 ``[1, seq]`` tensor and the
         positions are SLICED from the precomputed ``self._text_pos_full`` (a device slice, no host
         write), so the whole thing is trace-capturable (``ttnn.arange`` would be a fatal in-capture write)."""
-        print(
-            f"[TtXttsGptModel._embed_dev] ids_tt={list(ids_tt.shape)} tok_weight={list(tok_weight.shape)} pos_weight={list(pos_weight.shape)}"
-        )
         seq = ids_tt.shape[1]
         pos_tt = ttnn.slice(
             self._text_pos_full, [0, 0], [1, seq], memory_config=ttnn.L1_MEMORY_CONFIG
@@ -372,9 +326,6 @@ class TtXttsGptModel(LightweightModule):
         cond_latents -> full causal prefill over ``[cond | text]`` -> seed the pre-allocated
         ``self._static_kv`` in place with ``fill_cache``. Returns ``prompt_len`` (mel token i ->
         cache pos prompt_len + i). Requires ``alloc_static_kv`` first (zero cache + text-pos table)."""
-        print(
-            f"[TtXttsGptModel.prefill_on_device] text_ids_tt={list(text_ids_tt.shape)} cond_latents={list(cond_latents.shape) if cond_latents is not None else None}"
-        )
         text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
         # concat output is L1; cond_latents is read straight from wherever the caller put it (no extra
         # reshard/Copy op — a DRAM in0 here is fine, it's a one-time read).

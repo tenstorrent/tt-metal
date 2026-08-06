@@ -12,7 +12,7 @@ Run:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/test_hifi_decoder.py
+    pytest models/experimental/xtts/tests/pcc/test_hifi_decoder.py
 """
 
 import pytest

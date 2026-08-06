@@ -7,7 +7,7 @@ device-time measurement. Not a correctness test (see ``test_speaker_encoder.py``
 reference audio through the mel frontend: 1 + 128000/160). Run under tracy:
 
     python -m tracy -v -r -p -o spk_enc \\
-        -m "pytest models/experimental/xtts/tests/test_speaker_encoder_profile.py"
+        -m "pytest models/experimental/xtts/tests/pcc/test_speaker_encoder_profile.py"
 
 then summarise the emitted ops_perf_results CSV (group by OP CODE, sum
 DEVICE FW DURATION [ns]). NOTE: the CSV holds **two** passes — the warmup below and the

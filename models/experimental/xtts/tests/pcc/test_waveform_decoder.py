@@ -13,7 +13,7 @@ Run:
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
     # first run downloads ~1.9 GB of XTTS-v2 weights to the HF cache
-    pytest models/experimental/xtts/tests/test_waveform_decoder.py
+    pytest models/experimental/xtts/tests/pcc/test_waveform_decoder.py
 """
 
 import pytest

@@ -125,6 +125,63 @@ def height_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
     return ttnn.to_memory_config(x, mem)
 
 
+def block_shard_grid(device, length: int, channels: int):
+    """``(gx, gy, rows_per_core)`` for a BLOCK_SHARDED L1 placement, or ``None`` if the shape can't
+    take one.
+
+    BLOCK splits channels as well as rows, which is what makes it worth having alongside
+    :func:`height_shard_l1`: on the vocoder's stage 0 (1120 x 256, fp32) height sharding is capped by
+    tile alignment at a 32-row shard, i.e. only ceil(1120/32) = 35 of 110 cores and 32 KB/core
+    resident. The block placement is 128 x 32 over 80 cores at 16 KB/core. Measured consequences:
+    the k3 convs roughly halve (24 -> 13.4 us) as do their halos (7 -> 1.4 us), and -- the reason this
+    exists at all -- **k7/k11 become buildable inside an L1-resident chain**, which height sharding
+    simply cannot do (every height-sharded variant dies at program.cpp:170/176 on a circular-buffer
+    clash, baseline config included).
+
+    ``gx = channels / 32`` is NOT a free parameter. ttnn.conv1d silently RE-GRIDS a wider shard -- a
+    4x10 / 128x64 input comes back as 8x10 / 128x32 -- which would desync the conv output from the
+    chain activation and drop the residual add off its matching-spec L1 fast path. At one channel tile
+    per grid column the conv hands back the exact spec it was given (verified identical shape, grid and
+    orientation for k3 through k11). Only useful where channels/32 >= 2; stages 1-3 are narrower than
+    stage 0 and would score fewer cores than height sharding, so they keep the height placement.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if channels % 32:
+        return None
+    gx, gy = channels // 32, int(grid.y)
+    if gx < 2 or gx > int(grid.x):
+        return None
+    rows_per_core = math.ceil(math.ceil(length / gy) / 32) * 32
+    if rows_per_core * gy < length:
+        return None
+    return gx, gy, rows_per_core
+
+
+def block_chain_fits_l1(device, length: int, channels: int, dtype_bytes: int = 4) -> bool:
+    """Whether a BLOCK_SHARDED activation of ``length x channels`` leaves the convs' circular buffers
+    room in L1. Same budget as the height path, but the per-core tile is (rows_per_core x 32) rather
+    than (shard_height x channels), so it clears the bar at shapes height sharding cannot."""
+    plan = block_shard_grid(device, length, channels)
+    if plan is None:
+        return False
+    _, _, rows_per_core = plan
+    return rows_per_core * 32 * dtype_bytes <= _SHARD_L1_BUDGET_BYTES
+
+
+def block_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
+    """BLOCK_SHARDED counterpart of :func:`height_shard_l1` -- same contract (the returned tensor is
+    the entry point of an L1-resident conv chain), different cut. See :func:`block_shard_grid`."""
+    gx, gy, rows_per_core = block_shard_grid(device, x.shape[-2], channels)
+    mem = ttnn.create_sharded_memory_config(
+        shape=(rows_per_core, channels // gx),
+        core_grid=ttnn.CoreGrid(y=gy, x=gx),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(x, mem)
+
+
 def _subpixel_weight(weight: torch.Tensor, bias: torch.Tensor | None, stride: int):
     """Fold a ``ConvTranspose1d`` weight ``[in, out, k]`` (HiFi-GAN padding
     ``(k - stride) // 2``) into ONE regular-conv weight ``[out*stride, in, Ic]`` with
@@ -220,6 +277,11 @@ class TtConv1d(LightweightModule):
             self._raw_bias_fp32 = ttnn.from_torch(
                 bias.reshape(1, 1, 1, -1).float(), ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
             )
+        # Pristine (host, un-preprocessed) copies, kept so a change of input length can re-derive
+        # from them -- see ``forward``. This conv sees variable-length input by nature (the vocoder
+        # decodes whatever the GPT produced), which is exactly the case the cache below breaks on.
+        self._host_weight, self._host_bias = self.tt_weight, self.tt_bias
+        self._prepared_for = None
 
         # No forced shard_layout: HEIGHT_SHARDED fails the DRAM slicer on the wide (1024-channel)
         # layers with short spatial extent; auto-sharding picks a valid layout per shape (PCC
@@ -251,6 +313,13 @@ class TtConv1d(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None, keep_sharded: bool = False) -> ttnn.Tensor:
         batch_size, input_length, _ = x.shape
+        # The prepared weights cached at the end of this function are only valid for the
+        # parallelization ttnn.conv1d chose for *this* input length and memory config, and ttnn
+        # cannot detect a stale one (see TtConv2d.forward for the mechanism and the measurement).
+        # Re-derive from the pristine host copies whenever the signature moves.
+        key = (batch_size, input_length, x.dtype, x.layout, x.memory_config())
+        if key != self._prepared_for:
+            self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
         # ``cond_bias`` ([1,1,1,C], fp32) is a per-channel conditioning constant. Two equivalent
         # ways to apply it (identical math — a per-output-channel bias add):
         #   * EAGER (default, faster): fold it into the conv's bias so conv1d adds it in its fused
@@ -289,6 +358,7 @@ class TtConv1d(LightweightModule):
         self.tt_weight = weight
         if not fold:  # bias is the (prepared) base bias — cache it; when folding it is the combined bias
             self.tt_bias = bias
+        self._prepared_for = key
         if keep_sharded:
             # Sharded-chain mode (input was L1-sharded): the L1 path already returns a
             # HEIGHT_SHARDED TILE output; reshape is a metadata op that preserves the sharding
@@ -359,8 +429,21 @@ class TtConvTranspose1d(LightweightModule):
         # Sub-pixel shuffle: [N, L, out*stride] -> [N, L*stride, out]. In row-major this
         # is a contiguous reinterpretation that lands phase phi of position q at output
         # index q*stride + phi (the transpose-conv output ordering).
+        #
+        # Two ways to spell it, BIT-EXACT to each other (maxdiff 0.0 on all four XTTS ups
+        # shapes) but with very different device cost, because a TILE-layout reshape has to
+        # gather each output tile from ``stride`` separate input column-blocks:
+        #   * stride 2 -- ttnn.reshape straight on the TILE tensor wins big, and drops the
+        #     untilize + retilize entirely: ups[2] 80.8 -> 56.4 us, ups[3] 138.9 -> 55.3 us.
+        #   * stride 8 -- the same call LOSES (ups[1] 65.2 -> 93.6 us, ups[0] 39.3 -> 40.9),
+        #     the 8-way tile gather costing more than a row-major round-trip, so those keep
+        #     the untilize -> reshape -> retilize path.
+        # Measured per-op under tracy on Blackhole; see the ups rows of the decoder report.
+        shape = [batch_size, input_length * self.stride, self.out_channels]
+        if self.stride <= 2:
+            return ttnn.reshape(z, shape)
         z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-        z = ttnn.reshape(z, [batch_size, input_length * self.stride, self.out_channels])
+        z = ttnn.reshape(z, shape)
         return ttnn.to_layout(z, ttnn.TILE_LAYOUT)
 
 
@@ -419,6 +502,12 @@ class TtConv2d(LightweightModule):
         self.tt_bias = None
         if bias is not None:
             self.tt_bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1).float(), weights_dtype)
+        # The pristine (host, un-preprocessed) weights, kept for the lifetime of the module so a
+        # shape change can re-derive from them -- see ``forward``. Costs one host-side copy of the
+        # weights; before this they were dropped once the first call replaced them with the
+        # prepared device tensor.
+        self._host_weight, self._host_bias = self.tt_weight, self.tt_bias
+        self._prepared_for = None
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
@@ -461,6 +550,19 @@ class TtConv2d(LightweightModule):
         input_width: int,
         memory_config: ttnn.MemoryConfig | None = None,
     ) -> tuple[ttnn.Tensor, int, int]:
+        # Caching the prepared weights below is what keeps ttnn.conv2d's one-time weight
+        # preprocessing (a host round-trip) off every call -- but they are only valid for the
+        # parallelization the conv chose, which depends on the input shape and memory config.
+        # ttnn cannot detect a stale one: is_valid_device_conv_weights checks only layout, rank,
+        # out_channels and dtype (prepare_conv2d_weights.cpp:1069, in_channels is unused), so a
+        # weight prepared for another shape passes, is used as-is, and the conv silently returns a
+        # wrong answer -- no error, no warning. Measured on the speaker encoder: one module reused
+        # across mel_len 200 -> 512 scored PCC 0.302 against 0.999 for a fresh one, and restoring
+        # these pristine weights was what recovered it. So key the cache here and re-derive from
+        # the host copies whenever the signature moves.
+        key = (x.shape[0], input_height, input_width, x.dtype, x.layout, x.memory_config(), memory_config)
+        if key != self._prepared_for:
+            self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
         out, (out_h, out_w), [weight, bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.tt_weight,
@@ -483,6 +585,7 @@ class TtConv2d(LightweightModule):
         )
         self.tt_weight = weight
         self.tt_bias = bias
+        self._prepared_for = key
         # No relayout on the way out: the output is already the flat
         # [1, 1, N*out_h*out_w, C] TILE form the next conv / eltwise op consumes.
         return out, out_h, out_w

@@ -18,7 +18,7 @@ Run:
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
     # first run downloads ~1.9 GB of XTTS-v2 weights + the sample wav
-    pytest models/experimental/xtts/tests/test_conditioning.py -s
+    pytest models/experimental/xtts/tests/pcc/test_conditioning.py -s
 """
 
 import pytest

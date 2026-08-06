@@ -25,7 +25,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_mel import HOP_LENGTH, N_FFT, N_MELS, PREEMPH, WIN_LENGTH
 
 N_FREQS = N_FFT // 2 + 1  # 257
-CENTER_PAD = N_FFT // 2  # 256
 
 
 class _Framer:
@@ -196,7 +195,6 @@ from models.experimental.xtts.reference.xtts_conditioning import (  # noqa: E402
 )
 
 C_NFREQS = C_NFFT // 2 + 1  # 1025
-C_CENTER_PAD = C_NFFT // 2  # 1024
 
 
 def _cond_dft_basis():
