@@ -420,8 +420,6 @@ class CustomNamespace(SimpleNamespace):
     dummy_inputs=Mistral3DummyInputsBuilder,
 )
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
-    decode_input_update_contract = 1
-
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_sample_on_device": True,
@@ -513,8 +511,6 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 #     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
 # )
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
     # decode_forward calls decode_forward_llama_vision and discards anything
@@ -661,8 +657,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
 
 
 class LlamaForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -748,8 +742,6 @@ class LlamaForCausalLM(Generator):
 
 
 class QwenForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -829,8 +821,6 @@ class QwenForCausalLM(Generator):
 
 
 class MistralForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -928,8 +918,6 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
     picks up the stash via ``_active_page_tables_per_layer`` and routes
     each layer's attention to its own page table.
     """
-
-    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {
@@ -1071,8 +1059,6 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     cleared on the way out so a subsequent legacy single-page-table call
     isn't accidentally affected.
     """
-
-    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {

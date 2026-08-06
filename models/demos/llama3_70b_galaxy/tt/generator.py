@@ -169,6 +169,11 @@ def _pad_or_create_page_table(table, target_blocks: int):
 
 
 class Generator(WarmupForwardMixin):
+    # Declared here rather than per adapter: decode_forward below is what executes the
+    # four reload commands, so every subclass that inherits it satisfies version 1. A
+    # subclass that overrides decode_forward without the commands must override this too.
+    decode_input_update_contract = 1
+
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
