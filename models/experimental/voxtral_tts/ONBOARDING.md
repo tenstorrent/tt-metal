@@ -33,10 +33,14 @@ python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current on the **p150**: **~42.9 ms/frame on the long-form cases, RTF 0.694**, against 47.89 /
-0.759 for the same harness before §6.52 — a paired 15×3 A/B, so those two are comparable to each
-other and not to older figures from `generate_quality_set.py`. Long-form WER **1 wrong of 894**
-over 3 seeds, unchanged by §6.52. Beat that without breaking it.
+Current on the **p150**: **39.1 ms/frame on the long-form cases, RTF 0.507**, against
+44.19 / 0.577 for the same harness before §6.52 — a paired 15×3 A/B. Long-form WER
+**1 wrong of 894** over 3 seeds, unchanged by §6.52. Beat that without breaking it.
+
+> **These exclude case 0, and any RTF you quote from this harness must too.** It is the first
+> utterance in each process and pays one-time program-cache compilation — 3.3 s over 5.4 s of
+> audio, RTF 1.346. Leaving it in reads as 0.759 / 0.694 and will not reconcile with anything
+> (§6.52).
 
 ---
 
@@ -50,7 +54,7 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 | **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~19.1 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
-One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~42.9, RTF ~0.69.
+One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~39.1, RTF ~0.51.
 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
