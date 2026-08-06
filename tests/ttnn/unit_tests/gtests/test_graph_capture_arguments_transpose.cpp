@@ -50,8 +50,10 @@ TensorSpec make_legacy_height_sharded_tensor_spec(const ttnn::Shape& shape) {
 }
 
 const auto has_nd_provenance = [](const std::string& args) {
+    // MemoryConfig reflection prints an empty nd_shard_spec as std::nullopt and a
+    // populated one as a JSON object, so a populated spec is any non-nullopt value.
     return args.find("created_with_nd_shard_spec=1") != std::string::npos &&
-           args.find("nd_shard_spec=std::optional") != std::string::npos;
+           args.find("nd_shard_spec=std::nullopt") == std::string::npos;
 };
 
 const auto find_create_device_tensor = [](const auto& operations) {
