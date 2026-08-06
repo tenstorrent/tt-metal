@@ -1115,6 +1115,11 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
 
     ring_prefill.reset_ring_attention_calls()
     stats = []
+    # Device time per chunk, excluding the host readback below. The readback exists
+    # only so the test can assert on the output; counting it would understate the
+    # model by a wide margin at long contexts, where gathering 4096x5376 back to host
+    # each chunk is real time that a production prefill never pays.
+    chunk_device_s = []
     t_start = time.time()
     for chunk_idx in range(n_chunks):
         chunk_start = chunk_idx * chunk
@@ -1126,6 +1131,7 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
         )
         device_input = ttnn.to_device(host_input, device=mesh_device)
 
+        t_chunk = time.time()
         with _lm_head_deferred(model):
             embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
                 device_input, page_table_tt, None, None
@@ -1139,7 +1145,23 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
                 get_last_token=-1,
                 user_id=0,
             )
+        # ttnn dispatch is async, so the elapsed time is meaningless until the device
+        # has actually finished; this sync is what makes the number a measurement.
         ttnn.synchronize_device(mesh_device)
+        device_s = time.time() - t_chunk
+        chunk_device_s.append(device_s)
+
+        # Per-chunk perf. Cost per chunk is expected to RISE with ring depth: chunk k
+        # attends over k preceding chunks, so the full-attention layers do more work
+        # each time while the sliding layers stay flat. A flat curve at large depth
+        # would suggest the history read is not happening.
+        done = chunk_start + chunk
+        cum_device = sum(chunk_device_s)
+        logger.info(
+            f"[long_ctx_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {done}) "
+            f"device={device_s * 1000:.0f}ms ({chunk / device_s:.0f} tok/s) | "
+            f"cumulative {cum_device:.1f}s ({done / cum_device:.0f} tok/s) | ring_depth={chunk_idx}"
+        )
 
         hidden = _cp_gather_torch(out, mesh_device, mesh_config)
         out.deallocate(True)
@@ -1155,8 +1177,41 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
         assert std > 0.01, f"chunk {chunk_idx} output is degenerate (std={std})"
 
     elapsed = time.time() - t_start
-    tok_s = context_len / elapsed if elapsed > 0 else 0
-    logger.info(f"[long_ctx] {context_len} tokens in {elapsed:.1f}s ({tok_s:.0f} tok/s)")
+    device_total = sum(chunk_device_s)
+
+    # The first two chunks each pay a one-time program compile: chunk 0 is the first
+    # run of the mask CP path, chunk 1 the first run of the ring path. They are tens of
+    # seconds against ~1.4 s steady state, so averaging them in would misreport
+    # throughput by more than 2x and would make a last/first ratio look like a 30x
+    # speedup rather than the cost curve it is meant to show.
+    n_warmup = min(2, len(chunk_device_s))
+    steady = chunk_device_s[n_warmup:] or chunk_device_s
+    steady_tokens = len(steady) * chunk
+    steady_s = sum(steady)
+    logger.info(
+        f"[long_ctx_perf] TOTAL {context_len} tokens in {device_total:.1f}s device "
+        f"({context_len / device_total:.0f} tok/s) | wall {elapsed:.1f}s incl. host readback "
+        f"({context_len / elapsed:.0f} tok/s)"
+    )
+    logger.info(
+        f"[long_ctx_perf] warmup (compile): "
+        f"{', '.join(f'chunk{i}={chunk_device_s[i]:.1f}s' for i in range(n_warmup))} — excluded below"
+    )
+    logger.info(
+        f"[long_ctx_perf] STEADY STATE over {len(steady)} chunks: {steady_tokens} tokens in "
+        f"{steady_s:.1f}s ({steady_tokens / steady_s:.0f} tok/s) | per-chunk "
+        f"mean={steady_s / len(steady) * 1000:.0f}ms min={min(steady) * 1000:.0f}ms "
+        f"max={max(steady) * 1000:.0f}ms"
+    )
+    # Cost per chunk should grow with ring depth, but only through the 10
+    # full-attention layers — the 50 sliding layers are flat in context length — so the
+    # growth is expected to be mild rather than linear in depth.
+    if len(steady) > 1:
+        logger.info(
+            f"[long_ctx_perf] ring-depth cost: first steady chunk (depth {n_warmup}) "
+            f"{steady[0] * 1000:.0f}ms -> last (depth {n_chunks - 1}) {steady[-1] * 1000:.0f}ms "
+            f"= {steady[-1] / steady[0]:.2f}x over {n_chunks - 1 - n_warmup} extra chunks of history"
+        )
 
     # The ring read must not drift as the prefix grows: a halo pointing at the wrong
     # predecessor slab, or a cache offset walking off, shows up as the last chunk's
