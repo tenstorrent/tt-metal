@@ -26,6 +26,7 @@ Run:
 
 from __future__ import annotations
 
+import gc
 from typing import List, Tuple
 
 import pytest
@@ -125,20 +126,22 @@ def _pack_sparse_frame_mask(allow: torch.Tensor) -> list:
 
 
 def _additive_mask_from_allow(allow: torch.Tensor, tokens_per_frame: int, n_pad: int) -> torch.Tensor:
-    """Expand `sparse_frame_mask` [nf, nf] to the additive `[n_pad, n_pad]` block-mask used for the
-    pytorch reference (0 = allowed, -inf = disallowed). Padded columns are all -inf; padded rows
-    are all-zero so softmax doesn't NaN (their outputs are dropped after)."""
+    """Expand `sparse_frame_mask` [nf, nf] to a boolean `[n_pad, n_pad]` attend-mask for the pytorch
+    reference (True = attend, False = disallowed). Returned as bool, not the old f32 additive form:
+    `F.scaled_dot_product_attention` converts False -> -inf internally, so it is numerically
+    identical, but uses 1 byte/elem instead of 4 (4x less host RAM — at 720p n_pad=92160 that is
+    ~8.5 GB vs ~34 GB, which is what OOM-killed consecutive 720p tests). Padded columns are False
+    (masked); padded rows attend all so softmax stays finite (their outputs are dropped after)."""
     nf = allow.shape[0]
     real = nf * tokens_per_frame
     assert real >= n_pad or n_pad >= real, "expected n_pad and real to match after padding"
-    ff = torch.where(allow.bool(), 0.0, float("-inf")).to(torch.float32)
-    full = ff.repeat_interleave(tokens_per_frame, 0).repeat_interleave(tokens_per_frame, 1)[:n_pad, :n_pad]
-    if n_pad > full.shape[0]:
-        padded = torch.full((n_pad, n_pad), float("-inf"), dtype=torch.float32)
-        padded[: full.shape[0], : full.shape[1]] = full
-        padded[full.shape[0] :, :] = 0.0  # any non-empty row so softmax stays finite
-        full = padded
-    return full
+    keep = allow.bool().repeat_interleave(tokens_per_frame, 0).repeat_interleave(tokens_per_frame, 1)[:n_pad, :n_pad]
+    if n_pad > keep.shape[0]:
+        padded = torch.zeros((n_pad, n_pad), dtype=torch.bool)  # False = masked
+        padded[: keep.shape[0], : keep.shape[1]] = keep
+        padded[keep.shape[0] :, :] = True  # padded rows attend all so softmax stays finite
+        keep = padded
+    return keep
 
 
 def _torch_sdpa_ref(
@@ -151,14 +154,18 @@ def _torch_sdpa_ref(
 ) -> torch.Tensor:
     """pytorch reference: block-sparse SDPA using the additive mask expanded from sparse_frame_mask."""
     n_pad = q.shape[2]
-    mask = _additive_mask_from_allow(allow, tokens_per_frame, n_pad).to(q.device).to(q.dtype)
-    return torch.nn.functional.scaled_dot_product_attention(
+    # Keep the mask boolean (do NOT cast to q.dtype — that would map True/False to 1.0/0.0 and
+    # break the mask semantics). F.scaled_dot_product_attention handles a bool attn_mask directly.
+    mask = _additive_mask_from_allow(allow, tokens_per_frame, n_pad).to(q.device)
+    out = torch.nn.functional.scaled_dot_product_attention(
         q,
         k,
         v,
         attn_mask=mask.reshape(1, 1, n_pad, n_pad),
         is_causal=False,
     )
+    del mask  # free the [n_pad, n_pad] mask (largest single host allocation at 720p) before returning
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +292,12 @@ def _run_sparse_frames_op(
     tt_K = _to_dev(padded_K, input_shard_dims)
     tt_V = _to_dev(padded_V, input_shard_dims)
 
+    # The golden (gt) is computed and Q/K/V are now on device, so the host-side f32 copies
+    # (~1-2 GB each at 720p) are dead. Free them before the op runs to keep peak host RAM low
+    # when 720p cases run back-to-back (they were OOM-killing the process otherwise).
+    del padded_Q, padded_K, padded_V, Q, K, V
+    gc.collect()
+
     # Persistent AllGather output buffers — the op internally gathers K/V across sp_axis into
     # these buffers. Shape is the full (unsharded) length on the sp_axis; kept sharded on tp_axis
     # (heads). Mirrors run_ring_joint_sdpa's setup.
@@ -404,6 +417,10 @@ def _run_sparse_frames_op(
         f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={tokens_per_frame} "
         f"window={window} add_last={add_last_frame} sp={sp_factor} tp={tp_factor} pcc={pcc}"
     )
+    # Free the golden + gathered output (~1-2 GB each at 720p) BEFORE the assert, so a failing 720p
+    # case doesn't keep them resident through teardown into the next test's setup.
+    del gt, out, gt_f, out_f
+    gc.collect()
     assert passing, f"sparse-frames ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
 
 

@@ -2328,6 +2328,10 @@ void sdpa_ring_v2(
                 }
             }
         }
+        // DIAGNOSTIC (temporary): mirror the reader's forced force-push-all + drain path. If the
+        // windowed tests pass with this, the regression is in the reader-skip + zero-work-empty
+        // path. Revert (this line + the reader's) to restore real sparsity.
+        shard_attends_nothing = true;
     }
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
