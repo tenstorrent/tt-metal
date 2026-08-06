@@ -1648,7 +1648,9 @@ def _print_scorecard(
         on_device = probed and not host_ops
         batch = int(os.environ.get("TT_PERF_BATCH", "1") or "1")
         isl = os.environ.get("TT_PERF_SEQ_LEN") or "(default)"
-        osl = os.environ.get("TT_PERF_MAX_NEW_TOKENS") or "4"
+        # Same fallback the skeleton uses, so the scorecard reports the OSL that RAN. "4" here printed
+        # OSL=4 on a run measuring 128 whenever the variable was unset.
+        osl = os.environ.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
         L = ["  ┌─ optimize scorecard — pipeline: %s" % pipe.get("task", "?")]
         L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
         if facts.get("parallelism_known"):

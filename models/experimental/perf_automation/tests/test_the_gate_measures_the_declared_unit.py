@@ -139,3 +139,53 @@ def test_the_op_signature_probe_still_uses_one_token(mcp):
     i = src.index("_op_sig_probe.py")
     window = src[max(0, i - 900) : i]
     assert 'env["TT_PERF_MAX_NEW_TOKENS"] = "1"' in window, "the op-sig probe should still cap at 1"
+
+
+# ---------------------------------------------------------------- the PROFILE runs the declared OSL too
+
+
+def test_the_perf_node_runner_does_not_pin_four_tokens(mcp):
+    """THE SITE THAT SURVIVED THE FIRST FIX. The skeleton reads
+
+        TT_PERF_MAX_NEW_TOKENS or TT_PERF_OSL_TOKENS
+
+    so an env value WINS OUTRIGHT and the OSL fallback can never fire. _run_perf_node did
+    `env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")`, so every run through it -- including the one whose
+    tracy capture ranks ops -- executed 4 decode steps while printing PERF_OSL_TOKENS=128.
+
+    Cost, measured on gemma-3-12b-it run 39: decode ops were sampled 4 times instead of 128, so their
+    gap_ms was ~32x under-counted against prefill's single big pass. 72 of 138 shaped attempts went to
+    prefill matmuls, which cannot move tok/s/u at all.
+    """
+    src = GEN.read_text()
+    assert 'setdefault("TT_PERF_MAX_NEW_TOKENS", "4")' not in src
+    i = src.index('setdefault("TT_PERF_MAX_NEW_TOKENS"')
+    assert "TT_PERF_OSL_TOKENS" in src[i : i + 120], src[i : i + 120]
+
+
+def test_the_bound_itself_is_kept(mcp):
+    """The setdefault must NOT simply be deleted: it is what stops a generative loop running forever
+    when nothing else caps it."""
+    assert 'setdefault("TT_PERF_MAX_NEW_TOKENS"' in GEN.read_text()
+
+
+def test_the_authoring_prompt_no_longer_teaches_four(mcp):
+    """It is the instruction that stamps the literal into every newly generated test, which is how a
+    validation shortcut became the measurement condition in the first place."""
+    src = GEN.read_text()
+    assert "default 4" not in src
+    assert "PERF_OSL_TOKENS" in src
+
+
+def test_the_scorecard_reports_the_osl_that_ran(mcp):
+    """run.py printed OSL=4 whenever the variable was unset, on a run measuring 128."""
+    run_src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
+    assert 'os.environ.get("TT_PERF_MAX_NEW_TOKENS") or "4"' not in run_src
+
+
+def test_the_marker_buffer_is_not_a_reason_for_a_small_cap(mcp):
+    """The 12000-marker limit was the assumed justification for 4. It is not one: the skeleton drains
+    the profiler every TT_PERF_FLUSH_EVERY ops, so a long capture is SLOWER, not unsafe. Pinned so the
+    literal is not reintroduced on that reasoning."""
+    src = GEN.read_text()
+    assert "TT_PERF_FLUSH_EVERY" in src and "ReadDeviceProfiler" in src

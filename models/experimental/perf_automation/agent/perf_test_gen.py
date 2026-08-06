@@ -407,7 +407,15 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
     def _once(ev):
         env = dict(os.environ)
         env.setdefault("TT_PERF_TRACE", "1")
-        env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")
+        # THE DECLARED OSL, not 4. This setdefault BOUNDS a generative loop that would otherwise run
+        # forever, which is why it stays -- but 4 made it the MEASUREMENT CONDITION. Because the
+        # skeleton reads `TT_PERF_MAX_NEW_TOKENS or TT_PERF_OSL_TOKENS`, an env value of "4" wins
+        # outright and the OSL fallback can never fire: the test printed PERF_OSL_TOKENS=128 and
+        # looped 4. The profile that ranks ops then sampled 4 decode steps of a 128-step request,
+        # under-counting every decode op ~32x and promoting prefill work that cannot move tok/s/u.
+        # The 12000-marker buffer is NOT the reason for a small cap -- the drain in the same skeleton
+        # empties it every TT_PERF_FLUSH_EVERY ops, so a long capture is slower, not unsafe.
+        env.setdefault("TT_PERF_MAX_NEW_TOKENS", os.environ.get("TT_PERF_OSL_TOKENS", "128"))
         env.pop("TT_METAL_DEVICE_PROFILER", None)
         env.update(ev)
         cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
@@ -1138,7 +1146,10 @@ def generate_perf_test(
         "nothing recorded, so the reported throughput silently described a six-token context. Echo "
         "PERF_ISL_TOKENS= and PERF_OSL_TOKENS= so the conditions are in the log.\n"
         "- BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode "
-        "loop via env TT_PERF_MAX_NEW_TOKENS default 4, or a SINGLE forward if there's no loop), AND drain "
+        "loop via env TT_PERF_MAX_NEW_TOKENS, defaulting to the DECLARED PERF_OSL_TOKENS so the executed "
+        "unit is the one the test reports -- never a smaller literal, or the profile samples a fraction "
+        "of the request and every recurring op is under-counted; or a SINGLE forward if there's no "
+        "loop), AND drain "
         "the profiler every TT_PERF_FLUSH_EVERY ops (default 32) + a final ttnn.ReadDeviceProfiler. DRAIN "
         "MUST BE MODEL-AGNOSTIC — wrap EVERY ttnn op by TYPE, not a curated list: iterate ttnn (and its op "
         "submodules ttnn.transformer / ttnn.experimental) and wrap every attribute whose "
