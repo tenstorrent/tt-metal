@@ -63,6 +63,18 @@ struct RingAttentionNeighborHaloConfig {
     // predecessor tail back to device 0 over the backward fabric direction.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
+
+    // Trace-safe metadata path. send_to_next_start_Ht above is linear in the chunk index, so on the
+    // scalar path the host rewrites the halo page ranges every dispatch — something a captured trace
+    // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
+    // start themselves, making one capture valid for every chunk. The remaining fields are the static
+    // inputs to that derivation; source_device selects which group's tail is read.
+    const ttnn::Tensor* kv_actual_isl = nullptr;
+    uint32_t q_local_tile_rows = 0;
+    uint32_t halo_tile_rows = 0;
+    uint32_t source_device = 0;
+
+    bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
 };
 
 namespace ring_attention_all_gather_async_detail {
