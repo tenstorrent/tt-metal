@@ -454,7 +454,8 @@ def compute_constants(
         dispatch_buffer_capacity_factor: Multiplier for the flat dispatch
             buffer; callers must pick the smallest integer such that
             dgs*seq*factor is not smaller than the theoretical worst-case
-            required buffer size.
+            raw token count. The returned buffer also reserves the tile
+            padding required by each local expert region.
         experts_per_chip_override: If not None, bypass the
             num_routed_experts // num_devices derivation and use this value.
             Required when simulating one Galaxy column on a single-column LB
@@ -474,6 +475,7 @@ def compute_constants(
     assert (
         seq_len_per_chip % ttnn.TILE_SIZE == 0
     ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
+    assert dispatch_buffer_capacity_factor > 0, "dispatch_buffer_capacity_factor must be positive"
 
     if experts_per_chip_override is not None:
         assert (
@@ -491,7 +493,16 @@ def compute_constants(
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)
     max_dispatched_tokens_per_expert = dispatch_group_size * seq_len_per_chip
-    max_dispatch_buffer_token_size = max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor
+    raw_dispatch_buffer_token_capacity = max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor
+
+    # `offset_cumsum` lays out each nonempty local expert in a TILE_SIZE-aligned
+    # region. With a raw capacity of B tokens spread across E local experts,
+    # the alignment overhead is at most (min(B, E) - 1) complete tiles: reserve
+    # it here so dispatch, the routed FFN, and combine share a safe buffer size.
+    max_active_local_experts = min(raw_dispatch_buffer_token_capacity, experts_per_chip)
+    max_dispatch_buffer_token_size = raw_dispatch_buffer_token_capacity + ttnn.TILE_SIZE * (
+        max_active_local_experts - 1
+    )
 
     return experts_per_chip, metadata_len, max_dispatch_buffer_token_size, max_dispatched_tokens_per_expert
 
