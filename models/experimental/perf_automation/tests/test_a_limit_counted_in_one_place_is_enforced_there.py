@@ -173,34 +173,76 @@ def test_the_halt_tells_the_operator_to_reboot():
     assert "device_unrecoverable" in win, "the non-diagnosed case must keep its own halt reason"
 
 
-# ---------------------------------------------------------------- the limit must not be a one-way door
+# ---------------------------------------------------------------- the count belongs to ONE run
 
 
-def test_a_working_device_clears_the_reset_count(dr):
-    """THE REGRESSION THE GUARD CREATED. RESET_FAILS cleared in exactly one place -- inside recover(),
-    after a reset came back healthy. Harmless while nothing read it; once recover() REFUSED at the
-    limit, clearing required a successful reset and resetting was refused. A one-way door.
+def test_a_count_from_another_run_reads_as_zero(dr, monkeypatch):
+    """THE REGRESSION THE GUARD CREATED, fixed at the lifetime rather than patched.
 
-    Run 39's dead board left reset_fails=34 in the DURABLE state file. It survived the board being
-    fixed, a host reboot and a fresh run on healthy hardware, then halted that run before its first
-    round with the board idling at 45C. A profile that completes is proof the device is fine, and
-    proof outranks a stale count."""
-    for _ in range(dr.RESET_FAIL_LIMIT + 5):
+    state_path() keys the file by (model, task), which OUTLIVES the run -- so "resets have stopped
+    working" was inherited by every later run on that model. Harmless while nothing read the count;
+    once recover() began REFUSING at the limit it was a latch. Run 39's dead board left
+    reset_fails=34 in a file that survived the board being fixed, a host reboot and a fresh run on
+    healthy hardware, which then halted before its first round with all four chips at 45C."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    for _ in range(dr.RESET_FAIL_LIMIT + 4):
         dr.recover("t", lambda tgt: None)
     assert dr.recovery_exhausted() is True
-    dr.note_ok()
-    assert dr.recovery_exhausted() is False, "a healthy device did not clear the count"
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-B")
+    assert dr.recovery_exhausted() is False, "a previous run's failures still gate this one"
 
 
-def test_after_clearing_it_will_reset_again(dr):
-    """Not just the flag -- the behaviour. The next crash must actually get its resets back."""
+def test_the_new_run_actually_gets_its_resets_back(dr, monkeypatch):
+    """Not just the flag -- the behaviour."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
     for _ in range(dr.RESET_FAIL_LIMIT + 2):
         dr.recover("t", lambda tgt: None)
-    dr.note_ok()
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-B")
     tries = []
     for _ in range(dr.RESET_FAIL_LIMIT + 3):
         dr.recover("t", lambda tgt: tries.append(tgt))
     assert len(tries) == dr.RESET_FAIL_LIMIT, tries
+
+
+def test_within_one_run_the_count_still_accumulates(dr, monkeypatch):
+    """It must survive the PROCESS -- the process holding it is the one a device fault kills -- just
+    not the run."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    for _ in range(dr.RESET_FAIL_LIMIT):
+        dr.recover("t", lambda tgt: None)
+    assert dr.recovery_exhausted() is True
+    assert dr.recovery_exhausted() is True, "re-reading the file lost the count"
+
+
+def test_a_successful_measurement_does_not_reset_the_backstop(dr, monkeypatch):
+    """note_ok clears the CRASH STREAK, not the reset count. A board alternating working and wedging
+    would otherwise clear it on every good measurement -- restoring the unbounded retrying the limit
+    exists to stop."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    for _ in range(dr.RESET_FAIL_LIMIT + 1):
+        dr.recover("t", lambda tgt: None)
+    dr.note_ok()
+    assert dr.recovery_exhausted() is True
+
+
+def test_the_run_id_is_forwarded_to_the_mcp_server():
+    """perf_mcp counts in its OWN process. An unforwarded stamp puts the two sides in different runs,
+    each reading the other's failures as zero, and the backstop never triggers."""
+    src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
+    i = src.index('for _k in ("PERF_MCP_STATE_DIR"')
+    assert "PERF_MCP_RUN_ID" in src[i : i + 200], src[i : i + 200]
+
+
+def test_the_stamp_is_not_overwritten_on_a_restart():
+    """The supervisor restarts the child. A fresh stamp there would hand every restart a new budget,
+    which is the latch's opposite failure: never stopping."""
+    src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _stamp_run_id")
+    body = src[i : src.index("\ndef ", i + 1)]
+    assert "if not cur:" in body, body[-400:]
+
+
+# ---------------------------------------------------------------- the kernel verdict is the REAL stop
 
 
 def test_note_ok_still_clears_the_crash_streak(dr):

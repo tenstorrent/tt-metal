@@ -284,7 +284,10 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     # perf_mcp writes; the ledger is shared the same way), so a one-sided redirect points them at two
     # different directories and the report silently finds nothing. Unset on both sides they agree via
     # gettempdir(), which is why this is latent rather than broken -- forward it so it stays that way.
-    for _k in ("PERF_MCP_STATE_DIR", "PERF_MCP_LEDGER_DIR"):
+    # PERF_MCP_RUN_ID joins these because the recovery counters are scoped to a RUN, and perf_mcp
+    # counts in its OWN process -- an unforwarded stamp puts the two sides in different runs, so each
+    # would read the other's failures as zero and the backstop would never trigger.
+    for _k in ("PERF_MCP_STATE_DIR", "PERF_MCP_LEDGER_DIR", "PERF_MCP_RUN_ID"):
         if os.environ.get(_k):
             env[_k] = os.environ[_k]
     # TELL THE SERVER WHERE THE RUN IS. perf_mcp is a SEPARATE PROCESS and resolves its model dir as
@@ -3836,6 +3839,22 @@ def _print_optimize_stop(pipe, exc) -> None:
         pass
 
 
+def _stamp_run_id() -> str:
+    """One id for this optimize run, set once and inherited by every child.
+
+    The recovery counters are scoped to it: "resets have stopped working" is a fact about THIS run
+    against THIS board, and carrying it into the next run is what turned a limit into a latch (run 39
+    left reset_fails=34 in a (model, task)-keyed file that survived the board being fixed and a host
+    reboot). Set here rather than in the CLI so every entry point -- supervisor restarts included --
+    lands in the same run, and never overwritten, so a restart does not silently get a fresh budget.
+    """
+    cur = str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
+    if not cur:
+        cur = "%d_%d" % (int(time.time()), os.getpid())
+        os.environ["PERF_MCP_RUN_ID"] = cur
+    return cur
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -3859,6 +3878,7 @@ def run_cc_optimize(
     discovery (so this run recalls the latest cross-model-proven knobs), and push any GRADUATED_* back
     at the end. Off by default — learning stays local unless opted in. Both steps are best-effort and
     never fail the run; the remote/branch is fully configurable (nothing hard-coded)."""
+    _stamp_run_id()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         # No exported key is FINE: `claude` may be authenticated via `claude /login` (README §5.2
         # Option A). Every claude subprocess uses those stored creds; claude surfaces its own error

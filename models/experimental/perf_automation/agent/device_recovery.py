@@ -147,6 +147,24 @@ def state_path() -> Path:
     return state_dir() / ("tt_device_recovery_%s.json" % safe)
 
 
+def _run_stamp() -> str:
+    """Which run these counters belong to, or "" when nothing said.
+
+    THE LIFETIME MATTERS AS MUCH AS THE VALUE. state_path() keys the file by (model, task), which
+    outlives the run -- so "resets have stopped working" was inherited by every later run on that
+    model. Harmless while nothing read the count; once recover() began REFUSING at the limit it became
+    a latch, and run 39's dead board left reset_fails=34 in a file that survived the board being
+    fixed, a host reboot, and a fresh run on healthy hardware -- which then halted before its first
+    round with all four chips idling at 45C.
+
+    "Resets are not working" is a statement about THIS run against THIS board. A new run re-establishes
+    it in three attempts if it is still true, and the kernel's verdict (board_needs_host_reboot) stops
+    it in ZERO when the fault is one no reset can clear -- that check, not the count, is the real
+    condition. The count is only the backstop for a host where dmesg cannot be read.
+    """
+    return str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
+
+
 class Counter:
     """A counter that OUTLIVES THE PROCESS COUNTING IT.
 
@@ -162,9 +180,14 @@ class Counter:
 
     def _load(self) -> dict:
         try:
-            return json.loads(state_path().read_text())
+            d = json.loads(state_path().read_text())
         except Exception:  # noqa: BLE001
             return {}
+        # A COUNT FROM ANOTHER RUN IS NOT EVIDENCE ABOUT THIS ONE. Rather than deleting the file --
+        # which would lose the record a post-mortem reads -- a stamp mismatch simply reads as zero.
+        if isinstance(d, dict) and str(d.get("run") or "") != _run_stamp():
+            return {}
+        return d if isinstance(d, dict) else {}
 
     def __getitem__(self, key: str) -> int:
         try:
@@ -174,6 +197,7 @@ class Counter:
 
     def __setitem__(self, key: str, value: int) -> None:
         state = self._load()
+        state["run"] = _run_stamp()
         state[self._field] = int(value)
         try:
             p = state_path()
@@ -387,18 +411,11 @@ def note_crash(where: str, reset, error_text: str = "", config_target: str = "",
 
 
 def note_ok() -> None:
-    """The device WORKED. Clear both counters -- crash streak and reset failures.
+    """The device worked: clear the CRASH STREAK.
 
-    RESET_FAILS used to clear in exactly one place: inside recover(), after a reset came back healthy.
-    That was harmless while nothing read the counter. Once recover() started REFUSING at the limit it
-    became a one-way door -- clearing required a successful reset, and resetting was refused -- so a
-    single bad session disabled recovery permanently. Run 39's dead board left reset_fails=34 in the
-    durable state file; it survived the board being fixed, a host reboot, and a fresh run on healthy
-    hardware, and halted that run before its first round with the board idling at 45C.
-
-    A profile that completes is proof the device is fine, and proof outranks a stale count. This is
-    the same rule the crash counter already followed -- note_ok cleared CONSEC_CRASH for exactly this
-    reason -- applied to the counter that now has teeth.
+    Deliberately NOT the reset count. That is a within-run backstop against retrying forever, and a
+    board that alternates working and wedging would clear it on every good measurement -- restoring
+    exactly the unbounded retrying the limit exists to stop. The reset count is scoped to the run
+    instead (see _run_stamp), which is the honest lifetime for "have resets stopped working here".
     """
     CONSEC_CRASH["n"] = 0
-    RESET_FAILS["n"] = 0
