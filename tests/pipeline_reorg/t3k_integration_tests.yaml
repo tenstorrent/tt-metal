@@ -82,15 +82,6 @@
   team: models
   model-name: motif
 
-- name: t3k_wan2.2_tests
-  cmd: run_t3000_wan22_tests
-  skus:
-    wh_llmbox:
-      timeout: 45
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: wan2.2
-
 - name: t3k_mochi_tests
   cmd: run_t3000_mochi_tests
   skus:
