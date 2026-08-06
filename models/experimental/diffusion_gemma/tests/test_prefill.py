@@ -82,6 +82,86 @@ def test_chunk_page_table_slicing_matches_reference_contract():
         assert pt[:, sb:eb].tolist() == expected[c]
 
 
+def test_chunked_prefill_adapter_forwards_shared_prefill_api(monkeypatch):
+    captured = {}
+    expected = object()
+
+    def original(*args, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(cp, "_ORIG_PREFILL_FORWARD", original)
+    monkeypatch.setattr(cp, "_CHUNK_CTX", None)
+
+    result = cp.chunked_prefill_attention_forward(
+        *(object() for _ in range(8)),
+        chunk_start_idx=256,
+        chunk_page_table="chunk-table",
+        sliding_tail_in="sliding-tail",
+    )
+
+    assert result is expected
+    assert captured["chunk_start_idx"] == 256
+    assert captured["chunk_page_table"] == "chunk-table"
+    assert captured["sliding_tail_in"] == "sliding-tail"
+
+
+def test_chunked_prefill_adapter_returns_shared_three_value_contract(monkeypatch):
+    class FakeTensor:
+        shape = (1, 1, 1, 1)
+
+        def deallocate(self, *_args):
+            pass
+
+    q, projected_k, projected_v = FakeTensor(), FakeTensor(), FakeTensor()
+    shared_kv = (FakeTensor(), FakeTensor())
+    output = object()
+    monkeypatch.setattr(
+        cp,
+        "_CHUNK_CTX",
+        SimpleNamespace(sliding_state=SimpleNamespace()),
+    )
+    monkeypatch.setattr(cp, "apply_qkv_projection", lambda *_args: object())
+    monkeypatch.setattr(
+        cp,
+        "split_qkv_heads_prefill",
+        lambda *_args, **_kwargs: (q, projected_k, projected_v),
+    )
+    monkeypatch.setattr(cp, "apply_per_head_norm", lambda value, *_args, **_kwargs: value)
+    monkeypatch.setattr(cp, "apply_rope", lambda value, *_args: value)
+    monkeypatch.setattr(cp, "_bounded_sliding_sdpa", lambda *_args: output)
+    monkeypatch.setattr(cp, "concat_heads", lambda value, **_kwargs: value)
+    monkeypatch.setattr(cp, "apply_output_projection", lambda value, *_args: value)
+    monkeypatch.setattr(cp, "apply_allreduce", lambda value, *_args: value)
+
+    weights = SimpleNamespace(
+        is_global=False,
+        kv_replicated=False,
+        q_norm_weight=None,
+    )
+    config = SimpleNamespace(
+        rms_norm_eps=1e-6,
+        is_sliding=True,
+        sliding_window=1024,
+        head_dim=32,
+        hidden_size=128,
+    )
+    result = cp.chunked_prefill_attention_forward(
+        object(),
+        object(),
+        object(),
+        weights,
+        object(),
+        config,
+        None,
+        None,
+        page_table=object(),
+        shared_kv=shared_kv,
+    )
+
+    assert result == (output, None, None)
+
+
 # --- device chunked prefill (#47466) ---------------------------------------------------------
 #
 # Prefilling a prompt in chunks must reproduce a single full-length prefill (last-token logits

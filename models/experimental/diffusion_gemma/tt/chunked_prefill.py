@@ -293,6 +293,9 @@ def chunked_prefill_attention_forward(
     keep_kv=False,
     batch_size=1,
     valid_seq_len=None,
+    chunk_start_idx=None,
+    chunk_page_table=None,
+    sliding_tail_in=None,
 ):
     """Single-user prefill attention for ONE bounded chunk.
 
@@ -330,6 +333,9 @@ def chunked_prefill_attention_forward(
             keep_kv=keep_kv,
             batch_size=batch_size,
             valid_seq_len=valid_seq_len,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
+            sliding_tail_in=sliding_tail_in,
         )
 
     if batch_size > 1:
@@ -464,7 +470,7 @@ def chunked_prefill_attention_forward(
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
-    return tt_out, kept_kv
+    return tt_out, kept_kv, None
 
 
 # The gemma4 name the swapped attention defers to for the non-chunked path.
