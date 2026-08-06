@@ -278,6 +278,27 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
         assert generator.model.rope_setup.rope_deltas.tolist() == [40, 20, 30, 40]
 
 
+def test_partial_reload_is_refused_without_decode_token_feedback(expect_error):
+    from models.tt_transformers.tt.generator import Generator
+
+    model = SimpleNamespace(switch_mode=lambda mode: None, _tt_supports_decode_token_feedback=False)
+    fake = SimpleNamespace(mode=Mode.DECODE, model=[model], data_parallel=1)
+
+    # Nothing would write the sampled token into the traced input, so a steady-state step
+    # would replay the previous token instead of the new one.
+    with expect_error(ValueError, "requires reload_inputs=True"):
+        Generator.decode_forward(
+            fake,
+            torch.zeros((1, 1), dtype=torch.int64),
+            torch.zeros((1,), dtype=torch.int64),
+            sampling_params=object(),
+            reload_inputs=False,
+            reload_page_table=True,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+
+
 def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
     from models.tt_transformers.tt.generator import Generator
 

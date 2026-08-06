@@ -1296,6 +1296,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
         if not enable_trace and not reload_inputs:
             raise ValueError("Non-traced decode rebuilds all forward inputs and requires reload_inputs=True")
+        # Refuse a command the model cannot execute rather than silently upgrading it:
+        # without token feedback nothing writes the sampled token into the traced decode
+        # input, so keeping the host inputs would replay the previous token. The adapters
+        # for these models leave supports_async_decode off, which is what keeps vLLM from
+        # planning this combination in the first place.
+        if enable_trace and on_device_sampling and not reload_inputs:
+            for model in self.model:
+                if not getattr(model, "_tt_supports_decode_token_feedback", True):
+                    raise ValueError(
+                        f"{type(model).__name__} has no on-device decode token feedback and "
+                        "requires reload_inputs=True on every traced decode step"
+                    )
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
