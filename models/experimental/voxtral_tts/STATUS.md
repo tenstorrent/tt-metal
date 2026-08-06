@@ -2673,6 +2673,37 @@ on CCL/MoE infrastructure and our semantic matmul is already at 182 of ~194 GB/s
 `ttnn.topk` exist but the host argmax is simpler and 1.439x faster; `speecht5_tts` and
 `demos/audio/whisper` are different architectures.
 
+**4. THE MEASUREMENT METHODOLOGY, CHECKED AGAINST THE REPO'S OWN — and it holds.**
+`models/common/tests/modules/attention/profiling/` states outright that it uses trace capture "for
+accurate device-side timing without host dispatch overhead". Every probe in this file times
+`perf_counter` around `synchronize_device`, which INCLUDES host dispatch — so the whole session's numbers
+were open to the objection that they measured dispatch, not device work. Tested directly on `_solve`
+(a pure device graph by design, [flow-18], so it captures cleanly), 200 reps x 3 rounds:
+
+    eager  (host dispatch included)   19.145 ms   spread 0.002
+    traced (device work only)         19.230 ms   spread 0.002
+
+**Host dispatch is 0% of what was measured** — the device is saturated and dispatch is entirely hidden.
+Traced is even marginally SLOWER (+0.085 ms), independently reproducing §6.26's trace verdict on a
+different unit. So "an op costs ~20 us to exist" is genuine DEVICE time, every probe in this file is
+sound as written, and §6.33's unexplained whole-block gain is NOT a dispatch artifact. Note this is
+trace-as-MEASUREMENT; §6.26's rejection of trace-as-SHIPPING is untouched.
+
+The full tracy op profiler (`tools/tracy/process_ops_logs.py`, `python -m tracy -r -m ...`) would give
+per-op device times directly, and is the right tool if the §6.33 mechanism is ever chased. It does not
+run here as-is: `websockets` is absent from the venv, `generated/profiler/` is empty (never run on this
+box) and `build_Release/profiler/` looks incomplete, so it likely needs a profiler-enabled rebuild.
+
+**5. TWO CHOICES THE SHARED LIBRARY MAKES DIFFERENTLY — both already settled here.**
+- `models/common/modules/mlp/mlp_1d.py` defaults to **HiFi2 with fp16 accumulation**; we use HiFi4 +
+  `fp32_dest_acc_en=True` everywhere. Already tested and rejected: [flow-03] measured HiFi2/no-fp32acc
+  at PCC 0.9998382 and 35/222 code errors against HiFi4's 0.9999845 and 4/222 — and **slower**, 48.72 vs
+  42.57 ms. In Block 1, HiFi2/LoFi saves ~4 ms for 10-20x the integer-code errors. Not a missed knob.
+- their `_matmul_config` derives `in0_block_w = _find_largest_divisor(k // (tile*grid_y))` as a heuristic.
+  We swept it explicitly instead ([gpt-20]: 1/2/4/8/16/32 -> 152.0/83.2/68.1/73.7/80.5/89.4 us) and
+  shipped the bit-exact 2 over the faster-but-inexact 4. A heuristic would not have surfaced that
+  exactness cliff, so the hand-sweep stands.
+
 **Code audit, same pass:** 0 broken `NOTES.md [id]` pointers, 0 orphan NOTES entries, 0 broken `§6.x`
 references, no comment contradicting a current measurement, `test_tt_defaults` (7 guards on the shipped
 constants) green, 122 tests green. Five module-level names in `reference/` are unreferenced
