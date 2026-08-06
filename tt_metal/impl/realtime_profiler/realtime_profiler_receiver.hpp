@@ -61,7 +61,12 @@ public:
     RealtimeProfilerRecordRing::Reader make_reader() override;
     void wait_until_no_readers() override;
 
+    // All-time, so it answers "did the FIFO ever reach capacity" and nothing else. A run that spikes once reads the
+    // spike forever after, which cannot distinguish a device that recovered from one that never did.
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
+    // High-water since the previous call, which is what a periodic report wants: reading it clears it, so exactly one
+    // caller can use it.
+    uint32_t take_peak_fifo_pages() { return peak_fifo_pages_since_report_.exchange(0, std::memory_order_relaxed); }
     uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const override { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
@@ -141,7 +146,8 @@ private:
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
 
-    std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
+    std::atomic<uint32_t> peak_fifo_pages_{0};               // all-time peak D2H FIFO usage
+    std::atomic<uint32_t> peak_fifo_pages_since_report_{0};  // peak since take_peak_fifo_pages()
     uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
     std::chrono::nanoseconds pass_sync_busy_{};  // clock-read time in the pass just finished
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};

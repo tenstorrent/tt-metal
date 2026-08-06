@@ -779,6 +779,9 @@ RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pag
         peak_fifo_pages_.store(available, std::memory_order_relaxed);
     }
     fifo_pages_window_max_ = std::max(fifo_pages_window_max_, available);
+    if (available > peak_fifo_pages_since_report_.load(std::memory_order_relaxed)) {
+        peak_fifo_pages_since_report_.store(available, std::memory_order_relaxed);
+    }
     if (available >= RealtimeProfilerRuntimeSizes::fifo_pages && !dev_state.fifo_reached_capacity) {
         dev_state.fifo_reached_capacity = true;
         log_warning(
