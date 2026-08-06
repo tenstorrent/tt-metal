@@ -8,7 +8,10 @@ Bringup campaign: the metric is gates going green, not a latency.
 
 | Round | Gates green | Baseline | Stall | Target | Gate status |
 |---|---|---|---|---|---|
-| 9 | **8/8** | t2va + fl2va green @ `bd12ad2aeb2` | 0/10 | 8/8 acceptance criteria | **target met** |
+| 11 | **8/8 + quality bars set** | t2va + fl2va green @ `bd12ad2aeb2`; warm perf @ `e10e6dda34e` | 1/10 | correctness met; perf **not** exhausted | correctness target met |
+
+Correctness is done. **Perf is not**: the warm baseline exists and two levers are named with evidence,
+one optimization was tried and produced a measured non-result (am. 133). See `Pending work`.
 
 ## Working point
 
@@ -50,20 +53,61 @@ VBench 0.9804 / 0.9812 / 0.9914 / 1.0000 / 0.6925 · fl2va anchor **0.9971** · 
 | 6 ref2va e2e | **GREEN** — all three shapes |
 | 7 conditioning is not a no-op | **GREEN** — signal 0.128143 vs floor **0.000000**; order 0.096018 |
 | 8 frames inspected | **GREEN** — 6 frames + a 2× boundary strip; no seams, no flicker |
+| 9 quality bars, derived from measurement | **GREEN** — 6 bars set from am. 131, verified active on the binding case |
+
+## Quality (am. 131) — bars derived from ref2va's own measurements, never inherited from t2va
+
+| dimension | one_image | video+sound | mixed | **bar** | t2va | t2va bar |
+|---|---|---|---|---|---|---|
+| CLIP prompt alignment | 29.05 | 29.97 | 29.38 | **25.0** | 37.38 | 33.0 |
+| subject_consistency | 0.9631 | 0.9344 | 0.9587 | **0.90** | 0.9804 | 0.95 |
+| background_consistency | 0.9569 | 0.9249 | 0.9397 | **0.89** | 0.9812 | 0.95 |
+| motion_smoothness | 0.9957 | 0.9952 | 0.9959 | **0.97** | 0.9914 | 0.97 |
+| dynamic_degree | 1.0000 | 1.0000 | 1.0000 | **1.0** | 1.0000 | 1.0 |
+| imaging_quality | 0.4826 | 0.6575 | 0.5826 | **0.44** | 0.6925 | 0.64 |
+
+**Three of t2va's six bars would have failed and none of the three is a defect** — CLIP is
+prompt-dependent, the consistency pair trades against confirmed motion (`dynamic_degree` 1.0
+everywhere), and `imaging_quality` is no-reference IQA that spreads 0.17 on one pipeline. ref2va is
+**better** than t2va on `motion_smoothness`.
+
+## Warm latency (am. 132, immutable baseline @ `e10e6dda34e`)
+
+Warm window: one full warmup generation at the same shape with the same references, plus a priming
+`encode_prompt`; both `padded_len` values asserted. Wall time, prepares and export excluded.
+
+| case | cold | **warm** | ms/forward | realtime | denoise share |
+|---|---|---|---|---|---|
+| one_image (46080) | 210.7 s | **73.6 s** | 1355 | 14.2× | 90.3 % |
+| video+sound (81664) | 270.5 s | **193.3 s** | 3356 | 37.4× | 85.0 % |
+| mixed (89856) | 372.0 s | **216.1 s** | 3818 | 41.8× | 86.6 % |
 
 ## Pending work
 
-1. **No instrument shows the output resembling its own reference** more than another of the same
-   geometry (am. 128). Divergence and order-sensitivity are proven; *directional* resemblance is
-   recorded, not asserted. Luminance correlation measured noise; CLIP gives a per-output offset
-   (0.0279 vs 0.0292 gap for the two references). A subject-transfer test with a nameable subject the
-   model can place is the next thing to try. **This is a quality question, not a parity one** — every
-   interface below e2e is gated against the reference implementation.
-2. The **9-image** shape (111616) fits at full depth but has no e2e run. Its vision-tower cost is nine
-   16384-row attentions on a replicated tower, unmeasured (am. 117).
-3. `warmup()` does not accept `references`, so no ref2va latency is warm. The numbers above are cold.
-4. VBench/CLIP quality bars are **not** set for ref2va. Deliberately: am. 80/87 and this campaign's
-   own am. 130 all say t2va's bars do not transfer to reference-driven content.
+**Perf, in priority order. Denoise is 85–90 %, so nothing else is worth touching first.**
+
+1. **Matmul blockings for ref2va's shapes.** The warm log carries 12 distinct
+   `No known best blocking for (M, K, N) = …; using default` warnings, including `(5760, 5376, 5376)`
+   and `(5760, 7168, 1344)` — DiT block matmuls running 50× per forward. The table has no entry for
+   `seq_local` 5760 / 10208 / 11232. A configuration sweep with its own baseline and revalidation;
+   **not attempted**.
+2. **`measured_sdpa_chunk_sizes`.** STATE.md pending item 2: keyed on `seq_local ∈ {4768, 9216, 13632}`,
+   so dead at t2va's 4736 / 4992 *and* at all three ref2va values. The tuned `(320, 384)` was worth
+   −13 % on its op and has never run. Same shape of work as (1).
+3. **Reference encode is 21.6 s (11 %) for a video reference** — a 124-frame clip through the taps=3
+   temporal chunking, 192 work units over 32 devices. Second-largest single stage; unexamined.
+4. **Trace is unused for the DiT.** Lower priority than it looks: per-forward scales 2.82× for 1.95×
+   the rows per device, which is device-work scaling, and am. 133 measured that removing 351 MB of
+   redundant per-step host upload changed nothing. Host dispatch is not the binding constraint at these
+   lengths.
+
+**Correctness, remaining.**
+
+5. **No instrument shows the output resembling its own reference** more than another of the same
+   geometry (am. 128). Divergence and order-sensitivity are proven; directional resemblance is recorded,
+   not asserted. A subject-transfer test with a nameable subject is the next thing to try.
+6. The **9-image** shape (111616) fits at full depth but has no e2e run; its nine 16384-row vision-tower
+   attentions on a replicated tower are unmeasured (am. 117).
 
 ## Pitfalls
 
@@ -81,11 +125,12 @@ VBench 0.9804 / 0.9812 / 0.9914 / 1.0000 / 0.6925 · fl2va anchor **0.9971** · 
 
 ## Latest amendment
 
-**130 (2026-08-06)** — the 2.29× horizontal seam ratio on `video_with_sound` is scene content, not a
-seam: no discontinuity in the magnified boundary strip, a ~9-row-wide elevation, and the frame's
-largest vertical gradient (16.06) at y=306 which is not a boundary at all. Horizontal bar set to 3.0
-for ref2va on that evidence; vertical stays 2.0. Full body and 114–129 in `ledgers/amendments.md`.
+**133 (2026-08-06)** — hoisting the provably-redundant per-step conditioning upload (351 MB of
+identical bytes over 49 steps) buys −0.8 / −0.1 / −0.3 %, all inside the ±8 % noise floor, and the
+effect did **not** scale with block size. The loop is asynchronous, so host work hidden behind device
+work costs nothing. Kept as `attempts`, not `optimizations`: counting bytes is not profiling. Full body
+and 114–132 in `ledgers/amendments.md`.
 
 ## Ledger index
 
-attempts.md (7 rounds) · optimizations.md (5) · source-ideas.md (10) · amendments.md (17: 114–130)
+attempts.md (11 rounds) · optimizations.md (6) · source-ideas.md (10) · amendments.md (20: 114–133)
