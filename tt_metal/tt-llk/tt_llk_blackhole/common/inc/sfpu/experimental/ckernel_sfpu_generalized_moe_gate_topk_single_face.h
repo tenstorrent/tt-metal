@@ -590,14 +590,11 @@ inline void _gmg_merge16_to_run()
 {
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
 
-    // idx_offset turns the run's local ids into GLOBAL ones by adding the block's expert-id base
-    // (b*256). The add reads the idx|score concat in LREG4/LREG5 but writes LREG2/LREG3, because
-    // merge16_core leaves index tracking enabled: while it is, the data/index select mux is held on
-    // the index side "for all instructions, not just swaps" (erratum TEN-2932; WH and BH, fixed in
-    // Quasar), so a result written into LREG4-7 is replaced by the tracked index. Filling an upper
-    // LREG would mean toggling the control register off and back on around the add, which the erratum
-    // calls out as expensive; writing a lower LREG needs no toggle, and LREG2/LREG3 hold no live
-    // value once the sort has finished (the run is in LREG4/LREG5, its bias in LREG0/LREG1).
+    // idx_offset turns the run's local ids into global ones by adding the block's expert-id base
+    // (b*256). The add reads the idx|score concat in LREG4/5 but writes LREG2/3 to work around
+    // a hardware erratum (TEN-2932): when index tracking is enabled (merge16_core), a result
+    // written into LRegs 4-7 is replaced by the tracked index. LRegs 2 and 3 are free once the sort
+    // is finished, so they can be used here.
     //
     // Only the id (LO16) store reads the sum; the score half is stored from the untouched concat.
     // Must use TTI, not sfpi l_reg[]: sfpi's SSA register model does not write back to the physical
