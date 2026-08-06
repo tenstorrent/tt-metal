@@ -294,15 +294,23 @@ def fit_fc_grid(device, n_tiles, k_tiles):
     feeding it take a (grid_x, grid_y) and must agree.
     """
     if is_quasar():
-        # Quasar no-spill fc (Option 1). mcast_in0 width-shards K across the grid, so
-        # num_blocks == num_cores; ANY multi-core grid forces num_blocks > 1 -> the interm0/mm_partials
-        # K-spill accumulate, which hits the intra-tensix TILE_COUNTERS fault on Quasar (no compute-side
-        # implicit-sync opt-out exists). Run the fc on a SINGLE core so the whole K sits on that core and
-        # in0_block_w == full K (num_blocks == 1, no spill, interm0 never touched). Shrink out_block_w so
-        # the in1 DFB ring (out_block_w * in0_block_w tiles) fits the uint16 ring-extent limit.
+        # [#48552] Quasar fc: single core, K-SPILLED. The old no-spill config (in0_block_w == full K, then
+        # out_block_w shrunk to fit the weights ring) sized cb_intermed0 (= out_block_w) DIFFERENTLY from cb_out
+        # (= per_core_N) while they ALIAS -> "Aliased DFBs cb_out and cb_intermed0 different total sizes" FATAL.
+        # Instead K-spill: stream the weights per small K-block (in0_block_w << full K, num_blocks > 1) so
+        # out_block_w can be the FULL per_core_N -> cb_intermed0 == cb_out (same size), and the in1 ring
+        # (out_block_w * in0_block_w) stays small via the K-block. This is the same DRAM-weights K-spill path as
+        # layer4 (DPRINT-masked until the copy_tile real fix lands); mcast_in0 on a single core degenerates to a
+        # plain single-core matmul, so there's no cross-core K-reduction.
         per_core_N = n_tiles
-        in0_block_w = k_tiles
-        out_block_w, out_subblock_w = _no_spill_out_block(per_core_N, in0_block_w)
+        k_blk = 8
+        while k_blk > 1 and (k_tiles % k_blk) != 0:
+            k_blk -= 1
+        in0_block_w = k_blk
+        out_block_w = per_core_N
+        out_subblock_w = per_core_N
+        while out_subblock_w > 8 or (per_core_N % out_subblock_w) != 0:
+            out_subblock_w -= 1
         return 1, 1, 1, per_core_N, in0_block_w, out_block_w, out_subblock_w
 
     grid = device.compute_with_storage_grid_size()
