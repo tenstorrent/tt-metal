@@ -1038,6 +1038,7 @@ print(json.dumps(patch))
 PY
 )" || return $?
 
+    ss END_TIME "$END_TIME"   # freeze the cost window; later same-session turns can't inflate a finished run
     refresh_cost   # final authoritative refresh — overwrites the TOKENS_JSON
 
     # $LOG_DIR/run.json is the authoritative per-run record — derive the
