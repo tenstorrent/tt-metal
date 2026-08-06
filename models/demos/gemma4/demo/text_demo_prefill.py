@@ -1779,6 +1779,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     # Which chunk the ring trace is captured at. A probe: replays must be independent of
     # this, so if correctness tracks the capture point then per-chunk state is still baked
     # into the recorded commands somewhere.
+    one_trace = os.environ.get("GEMMA4_ONE_TRACE") == "1"
     cap_idx = int(os.environ.get("GEMMA4_TRACE_CAPTURE_CHUNK", "1"))
     start1 = _stage(cap_idx)
     tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -1818,7 +1819,10 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             t_stage = time.time()
             chunk_start = _stage(chunk_idx)
             stage_s += time.time() - t_stage
-            tid = tid_first if chunk_idx == 0 else tid_ring
+            # GEMMA4_ONE_TRACE: replay the ring trace for chunk 0 too. Chunk 0 differs only in
+            # kv_actual_isl == 0, which the kernels now derive on-device, so one capture can serve
+            # the whole prefill — halving trace memory and dropping the mask path's ~80ms premium.
+            tid = tid_ring if (one_trace or chunk_idx > 0) else tid_first
             t_c = time.time()
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
