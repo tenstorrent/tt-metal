@@ -412,3 +412,84 @@ def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in
         atol=0.052,
         frobenius_threshold=0.010,
     )
+
+
+def _cores_of(core_range_set):
+    return {
+        (x, y)
+        for r in core_range_set.ranges()
+        for x in range(r.start.x, r.end.x + 1)
+        for y in range(r.start.y, r.end.y + 1)
+    }
+
+
+def test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(device, expect_error):
+    """The reduction multicasts over the bounding box of the shard grid, so a non-rectangular grid also
+    places kernels, CBs and semaphores on the holes inside that box. create_descriptor must therefore
+    reject a core_range_set that omits those holes instead of silently scheduling work on cores the
+    caller excluded, which could collide with another program."""
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.y < 2 or device_grid.x < 4:
+        pytest.skip(f"case does not fit a {device_grid.x}x{device_grid.y} device grid")
+
+    num_cores = device_grid.x + 3
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
+    assert len(grid.ranges()) > 1, f"{num_cores} cores on a {device_grid.x}-wide grid should not be a rectangle"
+
+    h = 32
+    shard_width = 32
+    w = num_cores * shard_width
+
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        generate_input_tensor(h, w, "random", torch.bfloat16),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+    weight = ttnn.from_torch(
+        generate_input_tensor(1, w, "random", torch.bfloat16)[0],
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    params = ttnn.LayerNormParams()
+    params.norm_type = ttnn.LayerNormType.RMSNORM
+    params.distributed_norm_stage = ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED
+    params.eps = 1e-12
+    params.output_mem_config = sharded_mem_config
+    params.program_config = ttnn.create_layernorm_program_config(input_tensor.memory_config().shard_spec)
+    params.compute_kernel_config = ttnn.rmsnorm_default_compute_config(device.arch())
+
+    tensor_args = ttnn.LayerNormInputs(input_tensor)
+    tensor_args.weight = weight
+    if params.program_config.use_welford:
+        tensor_args.recip_tensor = ttnn.create_layer_norm_reciprocals(device, grid, shard_width)
+
+    output_tensor = ttnn.LayerNormDeviceOperation.create_output_tensors(params, tensor_args)
+
+    # The shard grid alone excludes the holes the multicast still covers, so it must be rejected.
+    with expect_error(RuntimeError, "hole in the non-rectangular shard grid"):
+        ttnn.LayerNormShardedProgramFactory.create_descriptor(params, tensor_args, output_tensor, grid)
+
+    # Supplying the full multicast footprint is accepted, and nothing is scheduled outside it.
+    bounding_box_set = ttnn.CoreRangeSet([grid.bounding_box()])
+    descriptor = ttnn.LayerNormShardedProgramFactory.create_descriptor(
+        params, tensor_args, output_tensor, bounding_box_set
+    )
+
+    allowed_cores = _cores_of(bounding_box_set)
+    scheduled_cores = set()
+    for kernel in descriptor.kernels:
+        scheduled_cores |= _cores_of(kernel.core_ranges)
+    for semaphore in descriptor.semaphores:
+        scheduled_cores |= _cores_of(semaphore.core_ranges)
+
+    assert (
+        not scheduled_cores - allowed_cores
+    ), f"cores scheduled outside core_range_set: {sorted(scheduled_cores - allowed_cores)}"
