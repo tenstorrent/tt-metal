@@ -54,18 +54,6 @@
       timeout: 30
   owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS team @tenstorrent/cse-developer-ttnn)
   team: models
-- name: vit nightly
-  cmd: |
-    unset HF_HUB_OFFLINE
-    $PYTEST_CMD tests/nightly/single_card/vit
-  model: vit
-  skus:
-    wh_n150:
-      timeout: 30
-    wh_n300:
-      timeout: 30
-  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
-  team: models
 - name: sentence_bert nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/sentence_bert
   model: sentence_bert

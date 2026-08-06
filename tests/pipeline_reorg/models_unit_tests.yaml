@@ -254,6 +254,30 @@
   owner_id: U08GEGWHQJF # Adam Roberge
   team: models
 
+# Ported from the `vit nightly` entry in single_card_ttnn_models_frequent_tests.yaml.
+# That entry ran the tests/nightly/single_card/vit directory, which contains a single
+# symlink to the test file referenced directly below. HF_HUB_OFFLINE is forced back to
+# 0 because the tiered impl defaults WH SKUs to offline and the test resolves its
+# checkpoint from the hub — the legacy entry did the same with `unset HF_HUB_OFFLINE`.
+- name: ViT unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 1500 models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py
+  model: vit
+  model_family: ViT
+  skus:
+    # Carried over unchanged from the legacy `vit nightly` entry, NOT re-measured on
+    # the tier runner. Tighten to measured + ~15% after the first tiered run and
+    # re-sync .github/time_budget.yaml to the new sums.
+    wh_n150:
+      timeout: 30
+      tier: 2
+    wh_n300:
+      timeout: 30
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+
 - name: Gemma-3-4B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
