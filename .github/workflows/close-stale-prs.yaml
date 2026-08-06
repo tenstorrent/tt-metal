@@ -18,8 +18,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           days-before-pr-stale: 32
           days-before-pr-close: 0
-          days-before-issue-stale: -1 # Do not touch issues
-          days-before-issue-close: -1 # Do not touch issues
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
           stale-pr-message: >
             This PR has been automatically closed because it has had no activity
             for 32 days. If you still need this change, feel free to reopen it
