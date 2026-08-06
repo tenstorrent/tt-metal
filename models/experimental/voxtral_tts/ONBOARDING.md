@@ -184,7 +184,10 @@ reduction that was on the chip when its result was already being shipped off it.
 9. **Frame counts in a multi-case run depend on the preceding cases.** An hour went into a "moved
    from 207 to 220" that reproduced identically when the case was run alone.
 
-### The strongest exactness gate, and it is cheap
+### The strongest EXACTNESS gate — and it is NOT a quality gate
+
+Read this whole subsection before using frame counts as evidence. It is cheap and decisive for
+exactness, and **worthless for quality**, and it took two wrong readings to establish that.
 
 If you are claiming a change is exact, do this rather than trusting an 8-frame code comparison:
 
@@ -197,6 +200,27 @@ python .../generate_quality_set.py --cases 0,2,3 --tag after    # on the new one
 Generation is autoregressive — each frame's output becomes the next frame's input — so **any**
 divergence compounds and moves the frame at which the model decides to stop. Reproducing 461 and 487
 frames exactly is real proof of bit-identity. Two cases, ~90 s. See `§6.32`.
+
+**BUT A CHANGED FRAME COUNT PROVES NOTHING ABOUT QUALITY.** The control (`§6.38`): same shipped code,
+same prompts, only the `x_0` noise seed changed —
+
+    case 0:  66 / 76 / 70 frames   (seeds 0/1/2)   swing 10
+    case 2: 461 / 470 / 438                        swing 32
+    case 3: 487 / 508 / 449                        swing 59
+
+So a non-bit-exact change WILL move frame counts, by tens, for free. I twice cited a moved frame count
+as evidence of degradation (`§6.37` sdpa: 461→445; w2-BFP8: 487→523) when both movements sit **inside**
+the seed-only swing. The asymmetry is what matters:
+
+| observation | means |
+|---|---|
+| frame counts IDENTICAL | the change is bit-exact — strong, trustworthy |
+| frame counts MOVED | the change is not bit-exact. **Nothing more.** |
+
+For quality on a non-exact change, the only usable instrument is **WER across several seeds**. That IS
+stable on the shipped build: 0 wrong of 274 at seeds 0, 1 and 2 (`§6.38`), so the clean baseline is
+reproducible rather than lucky, and a word appearing is real signal — but judge it over ≥3 seeds, never
+one.
 
 ### The order to work in
 
@@ -243,6 +267,43 @@ frames exactly is real proof of bit-identity. Two cases, ~90 s. See `§6.32`.
   (65.1 µs either way). The "CFG doubles the work" intuition does not hold on this hardware.
 
 ---
+
+## 6b. What to reuse from the rest of this repo (surveyed 2026-08-06, `§6.38`)
+
+This model was built standalone. Four things elsewhere in the tree are worth knowing about; the first
+directly unblocks the biggest open lead.
+
+- **`models/common/modules/rmsnorm/rmsnorm_1d.py` → `_create_sharded_norm_program_config(dim, grid,
+  tile_padded_batch_rows, tile_size)`** — builds the sharded-norm program config from the ROW COUNT:
+  `block_h = tile_padded_batch_rows // tile_size`, with `tile_padded_batch_rows = 32*ceil(batch/32)`,
+  plus a `subblock_w` search. **This is exactly what `_NORM_SHARD`/`_NORM_PRG` cannot do** — ours
+  hardcode `(32, 96)` and `block_h=1`, which is why Block 2 dies at 48 rows and the 3.4× batching win
+  in `§6.35` is blocked. `models/common/modules/mlp/mlp_1d.py` shows the same
+  `tile_padded_batch_rows` pattern applied to shard shapes *and* matmul configs. **Start here if you
+  pick up the batching lead.**
+- **`models/demos/gemma4/tt/spec_decode.py`** (1682 lines, well documented) — speculative decoding whose
+  verify step "runs ONE batched forward over `[anchor, d1, …, dK]` … candidates in the batch dim". That
+  is precisely the mechanism for our 31 unused tile rows. Its docstring also reasons through the
+  worse-vs-different question we keep hitting: a batched forward differs by ~1e-5, "flips only target
+  near-ties (top-2 logit gap < ~1)", and yields "an equally-valid greedy trajectory thereafter". Note
+  their correctness is guaranteed *by construction* (committed tokens always come from the target
+  verify); a weight-precision change has no such guarantee, so do not borrow the conclusion.
+- **`models/common/tests/modules/sampling/test_sampling_1d.py`** — classifies argmax/top-k index
+  disagreements as TIE-BREAK (acceptable) vs TRUE-MISMATCH (kernel bug), and notes `ttnn.argmax` returns
+  uint32 where torch returns int64. Relevant to `[flow-08a]`: we moved the semantic argmax to the host,
+  so a tie would be broken by `torch.argmax` rather than `ttnn.argmax`. Our logits are **fp32** and the
+  mask is additive, so exact ties are effectively impossible — but that is the reason it is safe, and it
+  was not checked when the change shipped.
+- **`models/tt_dit/`** (`pipelines/qwenimage`, `pipelines/ltx`) and `models/demos/z_image_turbo` — flow
+  matching / DiT pipelines. Block 2 is a flow-matching transformer, so if its structure is ever
+  revisited (e.g. the 7→5 Euler-step question) these are the nearest neighbours in-tree. Not examined
+  in depth.
+
+Checked and **not** reusable: `models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/` is a bespoke
+multi-device kernel on deepseek's CCL/MoE infrastructure, and our semantic matmul is already at the
+roofline (182 GB/s of ~194). `ttnn.sampling` and `ttnn.topk` exist but our host argmax is both simpler
+and 1.439× faster. `models/experimental/speecht5_tts` and `models/demos/audio/whisper` are different
+architectures.
 
 ## 7. Things that are settled — do not re-run these
 

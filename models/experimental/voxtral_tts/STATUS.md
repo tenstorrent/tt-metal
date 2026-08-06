@@ -2602,6 +2602,84 @@ fusing w1/w3, which §6.24 measured at 4x slower.
 **Residual-as-bias is NOT EXPRESSIBLE here**, unlike in Block 1: ttnn's `bias` is added per output
 column, and the residual differs per row. Recorded so it is not attempted.
 
+### 6.38 — the seed control (frame counts are noise), w2-BFP8 over three seeds, and a repo-wide reuse survey
+
+Three things, and the first invalidates evidence I used twice.
+
+**1. FRAME COUNTS ARE SEED NOISE.** §6.37 rejected sdpa partly because case 2's frame count moved
+461 → 445, and the w2-BFP8 test showed case 3 moving 487 → 523. I called both "divergence". The control
+— same shipped code, same prompts, **only the `x_0` noise draw changed**:
+
+| build / seed | case 0 | case 2 | case 3 |
+|---|---|---|---|
+| shipped, seed 0 | 66 | 461 | 487 |
+| shipped, seed 1 | 76 | 470 | 508 |
+| shipped, seed 2 | 70 | 438 | 449 |
+| **seed-only swing** | **10** | **32** | **59** |
+
+Both movements I cited sit INSIDE the seed-only swing. The correct reading is asymmetric:
+
+    frame counts IDENTICAL  ->  the change is bit-exact. Strong, and it has caught nothing false (§6.32).
+    frame counts MOVED      ->  the change is not bit-exact. NOTHING MORE.
+
+**WER, by contrast, is stable across seeds: 0 wrong of 274 at seeds 0, 1 and 2.** So the clean baseline
+is reproducible rather than lucky, and a word appearing is real signal — but it must be judged over
+several seeds, never one.
+
+**2. w2 IN BFP8, RE-GATED ON THREE SEEDS.** §6.16 rejected it on Block 1 teacher-forced metrics alone —
+no WER, no frame counts, no listening pass, none of which existed then. Re-measured:
+
+    block 1 decode step   w2 bf16  23.151 ms (spread 0.004)
+                          w2 BFP8  20.507 ms (spread 0.002)     -> 2.644 ms/step, 5.5% of a frame
+
+    decode gate, 15 prompts    bf16  mean 0.92%  p90 1.28%  max 3.05%  min PCC 0.999040
+                               BFP8  mean 1.16%  p90 1.68%  max 4.41%  min PCC 0.997815
+
+    long-form WER      seed 0     seed 1     seed 2
+      shipped          0 wrong    0 wrong    0 wrong      (0 of 822 words)
+      w2 BFP8          1 wrong    0 wrong    0 wrong      (1 of 822 words)
+
+**So the upstream degradation is real and reproducible; the output evidence is 1 word in 822 against 0 in
+822, which no test would call significant.** §6.16's pricing stands (w2 = 77% of the accuracy cost for
+15% of the speed), and the accumulated Block 1 error is unambiguous. But the claim "it costs a word" is
+NOT established — it rests on one occurrence. **Left at bf16, and this is a genuine open decision, not a
+closed one.** To settle it: all 15 cases x 3+ seeds on both arms. At 2.644 ms/step it is the largest
+single win left anywhere in this model, so that experiment is worth running before dismissing it.
+
+**3. REPO-WIDE REUSE SURVEY.** This model was built standalone; four things elsewhere are worth knowing.
+
+- **`models/common/modules/rmsnorm/rmsnorm_1d.py::_create_sharded_norm_program_config`** — builds the
+  config from the ROW COUNT (`block_h = tile_padded_batch_rows // tile_size`, `tile_padded_batch_rows =
+  32*ceil(batch/32)`, plus a `subblock_w` search). **This is precisely what our hardcoded `_NORM_SHARD`
+  `(32, 96)` / `block_h=1` cannot do, and it is the stated blocker on §6.35's measured 3.4x batching
+  win.** `models/common/modules/mlp/mlp_1d.py` applies the same pattern to shard shapes and matmul
+  configs. Start here if the batching lead is picked up.
+- **`models/demos/gemma4/tt/spec_decode.py`** — verify step "runs ONE batched forward over
+  `[anchor, d1, ..., dK]` … candidates in the batch dim", which is exactly the mechanism for our 31
+  unused tile rows. Its docstring also reasons through worse-vs-different: a batched forward differs by
+  ~1e-5, "flips only target near-ties (top-2 logit gap < ~1)", giving "an equally-valid greedy trajectory
+  thereafter". **Do not borrow that conclusion** — their correctness is guaranteed by construction
+  (committed tokens always come from the target verify); a precision change has no such guarantee.
+- **`models/common/tests/modules/sampling/test_sampling_1d.py`** — classifies index disagreements as
+  TIE-BREAK (acceptable) vs TRUE-MISMATCH (kernel bug); notes `ttnn.argmax` returns uint32 vs torch's
+  int64. Bears on [flow-08a]: we moved the semantic argmax to the host, so ties would now be broken by
+  `torch.argmax`. fp32 logits plus an additive mask make exact ties effectively impossible — that is
+  *why* it is safe, and it was not checked when the change shipped.
+- **`models/tt_dit/` and `models/demos/z_image_turbo`** — flow-matching / DiT pipelines, the nearest
+  in-tree neighbours to Block 2 if its structure is revisited (e.g. 7→5 Euler steps). Not examined.
+
+Checked and NOT reusable: `deepseek_v3_b1/fused_ops/lm_head_sampling/` is a bespoke multi-device kernel
+on CCL/MoE infrastructure and our semantic matmul is already at 182 of ~194 GB/s; `ttnn.sampling` /
+`ttnn.topk` exist but the host argmax is simpler and 1.439x faster; `speecht5_tts` and
+`demos/audio/whisper` are different architectures.
+
+**Code audit, same pass:** 0 broken `NOTES.md [id]` pointers, 0 orphan NOTES entries, 0 broken `§6.x`
+references, no comment contradicting a current measurement, `test_tt_defaults` (7 guards on the shipped
+constants) green, 122 tests green. Five module-level names in `reference/` are unreferenced
+(`text_logits`, `TIED_EMBEDDINGS`, `FM_HIDDEN_DIM`, `CODEC_HIDDEN_DIM`, `DEC_WINDOWS`) and are
+**deliberately kept** — they document checkpoint architecture, and deleting model facts from the fp32
+ground truth to satisfy a linter is a bad trade.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
