@@ -42,8 +42,21 @@ def windowed_mask(seq_len, cu_window_seqlens):
         (256, 32, [0, 64, 128, 256]),  # larger sequence
         (96, 64, [0, 33, 64, 96]),  # sequence padded to chunk size; windowed mask owns padding
         (129, 64, [0, 32, 97, 129]),  # partial final tile plus chunk padding
+        # Aggressive K-range narrowing: each Q chunk's windows cover a small fraction of the 8
+        # K chunks, so a wrong [k_lo, k_hi) (missing or extra keys) craters PCC rather than hiding
+        # behind a nearly-dense range.
+        (1024, 128, [0, 128, 256, 384, 512, 640, 768, 896, 1024]),  # 8 chunk-aligned windows
+        (1024, 128, [0, 200, 480, 730, 1024]),  # uneven windows straddling chunk boundaries
     ],
-    ids=["s128_w2", "s128_w3", "s256_w3", "s96_padded_chunk", "s129_partial_tile"],
+    ids=[
+        "s128_w2",
+        "s128_w3",
+        "s256_w3",
+        "s96_padded_chunk",
+        "s129_partial_tile",
+        "s1024_w8_aligned",
+        "s1024_w4_straddle",
+    ],
 )
 @pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize(

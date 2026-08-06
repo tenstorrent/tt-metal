@@ -111,14 +111,10 @@ inline void generate_windowed_mask_for_q_chunk(
         Sk_chunk_t,
         k_num_chunks,
         tt::constants::TILE_HEIGHT);
-    // PHASE-1 (plumbing validation): range computed but the dense loop is kept until the
-    // three-kernel handshake is proven.
-    (void)k_range;
-
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     CircularBuffer cb_mask(cb_mask_in);
     uint32_t local_window_idx = start_window_idx;
-    for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+    for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
 
         cb_mask.reserve_back(mask_chunk_tiles);
