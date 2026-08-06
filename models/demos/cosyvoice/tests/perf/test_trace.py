@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Trace capture for the AR decode step -- `02_plan.md` P6's headline lever.
 
-F23 measured the LLM at **81.9 % of end-to-end runtime** and ~124 us per op over
-~280 ops per token: dispatch bound, not compute bound. Trace capture replays the
-recorded graph with one host command instead of re-issuing every op.
+Before any of it was traced, the LLM was **81.9 % of end-to-end runtime** at ~124 us
+per op over ~280 ops per token: dispatch bound, not compute bound. That is what made
+trace capture the right lever -- it replays the recorded graph with one host command
+instead of re-issuing every op. (Post-tracing figures live in PERF.md; the number
+here is the *motivation*, so it stays as it was measured.)
 
 Two things are checked, in this order, because the second is worthless without the
 first:
