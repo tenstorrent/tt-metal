@@ -33,7 +33,14 @@ LLM_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "llm_")
 SAMPLE_RATE = 22050
 
 needs_l1_small = pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 131072, "trace_region_size": 67108864}], indirect=True
+    # 384 MB, not the usual 64: the in-place KV cache captures 65 traces where the
+    # moving one captures a single trace. The requirement is not a tidy per-trace
+    # figure -- offered 64 MB it asked for 68.6, offered 128 it asked for 134.3, so
+    # the allocator is filling whatever it is given before it reports a shortfall.
+    # 384 MB is simply a size this class has been observed to capture in.
+    "device_params",
+    [{"l1_small_size": 131072, "trace_region_size": 402653184}],
+    indirect=True,
 )
 needs_all = pytest.mark.skipif(
     not all(os.path.exists(p) for p in (HIFT_WEIGHTS, FLOW_WEIGHTS, LLM_WEIGHTS)),
@@ -94,11 +101,14 @@ def test_device_end_to_end_rtf(device):
         ttnn.deallocate(ys)
         return c
 
-    # Traced decode -- the path `generate()` now takes by default.
-    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep
+    # Traced decode -- the path `generate()` takes. The KV-cache mode is read from
+    # the same environment variable `generate()` reads, so this measures whatever the
+    # model would actually run rather than a fixed choice that can drift away from it.
+    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TracedDecodeStepInPlace
 
+    kls = TracedDecodeStepInPlace if os.environ.get("COSYVOICE_KV_INPLACE") == "1" else TracedDecodeStep
     caches = prefill()
-    traced = TracedDecodeStep(dec, max_len).capture()
+    traced = kls(dec, max_len).capture()
     traced.seed(caches)
     TtARDecoder.free_caches(caches)
     for i in range(2):
