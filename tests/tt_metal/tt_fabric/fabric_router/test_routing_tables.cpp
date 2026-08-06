@@ -144,6 +144,22 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
+static bool has_cluster_type(tt::tt_metal::ClusterType required_type) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == required_type;
+}
+
+static bool has_galaxy_topology() {
+    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    return cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+           cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+}
+
+static bool has_single_galaxy_topology() {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& world = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    return has_galaxy_topology() && cluster.get_cluster_desc()->get_all_chips().size() == 32 && *world->size() == 1;
+}
+
 TEST(MeshGraphValidation, TestMGDConnections) {
     // TODO: This test is currently not implemented completely connection types currently cannot be mixed
     // Skip for now
@@ -191,6 +207,9 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
 // checks for shapes 1x1, 1x2, 2x2, 2x4, 2x8, 4x4 (two-tray), 4x8, 4x16, 4x32, 8x16 (rank 0 only in multihost).
 // Four-tray 4x4 split-host layouts use TestGalaxy4x4SplitHostLayoutCheck instead.
 TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
+    if (!has_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a Galaxy topology";
+    }
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -221,6 +240,9 @@ TEST_F(ControlPlaneFixture, TestGalaxy4x4SplitHostLayoutCheck) {
 
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
+    if (!has_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a Galaxy topology";
+    }
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -260,6 +282,9 @@ TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+        GTEST_SKIP() << "Test requires a T3K topology";
+    }
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
@@ -285,6 +310,9 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+        GTEST_SKIP() << "Test requires a T3K topology";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
@@ -305,6 +333,9 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutes) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+        GTEST_SKIP() << "Test requires a T3K topology";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
@@ -333,6 +364,9 @@ TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
@@ -342,6 +376,9 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
@@ -417,7 +454,15 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16FabricRoutes) {
 
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
-      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
+protected:
+    void SetUp() override {
+        if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+            GTEST_SKIP() << "Test requires a T3K topology";
+        }
+        ControlPlaneFixture::SetUp();
+    }
+};
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
     auto [mesh_graph_desc_path, _] = GetParam();
@@ -512,6 +557,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kDisjointFabricRoutes) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+        GTEST_SKIP() << "Test requires a T3K topology";
+    }
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_disjoint_mesh_descriptor_chip_mappings[0];
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
@@ -546,6 +594,9 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
@@ -645,6 +696,9 @@ TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) 
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
@@ -892,6 +946,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyMesh) {
 }
 
 TEST(RoutingTableValidation, TestSingleGalaxyMesh) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     using namespace single_galaxy_constants;
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
@@ -966,6 +1023,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXY) {
 }
 
 TEST(RoutingTableValidation, TestSingleGalaxyTorusXY) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     using namespace single_galaxy_constants;
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
@@ -1052,6 +1112,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusX) {
 }
 
 TEST(RoutingTableValidation, TestSingleGalaxyTorusX) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     using namespace single_galaxy_constants;
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
@@ -1139,6 +1202,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusY) {
 }
 
 TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
+    if (!has_single_galaxy_topology()) {
+        GTEST_SKIP() << "Test requires a single-rank, 32-chip Galaxy topology";
+    }
     using namespace single_galaxy_constants;
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
@@ -1260,6 +1326,9 @@ TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraph) {
 }
 
 TEST_F(ControlPlaneFixture, TestP150X8BlackHoleControlPlaneInit) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::P150_X8)) {
+        GTEST_SKIP() << "Test requires a P150 x8 topology";
+    }
     const std::filesystem::path p150_x8_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
@@ -1267,6 +1336,9 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::P150_X8)) {
+        GTEST_SKIP() << "Test requires a P150 x8 topology";
+    }
     const std::filesystem::path p150_x8_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
@@ -1329,6 +1401,9 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
 }
 
 TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
+    if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
+        GTEST_SKIP() << "Test requires a T3K topology";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
@@ -2182,6 +2257,10 @@ void validate_sp5_blitz_decode_pipeline_stages(
 }  // namespace
 
 TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
+    if (!has_galaxy_topology() ||
+        !tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
+        GTEST_SKIP() << "Test requires a Galaxy cluster with an explicit multi-mesh graph descriptor";
+    }
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(

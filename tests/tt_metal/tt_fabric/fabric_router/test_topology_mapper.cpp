@@ -8,6 +8,8 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <unordered_set>
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -26,6 +28,31 @@ protected:
 
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const std::string_view test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+
+        std::optional<tt::tt_metal::ClusterType> required_cluster_type;
+        std::optional<std::size_t> required_world_size;
+        if (test_name.starts_with("T3k") || test_name.starts_with("T3K")) {
+            required_cluster_type = tt::tt_metal::ClusterType::T3K;
+        } else if (test_name.starts_with("DualGalaxy") || test_name.starts_with("Pinning")) {
+            required_cluster_type = tt::tt_metal::ClusterType::GALAXY;
+            required_world_size = 2;
+        } else if (test_name.starts_with("P100")) {
+            required_cluster_type = tt::tt_metal::ClusterType::P100;
+        } else if (test_name.starts_with("BHQB")) {
+            required_cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+            required_world_size = 4;
+        } else if (test_name.starts_with("ClosetBox")) {
+            required_world_size = 4;
+        }
+
+        if (required_cluster_type.has_value() && cluster.get_cluster_type() != *required_cluster_type) {
+            GTEST_SKIP() << "Test requires its named fixed cluster topology";
+        }
+        if (required_world_size.has_value() && *distributed_context->size() != *required_world_size) {
+            GTEST_SKIP() << "Test requires exactly " << *required_world_size << " world ranks";
+        }
+
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         auto psd = tt::tt_metal::run_physical_system_discovery(
             *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
