@@ -1410,6 +1410,11 @@ void PerfDebugProfiler::stop() {
             if ((done & 0xFFFF0000u) != 0xD09E0000u) {
                 log_warning(
                     tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
+                // WHERE is it stuck? The phase word is live while the loop runs, so this says which part of
+                // the kernel is blocking instead of leaving it to inference. POLL = sweep body (NoC reads or
+                // the control-vector pass), RESERVE = credit wait (should be impossible now it is bounded),
+                // WRITE = the PCIe write / push / notify / barrier, EXIT = the socket teardown tail.
+                dump_drainer_state(ctx, d, "stop-not-acked");
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.

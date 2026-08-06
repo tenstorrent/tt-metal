@@ -178,6 +178,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
     volatile tt_l1_ptr uint32_t* phase = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 8);
     constexpr uint32_t kPhaseInit = 1, kPhasePoll = 2, kPhaseReserve = 3, kPhaseWrite = 4, kPhaseExit = 5;
+    // Sub-phases of WRITE, so a stuck egress says WHICH call blocks: 6=chunked NoC write to the
+    // PCIe tile, 7=socket_push_pages bookkeeping, 8=socket_notify_receiver (a PCIe write of the
+    // producer pointer), 9=write issued, back in the sweep body.
+    constexpr uint32_t kPhWrChunk = 6, kPhWrPush = 7, kPhWrNotify = 8, kPhWrDone = 9;
+    // 10 = frame dropped (credit wait gave up); 11/12/13 = the write barriers in the sweep body,
+    // which are OUTSIDE ship_run and so were invisible: a stale phase 4 after a dropped frame
+    // made it look like the write path was blocking when execution had already moved on.
+    constexpr uint32_t kPhDropped = 10, kPhBar1 = 11, kPhBar2 = 12, kPhBarTail = 13;
     *hb = 0;
     *phase = kPhaseInit;
 
@@ -247,6 +255,7 @@ void kernel_main() {
             // The consumer is gone or wedged. DROP this frame rather than block: the heads for these slots
             // were already written back, so the producers stay unblocked and the workload runs to
             // completion. Capture is best-effort; the workload is not.
+            *phase = kPhDropped;
             credit_timeouts++;
             dropped_frames += count;
             c_reserve += get_timestamp() - t0;
@@ -259,6 +268,7 @@ void kernel_main() {
         }
         // A multi-page write is one contiguous burst, so it must be split where the FIFO wraps;
         // socket_push_pages only wraps the pointer, it does not split the transfer.
+        *phase = kPhWrChunk;
         const uint32_t base = kStageBase + start * kSlotBytes;
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
         const uint32_t first = (sender.write_ptr + nbytes > fifo_size) ? fifo_size - sender.write_ptr : nbytes;
@@ -268,13 +278,16 @@ void kernel_main() {
         }
         const uint64_t t2 = get_timestamp();
         c_wr_chunk += t2 - t1;
+        *phase = kPhWrPush;
         socket_push_pages(sender, npages);
         const uint64_t t3 = get_timestamp();
         c_wr_push += t3 - t2;
+        *phase = kPhWrNotify;
         socket_notify_receiver(sender);
         const uint64_t t4 = get_timestamp();
         c_wr_notify += t4 - t3;
         c_write += t4 - t1;
+        *phase = kPhWrDone;
         pages += npages;
         pushes++;
     };
@@ -372,6 +385,7 @@ void kernel_main() {
             // This generation's previous ship must have landed before its slots are refilled.
             if (gen_shipped[gen]) {
                 const uint64_t t_b0 = get_timestamp();
+                *phase = kPhBar1;
                 noc_async_write_barrier();
                 c_barrier += get_timestamp() - t_b0;
                 gen_shipped[gen] = false;
@@ -410,6 +424,7 @@ void kernel_main() {
         }
         {
             const uint64_t t_b0 = get_timestamp();
+            *phase = kPhBar2;
             noc_async_write_barrier();
             c_barrier += get_timestamp() - t_b0;
         }
@@ -433,6 +448,7 @@ void kernel_main() {
     }
 
     socket_barrier(sender);
+    *phase = kPhBarTail;
     noc_async_write_barrier();
     const uint64_t t_end = get_timestamp();
 
