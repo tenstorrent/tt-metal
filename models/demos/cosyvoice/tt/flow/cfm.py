@@ -28,6 +28,7 @@ module follows. `ConditionalCFM.forward` draws it as `randn_like(mu) * temperatu
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 from loguru import logger
@@ -76,9 +77,40 @@ class TtConditionalCFM:
     ):
         self.device, self.dtype = device, dtype
         self.cfg_rate = inference_cfg_rate
-        self.n_timesteps = n_timesteps
+        # `COSYVOICE_FLOW_STEPS` overrides the checkpoint's solver depth. This is the
+        # one knob in the port that trades **accuracy for time by construction** rather
+        # than by numerical accident, so it is an explicit environment variable and not
+        # a default: 10 is what the checkpoint ships with and what every accuracy figure
+        # in PERF.md is measured at.
+        #
+        # It exists because the flow decoder is the largest single stage after the LLM
+        # and its cost is linear in this number, and because the bounty asks for exactly
+        # this experiment -- "optimize iterative refinement process / consider
+        # approximations for faster inference". Whether the approximation is acceptable
+        # is a measured question, not a matter of taste; `probe_flow_steps.py` measures
+        # it against the shipped 10-step result.
+        self.n_timesteps = int(os.environ.get("COSYVOICE_FLOW_STEPS", n_timesteps))
         self.t_scheduler = t_scheduler
         self.estimator = TtConditionalDecoder(device, bag.sub("estimator"), dtype=dtype)
+        # **Keep the captured trace across utterances of the same mel length.**
+        #
+        # `solve_euler` captured and released on every call, so a stage measured at
+        # 0.675 s spent 0.314 s of it -- 46.6 % -- recording a graph it then threw
+        # away. That is why cutting `n_timesteps` from 10 to 5 buys 1.43x and not 2x:
+        # half the stage is not the ODE.
+        #
+        # Reuse needs one thing to be true: everything the trace bakes an address for
+        # must be refillable in place. `_x_buf` already is. `_packed_const` is the
+        # utterance's conditioning, so it changes per call -- but its *shape* depends
+        # only on the mel length, so the trace stays valid if the contents are copied
+        # in rather than reallocated. That is the whole mechanism, and the mel length
+        # is therefore the cache key.
+        #
+        # One slot, not a dict: each entry pins a trace region allocation plus its
+        # buffers, and TTS lengths vary continuously, so an unbounded cache would grow
+        # for the length of a session and hit twice by luck.
+        self._cache_trace = os.environ.get("COSYVOICE_CFM_TRACE_CACHE", "1") != "0"
+        self._trace_key = None
 
     def _cfg_pair(self, x, zero_second_row: bool):
         """Stack a tensor into the 2-row CFG batch.
@@ -93,6 +125,26 @@ class TtConditionalCFM:
         out = ttnn.concat([x, zeros], dim=0)
         ttnn.deallocate(zeros)
         return out
+
+    def _reuse(self, x, mu2, spks2, cond2, t_len) -> bool:
+        """Refill the cached trace's inputs in place. `True` if it was usable.
+
+        The conditioning is copied into `_packed_const` rather than reassigned,
+        because the trace holds that buffer's *address*. Reassigning the attribute
+        would leave the replay reading the previous utterance's conditioning and
+        produce fluent audio in the wrong voice -- a failure with no exception and no
+        shape mismatch, which is the reason this is one method with one comment
+        rather than three lines inlined at the call site.
+        """
+        if not self._cache_trace or self._trace_key != (t_len, int(x.shape[2])):
+            return False
+        if getattr(self, "_trace_id", None) is None or self._packed_const is None:
+            return False
+        packed = self.estimator.pack_const(mu2, spks2, cond2, t_len)
+        ttnn.copy(packed, self._packed_const)
+        ttnn.deallocate(packed)
+        self._fill_x(x)
+        return True
 
     def _capture(self, x, mu2, spks2, cond2, t0, dt0):
         """Trace one estimator evaluation and replay it for every Euler step.
@@ -217,6 +269,7 @@ class TtConditionalCFM:
             self._next_x = body()
         finally:
             ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+        self._trace_key = (t_len, ch)
 
     def _fill_x(self, x):
         ttnn.copy(x, self._x_buf)
@@ -225,6 +278,7 @@ class TtConditionalCFM:
         if getattr(self, "_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._trace_id)
             self._trace_id = None
+        self._trace_key = None
         # `_next_x` is allocated inside the capture, so it belongs to the trace
         # region; `release_trace` reclaims it and deallocating it here would be a
         # double free. Dropping the reference is all that is wanted.
@@ -279,7 +333,9 @@ class TtConditionalCFM:
         traced = False
         if use_trace:
             try:
-                self._capture(x, mu2, spks2, cond2, schedule[0][0], schedule[0][1])
+                if not self._reuse(x, mu2, spks2, cond2, t_len):
+                    self._release()  # a stale trace of a different length must go first
+                    self._capture(x, mu2, spks2, cond2, schedule[0][0], schedule[0][1])
                 traced = True
             except Exception as e:  # noqa: BLE001
                 # Needs the device opened with a `trace_region_size`. Tracing is an
@@ -300,10 +356,17 @@ class TtConditionalCFM:
                 ttnn.copy(dt_dev, self._dt_buf)
                 ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
                 ttnn.copy(self._next_x, self._x_buf)
-            # Hand the buffer to the caller instead of copying out of it, and keep
-            # `_release` from freeing what the caller now owns.
-            x = self._x_buf
-            self._x_buf = None
+            if self._cache_trace:
+                # The trace is being kept, so `_x_buf` must be kept too -- it is the
+                # buffer the replay writes through. Copy the result out instead of
+                # handing the buffer over, which is the one place caching costs
+                # something: a full-tensor copy against the 0.31 s it saves.
+                x = ttnn.clone(self._x_buf)
+            else:
+                # Hand the buffer to the caller instead of copying out of it, and keep
+                # `_release` from freeing what the caller now owns.
+                x = self._x_buf
+                self._x_buf = None
         else:
             for (_t_val, dt), t_dev in zip(schedule, ts):
                 x2 = self._cfg_pair(x, zero_second_row=False)
@@ -327,7 +390,7 @@ class TtConditionalCFM:
                 ttnn.deallocate(x)
                 x = nxt
 
-        if traced:
+        if traced and not self._cache_trace:
             self._release()
 
         for t_dev in ts:

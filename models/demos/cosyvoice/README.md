@@ -171,12 +171,10 @@ it is never the accuracy gate.
 non-streamed audio for the same text and seed.
 
 **Perf targets are ordinary passing tests.** If a target is missed the number is reported
-and the gap explained; `xfail` reads as concealment. The current end-to-end RTF is
-**0.611** against a target of 0.5 — see [`PERF.md`](PERF.md), which states the breakdown
-(the LLM is 64 % of it), what took it there from 2.120, and — more usefully than a bare
-shortfall — the three measurements that **bound** what is left: a ~6.3 µs per-op floor
-that tracing does not remove, `bfloat8_b` neutral at two operating points, and explicit
-core grids losing to TTNN's default.
+and the gap explained; `xfail` reads as concealment. **Every measured figure lives in
+[`PERF.md`](PERF.md) and nowhere else** — this file deliberately quotes none of them, so
+there is no second copy to drift. That includes the end-to-end RTF, the per-stage
+breakdown, the Blackhole/Wormhole comparison, and which targets are met on which part.
 
 **Two things cannot be gated on exact agreement, and both say so explicitly.** RAS
 sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio chain
