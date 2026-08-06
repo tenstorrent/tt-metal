@@ -1009,9 +1009,13 @@ Result conv2d_L1(
                     c2->out_block_h = per_core_m_act;
                 }
             }
-            // matmul::linear requires TILE layout; the halo output is ROW_MAJOR (the fused conv tilizes
-            // internally, and the s1 1x1 mm_conv path tilizes its input up top). Do the same here.
-            tilize_with_optional_deallocation_qsr(input_tensor_post_tm, /*deallocate*/ true);
+            // matmul::linear requires TILE layout; the halo output is HEIGHT_SHARDED ROW_MAJOR with a per-core
+            // height that need not be tile-aligned (e.g. the 49-row downsample lands a 119-row shard). Use quasar
+            // to_layout directly (pad + tilize, 119 -> 128) rather than tilize_with_optional_deallocation_qsr,
+            // whose padding-detection (conv_act_requires_tile_padding_qsr) builds a TILE TensorSpec from the
+            // non-32-aligned shard and FATALs. to_layout handles exactly this HS-RM non-tile-multiple case.
+            input_tensor_post_tm =
+                ttnn::operations::experimental::quasar::to_layout(input_tensor_post_tm, Layout::TILE);
             ttnn::Tensor mm_out = ttnn::operations::experimental::quasar::matmul::linear(
                 input_tensor_post_tm,
                 weight_tensor_on_device,
