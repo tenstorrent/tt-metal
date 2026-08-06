@@ -1099,3 +1099,64 @@ rise says. Deeper buffering gives each ship more time to land:
 1. **Generation-depth sweep** {2, 3, 7} at delay 150, 3–4 repeats each, reading busy *and* worst sweep.
 2. **Knee re-measure** at 125/100 under the split.
 3. **Reader backoff** — the 50 µs sleep is still the suspect for the delay-300 latency tail.
+
+## §N+2 — The static TLB lever, and what the degraded state actually costs (bh-05, 2026-08-06)
+
+### The DRISC was on the slow host write path for no reason
+
+`D2HSocket::read()` ends in `notify_sender()`, one 4 B device write of `bytes_acked`. The DRISC drainer paid
+a **UMD dynamic-TLB reconfigure** on every one of them; the Tensix drainer did not. The socket gated its
+static window on `!sender_is_l2cpu_`, and `perf_debug_profiler` sets `sender_is_l2cpu = !tensix_drain` — so
+the DRISC inherited "no static TLB window exists", which is true of the X280 L2CPU and false of a DRAM core.
+
+Measured, healthy card, warm runs:
+
+| | ack write | path |
+|---|---|---|
+| DRISC before | 382 ns | DYNAMIC (reconfigure per access) |
+| **DRISC after** | **172 ns** | **STATIC window** |
+| Tensix (unchanged) | 171–176 ns | STATIC window |
+
+Two things had to change. The socket now **asks** UMD (`is_tlb_mapped`, address overload) instead of
+inferring from the sender kind. And the caller has to create the window at all: metal maps one 4 GB DRAM
+window per channel at init, but only on the channel's **preferred worker endpoint** (`ddr_to_noc0` takes the
+last of 3 NoC ports), while the drainer deliberately sits on the *unused* port — so a DRISC core is normally
+unmapped. `perf_debug_profiler` now configures a 2 MB window at address 0 (spans the DRISC's 128 KB L1)
+before constructing the socket.
+
+`TT_METAL_PERF_DEBUG_NO_STATIC_TLB=1` forces the old path so the two can be A/B'd on one binary.
+
+### The degraded state is per-ACCESS cost, not per-reconfigure — and it hits reads too
+
+A card degraded mid-session, which finally supplied the two numbers previously recorded as unmeasured:
+
+| probe | healthy | degraded | ratio |
+|---|---|---|---|
+| ack write, STATIC window | 172 ns | **2303 ns** | 13.4× |
+| ack write, DYNAMIC (reconfigure) | 382 ns | 2555 ns | 6.7× |
+| 4 B device read (`cluster.read_core`) | ~770 ns | **~2950 ns** | 3.8× |
+| flow-control poll (host memory, control) | 13–14 ns | 13–14 ns | 1.0× |
+| sock-read | 18.6 GB/s | 10.0 GB/s | 1.9× |
+
+Three conclusions:
+
+1. **A static window is no escape.** It degrades 13×, more than the dynamic path does in relative terms, and
+   the two nearly converge (2303 vs 2555) — the ~210 ns of reconfigure is noise once an access costs 2.3 µs.
+   So the penalty is attached to the **device access itself**, not to the driver's TLB work. That kills
+   "dynamic TLB reconfigure is the mechanism" as a theory of the degraded state.
+2. **Reads are hit too** (3.8×), so it is not write-specific — but the ratios differ (13.4× / 6.7× / 3.8×),
+   so it is not a flat per-access adder either. Bigger relative hit on the cheaper access.
+3. The host-memory poll is unchanged at 13 ns, as always. It remains the control, never the signal.
+
+### Measure the state before you trust any host-side number
+
+Every host-side cost in this file — sock-read GB/s, per-read overhead, the ack write, `wait_until_cores_done`
+polling — moves by 2–13× with card state, and nothing in the run output announces it. Read the ACK-WRITE
+probe first (~170 ns static / ~380 ns dynamic healthy, ~2.3–2.6 µs degraded) and only then compare runs.
+
+**A run does not have to be below the knee to leave the card degraded.** These runs were all at delay 500
+with 0 stalls. The one anomaly in the timeline is an **interrupted run**: the harness killed the background
+job running the sweep, tearing down its ssh and terminating a 200-iteration run mid-drain, and the
+degradation appeared immediately after. That is a hypothesis, not a proof (single occurrence), but it matches
+the earlier finding that a killed run leaves resident device state behind — and note this is not exotic bad
+luck, it is what happens every time a sweep is cancelled or times out. Let a run finish, or expect to reboot.
