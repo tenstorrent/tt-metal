@@ -51,7 +51,7 @@ _CHECKPOINT_PREFIX = "model.language_model."
 def minimax_h3_text_config(weights_dir: str | os.PathLike) -> dict:
     """Read `text_encoder/config.json`'s `text_config` as plain JSON.
 
-    Deliberately not `AutoConfig.from_pretrained`: that resolves `model_type: qwen3_vl`, which
+    Not `AutoConfig.from_pretrained`: that resolves `model_type: qwen3_vl`, which
     ties this to a transformers version that knows the architecture, when all that is needed are
     a dozen integers. The released values are hidden 5120, intermediate 25600, 64 heads, 8 KV
     heads, head_dim 128, rms_eps 1e-6, rope_theta 5e6, mrope_section [24, 20, 20].

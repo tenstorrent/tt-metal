@@ -359,10 +359,8 @@ class MiniMaxH3AudioEncoder(Module):
         projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
 
         # The upload replicates and nothing here is fractured, so every device holds the same
-        # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and
-        # therefore only ever worked on a single-device mesh -- which is all this encoder's own
-        # tests use (``SINGLE_DEVICE``), so the assert was never reached until ref2va put it on
-        # the 4x8. Exactly the shape of the fix already in ``MiniMaxH3AudioDecoder.__call__``.
+        # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and so
+        # only works on a single-device mesh. Same fix as ``MiniMaxH3AudioDecoder.__call__``.
         def read(tensor: ttnn.Tensor) -> torch.Tensor:
             if self.mesh_device.get_num_devices() > 1:
                 tensor = ttnn.get_device_tensors(tensor)[0]

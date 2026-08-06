@@ -281,7 +281,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
     A control matters here and is built in: non-boundary columns are measured the same way and must sit
     near 1.0, otherwise the statistic is picking up ordinary image structure rather than a seam.
 
-    The bar is deliberately loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
+    The bar is loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
     defect: linear cross-fading two independently decoded tiles leaves a derivative discontinuity at the
     ends of the blend, and at production geometry that measures ~0.3/255 of luma step -- 0.12 % of full
     scale, invisible at 8x zoom, and identical in `t2va`. This gate exists to catch that becoming

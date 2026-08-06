@@ -4,7 +4,7 @@
 
 """Device gates for the H/W-sharded MiniMax-H3 encoder.
 
-Three things are being established, deliberately separated so a failure names itself:
+Three things are being established, separated so a failure names itself:
 
 1. **The reflect edges**, on their own. ``neighbor_pad_async`` has no ``reflect`` mode, so
    the halo pads ``replicate`` and :func:`reflect_edge_correction` repairs the two global
@@ -129,7 +129,7 @@ def _shard_hw(x_BTHWC: torch.Tensor, mesh_device, h_factor: int, w_factor: int, 
 def _gather_hw(x, mesh_device, h_factor: int, w_factor: int) -> torch.Tensor:
     """Reassemble an H/W-sharded tensor on host by reading the shards directly.
 
-    Deliberately not ``ConcatMesh2dToTensor``: when one mesh axis is replicated the tensor
+    Not ``ConcatMesh2dToTensor``: when one mesh axis is replicated the tensor
     carries only ``h_factor * w_factor`` distinct shards, and the 2D composer requires one
     per mesh coordinate ("ND composition requires the number of tensors 4 to match the mesh
     shape MeshShape([4, 8])"). Indexing the shards is unambiguous and needs no assumption
@@ -180,7 +180,7 @@ def test_reflect_halo_edges_exact(mesh_device, h_factor, w_factor, spatial_paddi
     pad = (spatial_padding, spatial_padding)
     worst = _assert_halo_windows(padded, x, mesh_device, h_factor, w_factor, pad, pad)
     logger.info(f"h{h_factor}w{w_factor} pad{spatial_padding}: worst halo element {worst:.3e}")
-    # Elementwise, not PCC: the whole point is the one-pixel border. The bound is one fp32
+    # Elementwise, not PCC: the one-pixel border is what is under test. The bound is one fp32
     # ulp rather than zero because the correction is a blend, `t + mask * (s - t)`, which is
     # `s` only in exact arithmetic -- measured 2.384e-07 == 2^-22 across every config. Still
     # four orders tighter than anything PCC would notice.

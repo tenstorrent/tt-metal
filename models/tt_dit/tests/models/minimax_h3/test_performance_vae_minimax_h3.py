@@ -4,7 +4,7 @@
 
 """Gate M8f: MiniMax-H3 VAE roundtrip quality and per-component performance baselines.
 
-Two things live here, and they are separate concerns deliberately:
+Two separate concerns live here:
 
 * **Roundtrip quality.** PCC per component says the port matches the reference; it does not
   say the reconstruction is good. Visual gets a PSNR floor on a real encode->decode, audio
@@ -340,7 +340,7 @@ def test_audio_baselines_and_roundtrip(mesh_device):
 def test_audio_decoder_durations(mesh_device):
     """End-to-end audio decode time at 5 / 10 / 15 s.
 
-    Separate from ``test_audio_baselines_and_roundtrip`` on purpose: that gate pays for a CPU
+    Separate from ``test_audio_baselines_and_roundtrip``: that gate pays for a CPU
     reference encode->decode to check quality, which is not worth repeating per duration. The
     decoder takes ``(B, latent_channels, T)``, so latents can be synthesised directly at each
     length -- no encode needed, and timing does not depend on the values.
@@ -391,7 +391,7 @@ def test_audio_decoder_durations(mesh_device):
 def test_visual_roundtrip_quality(mesh_device):
     """Visual encode -> decode against the reference's own round trip, with a PSNR floor.
 
-    Deliberately small (one 256x256 tile, 39 frames) and with a shallow reference decoder:
+    Small (one 256x256 tile, 39 frames) and with a shallow reference decoder:
     the 36-layer numerics are gated per-tile elsewhere, and running 36 layers over multiple
     chunks on host would cost tens of TFLOP to prove something already proven. What this
     adds is that encode and decode compose -- that the latent one produces is the latent the
@@ -549,7 +549,7 @@ _HW_FABRIC = [
 def test_visual_encoder_hw_vs_dp(mesh_device, h_factor, w_factor):
     """Latency of one encoder unit under H/W sharding, against the data-parallel per-unit cost.
 
-    Two different quantities, deliberately reported side by side:
+    Two different quantities, reported side by side:
 
     * ``dp_only`` times a **whole 32-unit wave**, so its per-unit figure is throughput.
     * the sharded cases time **one unit** spread over ``h_factor * w_factor`` devices, so

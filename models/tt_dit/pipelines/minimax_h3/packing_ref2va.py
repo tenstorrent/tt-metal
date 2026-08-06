@@ -4,7 +4,7 @@
 
 """MiniMax-H3 ``ref2va``: the omni-reference half of the packed sequence.
 
-Host-side and deliberately pure torch/numpy, for the same reason as
+Host-side and pure torch/numpy, for the same reason as
 :mod:`packing`: every value here is part of the checkpoint's numerical contract
 and is compared bit-exactly against the reference, so nothing may be
 reassociated or moved to device.
@@ -18,22 +18,18 @@ The order is semantic **twice**: it fixes the ``"<Picture i>"`` / ``"<Audio j>"`
 / ``"<Video k>"`` labels of the prompt presentation, *and* it advances the shared
 audio/video rotary clock. Reordering the same references is a different request.
 
-Two properties separate this from ``fl2va`` and are the source of most of the
-surprises:
+Two properties separate this from ``fl2va``:
 
-* **A reference never binds the target geometry.** Every reference is prepared at
-  its own resolution -- 2048 px short edge for an image with *no area cap*, the
-  768 px canvas of its own aspect ratio for a video -- and carries its own
-  aspect-normalized spatial grid. One 2048x2048 reference therefore contributes
-  4096 vision tokens to the text stream *and* 4096 video condition rows, which is
-  why a ref2va packed sequence runs 1.2x-3.0x t2va's (campaign am. 114).
-* **A video reference packs its soundtrack rows immediately before its own video
-  rows**, sharing one rotary origin, exactly as the generated audio and video do.
+* **A reference never binds the target geometry.** Every reference is prepared at its
+  own resolution -- 2048 px short edge for an image with no area cap, the 768 px canvas
+  of its own aspect ratio for a video -- with its own aspect-normalized spatial grid. One
+  2048x2048 reference contributes 4096 vision tokens to the text stream *and* 4096 video
+  condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's (am. 114).
+* **A video reference packs its soundtrack rows immediately before its own video rows**,
+  sharing one rotary origin, as the generated audio and video do.
 
-Audio reference rows are **clean**: the reference takes the posterior *mean*, does
-not round it through float16, does not noise-augment it, and runs it at a literal
-``t = 1.0`` at every step (campaign am. 115). Only the visual rows get the
-``fl2va`` treatment.
+Audio reference rows are clean: posterior mean, no float16 round trip, no noise
+augmentation, and a literal ``t = 1.0`` at every step (am. 115).
 """
 
 from __future__ import annotations
@@ -181,19 +177,17 @@ def reference_kind(index: int, entry: Any) -> str:
 def _temporal_position_span(num_latent_frames: int) -> float:
     """Rotary time a video reference advances the shared clock by.
 
-    Summed **sequentially in float64**, which is deliberately *not* how
-    :func:`packing._temporal_position_span` sums the same series -- that one
-    reproduces a numpy pairwise sum. The two orders differ in the last ulp from 16
-    latent frames onwards and by ~2 ulp *in the opposite direction* at the
-    production 37 (campaign am. 116):
+    Summed sequentially in float64, which is *not* how
+    :func:`packing._temporal_position_span` sums the same series -- that one reproduces a
+    numpy pairwise sum. The two differ in the last ulp from 16 latent frames on, and by
+    ~2 ulp in the opposite direction at the production 37 (am. 116):
 
         n=16  pairwise 86.66666666666667   sequential 86.66666666666669
         n=37  pairwise 206.66666666666663  sequential 206.66666666666657
 
-    The reference keeps both, one per call site, so this port has to as well. A
-    single shared implementation passes below 16 frames and is wrong at the
-    working point -- and this is the shipping path, because a video reference
-    truncated to the target frame count has exactly the target's 37 latent frames.
+    The reference keeps both, one per call site. A single shared implementation passes
+    below 16 frames and is wrong at the working point, which a video reference truncated
+    to the target frame count always reaches.
     """
     return sum(
         _ROPE_FRAME_RESCALE * _ROPE_FRAMES_PER_LATENT[index % len(_ROPE_FRAMES_PER_LATENT)]

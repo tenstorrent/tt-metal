@@ -554,7 +554,7 @@ class MiniMaxH3Vae(Module):
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            # `ConcatMeshToTensor`, deliberately, **not** `fast_device_to_host`.
+            # `ConcatMeshToTensor`, **not** `fast_device_to_host`.
             #
             # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
             # `vae_ltx.py` and `vae_wan2_1.py` use, and it measured 39 % faster -- but it is a misuse

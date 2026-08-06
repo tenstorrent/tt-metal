@@ -59,7 +59,7 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 #
 # That chain depth is not a floor, though: `MINIMAX_H3_AUDIO_ACCURATE=1` reaches **0.45 %** RMSE
 # (PCC 99.9990 %, PSNR 67.5 dB) for ~3x the stage time, by fixing the three sources this bar's 10.5 %
-# is made of -- see `audio_accurate_mode` and STATE.md am. 111-113. This bar deliberately describes the
+# is made of -- see `audio_accurate_mode` and STATE.md am. 111-113. This bar describes the
 # **default** path, so it must be re-derived if that default ever changes.
 AUDIO_RELATIVE_RMSE = 0.12
 

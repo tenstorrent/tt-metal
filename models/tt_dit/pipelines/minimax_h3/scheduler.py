@@ -131,7 +131,7 @@ class MiniMaxH3Scheduler:
         # The sigma for x0 comes from the *timestep* the transformer was
         # conditioned on, while the Euler ratio below reads the sigma grid. Below
         # sigma = 0.5 the float32 round trip 1 - (1 - sigma) is not exact, and the
-        # reference deliberately keeps the two sources apart.
+        # reference keeps the two sources apart.
         if not isinstance(timestep, torch.Tensor):
             timestep = torch.tensor(timestep, dtype=sample.dtype)
         sigma_from_timestep = 1 - timestep.to(device=sample.device, dtype=sample.dtype)

@@ -4,7 +4,7 @@
 
 """Gate M8a.3/M8b: the MiniMax-H3 visual VAE encoder, whole.
 
-Two independent layers of evidence, deliberately kept apart:
+Two independent layers of evidence, kept apart:
 
 * **Host, no device** -- the T=1 collapse claim: a single frame reduces H3's causal 3D
   encoder to a 2D one, because ``temporal_padding = kernel_t - 1`` prepends *zeros*, so

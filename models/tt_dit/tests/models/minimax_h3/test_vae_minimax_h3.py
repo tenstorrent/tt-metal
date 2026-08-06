@@ -168,7 +168,7 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps):
 def test_encode_video_chunking(mesh_device):
     """``encode`` against the reference ``_encode``: clip padding and ``token_drop``.
 
-    39 frames is deliberately not a multiple of 17, so the last-frame repeat padding runs;
+    39 frames is not a multiple of 17, so the last-frame repeat padding runs;
     the expected latent count is ``ceil(39/17) * 5 - 3 = 12``.
     """
     weights_dir = _weights_dir()

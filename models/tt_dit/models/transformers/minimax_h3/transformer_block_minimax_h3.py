@@ -173,7 +173,7 @@ class MiniMaxH3TransformerBlock(Module):
         weight = state.pop("adaln_proj.linear.weight", None)
         bias = state.pop("adaln_proj.linear.bias", None)
         if self.precomputed_adaln:
-            # Deliberately dropped: these are the 26 GB the precomputed table exists to keep off the
+            # Dropped: these are the 26 GB the precomputed table exists to keep off the
             # device. Popping them above already removed them from the state the loader will check.
             return
         if weight is not None:
@@ -190,7 +190,7 @@ class MiniMaxH3TransformerBlock(Module):
         hidden_local] tables, row `t * MODALITY_NUM + modality`, matching the row order that
         `adaln_indices` addresses.
 
-        The SiLU deliberately runs at `temb`'s own (float32) precision and only its result is cast
+        The SiLU runs at `temb`'s own (float32) precision and only its result is cast
         down to the bfloat16 projection, as the reference is explicit about: every block reads the
         same `temb`, so rounding applied before the activation biases every block's modulation
         identically at every sampling step and accumulates over the denoising trajectory.

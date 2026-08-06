@@ -5,36 +5,35 @@
 """MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on the 4x8 mesh.
 
 A separate file from the ``t2va`` / ``fl2va`` e2e gates so it defaults to its own
-process: a ref2va request is 1.2x-3.0x t2va's packed length (campaign am. 114) and
-one process holding DiT programs plus CCL buffers at several of those lengths is a
-memory risk nobody had measured before this campaign's shape probe.
+process: a ref2va request is 1.2x-3.0x t2va's packed length (am. 114), and one process
+holding DiT programs plus CCL buffers at several of those lengths is a memory risk.
 
 WHY THE fl2va QUALITY GATE DOES NOT TRANSFER
 
-``fl2va``'s keyframe is *pinned*: it occupies frame 0 of the output, so "decoded
-frame 0 correlates with the keyframe" has a floor to hold to. A ``ref2va``
-reference is **not** pinned to any output row -- it conditions, it is not copied --
-so there is no similarity number that a correct implementation must reach, and any
-absolute bar would be invented rather than derived.
+``fl2va``'s keyframe is pinned to frame 0 of the output, so "decoded frame 0 correlates
+with the keyframe" has a floor to hold to. A ``ref2va`` reference is not pinned to any
+output row -- it conditions, it is not copied -- so no similarity number is one a correct
+implementation must reach, and an absolute bar would be invented rather than derived.
 
-So the gate here is built the other way round, from a **measured floor**:
+The gate is built from a measured floor instead:
 
-1. Generate twice from the *same* prompt and seed with the *same* reference. The
-   difference between those two runs is the pipeline's own run-to-run floor.
-2. Generate again with a *different* reference of **identical geometry** -- both
-   2048x2048, so the packed layout is identical row for row and the noise stream is
-   bit-identical, because the draw shapes and their order are unchanged.
-3. If conditioning were a no-op, run 3 would be indistinguishable from runs 1 and 2.
-   It has to differ by far more than the floor from step 1.
+1. Two generations from the same prompt, seed and reference give the run-to-run floor.
+   Measured: exactly 0.000000, the pipeline being bit-reproducible.
+2. A third with a different reference of the same size. The packed layout is then identical
+   row for row and every noise draw has the same shape in the same order, so the noise is
+   bit-identical and the two requests differ in reference content alone.
+3. An implementation that ignored its reference would score exactly the floor. Measured:
+   0.128143.
 
-That is a comparison the null hypothesis fails, with no threshold chosen by hand:
-the bar is a ratio against a number measured in the same test. The directional
-check that follows -- each output resembles the reference it was *given* more than
-the one it was not -- is likewise threshold-free.
+What this gate does not assert: that each output resembles the reference it was given more
+than the one it was not. No instrument is known to measure that here (am. 128) -- whole-frame
+luminance correlation is positional where conditioning is not, and CLIP image-image
+similarity separates the two outputs rather than the two references. Those numbers are
+logged only.
 
-And the standing rule: **look at the frames.** Seams and flicker are what
-whole-tensor metrics average away, and both are parallelism bugs. Artifacts land in
-``MINIMAX_H3_REF2VA_ARTIFACT_DIR``.
+**Look at the frames.** Seams and flicker are what whole-tensor metrics average away, and
+both are parallelism bugs. Artifacts land in ``MINIMAX_H3_REF2VA_ARTIFACT_DIR``, written
+before any quality check so a failing check still leaves them behind.
 """
 
 from __future__ import annotations
@@ -60,37 +59,29 @@ ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
 MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
 DEFAULT_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
 
-# The campaign working point. Fixed: changing it invalidates the numbers.
+# The working point. Fixed: changing it invalidates the numbers below.
 WIDTH, HEIGHT, NUM_FRAMES, STEPS, SEED = 1344, 768, 124, 50, 0
 FPS = 24
 
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
-# Quality bars for REFERENCE-DRIVEN content, derived from this campaign's own measurements and NOT
-# inherited from t2va (am. 131). Measured across all three shapes, against t2va's own numbers:
+# Quality bars for REFERENCE-DRIVEN content, set below the minimum measured across the three shapes
+# and NOT inherited from t2va (am. 131), three of whose six bars ref2va does not meet:
 #
-#   dimension               one_image  video+sound  mixed  | min     t2va    t2va bar
-#   CLIP prompt alignment      29.05      29.97     29.38  | 29.05   37.38   33.0
-#   subject_consistency       0.9631     0.9344    0.9587  | 0.9344  0.9804  0.95
-#   background_consistency    0.9569     0.9249    0.9397  | 0.9249  0.9812  0.95
-#   motion_smoothness         0.9957     0.9952    0.9959  | 0.9952  0.9914  0.97
-#   dynamic_degree            1.0000     1.0000    1.0000  | 1.0     1.0000  1.0
-#   imaging_quality           0.4826     0.6575    0.5826  | 0.4826  0.6925  0.64
+#   dimension               one_image  video+sound  mixed  | min     t2va bar
+#   CLIP prompt alignment      29.05      29.97     29.38  | 29.05   33.0
+#   subject_consistency       0.9631     0.9344    0.9587  | 0.9344  0.95
+#   background_consistency    0.9569     0.9249    0.9397  | 0.9249  0.95
+#   motion_smoothness         0.9957     0.9952    0.9959  | 0.9952  0.97
+#   dynamic_degree            1.0000     1.0000    1.0000  | 1.0     1.0
+#   imaging_quality           0.4826     0.6575    0.5826  | 0.4826  0.64
 #
-# THREE of t2va's six bars would fail here, and none of the three failures is a defect:
-#
-# - CLIP 29.05-29.97 against a 33.0 bar. Prompt-dependent, not quality-dependent: t2va's bar was
-#   calibrated on a long dialogue-rich prompt and ref2va's is one short clause. Same pipeline.
-# - subject/background consistency 0.9249-0.9631 against 0.95. These *penalise change over time*,
-#   and `dynamic_degree` is 1.0 in every case -- i.e. real motion. The lowest pair belongs to the
-#   video-reference case, which is conditioned on a moving clip. Lower consistency with confirmed
-#   motion is the expected trade, not a regression.
-# - imaging_quality 0.4826-0.6575, a 0.17 spread on ONE pipeline and ONE prompt. It is no-reference
-#   IQA and it is content-sensitive: am. 87 already recorded 0.4884 on a visually perfect night
-#   scene. The frames behind the 0.4826 were inspected and are excellent.
-#
-# Bars are set below the minimum observed, with the same headroom convention t2va used (its 33.0 sits
-# ~4 points under a measured 37.05). They exist to catch a collapse, not to police the last digit.
+# None of the three shortfalls is a defect. CLIP tracks prompt specificity, and ref2va's prompt is
+# one clause against t2va's dialogue scene. The consistency pair penalises change over time while
+# `dynamic_degree` is 1.0 everywhere, so the lowest pair belongs to the case conditioned on a moving
+# clip. `imaging_quality` is no-reference IQA and spreads 0.17 on one pipeline; am. 87 records 0.4884
+# on a visually perfect scene. Headroom follows t2va's convention: its 33.0 sits ~4 under a measured
+# 37.05.
 REF2VA_CLIP_THRESHOLD = 25.0
 REF2VA_VBENCH_THRESHOLDS = {
     "subject_consistency": 0.90,
@@ -100,18 +91,15 @@ REF2VA_VBENCH_THRESHOLDS = {
     "imaging_quality": 0.44,
 }
 
-# `l1_small_size` 16384 rather than the 65536 the t2va/fl2va gates use. Measured, not chosen: a video
-# reference goes through the video VAE's **taps=3** encoder, whose static circular buffers clash with
-# L1 at 65536 and at 32768, and 16384 is the first value that fits (am. 124/126). t2va and fl2va never
-# reach that encoder -- a keyframe is one frame and takes the taps=1 path -- which is why they were
-# free to reserve more. One process holds every stage, so this one value has to serve all of them,
-# including the audio decode STATE.md records 65536 for.
+# 16384 rather than the 65536 the t2va/fl2va gates use. A video reference goes through the video
+# VAE's taps=3 encoder, whose static circular buffers clash with L1 at 65536 and at 32768; 16384 is
+# the first value that fits (am. 124/126). t2va and fl2va never reach that encoder. One process holds
+# every stage, so this value also has to serve the audio decode.
 _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
-# `ring_params_req_exact_devices`, exactly as the t2va and fl2va e2e gates use -- the DiT attends in a
-# ring on the SP axis, and a LINE fabric config fails its CCL ops outright with
-# `fabric.cpp:174 forwarding_direction.has_value()`. Only `l1_small_size` differs, and that difference
-# is measured (above).
+# The same ring params the t2va and fl2va e2e gates use: the DiT attends in a ring on the SP axis,
+# and a LINE fabric config fails its CCL ops with `fabric.cpp:174 forwarding_direction.has_value()`.
+# Only `l1_small_size` differs.
 MESH_4X8 = [
     pytest.param(
         (4, 8),
@@ -152,19 +140,12 @@ def _real_frame_image() -> Image.Image:
 
 
 def _inverted(image: Image.Image) -> Image.Image:
-    """The same photograph with its colours inverted.
+    """The same photograph with its colours inverted: the discriminator's second reference.
 
-    The discriminator's second reference, and chosen for what it holds CONSTANT: identical
-    size (so the packed layout and the noise stream are unchanged), identical texture and
-    edge statistics, and an opposite palette. So the only thing the two references disagree
-    about is colour -- which is among the most transferable things a reference carries, and
-    is directly measurable in the output.
-
-    The earlier attempt used a Mandelbrot fractal against a stripe field and measured
-    whole-frame luminance correlation. Both were mistakes and are recorded as such
-    (am. 128): the references were content the model has no way to render at all, and
-    luminance correlation asks whether the reference's *pixels* appear at the same
-    *positions*, which is not what conditioning does.
+    Holds size constant, so the packed layout and the noise stream are unchanged, along with
+    texture and edge statistics. Only the palette differs, which is both transferable and
+    measurable. A synthetic pattern would leave nothing for a direction check to find, being
+    content the model cannot render for the prompt (am. 128).
     """
     return Image.fromarray(255 - np.asarray(image.convert("RGB")))
 
@@ -177,9 +158,8 @@ def _frames_of(output) -> np.ndarray:
 def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
     """Mean CLIP image-image cosine similarity between sampled output frames and a reference.
 
-    Semantic rather than positional, which is the property that matters: a reference
-    conditions what the output is *of* and what it looks like, not which pixel goes where.
-    `open_clip` is already in `python_env` and is the instrument the t2va gate uses.
+    Semantic rather than positional: a reference conditions what the output is of, not which
+    pixel goes where. `open_clip` is the instrument the t2va gate uses.
     """
     from ...dataset_eval.clip_encoder import CLIPEncoder
 
@@ -202,9 +182,9 @@ def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
 def _colour_distance(output, image: Image.Image) -> float:
     """Euclidean distance between an output's mean RGB and a reference's, over [0, 1].
 
-    The interpretable companion to the CLIP number: with an inverted-colour reference pair
-    this is the single most direct measure of whether the palette carried across. Reported
-    always; the CLIP similarity is what the gate asserts on.
+    The interpretable companion to the CLIP number: with an inverted-colour reference pair it
+    measures directly whether the palette carried across. Logged, not asserted -- see the
+    module docstring on why no direction check is a gate here.
     """
     output_mean = _frames_of(output).reshape(-1, 3).mean(axis=0) / 255.0
     reference_mean = np.asarray(image.convert("RGB")).reshape(-1, 3).mean(axis=0) / 255.0
@@ -219,9 +199,8 @@ def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
 def _write(output, stem: str) -> dict:
     """Frames and audio for a human to look at: four sampled PNGs, a wav, and a muxed mp4.
 
-    The mp4 comes from the shared `_write_artifacts` the t2va and fl2va gates use, so VBench scores
-    ref2va from the same kind of file it scores those from -- a codec difference between the two would
-    make the numbers incomparable, and comparing them is the whole reason for recording them.
+    The mp4 comes from the shared `_write_artifacts` the t2va and fl2va gates use, so VBench
+    scores every task from the same kind of file and the numbers stay comparable.
     """
     directory = _artifact_dir()
     frames = _frames_of(output)
@@ -233,13 +212,12 @@ def _write(output, stem: str) -> dict:
 
 
 def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
-    """Record CLIP prompt alignment and the five VBench dimensions. Bars are set separately.
+    """Record CLIP prompt alignment and the five VBench dimensions.
 
-    **Recorded, and asserted only against bars derived from these very measurements** (am. 131). The
-    plan is explicit that t2va's bars do not transfer to reference-driven content, and this campaign
-    has already seen that twice: `imaging_quality` scored 0.4884 on a visually perfect night scene
-    against a 0.64 bar (am. 80/87), and the seam ratio produced a false failure at 2.29x (am. 130). So
-    the order is measure, then set, and never the reverse.
+    Asserted against bars derived from these same measurements (am. 131). t2va's bars do not
+    transfer to reference-driven content: `imaging_quality` scored 0.4884 on a visually perfect
+    night scene against a 0.64 bar (am. 80/87), and the seam ratio gave a false failure at 2.29x
+    (am. 130).
     """
     if os.environ.get("RUN_CLIP", "1") in ("1", "true", "True"):
         pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is missing (set RUN_CLIP=0)")
@@ -276,18 +254,17 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """A pipeline bound to the `transformer_ref` partition.
 
-    The partition is fixed at construction rather than per call: the two are 62 GB
-    each, so switching inside one process would mean a full reload.
+    Fixed at construction rather than per call: each partition is 62 GB, so switching inside
+    one process would mean a full reload.
     """
     return MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), task="ref2va")
 
 
-# The e2e case list. Trimmed to what the campaign's Phase 0 shape probe admits --
-# see `campaigns/minimax-h3-ref2va/ledgers/amendments.md`. `padded` is the measured
+# The e2e case list, all admitted by the full-depth shape probe (am. 123). `padded` is the measured
 # packed length each case runs at, asserted below so a case cannot silently drift
 # onto a different shape than the one that was probed.
 # Padded packed length per case, MEASURED end to end and asserted below so a case cannot drift
-# onto a shape the campaign's probe did not cover. `one_image` and `video_with_sound` match am. 114's
+# onto a shape the probe did not cover. `one_image` and `video_with_sound` match am. 114's
 # host-only prediction exactly; `mixed` is 89856 rather than the 90112 predicted there, because that
 # estimate used a guessed presentation length and the real one tokenizes shorter. The prediction was
 # never a measurement -- am. 123 recorded `mixed` as an interpolation between two probed shapes.
@@ -299,6 +276,14 @@ CASES = {
 
 
 def _references(case: str) -> list[MiniMaxH3Reference]:
+    """The reference set per e2e case.
+
+    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
+    useful property is a reference nothing in the prompt could produce. It is also the most
+    adversarial of the three and sits at the bottom of the quality table above -- 0.4826
+    imaging_quality is this case, not ref2va generally, which reaches 0.6575 on a photographic
+    reference. The discriminator uses real photographs instead (am. 128).
+    """
     if case == "one_image":
         return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
     if case == "video_with_sound":
@@ -324,10 +309,9 @@ def _references(case: str) -> list[MiniMaxH3Reference]:
 def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     """A full ref2va generation: video plus its synchronized soundtrack.
 
-    What this gates is that every path a reference touches agrees on geometry -- the
-    conditioner's vision blocks, the VAE encode, the packed layout, the rotary clock
-    and both decoders. A mismatch anywhere shows up as a wrong shape, a failed
-    assert, or a desynchronized soundtrack, none of which needs a quality bar.
+    Gates that every path a reference touches agrees on geometry: the conditioner's vision
+    blocks, the VAE encode, the packed layout, the rotary clock and both decoders. A mismatch
+    surfaces as a wrong shape, a failed assert or a desynchronized soundtrack.
     """
     pipeline = _pipeline(mesh_device)
     output = pipeline(
@@ -343,16 +327,15 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
-    # The shape the campaign probed. A drift here means the case is no longer the
-    # request that was measured, so the memory verdict no longer covers it.
+    # A drift here means the case is no longer the request that was probed, so the memory
+    # verdict of am. 123 no longer covers it.
     assert (
         pipeline.last_padded_len == CASES[case]
     ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {CASES[case]}"
 
     frames = _frames_of(output)
-    # Artifacts FIRST, before any quality check can fail. The standing rule is "look at the
-    # frames", and a check that fires before the frames are written leaves nothing to look
-    # at -- which is exactly what happened the first time the seam check fired here.
+    # Artifacts before the checks: a check that fires first leaves no frames to inspect, and the
+    # frames are what a seam reading has to be judged against.
     paths = _write(output, f"ref2va_{case}")
     logger.info(f"ref2va[{case}] padded_len={pipeline.last_padded_len} timings={pipeline.last_timings}")
 
@@ -360,20 +343,12 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
         output.audio, sampling_rate=output.sampling_rate, expected_seconds=NUM_FRAMES / FPS, tolerance_seconds=0.05
     )
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=FPS)
-    # Seams and flicker are the two defects a whole-tensor metric averages away, and both are
-    # parallelism bugs -- which is exactly what a 3x longer sequence stresses.
-    #
-    # The two axes carry DIFFERENT bars, and the horizontal one is looser than t2va's on
-    # measured grounds rather than to make a case pass (am. 130). `video_with_sound` reads
-    # 2.29x horizontally, and it is scene content: the magnified boundary strip shows no
-    # discontinuity, the elevation spans ~9 rows (the width of real structure, not the 1-2 a
-    # decoder seam occupies), and the frame's LARGEST vertical gradient is 16.06 at y=306 --
-    # not a tile boundary at all -- against 5.46 at the boundary. The decode path is identical
-    # across every case, and `one_image`, `mixed`, t2va and fl2va all pass it.
-    #
-    # STATE.md's am. 87 makes the same point from the other side: a ratio near 1.0 is what a
-    # *smooth scene* gives, not what a correct one gives. So this number is read together with
-    # the frames, never instead of them -- which is why `_write` runs first.
+    # Separate bars per axis. Vertical keeps t2va's 2.0 (measured 1.20-1.32). Horizontal is 3.0:
+    # `video_with_sound` reads 2.29x there and it is scene content, not a seam -- the elevation
+    # spans ~9 rows where a decoder seam occupies 1-2, and the frame's largest vertical gradient
+    # (16.06 at y=306) is not at a tile boundary at all (am. 130). The ratio is content-sensitive
+    # in both directions -- am. 87 records a false pass from the same property -- so it triggers
+    # an inspection of the frames rather than standing in for one.
     check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(), max_ratio=2.0)
     check_spatial_seams(frames, vertical_boundaries=(), horizontal_boundaries=(384,), max_ratio=3.0)
 
@@ -387,20 +362,17 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
 def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     """The discriminator, against a floor measured in this same test.
 
-    Three generations, all at the smallest ref2va shape:
+    Three generations at the smallest ref2va shape:
 
-    ``A``  fractal reference, seed 0
-    ``A'`` the same request again -- this measures the pipeline's run-to-run floor
-    ``B``  a stripe reference of **identical geometry**, seed 0
+    ``A``  a real decoded frame as the reference, seed 0
+    ``A'`` the same request again, which measures the run-to-run floor
+    ``B``  the same frame colour-inverted, seed 0
 
-    Identical geometry is what makes ``B`` comparable: both references are 2048x2048,
-    so the packed layout is identical row for row and every noise draw has the same
-    shape in the same order, i.e. the noise is bit-identical. The only thing that
-    differs between ``A`` and ``B`` is the *content* of the reference.
-
-    So if conditioning were ignored, ``A`` and ``B`` would be as close as ``A`` and
-    ``A'``. The gate is that they are not, by a wide margin -- a ratio against a
-    measured floor rather than a threshold anyone chose.
+    Both references are the same size -- a 16:9 frame resolves to 2048x3584 at the 2048 px
+    short edge -- so the packed layout is identical row for row and every noise draw has the
+    same shape in the same order. The noise is therefore bit-identical and the two requests
+    differ only in reference content, so an implementation that ignored the reference would
+    score ``A`` against ``B`` as close as ``A`` against ``A'``.
     """
     pipeline = _pipeline(mesh_device)
     normal = _real_frame_image()
@@ -458,28 +430,12 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
         "the effect is present but too small to call conditioning"
     )
 
-    # 3. RECORDED, NOT ASSERTED -- and that is a deliberate choice, not an omission.
-    #
-    # "The output resembles the reference it was given more than the one it was not" is the
-    # claim a human would want, and no instrument tried so far measures it (am. 128/129).
-    # Whole-frame luminance correlation measured noise. CLIP image-image similarity gives a
-    # per-output OFFSET rather than a direction: measured, the normally-conditioned output
-    # scored higher against BOTH references (0.5978 / 0.5923) than the inverted-conditioned
-    # one did (0.5699 / 0.5631), with the A-B gap essentially equal for the two references
-    # (0.0279 vs 0.0292) -- so what it separates is the two outputs, not the two references.
-    # Mean-RGB distance splits: correct for one output, wrong for the other, by the same
-    # 0.011.
-    #
-    # Asserting a direction on an instrument not shown to measure it would be asserting a
-    # metric that cannot fail honestly -- exactly what the plan's own §7 forbids. So these
-    # numbers are logged for the record and the gate rests on what IS falsifiable: the
-    # pipeline is bit-reproducible, and swapping the reference moves the output far off that
-    # floor while nothing else about the request changes. The qualitative check is the frames
-    # in the artifact directory, and they are unambiguous -- the two runs render visibly
-    # different rooms from the same prompt, seed and noise.
-    #
-    # Finding an instrument that does show direction is tracked as campaign work, not
-    # silently dropped.
+    # Recorded, not asserted. No instrument is known to measure "resembles its own reference
+    # more than the other one" here (am. 128): CLIP image-image similarity separates the two
+    # OUTPUTS rather than the two references -- measured, one output scored higher against
+    # both references with the gap equal to within 0.0013 -- and mean-RGB distance splits,
+    # correct for one output and wrong for the other by the same 0.011. Asserting a direction
+    # on either would be asserting a metric that cannot fail.
     logger.info(
         f"ref2va direction (recorded, not asserted): CLIP own-vs-other "
         f"A {to_normal[0]:.4f} vs {to_inverted[0]:.4f}, B {to_inverted[1]:.4f} vs {to_normal[1]:.4f}; "
@@ -492,10 +448,9 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
 def test_ref2va_reference_order_changes_the_request(mesh_device, reset_seeds):
     """Reordering the same two references is a different request, and must generate differently.
 
-    The host gate proves the *layout* changes; this proves the change reaches the
-    output. Both references are 2048x2048, so the two requests have identical row
-    counts and an identical noise stream -- only the rotary clock and the presentation
-    labels differ.
+    The host gate covers the layout changing; this covers the change reaching the output. Both
+    references are the same size, so the two requests have identical row counts and an
+    identical noise stream, and only the rotary clock and the presentation labels differ.
     """
     pipeline = _pipeline(mesh_device)
     normal = _real_frame_image()

@@ -91,7 +91,7 @@ def _modality_metadata(
 
     The timestep indices give conditioning rows their own levels rather than reusing 0 or 1, because
     production runs them at different noise than the generated rows: **2** for video conditioning
-    (`max(t, 0.999)`) and **3** for audio conditioning (a literal `t = 1.0`, campaign am. 115). So a
+    (`max(t, 0.999)`) and **3** for audio conditioning (a literal `t = 1.0`, am. 115). So a
     ref2va request with a soundtrack addresses four distinct timestep levels where t2va and fl2va
     address three, and the AdaLN table is exercised wider.
     """
@@ -169,9 +169,8 @@ def _modality_metadata(
     [
         pytest.param("random", id="random_weights"),
         # Real checkpoint values at reduced depth. Random weights cannot exercise the trained
-        # distribution, and they hid a live bug once already (nn.RMSNorm inits to ones, so norm weight
-        # loading was invisible until `randomize_norm_weights` was added). Skipped unless
-        # MINIMAX_H3_MODEL_PATH is set.
+        # distribution, and they hide norm-weight loading entirely unless `randomize_norm_weights`
+        # runs, `nn.RMSNorm` initialising to ones. Skipped unless MINIMAX_H3_MODEL_PATH is set.
         pytest.param("checkpoint", id="real_weights"),
     ],
 )
@@ -205,28 +204,23 @@ def _modality_metadata(
         # ---- ref2va: a MODALITY-INTERLEAVED conditioning region ----
         #
         # The shape a single 2048x2048 image reference ships at, measured against the reference
-        # packing (campaign am. 114): 4104 presentation tokens (4096 of them one vision block) and
+        # packing (am. 114): 4104 presentation tokens (4096 of them one vision block) and
         # 4096 condition rows, giving 45910 -> padded to 46080. All-video conditioning, so what this
         # adds over fl2va is scale (1.22x t2va's packed length) and a condition block whose 64x64
         # spatial grid is NOT the target's 24x42 -- a reference is prepared at its own resolution.
         # This one does fit the CPU reference inside the per-test budget; the two longer ref2va shapes
         # do not, which is why the interleaved cases below run at production residues instead.
         pytest.param(4104, 414, 37296, (24, 42), (("video", 4096, (64, 64)),), id="prod_ref2va_1image"),
-        # A video reference WITH its soundtrack -- the case the whole typed-block design exists for.
-        # Its audio rows are packed immediately BEFORE its video rows, so the conditioning region is
-        # `[audio | video]` and the two projections must be applied per block. Also the first case with
-        # FOUR distinct timestep levels, since audio conditioning runs at a literal t = 1.0.
+        # A video reference WITH its soundtrack: audio rows packed immediately BEFORE its video rows,
+        # so the region is `[audio | video]` and the two projections apply per block. Also the first
+        # case with four distinct timestep levels, audio conditioning being a literal t = 1.0.
         #
-        # At PRODUCTION RESIDUES but not production length, deliberately. Every stream keeps the
-        # residue mod TILE that decides the assembly path -- audio cond 414 (30), video cond 1008 (16),
-        # target audio 414 (30), target video 3024 (16) -- while the sequence is 5372 rather than
-        # 81488. The reason is the reference, not the device: this test compares against a torch model
-        # whose full self-attention is O(n^2) on CPU, and at 81488 rows that alone exceeded the 300 s
-        # per-test budget (measured, campaign am. 122). Length adds nothing here -- what the
-        # interleaved region can get wrong is which projection a block takes and which rows it lands
-        # on, and both are residue- and order-sensitive, not length-sensitive. The production LENGTHS
-        # are covered at full depth by `test_minimax_h3_transformer_real_weights`, which has no CPU
-        # reference to pay for.
+        # Production RESIDUES, not production length -- audio cond 414 (30 mod 32), video cond 1008
+        # (16), target audio 414 (30), target video 3024 (16), sequence 5372 rather than 81488. What
+        # the interleaved region can get wrong is which projection a block takes and which rows it
+        # lands on, both residue- and order-sensitive rather than length-sensitive. The full lengths
+        # cost more than the budget allows here because the torch reference's attention is O(n^2) on
+        # CPU (am. 122); they are covered at full depth by the real-weights test below.
         pytest.param(
             512,
             414,
@@ -274,8 +268,8 @@ def test_minimax_h3_transformer(
     # unchanged to the output, so anything that merely misassigns per-row metadata barely moves the
     # result. Feeding rows metadata belonging to other rows measured 0.999888 -- only 8.6e-5 below the
     # real measurement, far too thin to gate on. Assembling the packed sequence in natural global order
-    # and fracturing it with mesh_partition removes the way that error used to be reachable, since the
-    # caller has no row permutation to get wrong. A deeper stack would still be a more sensitive test
+    # and fracturing it with mesh_partition keeps that error unreachable, the caller having no row
+    # permutation to get wrong. A deeper stack would still be a more sensitive test
     # of the modulation path than this one; the block test covers that math directly instead.
     MIN_PCC = 0.9995
 
@@ -479,7 +473,7 @@ def test_minimax_h3_transformer(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    # Same weights into the TT model. For the checkpoint case this deliberately re-reads them from
+    # Same weights into the TT model. For the checkpoint case this re-reads them from
     # `torch_model.state_dict()` rather than the raw dict, so the fp32 cast above applies to both
     # sides and any difference is the port, not the dtype.
     tt_model.load_torch_state_dict(torch_model.state_dict())
@@ -640,7 +634,7 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
         pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),
         # ---- ref2va: does it fit? ----
         #
-        # The campaign's shape probe. ref2va packed lengths were measured host-only against the
+        # The ref2va shape probe. Its packed lengths were measured host-only against the
         # reference packing (am. 114) and run 1.2x-3.0x t2va's, which is a residency question the
         # 2-layer correctness test cannot answer and the t2va shape above does not reach. These three
         # run the real 50 layers with the real checkpoint at the real padded lengths, so what they
@@ -686,7 +680,7 @@ def test_minimax_h3_transformer_real_weights(
 ) -> None:
     """Run the full-depth model with the real checkpoint, on device only.
 
-    Deliberately has no torch reference: 50 layers of a 33B-parameter model is impractical on CPU, so
+    No torch reference: 50 layers of a 33B-parameter model is impractical on CPU, so
     there is nothing to compute PCC against. What this covers instead, none of which the 2-layer
     correctness test can:
 

@@ -103,7 +103,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             return t.reshape(-1, *trailing)
 
         if self.precomputed_adaln:
-            # Dropped on purpose; the host-built table replaces this projection.
+            # Dropped: the host-built table replaces this projection.
             state.pop("linear.weight", None)
             state.pop("linear.bias", None)
             return
@@ -408,7 +408,7 @@ class MiniMaxH3Transformer3DModel(Module):
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
 
-        Both hold the **target rows only** --- `V` and `A` of them --- and deliberately not the
+        Both hold the **target rows only** --- `V` and `A` of them --- and not the
         conditioning rows the reference's `video_indices` / `audio_indices` would also cover. The caller
         discards conditioning-row velocity, because the loop re-imposes the anchors by only ever writing
         rows from `num_condition_video_rows` / `num_condition_audio_rows` on. For ref2va the reference
@@ -446,11 +446,8 @@ class MiniMaxH3Transformer3DModel(Module):
         # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
         # it is strictly cheaper, and keeping it means this change cannot move a shape that
         # already worked.
-        # Every *block* has to be tile aligned, not just their sum: the concat cuts at
-        # each block boundary, so one unaligned block forces the ROW_MAJOR path even
-        # if the totals happen to be aligned. ref2va reaches this constantly -- a 2048
-        # px reference image is 4096 rows (aligned) while its soundtrack is 414 rows
-        # (== 30 mod 32).
+        # Every *block* is tested, not their sum: the concat cuts at each block boundary, so one
+        # unaligned block forces the ROW_MAJOR path even when the totals are aligned.
         tile_aligned = not (
             v_len % tile or a_len % tile or l_len % tile or any(length % tile for length in condition_lengths)
         )

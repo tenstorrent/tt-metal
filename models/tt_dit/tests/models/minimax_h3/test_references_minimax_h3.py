@@ -10,10 +10,13 @@ Two halves, split by what they need:
   resolution, the audio hop padding, and the typed condition-block split. All gated
   against the reference implementation's own
   ``MiniMaxH3Ref2VASetupStep.prepare_references``, and all free.
-* **Device** (``test_encode_references_matches_reference``) -- the real VAE encode at
-  production resolutions against ``MiniMaxH3Ref2VAReferenceEncoderStep``, on **real
-  media**. ``randn`` would not exercise the fp16 round trip on natural statistics,
-  which is the thing under test.
+* **Device** (``test_encode_references_matches_reference``) -- the real VAE encode
+  against ``MiniMaxH3Ref2VAReferenceEncoderStep``, on **real media**, parametrized per
+  modality. The image runs at its full production resolution and the soundtrack at its
+  full duration; the video runs at a *reduced frame count* on the production canvas,
+  because the reference's video VAE runs on CPU (see the note above that case).
+  ``randn`` would not exercise the fp16 round trip on natural statistics, which is the
+  thing under test.
 
 The three encode recipes differ per modality and none of them is guessable from the
 others: image and video posteriors are *sampled* under a generator seeded 42 and
@@ -140,9 +143,9 @@ def test_prepare_references_matches_reference(name):
 def test_prepare_references_uses_each_references_own_resolution():
     """An image at 2048 short edge, a video at its own 768 canvas -- neither the target's.
 
-    Two sizing rules feed the same request, 2048 px against 768 px on the short edge,
-    and using one where the other belongs is the single easiest way to condition at
-    the wrong scale. It would not fail a shape check: both produce a valid request.
+    Two sizing rules feed one request, 2048 px against 768 px on the short edge. Using one
+    where the other belongs conditions at the wrong scale and fails no shape check, since
+    both produce a valid request.
     """
     references = [
         rp.MiniMaxH3Reference(image=_image(1024, 1024)),
@@ -153,14 +156,14 @@ def test_prepare_references_uses_each_references_own_resolution():
     # 2048 px short edge, no area cap.
     assert prepared[0].image.size == (2048, 2048)
     assert min(prepared[0].image.size) == rp.MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE
-    # The 768 px canvas of the VIDEO's own 16:9, which happens to equal the target
-    # here -- and 768x1344 rather than 2048-anything, which is the point.
+    # The 768 px canvas of the video's own 16:9, which equals the target here. The
+    # assertion that matters is 768-something rather than 2048-something.
     assert prepared[1].frames.shape[1:3] == (768, 1344)
     assert min(prepared[1].frames.shape[1:3]) == p.MINIMAX_H3_SHORT_EDGE
-    # 2048 against 768: an image reference is encoded at 2.67x a video reference's
-    # short edge, which is why one image costs 4096 rows where one video frame costs
-    # 1008. (The 4x the vision-tower test quotes is at the aspect extremes, where the
-    # canvas area cap pushes the short edge down to 32 patches.)
+    # 2048 against 768: an image reference is encoded at 2.67x a video reference's short
+    # edge, so one image costs 4096 rows where one video frame costs 1008. The 4x the
+    # vision-tower test quotes is at the aspect extremes, where the area cap pushes the
+    # short edge to 32 patches.
     assert min(prepared[0].image.size) > min(prepared[1].frames.shape[1:3])
 
 
@@ -381,17 +384,15 @@ def _weights_dir() -> Path:
 
 # ---------------------------------------------------------------- the encode, on device
 #
-# The Phase 3 gate: our device encode against `MiniMaxH3Ref2VAReferenceEncoderStep`, on
-# real media. `pcc=0.99` is the floor the encoder's thirteen `ttnn.group_norm` calls set
-# -- none has an fp32 path -- and it is the same bar the fl2va keyframe encode holds to.
+# Device encode against `MiniMaxH3Ref2VAReferenceEncoderStep`, on real media. `pcc=0.99`
+# is the floor the encoder's thirteen `ttnn.group_norm` calls set -- none has an fp32 path
+# -- and the same bar the fl2va keyframe encode holds to.
 #
-# On lengths: the IMAGE case runs at its full production 2048x2048, and the soundtrack at
-# its full production duration. The VIDEO case runs at a reduced FRAME COUNT on the
-# production canvas, because the reference's video VAE encode runs on CPU and 124 frames
-# at 768x1344 is hours there. What the video path adds over the image path is the entry
-# point (`vae.encode`, with its 17-frames-per-5-latents chunking) and the frame trim, and
-# both are exercised by 22 frames -> 7 latent frames just as well as by 124 -> 37. The
-# production frame count is covered end to end by the e2e gate. Same reasoning as am. 122.
+# The image runs at its full production resolution and the soundtrack at its full
+# duration. The video runs at a reduced FRAME COUNT on the production canvas: the
+# reference's video VAE encode runs on CPU, where 124 frames at 768x1344 is hours. What
+# the video path adds is the entry point (`vae.encode`, with its 17-frames-per-5-latents
+# chunking) and the frame trim, and 22 frames -> 7 latent frames exercises both.
 
 # 16384, not the 65536 every other MiniMax-H3 gate uses. MEASURED, not chosen (am. 124/126): the
 # taps=3 video-reference encoder's static circular buffers clash with L1 by 4224 bytes at 65536 and
@@ -480,7 +481,7 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
     take different code paths with different device requirements and a single case would
     report the first failure as a failure of all of them. `video` in particular needs the
     taps=3 encoder, whose L1 footprint is a separate question from the other two
-    (campaign am. 124).
+    (am. 124).
 
     Also asserts the resolved **geometry**, because the packed layout is built from it: a
     latent frame count or a latent height off by one produces a valid request conditioned on

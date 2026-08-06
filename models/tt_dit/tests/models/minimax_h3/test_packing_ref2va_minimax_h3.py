@@ -11,12 +11,11 @@ the wrong offset conditions on the wrong thing -- none of which fails a shape or
 finiteness check, and all of which still produce plausible-looking video. So the
 assertions are ``torch.equal`` against the installed reference, not PCC.
 
-The reference is ``diffusers.modular_pipelines.minimax_h3.packing_ref2va`` at
-PR #14355. Compared against **its classes**, never a hand-written expectation:
-the whole point is that nobody re-derived the contract.
+The reference is ``diffusers.modular_pipelines.minimax_h3.packing_ref2va`` at PR #14355.
+Compared against its classes rather than against hand-written expectations, so no part of
+the contract is re-derived here.
 
-Runs on host in a couple of seconds and needs no mesh. This is where the ``ref2va``
-semantics live, so it is also where they are cheapest to get wrong.
+Host-only, no mesh, a few seconds.
 """
 
 import numpy as np
@@ -39,8 +38,8 @@ reference_base_packing = pytest.importorskip(
 
 PATCH_SIZE = (1, 2, 2)
 
-# The target working point every ref2va gate runs at, and the one the campaign's
-# measured padded lengths were taken at: 1344x768, 124 frames.
+# The target working point every ref2va gate runs at, and the one the measured padded
+# lengths of am. 114 were taken at: 1344x768, 124 frames.
 TARGET_HEIGHT, TARGET_WIDTH, TARGET_FRAMES = 768, 1344, 124
 VAE_RATIO = 16
 AUDIO_HOP = 800
@@ -119,11 +118,10 @@ VIDEO_SOUND = dict(kind="video", source=(1344, 768), audio_seconds=DURATION)
 VIDEO_SILENT = dict(kind="video", source=(1344, 768))
 AUDIO_ONLY = dict(kind="audio", audio_seconds=DURATION)
 
-# The matrix. The last case is deliberately awkward: an audio reference BETWEEN two
-# videos, a video BEFORE an image, and a silent video mixed with a sounded one, so
-# the per-modality label counters, the soundtrack-before-video row order and the
-# shared rotary clock are all exercised out of their natural order. Nine
-# references, inside the documented 9 image / 3 video / 3 audio / 12 total limits.
+# The last case is awkward by construction: an audio reference between two videos, a
+# video before an image, and a silent video beside a sounded one. That exercises the
+# per-modality label counters, the soundtrack-before-video row order and the shared rotary
+# clock out of their natural order. Nine references, inside the 9/3/3/12 limits.
 CASES = {
     "one_image": [IMAGE_1TO1],
     "one_audio": [IMAGE_1TO1, AUDIO_ONLY],  # audio may never be the only reference
@@ -157,11 +155,11 @@ def _text_tags():
 
 
 def test_span_matches_both_reference_summation_orders():
-    """Two summation orders, one per call site, and this pins each to its own reference.
+    """Each summation order against its own reference function.
 
-    ``packing._temporal_position_span`` reproduces a numpy **pairwise** sum;
-    ``packing_ref2va._temporal_position_span`` sums **sequentially in float64**.
-    Exact ``==``, because a float64 last-ulp difference is the whole point.
+    ``packing._temporal_position_span`` reproduces a numpy pairwise sum;
+    ``packing_ref2va._temporal_position_span`` sums sequentially in float64. Exact ``==``:
+    the difference under test is a float64 last ulp.
     """
     for n in range(1, 61):
         assert p._temporal_position_span(n) == reference_base_packing._temporal_position_span(
