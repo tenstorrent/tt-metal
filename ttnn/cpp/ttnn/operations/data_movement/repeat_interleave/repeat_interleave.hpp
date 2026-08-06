@@ -10,8 +10,9 @@
 namespace ttnn {
 
 // # This operation does not support the following cases:
-// #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
-// #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
+// #   - `repeats` as a per-element Tensor (e.g. Shape([2, 2]) -> repeats = Tensor[1,2], dim = 1).
+// #     Only a single scalar `repeats` applied uniformly across the dim is supported.
+// # (Small-shape cases such as Shape([2, 2]) -> repeats = 2, dim = 0 are supported.)
 
 // `implementation` selects the dispatch path: "auto" (default) picks the codegen prim iff it is
 // supported and not perf-demoted for these inputs, else the native (host-composed) path;

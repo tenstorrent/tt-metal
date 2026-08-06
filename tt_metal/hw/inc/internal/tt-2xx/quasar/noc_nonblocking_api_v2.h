@@ -1541,9 +1541,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // Same as above, but with src_noc_addr giving the source NOC address separately.
@@ -1575,9 +1576,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // clang-format off
