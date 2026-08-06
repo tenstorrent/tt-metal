@@ -289,6 +289,18 @@ def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
     return ttnn.ReplicateTensorToMesh(mesh_device)
 
 
+def cpu_ref_contexts():
+    """Context lengths the CPU-reference PCC test is parametrized over.
+
+    Every entry is a device target with a reachable reference. Cases whose reference
+    has not been generated yet skip with the command to generate it, so the list can
+    lead the files on disk.
+    """
+    from models.demos.gemma4.tests.cpu_prefill_reference import LONG_REFERENCE_CONTEXTS
+
+    return LONG_REFERENCE_CONTEXTS
+
+
 def _per_token_pcc(actual, expected):
     """PCC per token row, contracting over hidden only.
 
@@ -1171,7 +1183,11 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
 
 
 @parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
-@pytest.mark.parametrize("context_len", [8192, 16384, 32768], ids=["ctx_8k", "ctx_16k", "ctx_32k"])
+@pytest.mark.parametrize(
+    "context_len",
+    cpu_ref_contexts(),
+    ids=[f"ctx_{c // 1024}k" for c in cpu_ref_contexts()],
+)
 def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_seeds, request):
     """Chunked CP prefill against a whole-sequence CPU reference, chunk by chunk.
 
@@ -1265,6 +1281,8 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
         # wrong token: adjacent tokens sit at 0.77 and distant ones at 0.06.
         tok_pcc = _per_token_pcc(tt_hidden, ref_slice)
         tok_mins.append(float(tok_pcc.min()))
+        if chunk_idx == n_chunks - 1:
+            last_token_pcc = float(tok_pcc[-1])
 
         # Where the bad rows are, not just how bad the worst one is. A systematic
         # misordering drags most rows down; a handful of stragglers means something
@@ -1303,6 +1321,17 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
         )
 
     ring_calls = ring_prefill.ring_attention_calls()
+
+    # End of context, called out separately. This is the state a disaggregated setup
+    # actually hands to the decode host, and it is the strictest point in the run: it
+    # sits at the maximum ring depth, having read every preceding chunk. The per-chunk
+    # list below buries it, so report it on its own line — including the final token,
+    # whose hidden state seeds the first decode step.
+    logger.info(
+        f"[long_ctx_pcc] ctx={context_len} END-OF-CONTEXT [{context_len - chunk}, {context_len}): "
+        f"PCC={pccs[-1]:.5f} rows_below_0.8={100 * bad_fracs[-1]:.2f}% "
+        f"last_token_PCC={last_token_pcc:.5f} (ring depth {n_chunks - 1} chunks)"
+    )
     logger.info(
         f"[long_ctx_pcc] ctx={context_len} PCC min={min(pccs):.5f} max={max(pccs):.5f} "
         f"chunk0={pccs[0]:.5f} ring_reads={ring_calls} "
@@ -1357,6 +1386,21 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
             f"({', '.join(f'{100 * f:.2f}%' for f in ring_bad)}) are not evidence the ring read "
             f"the right history"
         )
+
+    # Gate the end-of-context state explicitly. It is already covered by the per-chunk
+    # assertions above, but this is the output the prefill actually exists to produce —
+    # the hidden states handed to the decode host — and it deserves to fail on its own
+    # terms rather than as one entry in a list. The final token additionally seeds the
+    # first decode step, so it is checked individually; a single token is noisier than
+    # a chunk, hence the looser bound.
+    assert pccs[-1] >= threshold, (
+        f"end-of-context PCC {pccs[-1]:.5f} below {threshold} for tokens "
+        f"[{context_len - chunk}, {context_len}) at ring depth {n_chunks - 1}"
+    )
+    assert last_token_pcc >= 0.90, (
+        f"final token (index {context_len - 1}) PCC {last_token_pcc:.5f} below 0.90 — this is the "
+        f"hidden state a disaggregated decode host would start from"
+    )
 
 
 @torch.no_grad()
