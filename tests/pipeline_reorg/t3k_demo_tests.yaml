@@ -14,7 +14,7 @@
   skus:
     wh_llmbox_perf:
       timeout: 10
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet50
 
