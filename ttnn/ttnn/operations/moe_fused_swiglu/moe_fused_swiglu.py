@@ -127,6 +127,11 @@ def validate(
     counts,
     global_expert_idx_table,
     local_expert_id,
+    *,
+    output=None,
+    expert_region_offsets=None,
+    read_x_at_offset=False,
+    input_m_tiles=None,
 ):
     # ---- structural (ValueError) --------------------------------------------------
     if len(input_tensor.shape) != 4:
@@ -181,15 +186,80 @@ def validate(
             f"of length {num_local}"
         )
 
+    # ---- shared-buffer region mode (fused extract / insert) ------------------------
+    # Same two knobs as `unified_routed_expert_ffn`: an offsets tensor turns the writer into a
+    # direct placement into `output` (fusing ttnn::insert), and `read_x_at_offset` opts the reader
+    # into the mirror rebase of its x reads (fusing ttnn::extract).
+    if read_x_at_offset and expert_region_offsets is None:
+        raise ValueError("moe_fused_swiglu: read_x_at_offset requires expert_region_offsets")
+    if expert_region_offsets is not None:
+        if output is None:
+            raise ValueError(
+                "moe_fused_swiglu: direct-write mode (expert_region_offsets set) requires `output` — "
+                "the shared destination buffer this expert's rows are placed into"
+            )
+        s = expert_region_offsets
+        if s.dtype != ttnn.uint32 or s.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(
+                f"moe_fused_swiglu: expert_region_offsets must be uint32 ROW_MAJOR, got dtype "
+                f"{s.dtype} layout {s.layout}"
+            )
+        shape = list(s.shape)
+        if not (len(shape) == 1 or (len(shape) == 2 and int(shape[0]) == 1)):
+            raise ValueError(f"moe_fused_swiglu: expert_region_offsets must be 1-D or (1, N), got shape {shape}")
+        # The kernel indexes start[global_id] and counts[global_id] out of the SAME global-expert
+        # index space, and it reads `start` over the counts scratch page — so equal lengths are both
+        # a correctness requirement and what makes that page reuse sound. Mirrors ttnn::insert.
+        if int(shape[-1]) != int(counts.shape[-1]):
+            raise ValueError(
+                f"moe_fused_swiglu: expert_region_offsets length {int(shape[-1])} must equal counts "
+                f"length {int(counts.shape[-1])}"
+            )
+
+    if output is not None:
+        if output.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"moe_fused_swiglu: output must be TILE_LAYOUT, got {output.layout}")
+        if output.dtype not in (ttnn.bfloat8_b, ttnn.bfloat16):
+            raise ValueError(f"moe_fused_swiglu: output dtype {output.dtype!r} must be bfloat8_b or bfloat16")
+        if int(output.shape[-1]) != emb:
+            raise ValueError(
+                f"moe_fused_swiglu: output last dim {int(output.shape[-1])} must equal emb {emb} — "
+                f"the writer's tile-row stride IS that number"
+            )
+        out_m = int(output.shape[-2])
+        if out_m % TILE != 0:
+            raise ValueError(f"moe_fused_swiglu: output rows {out_m} must be tile-aligned")
+        if expert_region_offsets is not None:
+            # Direct write targets the larger shared buffer; the device bounds every row against
+            # its real tile-row count, so only "at least one region fits" is checkable here.
+            if out_m < int(input_tensor.shape[-2]):
+                raise ValueError(
+                    f"moe_fused_swiglu: output rows {out_m} must be >= input rows "
+                    f"{int(input_tensor.shape[-2])} in direct-write mode"
+                )
+        elif out_m != int(input_tensor.shape[-2]):
+            raise ValueError(
+                f"moe_fused_swiglu: output rows {out_m} must equal input rows "
+                f"{int(input_tensor.shape[-2])} (pass expert_region_offsets for a shared destination)"
+            )
+
     # ---- registry axes ------------------------------------------------------------
     # `fill` derives from a DEVICE-resident value and validate() is host-side and forbidden from
     # reading `counts`, so it is observed-but-uncheckable: SUPPORTED lists all four buckets and
     # the gate below covers the host-visible axes only.
+    #
+    # `capacity` is the ALLOCATED token rows the op's blocking is built for. That is x's own row
+    # count in the ordinary case, but when x is a shared multi-expert buffer the op is sized to ONE
+    # region (`input_m_tiles`) — tagging the buffer there would report a capacity no cell of
+    # SUPPORTED could ever contain, and reject every fused call.
+    capacity = int(input_tensor.shape[-2])
+    if read_x_at_offset and input_m_tiles is not None:
+        capacity = int(input_m_tiles) * TILE
     axes = {
         "input_format": _input_format(input_tensor),
         "weight_dtype": w_gate.dtype,
         "emb": emb,
-        "capacity": int(input_tensor.shape[-2]),
+        "capacity": capacity,
     }
     for axis, value in axes.items():
         if value not in SUPPORTED[axis]:
@@ -223,8 +293,40 @@ def moe_fused_swiglu(
     memory_config: ttnn.MemoryConfig = None,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
     core_grid=None,
+    output: ttnn.Tensor = None,
+    expert_region_offsets: ttnn.Tensor = None,
+    read_x_at_offset: bool = False,
 ) -> ttnn.Tensor:
-    validate(input_tensor, w_gate, w_up, w_down, counts, global_expert_idx_table, local_expert_id)
+    """`output` / `expert_region_offsets` / `read_x_at_offset` are the three fusion knobs, with the
+    same meanings as `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`:
+
+      * `output` — a pre-allocated DRAM TILE tensor to write into (no per-call allocation). Rows past
+        ceil_tile(count) are NEVER written, so whatever was there stays there.
+      * `expert_region_offsets` — the per-global-expert region starts (the `start` vector
+        ttnn::insert consumes). Set it and the writer places this expert's rows directly into
+        `output` (the shared destination) at start[global_id], fusing the ttnn::insert step. Requires
+        `output`.
+      * `read_x_at_offset` — x is that same kind of shared buffer, so the reader rebases its x reads
+        by start[global_id], fusing ttnn::extract. Requires `expert_region_offsets`, and pair it with
+        `input_m_tiles` = ONE region's tile-rows so the op still sizes its grid and chunks to a
+        single expert rather than to the whole buffer.
+
+    `output` must not alias `input_tensor`: this op's cross-M-block x prefetch is not ordered against
+    the write-back of an earlier block, so in-place would be a read-after-write race.
+    """
+    validate(
+        input_tensor,
+        w_gate,
+        w_up,
+        w_down,
+        counts,
+        global_expert_idx_table,
+        local_expert_id,
+        output=output,
+        expert_region_offsets=expert_region_offsets,
+        read_x_at_offset=read_x_at_offset,
+        input_m_tiles=input_m_tiles,
+    )
 
     device = input_tensor.device()
     capacity = int(input_tensor.shape[-2])
@@ -239,13 +341,33 @@ def moe_fused_swiglu(
     if m_t_max < 1 or m_t_max > capacity // TILE:
         raise ValueError(f"moe_fused_swiglu: input_m_tiles {m_t_max} out of range [1, {capacity // TILE}]")
 
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, capacity, emb]),
-        out_dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-        out_memory_config,
-    )
+    if output is not None:
+        # `dtype` / `memory_config` describe an allocation this call is not making. Refuse a
+        # disagreement rather than silently honouring one of the two.
+        if dtype is not None and dtype != output.dtype:
+            raise ValueError(
+                f"moe_fused_swiglu: dtype={dtype!r} contradicts the supplied output's dtype "
+                f"{output.dtype!r} — pass one or the other"
+            )
+        if memory_config is not None and memory_config != output.memory_config():
+            raise ValueError(
+                "moe_fused_swiglu: memory_config contradicts the supplied output's memory config — "
+                "pass one or the other"
+            )
+        if output.buffer_address() == input_tensor.buffer_address():
+            raise ValueError(
+                "moe_fused_swiglu: output must not alias input_tensor — the reader prefetches the "
+                "NEXT M-block's x rows with no ordering against this block's write-back"
+            )
+        output_tensor = output
+    else:
+        output_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, capacity, emb]),
+            out_dtype,
+            ttnn.TILE_LAYOUT,
+            device,
+            out_memory_config,
+        )
 
     # Sized over the FULL device grid, not the op's (possibly clamped) core_grid, and that is
     # load-bearing: the mailbox is an L1-INTERLEAVED buffer, so page i lives in bank i and every
@@ -269,19 +391,22 @@ def moe_fused_swiglu(
         input_m_tiles=m_t_max,
         compute_kernel_config=cfg,
         core_grid=core_grid,
+        expert_region_offsets=expert_region_offsets,
+        read_x_at_offset=read_x_at_offset,
     )
 
-    ttnn.generic_op(
-        [
-            input_tensor,
-            w_gate,
-            w_up,
-            w_down,
-            counts,
-            global_expert_idx_table,
-            mailbox,
-            output_tensor,
-        ],
-        descriptor,
-    )
+    io_tensors = [
+        input_tensor,
+        w_gate,
+        w_up,
+        w_down,
+        counts,
+        global_expert_idx_table,
+        mailbox,
+        output_tensor,
+    ]
+    if expert_region_offsets is not None:
+        io_tensors.append(expert_region_offsets)
+
+    ttnn.generic_op(io_tensors, descriptor)
     return output_tensor

@@ -84,6 +84,9 @@ KERNEL_CT_ORDER = {
         "WG_SHARD_W",
         "WD_SHARD_W",
         "GATHER_PAGES",
+        "NEED_START",
+        "READ_X_AT_OFFSET",
+        "START_PAGE",
         "CB_X_IN",
         "CB_X_TILES",
         "CB_X_STAGE",
@@ -127,6 +130,8 @@ KERNEL_CT_ORDER = {
         "WD_SPLIT",
         "WG_SHARD_W",
         "WD_SHARD_W",
+        "DIRECT_WRITE",
+        "OUT_M_T",
         "CB_W_UP",
         "CB_W_DOWN",
         "CB_OUT_TILES",
@@ -198,6 +203,9 @@ KERNEL_RT_SCALARS = {
         "JSTART",
         "MY_COL",
         "MY_ROW",
+        # `start` (= expert_region_offsets). LAST in the scalar block, so RT_PEERS and every
+        # mcast-arg offset derived from it shift together in the kernel and nothing is hand-indexed.
+        "START_ADDR",
     ),
     "writer": (
         "MAILBOX",
@@ -364,6 +372,8 @@ def create_program_descriptor(
     input_m_tiles,
     compute_kernel_config,
     core_grid=None,
+    expert_region_offsets=None,
+    read_x_at_offset=False,
 ):
     device = input_tensor.device()
     hgroups, kgroups = worker_grid(device, core_grid)
@@ -393,6 +403,20 @@ def create_program_descriptor(
     )
     idx_page = max(int(global_expert_idx_table.buffer_aligned_page_size()), ttnn.get_dram_alignment())
     counts_page = max(int(counts.buffer_aligned_page_size()), ttnn.get_dram_alignment())
+
+    # ---- shared-buffer region mode (fused extract / insert) --------------------------------
+    # `expert_region_offsets` present => the writer places this expert's rows into `output_tensor`
+    # (the SHARED destination) at start[global_id], fusing ttnn::insert. `read_x_at_offset` opts the
+    # reader into the mirror-image rebase of its x reads, fusing ttnn::extract. Same two knobs, same
+    # meanings as `unified_routed_expert_ffn`; `counts` stands in for the accessor + address when no
+    # offsets tensor is passed, so the argument streams have ONE length and the kernels compile
+    # identically either way.
+    direct_write = expert_region_offsets is not None
+    start_tensor = expert_region_offsets if direct_write else counts
+    start_page = max(int(start_tensor.buffer_aligned_page_size()), ttnn.get_dram_alignment())
+    # The reader fetches `start` over cb_counts_scratch's page (dead once `count` is extracted), so
+    # that ONE page must hold either vector. Equal by validation; the max is the belt.
+    counts_page = max(counts_page, start_page)
     phase_cb_alias = enable_phase_alias and blk.phase_cb_alias(requested_out_tile)
     need = blk.l1_bytes(x_is_rm, requested_out_tile, enable_phase_alias=phase_cb_alias)
     if need > blk.l1_budget:
@@ -540,13 +564,22 @@ def create_program_descriptor(
         "X_SLICE": x_stick_slice,
         "COUNTS_PAGE": max(int(counts.buffer_aligned_page_size()), dram_align),
         "IDX_PAGE": max(int(global_expert_idx_table.buffer_aligned_page_size()), dram_align),
+        # NEED_START is the reader's "fetch and publish start[global_id]" flag, so it is on for
+        # EITHER side of the fusion — the writer's half arrives only through the mailbox word.
+        "NEED_START": int(direct_write or read_x_at_offset),
+        "READ_X_AT_OFFSET": int(read_x_at_offset),
+        "START_PAGE": start_page,
+        "DIRECT_WRITE": int(direct_write),
+        "OUT_M_T": int(output_tensor.padded_shape[-2]) // TILE,
     }
     shared.update({n: getattr(geo, n) for n in dir(geo) if n.startswith("CB_")})
 
     reader_ct = _ct_args("reader", shared)
     reader_ct.extend(x_mcast.compile_time_args())
     reader_ct.extend(h_mcast.compile_time_args())
-    for t in (input_tensor, w_gate, w_down, counts, global_expert_idx_table):
+    # `start_tensor` is appended LAST, which is what let it be added without shifting a single
+    # existing accessor offset in the kernel.
+    for t in (input_tensor, w_gate, w_down, counts, global_expert_idx_table, start_tensor):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     writer_ct = _ct_args("writer", shared)
@@ -581,6 +614,7 @@ def create_program_descriptor(
                 jstart,
                 x,
                 y,
+                start_tensor.buffer_address(),
             ]
             # The whole COLUMN in virtual coordinates: the scatter's peer list (invite fan-out +
             # gather destinations). Row r is at index r on every core in the column, which is what

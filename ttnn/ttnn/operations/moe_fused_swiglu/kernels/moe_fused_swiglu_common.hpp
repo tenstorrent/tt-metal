@@ -50,7 +50,14 @@ constexpr uint32_t hidden_block_rows(uint32_t block, uint32_t hid_t, uint32_t hg
 constexpr uint32_t MBOX_COUNT = 0;     // counts[idx[local_expert_id]] — the RUNTIME token count
 constexpr uint32_t MBOX_M_T = 1;       // ceil(count/32), clamped to M_T_MAX
 constexpr uint32_t MBOX_M_BLOCKS = 2;  // ceil(M_t / M_BLOCK) — the outer-loop trip count
-constexpr uint32_t MBOX_READY = 3;     // == MAILBOX_MAGIC once words 0..2 are valid
+constexpr uint32_t MBOX_READY = 3;     // == MAILBOX_MAGIC once words 0..2, 4 are valid
+// start[global_expert_id] in TOKEN rows — this expert's region base in a SHARED x/output buffer,
+// 0 unless the caller passed expert_region_offsets. Published here rather than read twice because
+// the WRITER needs it too, and it already spins on this mailbox: the reference C++ op has no such
+// channel and pays a second DRAM page read plus a second accessor and scratch CB for it. Raw token
+// rows, not tile rows — the row-major x read offsets STICKS while the tiled x read and the output
+// write offset TILE rows, and each site divides by TILE_H itself.
+constexpr uint32_t MBOX_START_ROW = 4;
 
 // ---------------------------------------------------------------------------
 // The mailbox handshake. The reader fills words 0..2 and then stamps MAGIC into word 3; the writer
@@ -61,16 +68,18 @@ constexpr uint32_t MBOX_READY = 3;     // == MAILBOX_MAGIC once words 0..2 are v
 // `cb_wait_front` in a compute kernel is UNPACK-only, so a CB handoff would let MATH and PACK
 // diverge from UNPACK.
 struct Mailbox {
-    uint32_t count, m_t, m_blocks;
+    uint32_t count, m_t, m_blocks, start_row;
 };
 
-//: The reader's publish. The fence orders the three payload words BEFORE the magic, so a peer that
+//: The reader's publish. The fence orders every payload word BEFORE the magic, so a peer that
 //: sees the magic sees the payload.
-inline void mailbox_publish(uint32_t addr, uint32_t magic, uint32_t count, uint32_t m_t, uint32_t m_blocks) {
+inline void mailbox_publish(
+    uint32_t addr, uint32_t magic, uint32_t count, uint32_t m_t, uint32_t m_blocks, uint32_t start_row) {
     volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     mb[MBOX_COUNT] = count;
     mb[MBOX_M_T] = m_t;
     mb[MBOX_M_BLOCKS] = m_blocks;
+    mb[MBOX_START_ROW] = start_row;
     asm volatile("fence" ::: "memory");
     mb[MBOX_READY] = magic;
 }
@@ -83,7 +92,7 @@ inline Mailbox mailbox_wait(uint32_t addr, uint32_t magic, Invalidate invalidate
     while (mb[MBOX_READY] != magic) {
         invalidate();
     }
-    return Mailbox{mb[MBOX_COUNT], mb[MBOX_M_T], mb[MBOX_M_BLOCKS]};
+    return Mailbox{mb[MBOX_COUNT], mb[MBOX_M_T], mb[MBOX_M_BLOCKS], mb[MBOX_START_ROW]};
 }
 
 // ---------------------------------------------------------------------------

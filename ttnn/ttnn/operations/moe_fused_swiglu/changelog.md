@@ -1,3 +1,54 @@
+# Pre-allocated output, and the extract/insert fusion for shared dispatch buffers
+
+Three optional arguments, same names and semantics as
+`ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`: `output` (write into a caller-owned
+tensor, no per-call allocation), `expert_region_offsets` (the writer places this expert's rows into
+that tensor at `start[global_id]`, fusing `ttnn.insert`) and `read_x_at_offset` (the reader rebases
+its x reads by the same value, fusing `ttnn.extract`). A routed-expert block dispatches every expert
+into ONE token buffer, so both copies used to be real DRAM round-trips wrapped around an op whose
+whole point is that `h` never reaches DRAM. See op_design.md §13.
+
+`start[global_id]` is read ONCE, in the reader's phase 0, and published as a fourth L1 mailbox word.
+The reference op reads that page twice — reader and writer — because it has no cross-RISC channel;
+this op already broadcasts `{count, M_t, m_blocks}` through the mailbox, so the writer's half of the
+fusion costs no accessor, no scratch CB and no DRAM read. The page is fetched over
+`cb_counts_scratch`, dead once `count` is extracted and exactly the right size (`start` and `counts`
+are both one uint32 per global expert, and equal length is validated), so the fused mode adds ZERO
+L1 — which matters because this op's budget is a hard guard.
+
+Every x DRAM read already funnels through the reader's `issue_x_row` and every output write through
+one `BR::write` in the writer, so the rebase is one added term at each of two sites. The row index at
+both is region-relative and already clamped against `M_T_MAX`, so clamp-then-rebase composes for
+free. The knobs are compile-time, so the unfused path folds the term to `+ 0` and the phase-0 `start`
+read compiles out; the only new runtime work on that path is the writer's destination-bound compare
+(<= 8 per M-block, against a DRAM write of `ec` tiles) and one mailbox word.
+
+The writer carries `OUT_M_T` and drops any row at or past it, `ASSERT` first so `--dev` fails loudly:
+a wrong region base otherwise writes into another expert's rows. In place (`output == x`) is REFUSED
+and the host raises — the reference permits it for its TILE path, but this op prefetches M-block b+1's
+x rows during block b's phase 2 with no ordering against block b's deferred write-back, so an aliased
+buffer is a cross-M-block read-after-write race.
+
+`test_moe_fused_swiglu_region_fusion.py` (9 cases, all green) runs 4 experts through one shared x
+buffer into one shared output, both input formats, counts {32, 255, 0, 1024} covering the
+non-tile-aligned seam and a zero-count expert. Its load-bearing assertion is not PCC: the shared
+output is pre-filled with a sentinel and every row outside each expert's written prefix must still
+hold it, because a wrong offset writes *somewhere*. Plus expert 2 run alone (offset 0 would hide a
+broken rebase), insert-only fusion, 3x bit-identical determinism, and the host gates. Acceptance
+suite 16/16 unchanged.
+
+Perf re-measured over the full 8x11 table (4 Tracy sessions, 3 reps, median DEVICE KERNEL DURATION):
+mean **-0.11 %** across 72 cells, **-0.14 %** over the 32 cells at M >= 1024 where noise is lowest
+(worst +0.81 %, best -1.08 %). The +-5 % outliers are all at M=0, where the whole dispatch is ~3.4 us,
+and they point both ways.
+
+Two PRE-EXISTING host-test failures were found while regression-testing and left alone, since both
+fail identically at `d27ec82cba` (before this work): `test_moe_fused_swiglu_cb_alias.py` asserts a
+stale logical-L1 total (expects 1,415,104 B, geometry computes 1,484,736 B = +64 bfp8 tiles), and
+`test_moe_fused_swiglu_weight_dtype.py::test_non_resident_wdown_over_multiple_m_blocks` asserts its
+chosen shape still falls back off W_down residency, which it no longer does — so that shape no longer
+covers the non-resident path.
+
 # BFP8 phase-buffer alias with an explicit cross-block lifetime edge
 
 `CB_GATHER_GATE`, `CB_H_SLICE`, and `CB_OUT_TILES` now use three logical CB views of one exact-size

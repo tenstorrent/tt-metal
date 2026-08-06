@@ -35,6 +35,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
@@ -115,6 +116,16 @@ constexpr uint32_t WG_SHARD_W = CT(WG_SHARD_W);
 constexpr uint32_t WD_SHARD_W = CT(WD_SHARD_W);
 constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 
+// ---- SHARED-BUFFER REGION MODE (the fused extract / insert) ----
+// NEED_START: fetch start[global_expert_id] in phase 0 and publish it to the mailbox. Set when
+// EITHER side of the fusion is on, because the WRITER's half arrives through that mailbox and this
+// kernel is the only one that touches DRAM before it.
+// READ_X_AT_OFFSET: x is a SHARED buffer and this expert's tokens begin at start[global_id]
+// instead of row 0 — what ttnn::extract used to do, with no temp buffer and no DRAM round-trip.
+constexpr uint32_t NEED_START = CT(NEED_START);
+constexpr uint32_t READ_X_AT_OFFSET = CT(READ_X_AT_OFFSET);
+constexpr uint32_t START_PAGE = CT(START_PAGE);
+
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
 constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
@@ -147,7 +158,7 @@ constexpr uint32_t NEXT_X_TRID = 15;
 // (vx, vy) pairs in ROW order: the invite fan-out and the up-gather destinations. Row `r` is at
 // index `r` on every core in the column, which is what makes "worker r owns tiles
 // [r*sl_a, (r+1)*sl_a)" agree grid-wide.
-constexpr uint32_t RT_PEERS = 14;
+constexpr uint32_t RT_PEERS = 15;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
 constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
 
@@ -217,6 +228,10 @@ constexpr auto wg_args = TensorAccessorArgs<x_args.next_compile_time_args_offset
 constexpr auto wd_args = TensorAccessorArgs<wg_args.next_compile_time_args_offset()>();
 constexpr auto cnt_args = TensorAccessorArgs<wd_args.next_compile_time_args_offset()>();
 constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_offset()>();
+// `start` (= expert_region_offsets), appended LAST so adding it shifted no existing accessor. The
+// host always emits this block — it stands `counts` in when the caller passes no offsets tensor —
+// so the arg stream has one length and the accessor is simply unread when NEED_START is 0.
+constexpr auto start_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
 
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
 // placements: each weight stream takes its own tensor's DRAM ND shard width (0 = interleaved,
@@ -257,6 +272,9 @@ void kernel_main() {
     // My row in the grid column: which slice of the reduce-scatter I own (0 tiles = an idle core,
     // which still contributes and still invites).
     const uint32_t my_row = get_arg_val<uint32_t>(13);
+    // `start` (= expert_region_offsets) base. Present in every dispatch (the host stands `counts`
+    // in when the caller passes no offsets tensor) and read only when NEED_START.
+    const uint32_t start_addr = get_arg_val<uint32_t>(14);
     // Column `x`'s reduce root is row `x % KGROUPS` — the core that injects this column's h into
     // the phase-2 all-gather. Derived, not passed: one rule, three kernels.
     const bool is_root = (my_row == my_col % KGROUPS);
@@ -267,6 +285,7 @@ void kernel_main() {
     const auto wd_acc = TensorAccessor(wd_args, w_down_addr, W_TILE);
     const auto cnt_acc = TensorAccessor(cnt_args, counts_addr, COUNTS_PAGE);
     const auto idx_acc = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
+    const auto start_acc = TensorAccessor(start_args, start_addr, START_PAGE);
     const uint32_t wd_base = get_write_ptr(cb_w_down);
 
     // -----------------------------------------------------------------------
@@ -291,8 +310,32 @@ void kernel_main() {
     }
     const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
 
-    // Publish {count, M_t, m_blocks} so compute (all three TRISCs) and the writer can read it.
-    moe_fused_swiglu::mailbox_publish(mailbox_addr, MAILBOX_MAGIC, count, m_t, m_blocks);
+    // This expert's REGION BASE in a shared x / output buffer, in token rows. Read over
+    // cb_counts_scratch's page, which is dead the moment `count` is extracted above and is exactly
+    // the right size: `start` and `counts` are both one uint32 entry per GLOBAL expert and the host
+    // validates the two lengths equal, so the fused mode costs zero extra L1 in an op whose L1
+    // budget is a hard guard. Nothing reads counts after this point (compute and the writer take
+    // the count from the mailbox below).
+    uint32_t start_row = 0;
+    if constexpr (NEED_START) {
+        const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
+        noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[g];
+        // Region bases are tile-aligned by construction (the dispatch lays experts out in whole
+        // tile-rows) and every consumer floors by TILE_H, so a misaligned base would silently
+        // shift this expert's rows. Caught here under --dev rather than as a PCC mystery.
+        ASSERT(start_row % TILE_H == 0);
+    }
+
+    // Publish {count, M_t, m_blocks, start_row} so compute (all three TRISCs) and the writer can
+    // read it. The writer's half of the fusion arrives ONLY through this word.
+    moe_fused_swiglu::mailbox_publish(mailbox_addr, MAILBOX_MAGIC, count, m_t, m_blocks, start_row);
+    // x-read rebase, derived once. Row-major x is addressed by STICK (one page per token row), so
+    // the offset is the token row itself; tiled x is addressed by TILE PAGE at an EMB_T row stride.
+    const uint32_t x_stick_base = READ_X_AT_OFFSET ? start_row : 0;
+    const uint32_t x_tile_base = READ_X_AT_OFFSET ? (start_row / TILE_H) * EMB_T : 0;
 
     // -----------------------------------------------------------------------
     // Collective pipes. Receivers are constructed before any ack, so their local flag init is
@@ -334,19 +377,25 @@ void kernel_main() {
     // One activation-row issue body for both the ordinary prologue and the cross-block prefetch.
     // On the bf16 path `dst` is one cb_x_in stick-row slot; on the tiled path it is the resident
     // cb_x_tiles row. Completion and CB publication stay with the caller.
+    //
+    // THE ONE PLACE x MEETS DRAM, which is why the fused extract is two additions here and nothing
+    // anywhere else: `row` is a REGION-RELATIVE tile-row (callers clamp it against M_T_MAX, this
+    // expert's region height, so clamp-then-rebase composes for free) and the base below moves the
+    // whole read into this expert's slice of a shared buffer.
     auto issue_x_row = [&](uint32_t row, uint32_t dst) {
 #ifndef ABLATE_NO_XSTAGE_XFER
         if constexpr (INPUT_FORMAT == 0) {
             for (uint32_t i = 0; i < TILE_H; ++i) {
                 const uint32_t s = (i + my_col + my_row) % TILE_H;
                 noc_async_read(
-                    x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
+                    x_acc.get_noc_addr(x_stick_base + row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
                     dst + s * X_SLICE,
                     kr * BF16_TILE_ROW_BYTES);
             }
         } else {
             for (uint32_t i = 0; i < kr; ++i) {
-                noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                noc_async_read(
+                    x_acc.get_noc_addr(x_tile_base + row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
             }
         }
 #else

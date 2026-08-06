@@ -620,3 +620,59 @@ the dataflow ceiling from the compute ceiling.
 | **CBs that must hold a full block** | `cb_x_tiles` (resident `in0` for two matmuls), `cb_gate_interm` / `cb_up_interm` / `cb_out_interm` (matmul K-accumulation — `matmul_block` requires the whole out-block), `cb_h_local` (a whole mcast payload). These are the four CBs whose page count must not be reduced to a streaming depth. |
 | Dtype reconfig | the only genuine format boundary is bf16 `interm` → bfp8 output (phase 13) and bf16 sticks → bfp8 tiles (phase 3). Keep reconfig **on** at both; disabling it across a real boundary is silent corruption (`examples/compute_block_size/README.md:145-149`). Everywhere else the format is constant across the boundary, so the compile-time fold elides it (`eltwise_chain.hpp:20-21`). |
 | `count == 0` | uniform `m_blocks == 0` skip on all 130 cores; no collective entered; output returned allocated and untouched |
+
+---
+
+## 13. Shared-buffer region mode (the fused extract / insert)
+
+A routed-expert MoE block does not hand each expert its own token tensor. It dispatches into ONE
+buffer where expert `g`'s tokens occupy `[start[g], start[g] + count[g])`, so the standalone op has
+to be wrapped in `ttnn.extract` (copy my rows out) and `ttnn.insert` (copy my rows back) — two whole
+DRAM round-trips per expert, around an op whose whole point is that `h` never reaches DRAM. Three
+optional arguments remove both copies, with the same names and meanings as
+`ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`:
+
+| argument | who acts on it | effect |
+|---|---|---|
+| `output` | host | write into a caller-owned tensor; no per-call allocation |
+| `expert_region_offsets` | writer | place this expert's rows into `output` at `start[global_id]` — fuses `ttnn.insert` |
+| `read_x_at_offset` | reader | rebase this expert's x reads by `start[global_id]` — fuses `ttnn.extract` |
+
+Pair `read_x_at_offset` with `input_m_tiles` = ONE region's tile-rows, or the op sizes its grid,
+chunks and CBs to the whole shared buffer instead of to one expert.
+
+**The `start` value is read ONCE and broadcast through the mailbox.** The reference C++ op reads the
+`start` page twice — once in its reader, once in its writer — because it has no cross-RISC channel.
+This op already has one: the reader owns the device-resident count read and publishes
+`{count, M_t, m_blocks}` to the L1 mailbox that compute and the writer spin on (§4, `common.hpp`).
+`start[global_id]` becomes a fourth mailbox word, so the writer's half of the fusion costs no
+accessor, no scratch CB and no DRAM read — just the word it was already waiting for. It is published
+in raw TOKEN rows, not tile rows, because the row-major x read offsets STICKS while the tiled x read
+and the output write offset TILE rows; each site divides by 32 itself.
+
+**Zero extra L1**, which matters because this op's L1 budget is a hard guard (§5). The `start` page
+is fetched over `cb_counts_scratch`, which is dead the moment `count` is extracted and is exactly the
+right size: `start` and `counts` are both one uint32 per GLOBAL expert, and the host validates the
+two lengths equal (`ttnn.insert` enforces the same invariant). Nothing reads `counts` afterwards.
+
+**Two additions, in two places.** Every x DRAM read funnels through the reader's `issue_x_row`, and
+every output write through one `BR::write` in the writer, so the rebase is one term at each site and
+nothing else in either kernel changes. The row index arriving at both is REGION-RELATIVE and already
+clamped against `M_T_MAX` (this expert's region height), so clamp-then-rebase composes for free.
+`READ_X_AT_OFFSET` / `DIRECT_WRITE` are compile-time, so the unfused path folds the term to `+ 0`
+and the phase-0 `start` read compiles out entirely — re-measured across all 72 cells of the perf
+table: mean -0.11 %, and -0.14 % over the M >= 1024 cells, i.e. inside session noise both ways.
+
+**The destination bound is load-bearing.** The writer carries `OUT_M_T` (the destination's tile-row
+count) and drops any row at or past it, with an `ASSERT` in front so `--dev` fails loudly. A wrong
+region base otherwise writes *somewhere*, and "somewhere" is another expert's rows.
+`test_moe_fused_swiglu_region_fusion.py` pre-fills the shared output with a sentinel and asserts it
+SURVIVES everywhere outside each expert's written prefix, which is the assertion that actually
+catches an off-by-one — a PCC check on the right region cannot.
+
+**In place is refused, deliberately.** The reference allows `output == x` for its TILE path, arguing
+the CB chain orders a row's write after its read. That argument does not transfer: this op prefetches
+M-block `b+1`'s x rows during block `b`'s phase 2 (§4) with no ordering against block `b`'s deferred
+write-back, so an aliased buffer is a read-after-write race across M-blocks. The host compares buffer
+addresses and raises. Lifting this needs a written ordering proof plus a determinism stress run, not
+an argument by analogy.

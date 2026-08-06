@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
@@ -65,6 +66,15 @@ constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_SPLIT = CT(WD_SPLIT);
 constexpr uint32_t WG_SHARD_W = CT(WG_SHARD_W);
 constexpr uint32_t WD_SHARD_W = CT(WD_SHARD_W);
+// DIRECT_WRITE: the output tensor is a SHARED destination buffer and this expert's rows go in at
+// its region base instead of row 0 — what ttnn::insert used to do, with no temp buffer and no
+// second DRAM round-trip. The base itself comes from the mailbox (the reader fetched it in phase
+// 0), so this kernel needs no `start` accessor and no DRAM read of its own.
+constexpr uint32_t TILE_HEIGHT = 32;
+constexpr uint32_t DIRECT_WRITE = CT(DIRECT_WRITE);
+// Tile-rows of the DESTINATION tensor. Equals this expert's region height in the ordinary mode and
+// the whole shared buffer's height under DIRECT_WRITE; either way it BOUNDS every write.
+constexpr uint32_t OUT_M_T = CT(OUT_M_T);
 
 constexpr uint32_t cb_w_up = CT(CB_W_UP);
 constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
@@ -134,6 +144,11 @@ void kernel_main() {
     const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC, [] { invalidate_l1_cache(); });
     const uint32_t m_t = mb.m_t;
     const uint32_t m_blocks = mb.m_blocks;
+    // The destination rebase, in TILE-ROWS. `mb.start_row` is a token row the reader fetched from
+    // start[global_expert_id]; flooring by TILE_HEIGHT mirrors ttnn::insert's writer exactly, and
+    // the reader ASSERTs the alignment that makes the floor lossless. It MUST agree with the
+    // reader's x rebase or this expert would read one region and write another.
+    const uint32_t out_row_base = DIRECT_WRITE ? mb.start_row / TILE_HEIGHT : 0;
 
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
@@ -337,7 +352,15 @@ void kernel_main() {
                     if (row >= m_t) {
                         break;  // rows past ceil_tile(count) are never written
                     }
-                    BR::write(out_acc, row * EMB_T, jstart, jstart + ec, rp + t * EC_MAX * OUT_TILE, OUT_TILE);
+                    // Region-relative row -> destination row. The bound is what keeps a bad region
+                    // base from scribbling over another expert's rows (or past the buffer): loud
+                    // under --dev, silent-but-safe otherwise.
+                    const uint32_t dst_row = out_row_base + row;
+                    ASSERT(dst_row < OUT_M_T);
+                    if (dst_row >= OUT_M_T) {
+                        break;
+                    }
+                    BR::write(out_acc, dst_row * EMB_T, jstart, jstart + ec, rp + t * EC_MAX * OUT_TILE, OUT_TILE);
                 }
             }
 #endif
