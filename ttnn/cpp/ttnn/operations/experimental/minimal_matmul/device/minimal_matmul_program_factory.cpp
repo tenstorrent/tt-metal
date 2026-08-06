@@ -788,8 +788,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             }
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in0_args.push_back(1);  // mcast_signal_op_cores
-            // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array. Read
-            // by the sender right after constructing its OpSignaler; each MM core increments its own slot.
+            // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
         }
         if (in1_idx == 0) {
@@ -844,8 +843,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             }
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in1_args.push_back(1);  // mcast_signal_op_cores
-            // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array. Read
-            // by the sender right after constructing its OpSignaler; each MM core increments its own slot.
+            // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
         }
         if (in0_idx == 0) {

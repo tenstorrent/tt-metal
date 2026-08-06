@@ -20,8 +20,7 @@ auto make_tensor_accessor_tuple_impl(
     uint32_t address_rt_arg_index_start,
     uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize
     return std::make_tuple(TensorAccessor(
         std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
 }
@@ -85,12 +84,9 @@ void read_in0_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end,
-    // When false, issue the async reads but skip the completion barrier, so a caller reading the
-    // block in M-row bands can keep band s's reads in flight while it waits for band s+1's data and
-    // barrier once after the last band.
+    // When false, issue the async reads but skip the completion barrier
     bool issue_barrier = true,
-    // Byte offset from the CB base at which this (sub-)block's writes begin. A caller streaming the
-    // block in M-row bands passes each band's offset so bands land at their slots instead of the base.
+    // Byte offset from the CB base at which this (sub-)block's writes begin
     uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
@@ -146,8 +142,7 @@ void read_in1_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end,
-    // Byte offset from the CB base at which this block's writes begin. Lets a caller stage several
-    // blocks into distinct slots of one scratch CB (e.g. the fwd/bwd pair of AG_INTERLEAVE_BANDS).
+    // Byte offset from the CB base at which this block's writes begin
     uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
@@ -288,10 +283,7 @@ void read_ternary_blocks_sync(
         uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
-                // Do not move tile data into CB if tile is outside ternary/output tensor.
-                // This can happen when ternary/output tensor shape is not a multiple of block sizes:
-                // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
-                // N_block_tiles=4)
+                // Do not move tile data into CB if tile is outside ternary/output tensor
                 break;
             }
             if (i < shape.logical_d0) {
@@ -324,10 +316,7 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end,
-    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end). Used by the two-NoC output
-    // split: each DM writer drains only its half of a separate out CB and writes only its rows. The per-row
-    // cb_wait_front/pop happen once per iterated row, so the pop count matches what compute pushed to that
-    // CB. Defaults span the whole block (single-writer baseline).
+    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end)
     uint32_t m_id_start = 0,
     uint32_t m_id_end = M_block_tiles) {
     for (uint32_t m_id = m_id_start; m_id < m_id_end; m_id++) {
@@ -400,8 +389,7 @@ void write_block_sync_granular_interleaved(
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
     const Tuple& accessors, uint32_t chunk_idx, uint32_t tile_id, uint32_t read_ptr, std::index_sequence<Is...>) {
-    // Fold expression: expands to if/else chain at compile time
-    // Each branch calls noc_async_write_page with the concrete type
+    // Fold expression: expands to if/else chain at compile time Each branch calls noc_async_write_page
     ((chunk_idx == Is ? (noc_async_write_page(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
 }
 
@@ -486,9 +474,7 @@ void write_block_sync_granular_split(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end,
-    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end). Used by the two-NoC output
-    // split with chunks: each writer drains only its half of its output CB (per-row cb_wait_front/pop, so the
-    // pop count matches what compute pushed to that CB) and demuxes each row's N columns into the chunks.
+    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end)
     uint32_t m_id_start = 0,
     uint32_t m_id_end = M_block_tiles) {
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;

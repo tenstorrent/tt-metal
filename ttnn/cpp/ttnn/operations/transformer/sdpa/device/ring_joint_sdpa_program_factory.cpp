@@ -1182,8 +1182,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->initialized_fused_op = true;
     }
 
-    // Must match the all-gather kernels' split-forwarding gate exactly (ring geometry only) so the
-    // SDPA reader's dual-half wait and the kernels agree on whether the diametric slice is split.
+    // Must match the all-gather kernels' split-forwarding gate exactly
     sdpa_fused_op_signaler->split_forwarding_enabled =
         (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) &&
         (args.all_gather_operation_attributes.ring_size % 2 == 0) &&

@@ -177,19 +177,11 @@ class LTXCausalConv3d(Module):
             W=dims_W,
         )
 
-        # Hybrid dispatch: the fused neighbor_pad+conv3d op wins only on conv-heavy shapes where the
-        # interior conv pass hides the halo exchange. get_conv3d_config marks exactly those shapes with
-        # halo_last (interior-then-boundary two-pass) or force_spatial_parallel; that per-shape table IS
-        # the calibrated threshold (a flat T cutoff can't separate the winners — every VAE stage has
-        # T >= 21). NP-light / tiny-conv shapes (conv_in, s0/s1/s2 res, upsamplers, conv_out) carry
-        # neither flag and stay on the standalone NP+conv3d path, which is faster there.
+        # Hybrid dispatch: the fused neighbor_pad+conv3d op wins only on conv-heavy shapes where the interior conv
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
         # Halo-aware two-dispatch (neighbor_pad_halo -> conv3d halo mode): for the NP-light shapes that skip
-        # the fused op, avoid the full-pad interior copy by feeding conv3d the compact halo buffer directly.
-        # Valid only when ALL spatial padding is external (halo-exchanged) — i.e. both spatial axes' internal
-        # padding is 0 — so every conv boundary read maps to a halo section. Off via NP_NO_HALO_CONV.
         self._use_halo_conv = (
             self._needs_halo
             and self.internal_padding[1] == 0
@@ -215,10 +207,7 @@ class LTXCausalConv3d(Module):
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
-        # Persistent-padded path (default on): neighbor_pad_halo -> compact -> halo_scatter into a padded
-        # buffer -> plain (pad=0) conv with in-kernel logical masking, instead of conv3d halo-read mode.
-        # Validated PCC=1.0 and ~6% faster e2e on BH 4x8 1080p (448ms vs 477ms halo-read). Opt out with
-        # TT_LTX_NO_PERSIST_PAD for the halo-read path.
+        # Persistent-padded path (default on): neighbor_pad_halo -> compact -> halo_scatter into a padded buffer ->
         self._persist_pad = os.environ.get("TT_LTX_NO_PERSIST_PAD") is None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -271,9 +260,7 @@ class LTXCausalConv3d(Module):
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
-        # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer (copy-free; halo reads interior
-        #   strided + border-scatter in place, no interior copy). cf_output_padded: conv writes a padded
-        #   output (output_pad) so the next conv can consume it copy-free. Both require the persist-pad path.
+        # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         # Temporal padding (T is not sharded — local op on every device).
@@ -294,29 +281,19 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # H-row masking (zeroing rows at/beyond logical_h) is fused into neighbor_pad via logical_h on the
-        # standalone path. The fused neighbor_pad_conv3d op has no logical_h argument, so a call that
-        # actually needs H masking must fall back to standalone to stay correct. For the production
-        # 1080p config every logical dim divides the mesh factor, so this is never triggered there.
+        # H-row masking (zeroing rows at/beyond logical_h) is fused into neighbor_pad via logical_h on the standalone
         h_mask_active = (
             h_pad_needed
             and logical_h > 0
             and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
         )
 
-        # Pre-conv pad masking. W pad columns must be zeroed on the input in BOTH paths (neighbor_pad has
-        # no W-mask). The full-pad path masks H pad rows inside neighbor_pad (logical_h=...); the compact
-        # neighbor_pad_halo op has no logical_h, so the halo path must mask H here too — folded into the
-        # SAME mul as W (one combined H&W mask) so it pays a single pre-conv mask op, not two full-tensor
-        # muls. Fires only where the physical dim exceeds the logical (e.g. 4x8's s0 pad 34->36 that
-        # propagates through the upsamples); a no-op when every logical dim divides the mesh factor (2x4).
+        # Pre-conv pad masking
         wf = self.parallel_config.width_parallel.factor
         hf = self.parallel_config.height_parallel.factor
         w_needed = logical_w > 0 and wf > 1 and x_BTHWC.shape[3] * wf > logical_w
         h_needed = logical_h > 0 and hf > 1 and x_BTHWC.shape[2] * hf > logical_h
-        # Halo path defers pad masking INTO conv3d (in-kernel, per-position on the interior read) via
-        # logical_h/w + a per-device offset — no full-tensor pre-mul. The full-pad path keeps its W
-        # pre-mul (neighbor_pad masks H via logical_h but has no W mask). See _get_pad_offset / conv3d.
+        # Halo path defers pad masking INTO conv3d (in-kernel, per-position on the interior read) via logical_h/w +
         conv_logical_h = 0
         conv_logical_w = 0
         pad_offset_tensor = None
@@ -356,11 +333,7 @@ class LTXCausalConv3d(Module):
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
             if self._use_halo_conv and self._persist_pad and h_pad_needed and w_pad_needed:
-                # Persistent-padded: neighbor_pad_halo -> compact -> halo_scatter into a padded buffer ->
-                # plain (pad=0) conv. Logical-pad masking is done IN-KERNEL by the plain conv (logical+pad
-                # threshold + per-device interior offset). cf_input_padded: x is already padded -> read its
-                # interior halo (strided) + border-scatter in place (copy-free, no interior copy).
-                # cf_output_padded: conv writes a padded output so the next conv consumes it copy-free.
+                # Persistent-padded: neighbor_pad_halo -> compact -> halo_scatter into a padded buffer -> plain
                 pHe, pWe = self.external_padding[1], self.external_padding[2]
                 # Interior per-device dims (x carries the padded border when cf_input_padded).
                 ih = x_BTHWC.shape[2] - (2 * pHe if cf_input_padded else 0)
@@ -379,8 +352,7 @@ class LTXCausalConv3d(Module):
                         sub_h=(pHe if cf_input_padded else 0),
                         sub_w=(pWe if cf_input_padded else 0),
                     )
-                # Fused exchange+scatter. cf_input_padded: x already carries the padded interior (prev
-                # conv's padded output) -> border-only in place. Else: allocate padded, fill interior+border.
+                # Fused exchange+scatter
                 padded = self.ccl_manager.neighbor_pad_halo_scatter(
                     x_BTHWC,
                     dims=dims,
@@ -415,8 +387,7 @@ class LTXCausalConv3d(Module):
                 )
 
             if self._use_halo_conv:
-                # Compact halo -> conv3d halo mode: conv does the spatial (external) padding by reading the
-                # neighbor's pixels from the halo buffer, skipping the full-pad interior copy.
+                # Compact halo -> conv3d halo mode: conv does the spatial
                 halo_buffer = self.ccl_manager.neighbor_pad_halo_only(
                     x_BTHWC,
                     dims=dims,
@@ -579,9 +550,7 @@ class LTXResnetBlock3D(Module):
         logical_h: int = 0,
         logical_w: int = 0,
     ) -> ttnn.Tensor:
-        # Copy-free: conv1 writes a PADDED output, norm2 runs on it (per-position; border is garbage),
-        # and conv2 reads it copy-free (halo interior read + border-scatter in place) — no interior copy
-        # between the two convs. norm outputs TILE; conv3d needs ROW_MAJOR.
+        # Copy-free: conv1 writes a PADDED output, norm2 runs on it
         residual = x_BTHWC
         h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
@@ -824,8 +793,7 @@ class LTXVideoDecoder(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        # Set True by the pipeline after warmup so the first real decode captures a ttnn trace of
-        # decode_device and later decodes replay it (removing host-dispatch overhead).
+        # Set True by the pipeline after warmup so the first real decode captures a ttnn trace of decode_device
         self._vae_traced = False
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -984,8 +952,7 @@ class LTXVideoDecoder(Module):
         sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         out = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
-        # logical_h/logical_w have grown through the upsample blocks (e.g. 34 -> 272); the caller needs
-        # these post-upsample dims to crop mesh padding, not the pre-upsample ones it passed in.
+        # logical_h/logical_w have grown through the upsample blocks
         return out, logical_h, logical_w
 
     def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
@@ -1039,8 +1006,7 @@ class LTXVideoDecoder(Module):
             )
 
         if output_type == "yuv":
-            # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8.
-            # logical_h/logical_w crop the global-tail mesh padding post-gather in the host planar kernel.
+            # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8
             h_out, w_out = logical_h * q, logical_w * r
             planar = fast_device_to_host_yuv(
                 sample_tt,
@@ -1049,8 +1015,7 @@ class LTXVideoDecoder(Module):
                 logical_h=h_out,
                 logical_w=w_out,
             )
-            # Reshape flat (T, H*W*3//2) -> self-describing (T, H*3//2, W) so the exporter can
-            # recover H/W from the array alone — this IS PyAV's yuv420p ndarray layout.
+            # Reshape flat (T, H*W*3//2) -> self-describing
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         concat_dims = [None, None]

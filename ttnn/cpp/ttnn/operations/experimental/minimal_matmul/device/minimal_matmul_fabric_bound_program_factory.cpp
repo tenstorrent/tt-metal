@@ -233,11 +233,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
 
-    // Transpose core grid if the output is wide (M > N)
-    // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    // When fusing with strided reduce scatter, transposing is disabled
-    // because it resulted in slightly lower performance on a case of interest.
-    // (This can be revisited if needed.)
+    // Transpose core grid if the output is wide (M > N) If transpose core grid
     const bool fuse_srs = srs_fused_op_signaler.has_value();
     bool transpose_core_grid = M > N && !fuse_srs;
 
@@ -262,8 +258,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     uint32_t padded_N_tiles;
     uint32_t N_tiles_per_core;
     if (fuse_swiglu) {
-        // Partition on gate/up PAIRS (= output tiles), so every core's weight-tile range is
-        // 2 * (pairs per core): even, and never splitting a pair across cores.
+        // Partition on gate/up PAIRS (= output tiles), so every core's weight-tile range is 2 *
         uint32_t out_N_tiles = N_tiles / 2;
         uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
         padded_N_tiles = 2 * padded_out_N_tiles;
@@ -281,9 +276,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
     if (fuse_swiglu) {
-        // The gate/up tile pairs are interleaved along N (gate=2p, up=2p+1). Every core's
-        // N range and every N block must start on an even tile and span an even number of
-        // tiles so a pair is never split across cores or blocks.
+        // The gate/up tile pairs are interleaved along N (gate=2p, up=2p+1)
         TT_FATAL(
             N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
             "minimal_matmul fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and N_block_tiles ({}) all even",
@@ -302,9 +295,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    // Sub-chunk (M-row band) count for the fused AG in0 delivery; only meaningful when fusing AG.
-    // Parsed here so the in1 scratch CB, the divisibility checks, and the per-kernel define all agree
-    // on one value.
+    // Sub-chunk (M-row band) count for the fused AG in0 delivery
     uint32_t in0_sub_chunks = 1;
     if (fuse_op) {
         if (const char* e = std::getenv("IN0_SUB_CHUNKS")) {
@@ -315,21 +306,16 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
         }
     }
     // Band-interleave: process a forward remote k-block and the following backward one one-band-at-a-time
-    // (fwd.b0, bwd.b0, ...) instead of draining each whole. Needs two k-blocks resident in the in1 scratch
-    // at once, so it also drives the scratch CB size below. Always enabled on the banded path.
     bool interleave_bands = fuse_op && in0_sub_chunks > 1;
-    // Number of leading (self/local) k-block positions this device owns (see kernels). Placeholder
-    // K_blocks when not fusing / not banding (value only consumed on the IN0_SUB_CHUNKS > 1 path).
+    // Number of leading (self/local) k-block positions this device owns (see kernels)
     uint32_t num_local_k_blocks = K_blocks;
 
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // SwiGLU emits half the N tiles per block (one per gate/up pair), so the output CB only
-    // needs to hold half a block. The intermediate CB still holds the full (2N) block.
+    // SwiGLU emits half the N tiles per block (one per gate/up pair)
     uint32_t out_block_num_tiles_written = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;
-    // out_cb_num_tiles is sized below, after split_output_write is known: the two-NoC split path only
-    // runs with a single output block per core, so it does not need the double buffer (see there).
+    // out_cb_num_tiles is sized below, after split_output_write is known: the two-NoC split path only runs
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -359,11 +345,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
 
     {
-        // Scratch holds one K_block x N_block so the in1 injector can read it once and re-present it to
-        // compute per M-row band without re-reading DRAM (see dm_in1_sender_out.cpp). Single-buffered.
-        // Created unconditionally: the in1 dataflow always reads through it (nb == 1 when not banding).
-        // Band-interleave needs the forward and backward k-blocks of a pair resident at once, so it holds
-        // two blocks.
+        // Scratch holds one K_block x N_block so the in1 injector can read it once and re-present it to compute
         uint32_t in1_scratch_cb_id = tt::CBIndex::c_7;
         tt::tt_metal::create_cb(
             in1_scratch_cb_id,
@@ -374,39 +356,20 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
             in1_data_format);
     }
 
-    // Two-NoC output-write split: the whole-block post-loop write is split across M-rows so dm_in1 writes
-    // the low rows on NOC_1 and dm_in0 writes the high rows on NOC_0. Both DMs are idle at the write
-    // (reads/mcasts done), so no input contention and no dynamic-NoC needed. Only valid for the plain (copy)
-    // epilogue with a single output and one M-block per core (defer_write always false). split_noc1_pct
-    // (0..100) sets the percent of rows going to NOC_1 (dm_in1); the rest go to NOC_0.
+    // Two-NoC output-write split: the whole-block post-loop write is split across M-rows so dm_in1 writes the low
     const uint32_t split_noc1_pct = 50;
-    // Works with bias (compute uses add_bias_block_split; dm_in1 reads the bias since both DMs are writers)
-    // and with chunks (N_chunks > 1): compute still packs low/high M-rows into c_2/c_8 and each writer demuxes
-    // its M-row half's N columns into the chunk tensors. Not compatible with ternary/swiglu epilogues.
+    // Works with bias
     bool split_output_write = !use_fused_ternary && !fuse_swiglu && M_blocks_per_core == 1 && M_block_tiles > 1;
-    // Interleaved two-NoC output write: replace the contiguous [0, split_rows) / [split_rows, M) row split
-    // with an interleaved (ratio-preserving Bresenham) ownership so both NoC writers are fed from the first
-    // rows and overlap, instead of running back-to-back (see split_row_to_noc1 in subchunk_bands.hpp). Only
-    // the N_chunks == 1 write path is interleaved; the chunked (N_chunks > 1) path stays contiguous, so the
-    // define is gated on N_chunks == 1 below to keep compute and both DM writers consistent. Set to false to
-    // restore the contiguous split.
+    // Interleaved two-NoC output write: replace the contiguous [0, split_rows) / [split_rows
     const bool interleaved_output_write = true;
 
-    // Output CB double-buffering only earns its L1 when there is a *next* M-block for compute to work on
-    // while the writer drains the current one. When M_blocks_per_core == 1 there is exactly one output block
-    // per core, so the second buffer overlaps nothing and is dead L1 -- single-buffer it. This is the real
-    // condition (not split_output_write): it also covers the fused-ternary/addcmul epilogue, where
-    // split_output_write is false but M_blocks_per_core is still 1, so that op reclaims the buffer too. It
-    // reclaims one full output block per core (out_block_num_tiles_written tiles) -- the L1 we want back for
-    // the fabric AG buffers on the banded (IN0_SUB_CHUNKS > 1) path rather than paying for it by cutting
-    // num_buffers_per_channel. (c_8, only created on the split path, is already single-buffered.)
+    // Output CB double-buffering only earns its L1 when there is a *next* M-block for compute to work
     uint32_t out_cb_num_tiles = out_block_num_tiles_written * (M_blocks_per_core == 1 ? 1u : double_buffer_factor);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
     if (split_output_write) {
-        // Second output CB (c_8): the high-row half drained by dm_in0 on NOC_0. Full-block size upper-bounds
-        // the high half; total out-CB L1 stays modest.
+        // Second output CB (c_8): the high-row half drained by dm_in0 on NOC_0
         uint32_t out_cb_b_id = tt::CBIndex::c_8;
         tt::tt_metal::create_cb(
             out_cb_b_id, program, core_grid, out_tile_size, out_block_num_tiles, output_data_format);
@@ -490,8 +453,6 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
         defines["FUSE_TERNARY"] = "1";
 
         // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
-        // - If ternary_b / gate is float32 then use unary_bcast (row broadcast) + mul_binary_tile (accurate)
-        // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
         if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
@@ -501,23 +462,10 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
         // Create semaphores
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
-        // Stream the in0 read in this many M-row bands (parsed above), matching the AG's per-band
-        // delivery/signal. On the IN0_SUB_CHUNKS > 1 path the matmul also matmuls + forwards per band
-        // (see compute.cpp / dm_in0_sender.cpp / dm_in1_sender_out.cpp). Must equal the AG program's
-        // IN0_SUB_CHUNKS so the per-band signal counts match.
+        // Stream the in0 read in this many M-row bands (parsed above), matching the AG's per-band delivery/signal
         defines["IN0_SUB_CHUNKS"] = std::to_string(in0_sub_chunks);
         if (in0_sub_chunks > 1) {
-            // Every band occupies a uniform in0 CB slot of (M_block_tiles / in0_sub_chunks) rows, so a
-            // ragged band (height not a multiple of subblock_h, e.g. a partial final M-block) still
-            // reserves a slot that tiles the CB exactly -- no mid-block fifo wrap. matmul reads the full
-            // subblock_h into the slot's slack rows and packs only the real rows. Two divisibility
-            // invariants make that exact:
-            //   1. in0_sub_chunks | M_block_tiles           -- uniform slot is a whole number of rows
-            //   2. subblock_h | (M_block_tiles/in0_sub_chunks) -- the deep read never runs past the slot
-            // Plus every band must be non-empty: balanced_band yields a zero band only when a block has
-            // fewer rows than in0_sub_chunks, and the in1 sender / signal aggregator fire IN0_SUB_CHUNKS
-            // times unconditionally -- a zero band would desync them against the in0/compute early-exit
-            // and deadlock. The smallest block is the (possibly partial) last one.
+            // Every band occupies a uniform in0 CB slot of (M_block_tiles / in0_sub_chunks) rows
             uint32_t last_m_block_tiles = M_tiles_per_core - (M_blocks_per_core - 1) * M_block_tiles;
             TT_FATAL(
                 last_m_block_tiles >= in0_sub_chunks,
@@ -537,10 +485,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
                 M_block_tiles,
                 in0_sub_chunks,
                 M_block_tiles / in0_sub_chunks);
-            // Count this device's local (self) k-blocks = the leading schedule positions the AG delivers
-            // whole (never sub-chunked). Mirrors compute_device_chunk_stats for start_ring_index. v1
-            // requires K_block_tiles-aligned device boundaries: a straddling (co-owned) k-block would
-            // break the local-first band schedule, so assert none exist.
+            // Count this device's local (self) k-blocks = the leading schedule positions the AG delivers whole
             uint32_t my_chip = fused_op_signaler->start_ring_index;
             uint32_t in_Wt = fused_op_signaler->input_tensor_Wt;
             uint32_t curr_device = 0;
@@ -570,10 +515,8 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
             num_local_k_blocks = my_count;
         }
         // Consume the middle forward/backward k-blocks 1-backward-1-forward instead of grouped
-        // (see fused_receiver_utils.hpp::compute_actual_k_block_iter).
         defines["AG_ALTERNATE_MIDDLE"] = "1";
-        // Band-interleave a forward remote k-block with the following backward one (see dm_in0_sender.cpp).
-        // Assigned to the shared defines map so in0/in1 senders and compute all agree on the paired path.
+        // Band-interleave a forward remote k-block with the following backward one (see dm_in0_sender.cpp)
         if (interleave_bands) {
             defines["AG_INTERLEAVE_BANDS"] = "1";
         }
@@ -597,10 +540,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     uint32_t in0_addr = input_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
-    // Note: Dataflow kernels can take a variable number of output tensors.
-    // They are appended as a variable-length array at the end of the runtime-args:
-    //   - for in0 output-writer cores the first output address is at index 13
-    //   - for in1 output-writer cores the first output address is at index 12
+    // Note: Dataflow kernels can take a variable number of output tensors
     uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
                             ? fused_op_signaler->ag_input.value().buffer()->address()
                             : 0;
@@ -615,13 +555,11 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
      * Create kernels
      */
 
-    // Under the two-NoC split both DMs write (dm_in1 the low rows on NOC_1, dm_in0 the high rows on NOC_0);
-    // otherwise exactly one writes.
+    // Under the two-NoC split both DMs write (dm_in1 the low rows on NOC_1, dm_in0 the high rows on NOC_0)
     bool in0_is_output_writer = split_output_write ? true : !transpose_core_grid;
     bool in1_is_output_writer = split_output_write ? true : transpose_core_grid;
 
-    // Per-DM-family defines. Under the split: dm_in1 writes rows [0, split) from c_2; dm_in0 drains c_8 and
-    // writes [split, M). Both get the same split percent so their ranges line up with compute's copy.
+    // Per-DM-family defines
     auto in0_defines = defines;
     auto in1_defines = defines;
     if (split_output_write) {
@@ -870,10 +808,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
         max_defer_write_k_block = std::max(max_defer_write_k_block, dwk);
     }
 
-    // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
-    // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
-    // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
-    // div_up-based ranges for M and N.
+    // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
@@ -920,8 +855,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
-        // Defer write to K block with same coordinate as core
-        // The writer receiver cores always have core.x > 0
+        // Defer write to K block with same coordinate as core The writer receiver cores always have core.x > 0
         uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
 
         bool is_in0_sink = core == in0_core_order.back();
@@ -1136,12 +1070,7 @@ void MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
     auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
 
-    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4),
-    //   defer_write_k_block, max_defer_write_k_block,
-    //   [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
-    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4),
-    //   defer_write_k_block, max_defer_write_k_block,
-    //   [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
+    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4)
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
@@ -1156,9 +1085,7 @@ void MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after max_defer_write_k_block, num_local_k_blocks, and optional ternary addresses.
-    // in0: max_defer(13), num_local(14) -> outputs at 15 (+3 for ternary a/b/broadcast = 18).
-    // in1: max_defer(12), num_local(13) -> outputs at 14 (+3 for ternary = 17).
+    // Output addresses start after max_defer_write_k_block, num_local_k_blocks, and optional ternary addresses
     uint32_t in0_out_addr_start_idx = has_fused_ternary ? 18 : 15;
     uint32_t in1_out_addr_start_idx = has_fused_ternary ? 17 : 14;
 
@@ -1240,8 +1167,7 @@ void MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
         CoreCoord core = override_variables.cores.at(i);
         auto& compute_args = compute_runtime_args[core.x][core.y];
 
-        // Compute RT args: [M_start, M_end, N_start, N_end, [optional: scalar]]
-        // If ternary is present and scalar arg exists, update it at index 4
+        // Compute RT args: [M_start, M_end, N_start, N_end, [optional: scalar]] If ternary is present and scalar arg
         if (has_fused_ternary && operation_attributes.fused_ternary_scalar.has_value()) {
             float scalar = operation_attributes.fused_ternary_scalar.value();
             uint32_t scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);

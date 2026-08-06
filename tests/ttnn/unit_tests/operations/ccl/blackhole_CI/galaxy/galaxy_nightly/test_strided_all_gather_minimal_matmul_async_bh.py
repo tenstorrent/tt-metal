@@ -21,15 +21,7 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-# SP=8 / TP=4 on the blackhole galaxy. The (8, 4) mesh puts the M/sequence shard (other_dim) on
-# axis 0 (SP=8) and the K/contraction shard (dim) on axis 1 (TP=4), matching the impl's
-# shard_dims = [other_dim, dim]. The all-gather reconstructs full K across the TP group, so it
-# rides axis 1 -- the impl's default cluster_axis=1. K gathers over TP=4, so per-device K is
-# 4096/4 = 32 tiles; mm_block_k is 256 (8 tiles), which divides it.
-#
-# Core-grid partition (blackhole 12x10 grid): matmul takes the lower mm_core_grid.y rows at width
-# mm_core_grid.x; the strided all-gather workers take the rows above, starting at ag_offset, so
-# ag_offset.y must equal mm_core_grid.y to keep the two regions disjoint.
+# SP=8 / TP=4 on the blackhole galaxy
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
@@ -83,16 +75,13 @@ def create_fabric_router_config(max_payload_size):
     ],
     ids=["fused"],
 )
-# One axis for the mutually-exclusive fused-output variants. addcmul and fused_activation cannot be
-# combined on the op (validate); chunks (output split) is exercised on the plain projection, matching how
-# LTX uses it (qkv/kv projections have no activation/addcmul). "chunks2" needs N divisible by chunks.
+# One axis for the mutually-exclusive fused-output variants
 @pytest.mark.parametrize(
     "fused_op_variant",
     [None, "addcmul", "gelu_tanh", "chunks2"],
     ids=["plain", "addcmul", "gelu_tanh", "chunks2"],
 )
-# Bias is orthogonal to the variant (LTX uses bias on every AG-matmul call). Note bias disables the
-# two-NoC split write (the !use_bias gate), so bias+chunks2 uses the single-NoC chunk write.
+# Bias is orthogonal to the variant (LTX uses bias on every AG-matmul call)
 @pytest.mark.parametrize(
     "use_bias",
     [False, True],
@@ -196,48 +185,25 @@ def test_strided_all_gather_minimal_matmul_async(
     )
 
 
-# The AG-matmul configurations the LTX transformer block actually uses (see models/tt_dit LTXAttention /
-# ParallelFeedForward), for both the video (dim=4096) and audio (dim=2048) blocks. Every call has bias; only
-# K (=dim, gathered across TP=4), the output width N, the chunk count, the fused epilogue, and the N blocking
-# differ. M reuses the wan1 sequence for all (see caveat: the real M is the text sequence for *_kv and the
-# audio sequence for a_*). N below is the FULL model width; the table uses the per-device value (full / TP=4).
-# The *_gate case (N = num_heads/TP = 8, a sub-tile width) is commented out for now — TODO.
-#   *_qkv         : attn1.to_qkv       bias, chunks=3  (Q|K|V,  N = 3*dim)
-#   *_kv          : attn2.to_kv        bias, chunks=2  (K|V,    N = 2*dim, M = context/text seq)
-#   *_q_out       : to_q / to_out      bias, chunks=1, N = dim
-#   *_out_addcmul : attn.to_out fused  bias + addcmul, chunks=1
-#   *_ff1         : ffn.ff1 / audio_ff bias + gelu_tanh, chunks=1, N = ffn_dim
-#   *_gate        : to_gate_logits     bias, chunks=1, N = num_heads = 32 (disabled)
+# The AG-matmul configurations the LTX transformer block actually uses
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ltx_layer, M, K, N, chunks, use_bias, activation, use_ternary, M_block, K_block, N_block, subblock_h, subblock_w",
     [
-        # M is the full (SP=8) sequence length; per-device M = M / 8 (e.g. 38912 -> 4864, 9728 -> 1216).
-        # M_block/K_block/N_block/subblock_h/subblock_w are in TILES. Video block (K = video_dim = 4096);
-        # q_out folds to_q / to_out(plain) / cross-attn q. N is the PER-DEVICE output width (full N / TP=4),
-        # since shard_weights=False replicates a per-device-sized weight (K is full, gathered by the AG).
-        # Multi-N-block configs (v_qkv/v_kv/v_ff1 and audio) are commented out: with N_blocks/core > 1 the split
-        # write takes the deferred path, which is not split-aware and deadlocks. These are the wide-N (compute-
-        # bound) matmuls, so the fabric-bound AG-overlap path doesn't matter for them and we don't care to run them.
-        # ("v_qkv", 38912, 4096, 3072, 3, True, None, False, 16, 8, 4, 2, 2), good
-        # ("v_kv", 38912, 4096, 2048, 2, True, None, False, 16, 8, 4, 2, 2), check this dont see it on device
+        # M is the full (SP=8) sequence length
         ("v_q_out", 38912, 4096, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
         ("v_q_out_addcmul", 38912, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
         ("v_q_out_s1", 9728, 4096, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
         ("v_q_out_addcmul_s1", 9728, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
-        # ("v_out_addcmul", 38912, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
-        # ("v_ff1", 38912, 4096, 4096, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
+        # ("v_out_addcmul", 38912, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2)
         ("v_gate", 38912, 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         ("v_gate_s1", 9728, 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),
-        # Audio block (K = audio_dim = 2048), same fusion structure with halved dims.
-        # ("a_qkv", 38912, 2048, 1536, 3, True, None, False, 16, 8, 4, 2, 2),
+        # Audio block (K = audio_dim = 2048), same fusion structure with halved dims
         ("a_kv", 38912, 2048, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
         ("a_kv_s1", 9728, 2048, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
-        # ("a_q_out", 38912, 2048, 512, 1, True, None, False, 16, 8, 4, 2, 2),
-        # ("a_out_addcmul", 38912, 2048, 512, 1, True, None, True, 16, 8, 4, 2, 2),
-        # ("a_ff1", 38912, 2048, 2048, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
+        # ("a_q_out", 38912, 2048, 512, 1, True, None, False, 16, 8, 4, 2, 2)
         ("a_gate", 38912, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         ("a_gate_s1", 9728, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         # N_block=2 to match the in-model registry (N_block=1 deadlocks via the split-write path).

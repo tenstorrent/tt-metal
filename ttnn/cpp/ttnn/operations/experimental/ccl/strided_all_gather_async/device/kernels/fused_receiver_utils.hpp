@@ -60,17 +60,13 @@ struct MinimalMatmulOpReceiver {
     uint32_t num_k_blocks = 0;
     uint32_t local_k_start = 0;
     uint32_t local_k_end = 0;
-    // Per-worker signaling: each of the N all-gather workers in a remote direction increments its own
-    // semaphore, so a k-block is ready only once all N have signaled. self is a single semaphore
-    // (aggregated by the writer-side worker barrier). N==1 reproduces the legacy [backward,forward,self].
+    // Per-worker signaling: each of the N all-gather workers in a remote direction increments its own semaphore
     uint32_t num_ag_workers = 1;
     uint32_t* backward_sem_addrs = nullptr;  // [num_ag_workers] L1 semaphore addresses
     uint32_t* forward_sem_addrs = nullptr;   // [num_ag_workers] L1 semaphore addresses
     volatile tt_l1_ptr uint32_t* self_sem_ptr = nullptr;
     std::array<uint32_t, 3> sem_targets = {};  // indexed by direction: [backward, forward, self]
-    // Direction the most recent compute_actual_k_block_iter awaited, so a caller doing per-band reads
-    // can wait_for_dir() the same direction for bands 1..N. dir 2 (self/local) is not aggregator-
-    // signaled, so the caller must read it whole rather than band-by-band.
+    // Direction the most recent compute_actual_k_block_iter awaited
     uint8_t streamed_dir = 2;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     bool read_local_slice_from_input;
@@ -88,10 +84,7 @@ struct MinimalMatmulOpReceiver {
     uint8_t next_forward = 0;
     int8_t next_backward = 0;
 
-    // Interleaved-middle schedule state. Two independent direction cursors let the middle
-    // forward/backward region be consumed one-backward-one-forward instead of drained as
-    // whole-device groups. Each cursor keeps its own within-direction order (so the monotonic
-    // per-direction semaphores stay valid); only the interleaving between directions changes.
+    // Interleaved-middle schedule state
     uint8_t il_phase = 0;     // 0 = self, 1 = fwd/bwd (middle + folded diametric halves)
     uint8_t il_bwd_dist = 1;  // backward cursor device = my - il_bwd_dist
     uint32_t il_bwd_chunk = 0;
@@ -159,9 +152,7 @@ struct MinimalMatmulOpReceiver {
             device_k_block_counts,
             device_k_block_start_ids);
 
-        // A straddling k-block (expected==2) is co-completed by two devices sitting on
-        // different direction passes; interleaving would reorder those pair-completions, so
-        // the interleaved path is only enabled when no k-block straddles a device boundary.
+        // A straddling k-block (expected==2) is co-completed by two devices sitting on different direction passes
         for (uint32_t k = 0; k < num_k_blocks; k++) {
             if (k_block_device_expected[k] == 2) {
                 has_straddle = true;
@@ -261,8 +252,7 @@ struct MinimalMatmulOpReceiver {
         }
     }
 
-    // Block on the current direction's signal(s) exactly as the grouped path does: self is a
-    // single aggregated semaphore; a remote direction is ready only once all N workers signal.
+    // Block on the current direction's signal(s) exactly as the grouped path does: self is a single aggregated
     void wait_for_dir(uint8_t dir) {
         if (wait_for_op_signal && !(read_local_slice_from_input && (dir == 2))) {
             uint32_t sem_target = sem_targets[dir];
@@ -278,10 +268,7 @@ struct MinimalMatmulOpReceiver {
         }
     }
 
-    // Emit the next (direction, device, chunk) of the interleaved schedule: all self chunks,
-    // then the two remote directions alternating at chunk granularity, each kept in distance
-    // order 1..half. The diametric device (distance half) is not a separate step: its backward
-    // and forward halves ride the respective cursors, so it interleaves like any other block.
+    // Emit the next (direction, device, chunk) of the interleaved schedule: all self chunks
     void next_interleaved_slot(uint8_t& out_dir, uint8_t& out_dev, uint32_t& out_chunk) {
         const uint32_t half = num_devices / 2;
         while (true) {
@@ -295,9 +282,7 @@ struct MinimalMatmulOpReceiver {
                 il_phase = 1;
                 continue;
             }
-            // fwd/bwd region, distances 1..half. The diametric device sits at distance half and
-            // is split-forwarded: the backward link carries its first half, the forward link its
-            // second half, so each cursor folds its diametric half in as a normal last step.
+            // fwd/bwd region, distances 1..half
             bool bwd_avail = il_bwd_dist <= half;
             bool fwd_avail = il_fwd_dist <= half;
             if (!bwd_avail && !fwd_avail) {
@@ -356,8 +341,7 @@ struct MinimalMatmulOpReceiver {
 #endif
             {
                 while (true) {
-                    // On an even ring the diametric device's slice is split-forwarded: its second half
-                    // is relayed on the forward link, so await that half on the forward signal semaphore.
+                    // On an even ring the diametric device's slice is split-forwarded: its second half is relayed
                     if (topology == ttnn::ccl::Topology::Ring && num_devices % 2 == 0 && num_devices > 2) {
                         uint32_t diametric_device = (my_chip_id + num_devices / 2) % num_devices;
                         if (device_id == diametric_device && device_k_block_counts[device_id] >= 2 &&
@@ -371,8 +355,7 @@ struct MinimalMatmulOpReceiver {
                             // self: single semaphore (writer-side worker barrier already aggregated all workers)
                             noc_semaphore_wait_min(self_sem_ptr, sem_target + 1);
                         } else {
-                            // remote direction: a k-block is ready only once all N workers have signaled their
-                            // own semaphore (per-worker counters are drift-safe across independent fabric links)
+                            // remote direction: a k-block is ready only once all N workers have signaled their own
                             uint32_t* addrs = (curr_k_block_dir == 0) ? backward_sem_addrs : forward_sem_addrs;
                             for (uint32_t w = 0; w < num_ag_workers; w++) {
                                 noc_semaphore_wait_min(
@@ -381,8 +364,7 @@ struct MinimalMatmulOpReceiver {
                         }
                         sem_targets[curr_k_block_dir]++;
                     }
-                    // Record before process_chunk advances curr_k_block_dir, so a banded caller waits
-                    // the same direction's aggregator signal for this k-block's later bands.
+                    // Record before process_chunk advances curr_k_block_dir
                     streamed_dir = curr_k_block_dir;
                     int32_t k_block = process_chunk(
                         device_id, device_chunk_id, curr_k_block_dir, devices_received, next_forward, next_backward);

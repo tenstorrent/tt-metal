@@ -84,13 +84,11 @@ void kernel_main() {
 #if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
 // If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
 #ifdef FUSE_BIAS
-    // After in2, then in3, then ternary. TensorAccessorArgs counts are tensor-config dependent, so advance
-    // the accessor-aware way (never a fixed arg count): skip in2 + in3 starting from in2's offset.
+    // After in2, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, in2_args_cta_offset>();
 #else
-    // After outputs, then in3, then ternary. Treat in3 as one more accessor past the N_chunks outputs so its
-    // real (config-dependent) arg count is skipped.
+    // After outputs, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks + 1, out_tensor_args_cta_offset>();
 #endif
@@ -195,8 +193,7 @@ void kernel_main() {
     uint32_t mm_progress_counters_base = 0;
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
-        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array,
-        // pushed as the next RT arg right after the OpSignaler args.
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
     }
 #endif
@@ -421,10 +418,7 @@ void kernel_main() {
              * of the next output block.
              */
 #ifdef SRS_FUSE_OP_SIGNALER
-            // Fused RS path: write each block promptly (no core-y defer stagger — the L1-sharded output has
-            // no DRAM write banks to spread). This lets the per-core progress counter the RS reader polls
-            // tick at compute-completion instead of at the global max_defer_write_k_block barrier ~a block
-            // later, which was delaying the reader by a full block.
+            // Fused RS path: write each block promptly
             defer_write = false;
 #else
             defer_write = !is_last_block;
@@ -485,9 +479,7 @@ void kernel_main() {
                     }
 #endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER
-                    // Signal this core's per-core progress counter right after its prompt block write, at
-                    // compute-completion (every block, not just is_last_block). The reader waits per core, so
-                    // no global "all cores done writing" barrier is needed.
+                    // Signal this core's per-core progress counter right after its prompt block write
                     noc.async_write_barrier();
                     srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
 #endif

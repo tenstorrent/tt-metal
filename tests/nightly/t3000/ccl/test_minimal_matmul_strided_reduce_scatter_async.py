@@ -160,8 +160,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
-        # Golden: per-device MM outputs (each device has different weights). Skipped in perf/sweep
-        # mode (check_correctness=False) since the per-device torch.matmul is expensive and unused.
+        # Golden: per-device MM outputs (each device has different weights)
         if check_correctness:
             torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
             mm_outputs = []

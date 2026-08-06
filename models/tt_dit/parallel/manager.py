@@ -36,8 +36,7 @@ class CCLManager:
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
         self._fused_norm_stats_buffer_cache = {}
 
-        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op,
-        # keyed by (mesh_axis, num_workers_per_link). See get_strided_ag_mm_semaphore.
+        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
         self._strided_ag_mm_sem_cache = {}
         self._strided_ag_mm_sem_idx = {}
         # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
@@ -121,8 +120,7 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
-        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts
-        # when standalone NP and fused ops alternate in the same pipeline
+        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts when standalone NP and fused ops
         self.np_fused_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
@@ -132,11 +130,7 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
-        # Per-(region,link) progress sems for fused NP+Conv3d overlap: 4 face regions
-        # {H-top, H-bot, W-left, W-right} × num_links links, indexed [region*num_links + link].
-        # That is exactly 8 on BH-LB (num_links=2); up to 16 at num_links=4 (4x8). Single bank, no host
-        # reset: the consuming kernels self-reset their own copies on-device after their final wait, so
-        # the op is trace-safe and the static addresses are baked once by the factory.
+        # Per-(region,link) progress sems for fused NP+Conv3d overlap: 4 face regions {H-top, H-bot, W-left
         self._np_region_n_sems = 4 * self.num_links
         self.np_region_progress_semaphores = {
             0: [
@@ -448,9 +442,7 @@ class CCLManager:
         h_halo_total = outer_dim_size * 2 * padding * h_sticks
         w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0
         total_sticks = h_halo_total + w_halo_total
-        # Each "stick" = C channels × 2 bytes (BF16). The compact buffer must have shape
-        # [total_sticks, C] so that each 2D row = C elements = one stick page (= C×2 bytes),
-        # matching the input tensor's aligned_page_size used as stick_size in the NP factory.
+        # Each "stick" = C channels × 2 bytes (BF16)
         C = input_shape[-1]  # channel dimension
 
         cache_key = ("np_halo", tuple(input_shape), dim, padding, dim2, padding2, dtype)

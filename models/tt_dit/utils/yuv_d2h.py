@@ -22,8 +22,7 @@ from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
 
-# Persistent host-side reassembly pool — strided uint8 copies release the GIL,
-# so a few threads scale near-linearly; persistence avoids per-call startup.
+# Persistent host-side reassembly pool — strided uint8 copies release the GIL, so a few threads scale near-linearly
 _DEFAULT_REASSEMBLE_POOL: ThreadPoolExecutor | None = None
 _DEFAULT_REASSEMBLE_WORKERS = min(8, os.cpu_count() or 8)
 
@@ -38,10 +37,7 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
-# Persistent output buffer for the C++ planar-concat fast path — fresh np.empty
-# pays first-touch page-fault overhead per call that dwarfs the kernel; reuse
-# eliminates it. The returned buffer is reused across calls (copy out / feed
-# ffmpeg before the next call). Shape changes reallocate lazily.
+# Persistent output buffer for the C++ planar-concat fast path
 _PLANAR_OUT_BUF: np.ndarray | None = None
 _PLANAR_OUT_SHAPE: tuple[int, int] | None = None
 
@@ -110,9 +106,7 @@ def _yuv_planar_d2h(
     uv = Hu * Wu
     row_stride = hw + 2 * uv
 
-    # Logical output dims: when the VAE pads (global right/bottom tail, e.g. LTX W 1920->2048),
-    # the scatter writes each shard's valid columns/rows straight into a logical-sized buffer —
-    # no separate trim copy. Defaults to the padded H/W (no crop).
+    # Logical output dims: when the VAE pads
     out_H = H if out_H is None else out_H
     out_W = W if out_W is None else out_W
 
@@ -179,17 +173,7 @@ def _yuv_planar_d2h(
         Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
         Cr_shards = _extract(host_Cr)
 
-    # --- C++/AVX2 fast path ---------------------------------------------
-    #
-    # Drop-in replacement for the torch_threaded scatter below: same byte
-    # layout, ~2× faster with the persistent output buffer.  The C++
-    # binding assumes shards are passed in row-major (r, c) order, so we
-    # sort by coord first.  The fast path requires a complete TP_eff ×
-    # SP_eff rectangular submesh; if the local coords are sparse (could
-    # happen on irregular multi-host topologies), we fall through to the
-    # Python path which handles arbitrary coord sets.
-    # C++ path: needs a complete TP_eff x SP_eff rectangular submesh; it clamps each shard's
-    # write to out_H/out_W (the padded global tail is never written) and sizes out logically.
+    # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
     if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
         triples = sorted(
             zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
@@ -209,9 +193,7 @@ def _yuv_planar_d2h(
             out_W=out_W,
         )
 
-    # --- Python fallback (torch_threaded scatter) ------------------------
-    # Assemble directly into the logical-sized planar buffer; each shard's scatter is clamped to
-    # the logical bound so padded tail rows/cols are simply not written (no separate trim pass).
+    # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
     out_Hu, out_Wu = out_H // 2, out_W // 2
     out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
     out_row = out_hw + 2 * out_uv
@@ -328,13 +310,7 @@ def fast_device_to_host_yuv(
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
 
-    # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the
-    # per-shard (local) shape, not the global logical shape.  We derive the
-    # global H, W from the mesh shape, assuming H is sharded on axis 0 and W
-    # on axis 1 (the convention this function documents).  All on-device ops
-    # (permute, reshape, yuv_conversion) operate on per-shard semantics, so
-    # we use ``h_per, w_per`` for the reshape target; ``_yuv_planar_d2h``
-    # then takes the global ``H, W`` to size the output buffer.
+    # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the per-shard (local) shape
     mesh_shape = tuple(mesh_device.shape)
     B, C, T, h_per, w_per = tt_video_BCTHW.shape
     assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
@@ -364,10 +340,7 @@ def fast_device_to_host_yuv(
 
         inter_dim = concat_dims[inter_host_axis]
         if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
-            # Move the gather dim out of the tile dims (last two) to position 2
-            # (dim=-3). This avoids the composite_all_gather path's tile-padded
-            # check and makes any concat fallback a cheap outer-dim memcpy.
-            # BCTHW dims: B=0 C=1 T=2 H=3 W=4. inter_dim is 3 (H) or 4 (W).
+            # Move the gather dim out of the tile dims (last two) to position 2 (dim=-3)
             if inter_dim == 4:
                 pre_dims = (0, 1, 4, 2, 3)  # BCTHW -> BCWTH
                 post_dims = (0, 1, 3, 4, 2)  # BCWTH -> BCTHW
@@ -385,8 +358,7 @@ def fast_device_to_host_yuv(
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
-            # Drop back to ROW_MAJOR before repeat/mesh_partition so ttnn.repeat
-            # doesn't wrap itself in an Untilize → Repeat → Tilize roundtrip.
+            # Drop back to ROW_MAJOR before repeat/mesh_partition so ttnn.repeat doesn't wrap itself in an Untilize →
             tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
@@ -426,9 +398,7 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
-    # 3+4. Batched D2H + planar concat, assembled straight into the logical-sized buffer.
-    # The VAE pads a global right/bottom tail (LTX pads W 1920->2048 on 4x8); passing
-    # out_H/out_W clamps each shard's scatter so the padded tail is never written — no trim copy.
+    # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
     out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool)
