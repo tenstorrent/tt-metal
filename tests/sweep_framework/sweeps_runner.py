@@ -1888,6 +1888,26 @@ def _should_skip_device_profiler(config):
                     "(idle_erisc.elf 0x5544 > 0x5390). Vectors report device-perf N/A and PASS."
                 )
                 return True
+        elif fabric_config_for_mesh((2, 2)) is not None:
+            # No declared mesh, and the fabric is enabled. We cannot resolve the real mesh here:
+            # this runs in the MAIN process before any device is opened, and the open path's
+            # fallback (get_mesh_shape -> hardware auto-detect) constructs a cluster. Doing that
+            # in the parent is what wedges Galaxy dispatch when the worker later opens the mesh
+            # -- see the note on get_card_type/prime_device_count.
+            #
+            # get_model_traced_mesh_shape's own docstring records the consequence: with
+            # MESH_DEVICE_SHAPE unset, auto-detect returns (4, 8) on a Galaxy, so the open WOULD
+            # enable FABRIC_2D while the profiler is on -> overflow at mesh open. The two errors
+            # are not symmetric (lose device-perf vs. wedge the run), so be conservative and skip.
+            # The probe shape (2, 2) only asks "is fabric enabled for a 2D mesh at all?", so
+            # TTNN_SWEEP_FABRIC=off correctly falls through and keeps device-perf.
+            logger.info(
+                "Skipping device profiler: MESH_DEVICE_SHAPE is unset and the fabric is enabled, "
+                "so the mesh the open path auto-detects may be 2D (FABRIC_2D + profiler overflows "
+                "idle-erisc at mesh open). Set MESH_DEVICE_SHAPE to the batch's mesh, or "
+                "TTNN_SWEEP_FABRIC=off, to get device-perf back."
+            )
+            return True
     except Exception as e:
         logger.warning(f"Could not evaluate the fabric profiler gate ({e}); leaving the profiler as-is.")
 
