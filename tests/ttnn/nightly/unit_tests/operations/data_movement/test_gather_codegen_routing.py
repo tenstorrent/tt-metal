@@ -26,6 +26,26 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
+_UINT16_MAX = 65535
+
+
+def _materialize_index(shape, kwargs, layout, device):
+    """Ledger `index` specs are shape lists, not tensors — materialize once per case so every leg
+    (golden, routed, cache-hit pair) gathers the same elements. The dtype follows the gathered
+    axis length: uint16 cannot name a position past 65535."""
+    index_shape = kwargs.get("index")
+    if not isinstance(index_shape, list):
+        return kwargs
+    dim = kwargs.get("dim", -1)
+    axis = dim if dim >= 0 else len(shape) + dim
+    axis_len = int(shape[axis])
+    index = torch.randint(0, axis_len, index_shape, dtype=torch.int32)
+    index_dtype = ttnn.uint16 if axis_len <= _UINT16_MAX else ttnn.uint32
+    out = dict(kwargs)
+    out["index"] = ttnn.from_torch(index, dtype=index_dtype, layout=layout, device=device)
+    return out
+
+
 _DTYPES = [ttnn.bfloat16]
 _DTYPE_IDS = ["bfloat16"]
 
@@ -33,11 +53,13 @@ _ROUTING = [
     # port scope: layout row_major not in ['tile']
     ([1, 1, 128, 128], {"dim": -1, "index": [1, 1, 128, 64]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 128, 128], {"dim": -2, "index": [1, 1, 64, 128]}, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 1, 1536, 32768], {"dim": -1, "index": [1, 1, 1536, 256]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 20, 31990], {"dim": -1, "index": [1, 1, 20, 7670]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 256, 256], {"dim": -1, "index": [1, 1, 256, 128]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 32, 15360], {"dim": -1, "index": [1, 1, 32, 7680]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 32, 64], {"dim": -1, "index": [1, 1, 32, 32]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 32, 64], {"dim": -2, "index": [1, 1, 16, 64]}, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 1, 4352, 128], {"dim": -1, "index": [1, 1, 4352, 96]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 64, 128], {"dim": -2, "index": [1, 1, 32, 128]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 64, 32000], {"dim": -1, "index": [1, 1, 64, 3200]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 64, 64], {"dim": -1, "index": [1, 1, 64, 32]}, ttnn.ROW_MAJOR_LAYOUT),
@@ -52,11 +74,13 @@ _ROUTING_IDS = [
     # port scope: layout row_major not in ['tile']
     "[1, 1, 128, 128]|dim=-1&index=[1, 1, 128, 64]|row_major",
     "[1, 1, 128, 128]|dim=-2&index=[1, 1, 64, 128]|row_major",
+    "[1, 1, 1536, 32768]|dim=-1&index=[1, 1, 1536, 256]|row_major",
     "[1, 1, 20, 31990]|dim=-1&index=[1, 1, 20, 7670]|row_major",
     "[1, 1, 256, 256]|dim=-1&index=[1, 1, 256, 128]|row_major",
     "[1, 1, 32, 15360]|dim=-1&index=[1, 1, 32, 7680]|row_major",
     "[1, 1, 32, 64]|dim=-1&index=[1, 1, 32, 32]|row_major",
     "[1, 1, 32, 64]|dim=-2&index=[1, 1, 16, 64]|row_major",
+    "[1, 1, 4352, 128]|dim=-1&index=[1, 1, 4352, 96]|row_major",
     "[1, 1, 64, 128]|dim=-2&index=[1, 1, 32, 128]|row_major",
     "[1, 1, 64, 32000]|dim=-1&index=[1, 1, 64, 3200]|row_major",
     "[1, 1, 64, 64]|dim=-1&index=[1, 1, 64, 32]|row_major",
@@ -74,6 +98,7 @@ _ROUTING_IDS = [
 def test_gather_codegen_routing(device, shape, kwargs, dtype, layout):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    kwargs = _materialize_index(shape, kwargs, layout, device)
     golden = ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_NATIVE))
     entries_before = device.num_program_cache_entries()
     out = ttnn.gather(xt, **kwargs, implementation=_ROUTED)
@@ -94,6 +119,7 @@ _CACHE_HIT_IDS = [
 def test_gather_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    kwargs = _materialize_index(shape, kwargs, layout, device)
     golden = ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_NATIVE))
     assert_equal(golden, ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_CODEGEN)))
     entries_after_miss = device.num_program_cache_entries()
@@ -113,7 +139,8 @@ _SELECTOR_CASE = ([1, 1, 32, 64], {"dim": -1, "index": [1, 1, 32, 32]}, ttnn.bfl
 def test_gather_codegen_rejects_an_unknown_implementation(device, expect_error, selector):
     shape, kwargs, dtype, layout = _SELECTOR_CASE
     xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    kwargs = _materialize_index(shape, kwargs, layout, device)
     # The selector is parsed on every call, including ones a front-end shortcut would
     # otherwise answer without dispatching, so an unknown value never passes silently.
-    with expect_error(RuntimeError, "invalid implementation"):
+    with expect_error(RuntimeError, "Unknown gather implementation selector"):
         ttnn.gather(xt, **kwargs, implementation=selector)
