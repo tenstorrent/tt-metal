@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
@@ -29,7 +30,8 @@ namespace ckernel {
  * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t | 0 to 31, defaults to CB 16 | True     |
  */
 // clang-format on
-ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void binary_op_init_common(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure(icb0, icb1, ocb, call_line);
 
@@ -72,7 +74,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
@@ -93,7 +95,7 @@ ALWI void binary_tiles_init(
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_tiles_init(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
     // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
     // More control is provided with 3-arg version of init API.
@@ -110,7 +112,8 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __bu
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_tiles_init(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t acc_to_dest, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWMUL>(
         icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -127,7 +130,7 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uin
  */
 // clang-format on
 ALWI void add_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWADD>(
         icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -144,7 +147,7 @@ ALWI void add_tiles_init(
  */
 // clang-format on
 ALWI void sub_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWSUB>(
         icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -167,7 +170,8 @@ ALWI void sub_tiles_init(
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     // static bool first = true; // TODO(AP): static initializer causes a hang, possibly investigate
     // if (first)
     //  one possible solution is to add a local context in the kernel, pass it around and store init flags in it
@@ -204,7 +208,8 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
@@ -232,7 +237,8 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void sub_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
@@ -268,8 +274,13 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  */
 // clang-format on
 ALWI void mul_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         mul_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
@@ -300,8 +311,13 @@ ALWI void mul_block(
  */
 // clang-format on
 ALWI void add_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         add_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
@@ -332,27 +348,115 @@ ALWI void add_block(
  */
 // clang-format on
 ALWI void sub_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         sub_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 
+namespace detail {
+
+// Compile-time legality fence for the (broadcast x dest-reuse) matrix accepted by
+// binary_dest_reuse_tiles_init and binary_dest_reuse_tiles. Shared by both on purpose: the init is
+// what programs the unpacker MOP and the FPU broadcast mode, so a broadcast accepted by one and not
+// the other is a silent wrong-data bug rather than a build failure. Nothing else links an init to
+// its execute, so both must be instantiated with identical template arguments.
+template <BroadcastType src_b_bcast_type, EltwiseBinaryReuseDestType binary_reuse_dest>
+ALWI void assert_dest_reuse_broadcast_supported() {
+    static_assert(
+        src_b_bcast_type != BroadcastType::SCALAR,
+        "binary_dest_reuse_tiles: BroadcastType::SCALAR cannot be combined with dest reuse. The unpacker "
+        "rejects it outright (_llk_unpack_A_mop_config_ asserts !acc_to_dest for SCALAR), and its "
+        "acc_to_dest=false MOP raises only 1 of the 4 SrcA dvalids the FPU consumes, so the op would also "
+        "hang. Fix: materialize the scalar into a full tile first (mul_tiles_bcast<BroadcastType::SCALAR>), "
+        "then run binary_dest_reuse_tiles with BroadcastType::NONE.");
+
+    static_assert(
+        !(src_b_bcast_type != BroadcastType::NONE && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB),
+        "binary_dest_reuse_tiles: a broadcast operand is unpacked into SrcB, so SrcB is not available to "
+        "receive DST; the unpacker rejects this pairing (_llk_unpack_A_mop_config_). Fix: use "
+        "EltwiseBinaryReuseDestType::DEST_TO_SRCA with the broadcast, or keep BroadcastType::NONE if the "
+        "op really needs DEST_TO_SRCB.");
+
+    static_assert(
+        !(src_b_bcast_type != BroadcastType::NONE && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE),
+        "binary_dest_reuse_tiles: broadcast is only supported on the dest-reuse path. With "
+        "EltwiseBinaryReuseDestType::NONE nothing loads SrcA from DST, so the FPU would consume whatever "
+        "the dvalid-only unpack path leaves in SrcA and produce wrong results. Fix: pass "
+        "EltwiseBinaryReuseDestType::DEST_TO_SRCA, or use the add_tiles_bcast / sub_tiles_bcast / "
+        "mul_tiles_bcast family for a plain two-CB broadcast.");
+
+#ifndef ARCH_BLACKHOLE
+    static_assert(
+        src_b_bcast_type == BroadcastType::NONE,
+        "binary_dest_reuse_tiles: broadcast combined with dest reuse is implemented on Blackhole only. On "
+        "Wormhole the unpacker MOP raises just 1 of the 4 SrcA dvalids the FPU consumes for ROW and "
+        "ignores acc_to_dest entirely for COL, so the kernel hangs; on Quasar llk_unpack_A_init "
+        "hard-asserts BroadcastType::NONE for dest reuse. Fix: pass BroadcastType::NONE here and do the "
+        "broadcast as a separate step (add_tiles_bcast / mul_tiles_bcast), or gate the broadcasting call "
+        "on #ifdef ARCH_BLACKHOLE.");
+#endif
+}
+
+}  // namespace detail
+
+// clang-format off
 /**
- * Please refer to documentation for any_init.
+ * Init for *binary_dest_reuse_tiles*. Programs the unpacker MOP and the FPU (op, broadcast mode, dest-reuse mode and
+ * math fidelity) for the *binary_dest_reuse_tiles* calls that follow it.
+ *
+ * Must be instantiated with the SAME template arguments as those calls. The broadcast mode lives in the unpacker MOP
+ * and the FPU config programmed here, not at the execute call site, so an init/execute template mismatch yields
+ * silently wrong data rather than a compile error - nothing links the two at compile time.
+ *
+ * NOTE: any *src_b_bcast_type* other than BroadcastType::NONE is Blackhole-only and requires
+ * *binary_reuse_dest* == EltwiseBinaryReuseDestType::DEST_TO_SRCA. Illegal combinations are rejected by static_assert.
+ *
+ * NOTE: BroadcastType::ROW and BroadcastType::COL additionally require a full 4-face (32x32) tile. The unpacker MOP
+ * for those modes is hardwired to 4 faces, so narrower tiles are silently mis-unpacked. This is a runtime property of
+ * the CB's tile shape and is therefore not caught by static_assert - the caller must guarantee it.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name                | Description                                                                                                        | Type                       | Valid Range                                                                                       | Required |
+ * |------------|---------------------|--------------------------------------------------------------------------------------------------------------------|----------------------------|---------------------------------------------------------------------------------------------------|----------|
+ * | Template   | eltwise_binary_type | The binary operation the FPU is programmed for                                                                     | EltwiseBinaryType          | ELWADD, ELWSUB, ELWMUL. Defaults to ELWADD                                                        | False    |
+ * | Template   | binary_reuse_dest   | Which source register is loaded from DST instead of from a CB                                                      | EltwiseBinaryReuseDestType | NONE, DEST_TO_SRCA, DEST_TO_SRCB. Defaults to NONE                                                | False    |
+ * | Template   | src_b_bcast_type    | Broadcast applied to the CB operand as it is unpacked into SrcB                                                     | BroadcastType              | NONE everywhere. ROW/COL only on Blackhole, only with DEST_TO_SRCA, only on 4-face (32x32) tiles. SCALAR is rejected. Defaults to NONE | False    |
+ * | Function   | icb0                | The identifier of the circular buffer (CB) containing A                                                            | uint32_t                   | 0 to 31                                                                                           | True     |
  */
+// clang-format on
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE>
+ALWI void binary_dest_reuse_tiles_init(std::uint32_t icb0, std::uint32_t call_line = __builtin_LINE()) {
+    detail::assert_dest_reuse_broadcast_supported<src_b_bcast_type, binary_reuse_dest>();
     state_configure(icb0, call_line);
+    // acc_to_dest drives the unpacker MOP that raises all 4 SrcA dvalids for the dest-reuse and
+    // ROW/COL-broadcast paths; Quasar's llk_unpack_A_init requires it to be false.
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
 #else
     UNPACK(constexpr bool acc_to_dest = false);
 #endif
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+    // Tile shape is runtime CB state, so this cannot be a static_assert. The COL broadcast MOP is
+    // already guarded inside the LLK (llk_unpack_A.h, "Unary Broadcast Column requires num_faces == 4"),
+    // but the ROW branch hardcodes outerloop/innerloop to 2x2 with no assert, so it silently desyncs
+    // from the math thread's total_num_faces() on a partial-face tile. Guard both here.
+    if constexpr (src_b_bcast_type != BroadcastType::NONE) {
+        UNPACK((LLK_ASSERT(
+            get_operand_num_faces(get_operand_id(icb0)) == 4,
+            "binary_dest_reuse_tiles: ROW/COL broadcast requires a 4-face (32x32) tile - the unpacker "
+            "broadcast MOP is hardwired to 4 faces")));
+    }
+    UNPACK((llk_unpack_A_init<src_b_bcast_type, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY, binary_reuse_dest>(
         icb0, icb0, false /* acc_to_dest */)));
 }
 
@@ -368,31 +472,53 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __bui
  * EltwiseBinaryReuseDestType::DEST_TO_SRCA and EltwiseBinaryReuseDestType::DEST_TO_SRCB assume that another operation has
  * populated the dest register, otherwise dest will contain zeroes.
  *
+ * If src_b_bcast_type is not BroadcastType::NONE, the tile read from in_cb_id is broadcast as it is unpacked into
+ * SRCB: BroadcastType::ROW replicates row 0 of the tile down every row, BroadcastType::COL replicates column 0 across
+ * every column. This is only available together with EltwiseBinaryReuseDestType::DEST_TO_SRCA, since the broadcast
+ * operand must land in SRCB.
+ *
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  *
+ * Must be preceded by *binary_dest_reuse_tiles_init* instantiated with the SAME template arguments. The broadcast and
+ * dest-reuse modes are programmed by that init, so a mismatch produces silently wrong data rather than a compile error.
+ *
+ * NOTE: any *src_b_bcast_type* other than BroadcastType::NONE is Blackhole-only and requires
+ * *binary_reuse_dest* == EltwiseBinaryReuseDestType::DEST_TO_SRCA. Illegal combinations are rejected by static_assert.
+ *
+ * NOTE: BroadcastType::ROW and BroadcastType::COL additionally require a full 4-face (32x32) tile. The unpacker MOP
+ * for those modes is hardwired to 4 faces, so narrower tiles are silently mis-unpacked. This is a runtime property of
+ * the CB's tile shape and is therefore not caught by static_assert - the caller must guarantee it.
+ *
  * Return value: None
  *
- * | Argument       | Description                                                                                               | Type     | Valid Range                                    | Required |
- * |----------------|-----------------------------------------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A                                                   | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                                                                   | uint32_t | Must be less than the size of the CB           | True     |
- * | dst_tile_index | The index of tile B that will be moved to Src reg, and the index of the tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | Param Type | Name                | Description                                                                                               | Type                       | Valid Range                                                                                       | Required |
+ * |------------|---------------------|-----------------------------------------------------------------------------------------------------------|----------------------------|---------------------------------------------------------------------------------------------------|----------|
+ * | Template   | eltwise_binary_type | The binary operation performed by the FPU                                                                 | EltwiseBinaryType          | ELWADD, ELWSUB, ELWMUL. Defaults to ELWADD                                                        | False    |
+ * | Template   | binary_reuse_dest   | Which source register is loaded from DST instead of from a CB                                             | EltwiseBinaryReuseDestType | NONE, DEST_TO_SRCA, DEST_TO_SRCB. Defaults to NONE                                                | False    |
+ * | Template   | src_b_bcast_type    | Broadcast applied to the CB operand as it is unpacked into SRCB                                           | BroadcastType              | NONE everywhere. ROW/COL only on Blackhole, only with DEST_TO_SRCA, only on 4-face (32x32) tiles. SCALAR is rejected. Defaults to NONE | False    |
+ * | Function   | in_cb_id            | The identifier of the circular buffer (CB) containing A                                                   | uint32_t                   | 0 to 31                                                                                           | True     |
+ * | Function   | in_tile_index       | The index of tile A within the first CB                                                                   | uint32_t                   | Must be less than the size of the CB                                                              | True     |
+ * | Function   | dst_tile_index      | The index of tile B that will be moved to Src reg, and the index of the tile in DST REG for the result C  | uint32_t                   | Must be less than the acquired size of DST REG                                                    | True     |
  */
 // clang-format on
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE>
+ALWI void binary_dest_reuse_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    detail::assert_dest_reuse_broadcast_supported<src_b_bcast_type, binary_reuse_dest>();
+    // Must match the acc_to_dest derivation in binary_dest_reuse_tiles_init - it selects the same
+    // unpacker MOP branch, and the two are only consistent if derived identically.
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
 #else
     UNPACK(constexpr bool acc_to_dest = false);
 #endif
-    UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
+    UNPACK((llk_unpack_A<src_b_bcast_type, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_binary<
           eltwise_binary_type,
-          BroadcastType::NONE,
+          src_b_bcast_type,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           binary_reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));

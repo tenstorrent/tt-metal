@@ -23,6 +23,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -66,6 +67,17 @@ const map<std::string, std::string> binary_op_name_to_op_kernel = {
     {"mul", "mul_tiles"},
 };
 
+// SrcB broadcast requested from binary_dest_reuse_tiles. Only ROW and COL are reachable through
+// that API: SCALAR + dest reuse is rejected by a static_assert in the LLK unpacker
+// (tt_llk_blackhole/llk_lib/llk_unpack_A.h), and every broadcast mode is DEST_TO_SRCA-only because
+// DEST_TO_SRCB routes the dest face into SrcB, which is the register the FPU broadcasts.
+enum class BroadcastDim : std::uint8_t { NONE = 0, ROW = 1, COL = 2 };
+
+const map<BroadcastDim, std::string> broadcast_dim_to_type = {
+    {BroadcastDim::ROW, "BroadcastType::ROW"},
+    {BroadcastDim::COL, "BroadcastType::COL"},
+};
+
 struct SingleCoreBinaryConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
@@ -74,6 +86,8 @@ struct SingleCoreBinaryConfig {
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     CoreCoord core;
     std::string binary_op;
+    // Only meaningful for the *_with_dest_reuse ops; see BroadcastDim.
+    BroadcastDim broadcast_dim = BroadcastDim::NONE;
     bool acc_to_dest = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
@@ -81,7 +95,7 @@ struct SingleCoreBinaryConfig {
 };
 
 void set_math_fid_masks(
-    uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    std::uint16_t& srca_fid_mask, std::uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -105,11 +119,47 @@ void set_math_fid_masks(
 }
 
 struct BinaryStimulus {
-    std::vector<uint32_t> packed_input0;
-    std::vector<uint32_t> packed_input1;
-    std::vector<uint32_t> packed_input2;
-    std::vector<uint32_t> packed_golden;
+    std::vector<std::uint32_t> packed_input0;
+    std::vector<std::uint32_t> packed_input1;
+    std::vector<std::uint32_t> packed_input2;
+    std::vector<std::uint32_t> packed_golden;
 };
+
+// A tile lives in L1 face-major: four 16x16 row-major faces ordered
+// {top-left, top-right, bottom-left, bottom-right}. This test writes and reads raw buffers with no
+// tilize/untilize pass, so the operand vectors are already in that layout and the broadcast has to
+// be modelled there rather than in logical (row, column) space.
+//
+// ROW: the unpack MOP reloads the two top faces for the bottom face row (its end op resets the
+//      SrcB z counter every outer iteration) and the FPU replicates row 0 of each SrcB face, so
+//      every datum in the tile reads logical row 0.
+// COL: the MOP pushes only the left face of each face row (one SrcB face per two math faces, with
+//      CLR_B deferred to the end of the face row) and the FPU replicates column 0, so every datum
+//      reads logical column 0.
+// Both traced from tt_llk_blackhole/llk_lib/llk_unpack_A.h and llk_math_eltwise_binary.h.
+static size_t srcb_broadcast_source_index(size_t index_in_tile, BroadcastDim dim) {
+    const size_t face = index_in_tile / constants::FACE_HW;
+    const size_t row_in_face = (index_in_tile % constants::FACE_HW) / constants::FACE_WIDTH;
+    const size_t col_in_face = index_in_tile % constants::FACE_WIDTH;
+    if (dim == BroadcastDim::ROW) {
+        // Row 0 of the top face in this face's column: face 0 for the left half, face 1 for the right.
+        const size_t face_col = face % 2;
+        return (face_col * constants::FACE_HW) + col_in_face;
+    }
+    // COL: column 0 of the left face in this face's row: face 0 for the top half, face 2 for the bottom.
+    const size_t face_row = face / 2;
+    return (face_row * 2 * constants::FACE_HW) + (row_in_face * constants::FACE_WIDTH);
+}
+
+// Replace every datum with the one the SrcB broadcast substitutes for it, tile by tile.
+static std::vector<float> apply_srcb_broadcast(const std::vector<float>& src, BroadcastDim dim) {
+    std::vector<float> broadcasted(src.size());
+    for (size_t i = 0; i < src.size(); i++) {
+        const size_t tile_base = (i / constants::TILE_HW) * constants::TILE_HW;
+        broadcasted[i] = src[tile_base + srcb_broadcast_source_index(i % constants::TILE_HW, dim)];
+    }
+    return broadcasted;
+}
 
 static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
@@ -118,19 +168,19 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     // Using wall-clock seeds caused intermittent tolerance failures depending on
     // which random inputs were drawn (see https://github.com/tenstorrent/tt-metal/issues/46284).
     s.packed_input0 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
     s.packed_input1 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
     s.packed_input2 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
 
-    auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
-    auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
-    auto input2 = unpack_vector<bfloat16, uint32_t>(s.packed_input2);
+    auto input0 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input0);
+    auto input1 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input1);
+    auto input2 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input2);
 
     std::vector<float> temp_golden(input0.size());
-    uint16_t srca_fid_mask = 0xFFFF;
-    uint16_t srcb_fid_mask = 0xFFFF;
+    std::uint16_t srca_fid_mask = 0xFFFF;
+    std::uint16_t srcb_fid_mask = 0xFFFF;
     if (!is_quasar) {
         set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
     }
@@ -149,16 +199,35 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             }
             if (test_config.binary_op == "mul") {
                 return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(rhs) & srcb_fid_mask))));
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(lhs) & srca_fid_mask))) *
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(rhs) & srcb_fid_mask))));
             }
             if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
                 return static_cast<float>(lhs);
             }
             TT_THROW("Unsupported binary_op={}", test_config.binary_op);
         });
+
+    // binary_dest_reuse_tiles computes DEST [op] <CB operand>, i.e. input2 [op] input0, so input0 --
+    // which temp_golden carries through unchanged for the dest-reuse ops -- is the operand that
+    // feeds SrcB and therefore the one the FPU broadcasts.
+    //
+    // input0 is deliberately left fully random rather than masked down to the broadcast row/column:
+    // every datum outside the broadcast source then differs from its broadcast value, so a dropped
+    // BroadcastType shows up as a whole-tile mismatch instead of silently still matching.
+    if (test_config.broadcast_dim != BroadcastDim::NONE) {
+        TT_FATAL(
+            test_config.binary_op.find("_with_dest_reuse") != std::string::npos,
+            "Broadcast is only modelled for the dest-reuse ops, got binary_op={}",
+            test_config.binary_op);
+        const auto tile_shape = test_config.tile.get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == constants::TILE_HEIGHT && tile_shape[1] == constants::TILE_WIDTH,
+            "Broadcast with dest reuse requires a full 32x32 tile; COL needs all four faces");
+        temp_golden = apply_srcb_broadcast(temp_golden, test_config.broadcast_dim);
+    }
 
     std::vector<bfloat16> golden(input0.size());
     std::transform(
@@ -171,14 +240,14 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             }
             if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
                     static_cast<float>(std::bit_cast<bfloat16>(
-                        static_cast<uint16_t>(std::bit_cast<uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(lhs) & srca_fid_mask))) *
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
             }
             return rhs;
         });
-    s.packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    s.packed_golden = pack_vector<std::uint32_t, bfloat16>(golden);
     return s;
 }
 
@@ -218,10 +287,10 @@ static bool read_and_validate_binary_result(
     const std::shared_ptr<distributed::MeshBuffer>& output_dram_buffer,
     const distributed::MeshCoordinate& zero_coord,
     const BinaryStimulus& stimulus) {
-    std::vector<uint32_t> dest_buffer_data;
+    std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, zero_coord, false);
 
-    return is_close_packed_vectors<bfloat16, uint32_t>(
+    return is_close_packed_vectors<bfloat16, std::uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.0155f);
         });
@@ -232,6 +301,11 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
         {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
     if (test_config.binary_op.find("_with_dest_reuse") != std::string::npos) {
         defines["ELTWISE_DEST_REUSE_TYPE"] = "EltwiseBinaryReuseDestType::DEST_TO_SRCA";
+        // Left undefined for the non-broadcast cases so the kernel keeps instantiating the
+        // two-template-argument form of binary_dest_reuse_tiles{,_init}.
+        if (test_config.broadcast_dim != BroadcastDim::NONE) {
+            defines["ELTWISE_BCAST_TYPE"] = broadcast_dim_to_type.at(test_config.broadcast_dim);
+        }
     } else {
         defines["ELTWISE_OP"] = binary_op_name_to_op_kernel.at(test_config.binary_op);
         if (test_config.full_init) {
@@ -260,7 +334,7 @@ bool single_core_binary(
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{
-        static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
+        static_cast<std::uint32_t>(test_config.core.x), static_cast<std::uint32_t>(test_config.core.y)};
 
     // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
     auto stimulus = generate_binary_stimulus(test_config, is_quasar);
@@ -287,8 +361,8 @@ bool single_core_binary(
     auto make_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
-            .num_entries = static_cast<uint32_t>(test_config.num_tiles),
+            .entry_size = static_cast<std::uint32_t>(test_config.tile_byte_size),
+            .num_entries = static_cast<std::uint32_t>(test_config.num_tiles),
             .data_format_metadata = test_config.l1_input_data_format,
             .tile_format_metadata = test_config.tile,
         };
@@ -299,8 +373,8 @@ bool single_core_binary(
     experimental::DataflowBufferSpec inp2_dfb_spec = make_input_dfb(INP2_DFB);
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
-        .num_entries = static_cast<uint32_t>(test_config.num_tiles),
+        .entry_size = static_cast<std::uint32_t>(test_config.tile_byte_size),
+        .num_entries = static_cast<std::uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
         .tile_format_metadata = test_config.tile,
     };
@@ -423,7 +497,7 @@ bool single_core_binary(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
+    const std::uint32_t num_tiles_u = static_cast<std::uint32_t>(test_config.num_tiles);
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -457,10 +531,43 @@ bool single_core_binary(
     return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);
 }
 
+/// @brief Shared body for the dest-reuse + SrcB-broadcast cases: run one op / broadcast dimension
+/// over the four supported MathFidelity levels (index 1 is unused), mirroring the non-broadcast
+/// dest-reuse tests above.
+void run_dest_reuse_broadcast_sweep(
+    const std::vector<std::shared_ptr<distributed::MeshDevice>>& devices,
+    const std::string& binary_op,
+    BroadcastDim broadcast_dim) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
+        if (i == 1) {
+            continue;
+        }
+        SingleCoreBinaryConfig test_config = {
+            .num_tiles = 4,
+            .tile_byte_size = 2 * 32 * 32,
+            .l1_input_data_format = tt::DataFormat::Float16_b,
+            .l1_output_data_format = tt::DataFormat::Float16_b,
+            .core = CoreCoord(0, 0),
+            .binary_op = binary_op,
+            .broadcast_dim = broadcast_dim,
+            .math_fidelity = MathFidelity(i),
+        };
+        log_info(
+            tt::LogTest,
+            "binary_op = {}, broadcast = {}, Math Fidelity = {}",
+            binary_op,
+            broadcast_dim_to_type.at(broadcast_dim),
+            i);
+        for (auto& device : devices) {
+            ASSERT_TRUE(single_core_binary(device, test_config));
+        }
+    }
+}
+
 }  // namespace unit_tests::compute::binary
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -480,7 +587,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -500,7 +607,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -520,7 +627,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -541,7 +648,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -562,7 +669,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -583,7 +690,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -607,7 +714,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -631,7 +738,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -654,8 +761,66 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
     }
 }
 
+// binary_dest_reuse_tiles with a SrcB broadcast (the cases below) is Blackhole-only:
+//   - Wormhole's llk_unpack_A broadcast MOP issues fewer SrcA dvalids than
+//     move_d2a_fixed_face's STALLWAIT(SRCA_VLD) consumes, so DEST_TO_SRCA hangs rather than
+//     producing a mismatch.
+//   - Quasar rejects broadcast + dest reuse at compile time.
+//   - SCALAR is excluded on every arch by the static_assert in llk_unpack_A.h, and COL requires
+//     num_faces == 4, i.e. a full 32x32 tile. So only ROW and COL x DEST_TO_SRCA are covered.
+// The fixture stays LLKMeshDeviceFixtureSlowDispatchOnly (not LLKBlackholeSingleCardFixture)
+// because this file drives programs with detail::LaunchProgram, which is slow-dispatch only, and
+// because the merge-gate slow-dispatch jobs select tests by that exact suite name.
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastRow) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastCol) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastRow) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastCol) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastRow) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastCol) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+}
+
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -679,7 +844,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -703,7 +868,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -727,7 +892,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -753,7 +918,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -779,7 +944,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }

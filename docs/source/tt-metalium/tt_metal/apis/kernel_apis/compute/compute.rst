@@ -39,6 +39,7 @@ Compute (FPU/matrix engine)
   add_tiles_bcast
   sub_tiles_bcast
   mul_tiles_bcast
+  binary_dest_reuse_tiles
 
   matmul_tiles
   matmul_block

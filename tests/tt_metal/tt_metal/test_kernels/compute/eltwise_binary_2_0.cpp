@@ -12,9 +12,9 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    uint32_t per_core_block_size = get_arg(args::per_core_block_size);
-    uint32_t acc_to_dst = get_arg(args::acc_to_dst);
+    std::uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    std::uint32_t per_core_block_size = get_arg(args::per_core_block_size);
+    std::uint32_t acc_to_dst = get_arg(args::acc_to_dst);
 
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
@@ -33,7 +33,7 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
+    for (std::uint32_t block = 0; block < per_core_block_cnt; ++block) {
         dfb_in0.wait_front(per_core_block_size);
         dfb_in1.wait_front(per_core_block_size);
         dfb_out.reserve_back(per_core_block_size);
@@ -42,7 +42,7 @@ void kernel_main() {
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         dfb_in2.wait_front(per_core_block_size);
         copy_tile_to_dst_init_short(dfb::in2);
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+        for (std::uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(dfb::in2, i, i);  // copy from c_in[0] to DST[0]
         }
         dfb_in2.pop_front(per_core_block_size);
@@ -57,13 +57,26 @@ void kernel_main() {
 #endif
 #endif
 
+        // ELTWISE_BCAST_TYPE is optional: the host only defines it for the broadcast cases, so the
+        // existing non-broadcast callers keep instantiating the two-template-argument form.
+        // The init and the execute below must be given the same broadcast value -- the init is what
+        // programs the unpacker MOP and the FPU broadcast field, and nothing in the API ties the two
+        // together, so a mismatch is silently wrong data rather than a compile error.
 #ifdef ELTWISE_DEST_REUSE_TYPE
+#ifdef ELTWISE_BCAST_TYPE
+        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE, ELTWISE_BCAST_TYPE>(dfb::in0);
+#else
         binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0);
 #endif
+#endif
 
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+        for (std::uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
+#ifdef ELTWISE_BCAST_TYPE
+            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE, ELTWISE_BCAST_TYPE>(dfb::in0, i, i);
+#else
             binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0, i, i);
+#endif
 #else
             ELTWISE_OP(dfb::in0, dfb::in1, i, i, i);
 #endif
@@ -75,7 +88,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+        for (std::uint32_t i = 0; i < per_core_block_size; ++i) {
             pack_tile(i, dfb::out);
         }
         tile_regs_release();
