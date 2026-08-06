@@ -153,9 +153,15 @@ def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for 1/x, tightened for block-float inputs.
 
     A 1000:1 ratio inside a 16-element block quantizes the smallest elements to
-    zero, sending the golden to inf. Hold the ratio to 10:1 for block floats.
+    zero, sending the golden to inf. How tight the ratio has to be scales with the
+    mantissa width: 10:1 suffices for Bfp8_b's 7 bits, but at Bfp4_b's 3 bits ~6% of
+    that window still lands below the block's representable step and collapses to
+    zero. 4:1 keeps every element representable with margin (the smallest survivor
+    at 10:1 is 16.0, so the floor is not placed right on the boundary).
     """
-    if fmt in _BLOCK_FLOAT_FORMATS:
+    if fmt == DataFormat.Bfp4_b:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -25.0), (25.0, 100.0)])
+    elif fmt in _BLOCK_FLOAT_FORMATS:
         spec = StimuliSpec.uniform(intervals=[(-100.0, -10.0), (10.0, 100.0)])
     else:
         spec = StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])

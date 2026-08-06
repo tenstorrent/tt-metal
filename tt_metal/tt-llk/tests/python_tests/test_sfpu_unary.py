@@ -22,6 +22,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    build_param_id,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -219,10 +220,10 @@ MATHOPS_INCLUDE_BFP4_B = [
     MathOperation.Acosh,
     MathOperation.Cos,
     MathOperation.Log,
-    # MathOperation.Log1p,
-    # MathOperation.Reciprocal,
-    # MathOperation.Sin,
-    # MathOperation.Sqrt,
+    MathOperation.Log1p,
+    MathOperation.Reciprocal,
+    MathOperation.Sin,
+    MathOperation.Sqrt,
     MathOperation.Rsqrt,
     MathOperation.Square,
     MathOperation.Tanh,
@@ -233,9 +234,9 @@ MATHOPS_INCLUDE_BFP4_B = [
     MathOperation.Neg,
     MathOperation.Fill,
     MathOperation.Elu,
-    # MathOperation.Exp,
-    # MathOperation.Exp2,
-    # MathOperation.Hardsigmoid,
+    MathOperation.Exp,
+    MathOperation.Exp2,
+    MathOperation.Hardsigmoid,
     MathOperation.Threshold,
     MathOperation.ReluMax,
     MathOperation.ReluMin,
@@ -413,10 +414,21 @@ _APPROX_EXP_ACCURACY_XFAIL = {
 }
 
 
+_UNARY_SWEEP_ARGNAMES = (
+    "formats",
+    "approx_mode",
+    "mathop",
+    "fast_mode",
+    "dest_acc",
+    "input_dimensions",
+)
+
+
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc,input_dimensions",
+    ",".join(_UNARY_SWEEP_ARGNAMES),
     UNARY_SWEEP_PARAMS,
+    ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
 def test_eltwise_unary_sfpu(
     request,
