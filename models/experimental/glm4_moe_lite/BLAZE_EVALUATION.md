@@ -185,6 +185,41 @@ The mechanism-2 case therefore still rests on a *chained* fusion (norm -> proj, 
 eltwise -> matmul), where an intermediate genuinely round-trips today. That is the next op to
 build, and it is the honest test of whether fusion beats the ~12% ceiling.
 
+### The chained fusion, at last: `GLMQANormQBProjection` — 1.22x
+
+The previous op fused two projections that *share* an input, so no intermediate round-tripped and
+fusion contributed only ~4%. This one is the real mechanism-2 test: `q_a -> RMSNorm -> q_b` is the
+one place in GLM's decode attention where a norm feeds straight into a matmul, and the normalized
+q_a exists solely to be consumed. It uses FlashNorm deferred normalization -- gamma folds into the
+weight offline, so the matmul runs on un-normalized q_a and `1/RMS` rides the
+`DRAMStreamingMatmul` scalar epilogue. No new kernel.
+
+**Correctness (both gates required, both pass):**
+
+| gate | against | value | bar |
+|---|---|---:|---|
+| `pcc_vs_device` | `(1/RMS) * (q_a @ W'_bf8)` | **0.99989** | ≥ 0.99 |
+| `pcc_vs_model` | `RMSNorm(q_a, gamma) @ W_q_b` | **0.99988** | ≥ 0.99 |
+
+**Cluster timing** (separate from any end-to-end claim):
+
+| impl | dispatches | cores | µs |
+|---|---:|---:|---:|
+| ttnn `rms_norm` + `q_b` matmul | 2 | 24 | 25.9 |
+| **blaze `GLMQANormQBProjection`** | **1** | 8 | **21.1** |
+
+**1.22x, ~0.22 ms/token over 47 layers as an upper bound.** Modest — and informative precisely
+because it is. Removing the DRAM round-trip works, but the intermediate it removes is small: q_b
+is the *weakest* of the six matmul shapes against ttnn (1.75x), and the ttnn norm it deletes is
+only ~5 µs at 768 elements. So mechanism 2 is real and now demonstrated end to end, but at this
+cluster's size it is worth about a fifth of what the matmul substitution alone is worth.
+
+Two traps the handoff called correctly, both confirmed: K must pad 768 -> 1024 for `SumOfSquares`
+(768 is a multiple of neither 512 nor 1024, so `interpret_tile` would silently cover 512 of 768
+and produce a wrong RMS) while the reduce still divides by the logical 768; and
+`fp32_dest_acc_en` must be set on the **FusedProgram**, since the norm's `DST_ACCUM_MODE` comes
+from the program's ComputeConfigDescriptor, not from `emit`.
+
 ### rmsnorm — REGRESSION, do not adopt
 
 | config | ttnn µs | blaze µs | speedup | ttnn PCC | blaze PCC | verdict |
