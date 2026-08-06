@@ -1628,7 +1628,8 @@ class MiniMaxH3Pipeline:
         prompt: str = "warmup",
         image: Image.Image | None = None,
         last_image: Image.Image | None = None,
-        num_frames: int = 124,
+        references: Sequence[MiniMaxH3Reference] | None = None,
+        num_frames: int | None = 124,
         height: int | None = None,
         width: int | None = None,
         aspect_ratio: tuple[float, float] = (16, 9),
@@ -1643,19 +1644,26 @@ class MiniMaxH3Pipeline:
 
         "Fully warm" in every number this pipeline reports means *after* this.
 
-        **Pass the real `prompt` and the real keyframes**, not the defaults. Every program in the
-        50-block stack is keyed on the *padded* packed length, so warming a different one warms nothing.
-        `t2va` got away with the one-token default purely by luck -- 1 and 39 tokens both round up to
-        37888 -- and a keyframe's ~1010-row vision block ends that. `last_padded_len` is exposed so a
-        caller can assert the warm and measured lengths agree rather than trusting them to.
+        **Pass the real `prompt` and the real keyframes or references**, not the defaults. Every program
+        in the 50-block stack is keyed on the *padded* packed length, so warming a different one warms
+        nothing. `t2va` got away with the one-token default purely by luck -- 1 and 39 tokens both round
+        up to 37888 -- and a keyframe's ~1010-row vision block ends that. `ref2va` ends it far more
+        emphatically: its padded lengths run 46080 to 111616 against t2va's 37888, and they depend on the
+        *number and resolution of the references*, so a warmup with different references warms nothing
+        even at the same prompt. `last_padded_len` is exposed so a caller can assert the warm and
+        measured lengths agree rather than trusting them to.
         """
         t0 = time.time()
-        task = "t2va" if image is None and last_image is None else "fl2va"
+        if references is not None:
+            task = "ref2va"
+        else:
+            task = "t2va" if image is None and last_image is None else "fl2va"
         logger.info(f"warmup ({task}): {num_frames}f, {num_inference_steps} steps, prompt {len(prompt)} chars")
         self(
             prompt,
             image=image,
             last_image=last_image,
+            references=references,
             num_frames=num_frames,
             height=height,
             width=width,

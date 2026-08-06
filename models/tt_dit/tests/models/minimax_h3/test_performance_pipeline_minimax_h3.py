@@ -60,6 +60,10 @@ PROMPT = (
     "her coffee, Jerry shrugs with both palms up, and Kramer bursts through the door behind them."
 )
 
+# ref2va runs at the 5 s working point only: the campaign gated its three shapes there, and a perf
+# row at a duration no correctness gate covers would be a number about an unverified request.
+NUM_FRAMES_REF2VA = 124
+
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 
@@ -233,3 +237,141 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
 
     assert output.num_frames == aligned_frames
     assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
+
+
+# --------------------------------------------------------------------------- ref2va
+
+# `l1_small_size` 16384, not the 65536 the t2va and fl2va rows use. Measured, not chosen: a video
+# reference goes through the video VAE's taps=3 encoder, whose static circular buffers clash with L1
+# above 16384 (campaign am. 124/126). The mesh and every other device parameter are unchanged, so the
+# ref2va row stays comparable to the other two on everything that affects the denoise loop.
+REF2VA_MESH_4X8 = [
+    pytest.param(
+        (4, 8),
+        {**ring_params_req_exact_devices, "l1_small_size": 16384},
+        id="4x8",
+    )
+]
+
+# The three shapes the campaign gated end to end, by their measured padded packed length. `padded_len`
+# is what every program in the 50-block stack is keyed on, so it is the identity of a perf row here.
+REF2VA_CASES = [
+    pytest.param("one_image", 46080, id="one_image_s46080"),
+    pytest.param("video_with_sound", 81664, id="video_with_sound_s81664"),
+    pytest.param("mixed", 89856, id="mixed_s89856"),
+]
+
+REF2VA_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
+
+
+def _ref2va_references(case: str):
+    """The campaign's own reference sets, imported rather than restated.
+
+    Sharing them with the correctness gate is the point: a perf row measured on a different request
+    than the one that was gated is a number about nothing.
+    """
+    from .test_pipeline_ref2va_minimax_h3 import _references
+
+    return _references(case)
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("case", "expected_padded_len"), REF2VA_CASES)
+def test_ref2va_warm_latency(mesh_device, case, expected_padded_len, reset_seeds):
+    """Fully-warm `ref2va` latency, by the same method as the t2va and fl2va rows.
+
+    Every ref2va number the campaign recorded before this one is **cold** -- it includes kernel
+    compilation, and at 81664 padded rows the shape probe measured a cold forward of 114 s against a
+    warm 3.26 s (am. 123). So a cold total says almost nothing about the loop.
+
+    The same three things have to be right as for fl2va, and ref2va makes each of them sharper:
+
+    1. **The warmup must be ref2va-shaped, with the same references.** `padded_len` runs 46080 to 89856
+       across the three cases against t2va's 37888, and it depends on the number *and resolution* of the
+       references -- so warming with different references warms nothing even at the same prompt. The
+       expected value is asserted per case, so a request that silently changed shape cannot be reported
+       as warm.
+    2. **The warmup must run at the same prompt length**, which for ref2va means the same presentation:
+       a 2048 px image reference contributes ~4096 vision tokens to the text stream and a video
+       reference ~1008 per merged frame pair.
+    3. **The embedding cache must be populated.** `warmup` runs with `use_prompt_cache=False`, so the
+       priming call below is what makes the Encoder row mean the same thing it means for t2va -- and for
+       ref2va that row is the conditioner *plus* the vision tower over up to 7168 patches per reference,
+       which is the largest single non-denoise cost in the cold numbers.
+    """
+    base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
+    missing = [p for p in ("transformer_ref", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]
+    if missing:
+        pytest.skip(f"MiniMax-H3 snapshot at {base} is missing {missing}; set {WEIGHTS_ENV}")
+
+    from pathlib import Path
+
+    media = Path(os.environ.get(REF2VA_MEDIA_ENV) or Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4")
+    if case != "one_image" and not media.is_file():
+        pytest.skip(f"no reference video at {media}; set {REF2VA_MEDIA_ENV}")
+
+    references = _ref2va_references(case)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=base, task="ref2va")
+
+    # (1) and (2): warm at the real shape, with the real references and the real prompt.
+    pipeline.warmup(
+        prompt=PROMPT,
+        references=references,
+        num_frames=NUM_FRAMES_REF2VA,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
+    warm_padded_len = pipeline.last_padded_len
+
+    # (3): prime the disk cache so the Encoder row means what it means for the other two rows. The
+    # references have to be *prepared* first, because that is what the cache key digests.
+    from ....pipelines.minimax_h3.references import prepare_references
+
+    prepared, _ = prepare_references(references, NUM_FRAMES_REF2VA, pipeline.audio_sampling_rate)
+    pipeline.encode_prompt(PROMPT, references=prepared, use_cache=True)
+
+    output = pipeline(
+        PROMPT,
+        references=references,
+        num_frames=NUM_FRAMES_REF2VA,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+    )
+
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
+    )
+    assert warm_padded_len == expected_padded_len, (
+        f"{case} ran at padded_len {warm_padded_len}, not the gated {expected_padded_len}; this is a "
+        "different request than the one the correctness gate covers"
+    )
+
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    aligned_frames = align_num_frames(NUM_FRAMES_REF2VA)
+
+    logger.info(
+        f"MEASUREMENT ref2va[{case}] fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, "
+        f"2 links, l1_small_size 16384 | {WIDTH}x{HEIGHT}, {aligned_frames} frames @ {MINIMAX_H3_FPS} fps "
+        f"({aligned_frames / MINIMAX_H3_FPS:.2f} s), {num_forwards} forwards, padded_len {warm_padded_len} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for label, seconds in rows:
+        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / (aligned_frames / MINIMAX_H3_FPS):8.1f} x  (compute / video seconds)")
+
+    assert output.num_frames == aligned_frames

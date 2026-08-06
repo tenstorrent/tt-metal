@@ -53,6 +53,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.test import ring_params_req_exact_devices
 from .common_av import check_audio_sanity, check_av_sync, check_spatial_seams
 from .test_pipeline_fl2va_minimax_h3 import create_fractal_image
+from .test_pipeline_minimax_h3 import _clip_prompt_alignment, _run_vbench, _write_artifacts
 
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
@@ -64,6 +65,18 @@ WIDTH, HEIGHT, NUM_FRAMES, STEPS, SEED = 1344, 768, 124, 50, 0
 FPS = 24
 
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
+
+# Quality bars for REFERENCE-DRIVEN content, derived from this campaign's own measurements and not
+# inherited from t2va (am. 131). `None` means "recorded this run, not yet a bar" -- which is the
+# honest state before the first measurement exists, and is what the first run leaves in the log.
+REF2VA_CLIP_THRESHOLD = None
+REF2VA_VBENCH_THRESHOLDS = {
+    "subject_consistency": None,
+    "background_consistency": None,
+    "motion_smoothness": None,
+    "dynamic_degree": None,
+    "imaging_quality": None,
+}
 
 # `l1_small_size` 16384 rather than the 65536 the t2va/fl2va gates use. Measured, not chosen: a video
 # reference goes through the video VAE's **taps=3** encoder, whose static circular buffers clash with
@@ -181,14 +194,61 @@ def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a.float() - b.float()).abs().mean())
 
 
-def _write(output, stem: str) -> None:
-    """Frames and audio for a human to look at, plus four sampled PNGs."""
+def _write(output, stem: str) -> dict:
+    """Frames and audio for a human to look at: four sampled PNGs, a wav, and a muxed mp4.
+
+    The mp4 comes from the shared `_write_artifacts` the t2va and fl2va gates use, so VBench scores
+    ref2va from the same kind of file it scores those from -- a codec difference between the two would
+    make the numbers incomparable, and comparing them is the whole reason for recording them.
+    """
     directory = _artifact_dir()
-    frames = (output.video[0].permute(1, 2, 3, 0).float().cpu().numpy() * 255).astype(np.uint8)
+    frames = _frames_of(output)
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
-    np.save(directory / f"{stem}_audio.npy", output.audio.float().cpu().numpy())
-    logger.info(f"{stem}: artifacts in {directory}")
+    paths = _write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
+    logger.info(f"{stem}: artifacts in {directory} ({sorted(paths)})")
+    return paths
+
+
+def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
+    """Record CLIP prompt alignment and the five VBench dimensions. Bars are set separately.
+
+    **Recorded, and asserted only against bars derived from these very measurements** (am. 131). The
+    plan is explicit that t2va's bars do not transfer to reference-driven content, and this campaign
+    has already seen that twice: `imaging_quality` scored 0.4884 on a visually perfect night scene
+    against a 0.64 bar (am. 80/87), and the seam ratio produced a false failure at 2.29x (am. 130). So
+    the order is measure, then set, and never the reverse.
+    """
+    if os.environ.get("RUN_CLIP", "1") in ("1", "true", "True"):
+        pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is missing (set RUN_CLIP=0)")
+        alignment = _clip_prompt_alignment(frames, PROMPT)
+        logger.info(
+            f"QUALITY ref2va[{case}] CLIP prompt alignment: mean={alignment['mean']:.2f} "
+            f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {REF2VA_CLIP_THRESHOLD})"
+        )
+        if REF2VA_CLIP_THRESHOLD is not None:
+            assert alignment["mean"] >= REF2VA_CLIP_THRESHOLD, (
+                f"CLIP prompt alignment {alignment['mean']:.2f} is below the {REF2VA_CLIP_THRESHOLD} bar; "
+                "the video no longer matches the prompt"
+            )
+    else:
+        logger.info("RUN_CLIP=0, skipping the CLIP prompt-alignment measurement")
+
+    if os.environ.get("RUN_VBENCH", "1") not in ("1", "true", "True"):
+        logger.info("RUN_VBENCH=0, skipping the VBench measurement")
+        return
+    if "mp4" not in paths:
+        pytest.skip("RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce")
+    scores = _run_vbench(paths["mp4"], PROMPT, tuple(REF2VA_VBENCH_THRESHOLDS))
+    for dimension, value in scores.items():
+        bar = REF2VA_VBENCH_THRESHOLDS.get(dimension)
+        logger.info(f"QUALITY ref2va[{case}] VBench {dimension} = {value:.4f} (bar {bar})")
+    for dimension, bar in REF2VA_VBENCH_THRESHOLDS.items():
+        if bar is None:
+            continue
+        value = scores.get(dimension)
+        assert value is not None, f"VBench produced no {dimension} score"
+        assert value >= bar, f"VBench {dimension} {value:.4f} is below the {bar} bar"
 
 
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
@@ -271,7 +331,7 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     # Artifacts FIRST, before any quality check can fail. The standing rule is "look at the
     # frames", and a check that fires before the frames are written leaves nothing to look
     # at -- which is exactly what happened the first time the seam check fired here.
-    _write(output, f"ref2va_{case}")
+    paths = _write(output, f"ref2va_{case}")
     logger.info(f"ref2va[{case}] padded_len={pipeline.last_padded_len} timings={pipeline.last_timings}")
 
     check_audio_sanity(
@@ -294,6 +354,10 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     # the frames, never instead of them -- which is why `_write` runs first.
     check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(), max_ratio=2.0)
     check_spatial_seams(frames, vertical_boundaries=(), horizontal_boundaries=(384,), max_ratio=3.0)
+
+    # Prompt alignment and the five VBench dimensions, on reference-driven content. Last, because it is
+    # the most expensive check and the cheap structural ones above localise a failure better.
+    _record_quality(frames, paths, case)
 
 
 @pytest.mark.timeout(9000)
