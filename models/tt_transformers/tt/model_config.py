@@ -561,8 +561,11 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
-        # Logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
-        self.attn_logit_softcapping = None
+        # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
+        # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
+        # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
+        # omitting attn softcap at inference has only minor effect. See final-logit
+        # application in Transformer._apply_final_logit_softcapping.
         self.final_logit_softcapping = None
         self.model_type = None
         # Decode-SDPA tuning. Architecture-specific overrides are applied once in
@@ -2818,10 +2821,11 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # Gemma-2 alternates local (sliding-window) and global attention but, unlike
-        # Gemma-3, its HF config does not provide an explicit `layer_types` list. HF
-        # derives it as `is_sliding = not bool(layer_idx % 2)` (even layers = sliding).
-        # Synthesize the same pattern so the sliding-window path activates per layer.
+        # Gemma-2 alternates local (sliding-window) and global attention. Upstream
+        # Gemma2Config.__post_init__ already fills `layer_types` before to_dict(), so
+        # for a real HF checkpoint this block is usually a no-op; keep it as a
+        # defensive fallback for dict-style configs that omit the list.
+        # Pattern: even layers = sliding (matches HF is_sliding = not bool(layer_idx % 2)).
         if (
             self.model_type is not None
             and str(self.model_type).lower().startswith("gemma2")
@@ -2852,9 +2856,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
-        # Logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
-        # Values default to None (disabled) for every other model.
-        self.attn_logit_softcapping = text_config.get("attn_logit_softcapping", None)
+        # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
+        # Attn-score softcapping is not applied (see __init__ comment); only the
+        # final-logit cap is consumed, via Transformer._apply_final_logit_softcapping.
         self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
 
         # Configurable MLP activation type

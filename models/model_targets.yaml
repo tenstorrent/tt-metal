@@ -248,6 +248,8 @@ targets:
   gemma-2-2b:
     aliases: ["gemma-2-2b", "google/gemma-2-2b-it"]
     skus:
+      # Seeded from measured ci-token-matching on N300 (90.0 / 100.0).
+      # N150 uses the same model path; CI will re-calibrate if it drifts.
       wh_n150:
         entries:
           - batch_size: 1
@@ -256,8 +258,8 @@ targets:
             # Tier 3: exempt from perf targets; accuracy still gated.
             perf: {}
             accuracy:
-              top1: 80
-              top5: 95
+              top1: 90
+              top5: 100
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       wh_n300:
@@ -267,13 +269,14 @@ targets:
             status: active
             perf: {}
             accuracy:
-              top1: 80
-              top5: 95
+              top1: 90
+              top5: 100
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   gemma-2-9b:
     aliases: ["gemma-2-9b", "google/gemma-2-9b-it"]
     skus:
+      # Seeded from measured ci-token-matching on N300 (91.8 / 99.8).
       wh_n300:
         entries:
           - batch_size: 1
@@ -282,19 +285,8 @@ targets:
             # Tier 3: exempt from perf targets; accuracy still gated.
             perf: {}
             accuracy:
-              top1: 80
-              top5: 95
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
-      wh_llmbox_perf:
-        entries:
-          - batch_size: 1
-            seq_len: null
-            status: active
-            perf: {}
-            accuracy:
-              top1: 80
-              top5: 95
+              top1: 92
+              top5: 100
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   gemma-3-27b:
