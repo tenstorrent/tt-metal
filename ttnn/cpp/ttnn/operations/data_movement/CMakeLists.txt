@@ -36,6 +36,8 @@ file(
     permute/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
+    repeat/codegen/kernels/*.cpp
+    repeat/codegen/kernels/*.h
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
     scatter/device/kernels/*.hpp

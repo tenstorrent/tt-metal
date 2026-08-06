@@ -713,6 +713,7 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
     std::vector<multihost::Rank> ranks;
+    ranks.reserve(global_logical_bindings.size());
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == mesh_id && rank_translation_table.contains(rank)) {

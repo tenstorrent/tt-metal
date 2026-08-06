@@ -29,6 +29,11 @@ TIEBREAK_DELTA_SCALE = 2**-6
 # bf16 number (smallest normal ~1.18e-38) and orders of magnitude below one ULP of any real logit,
 # so it never perturbs a non-zero maximum.
 TIEBREAK_DELTA_FLOOR = 1e-30
+# Added to the global index of every non-maximum candidate so the row min over the masked indices can
+# only ever land on a tied maximum. A power of two, so the mask that carries it (built in bfloat16)
+# holds it exactly; larger than any padded vocabulary size, which __init__ asserts; and small enough
+# that sentinel + index cannot overflow the int32 the min reduce runs in.
+TIEBREAK_INDEX_SENTINEL = 2**24
 
 
 class TTSampling(LightweightModule):
@@ -114,6 +119,12 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # ttnn.topk rejects stable=True outright on any architecture whose LLK lacks the stable bitonic
+        # network -- only Wormhole B0 and Blackhole implement it -- so ask for it just where it exists
+        # instead of taking a TT_FATAL everywhere else. Requesting it is best effort regardless
+        # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what guarantees the greedy pick,
+        # so falling back to the default network costs correctness nothing.
+        self._topk_stable = ttnn.device.is_wormhole_b0(mesh_device) or ttnn.device.is_blackhole(mesh_device)
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -233,14 +244,24 @@ class TTSampling(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
+        # The tie-break sentinel has to outrank every real global index. Vocabularies this large are
+        # far beyond anything shipped, but exceeding it would corrupt the greedy token silently rather
+        # than fail, so check it at construction. Raise rather than assert: this guards a correctness
+        # invariant and must survive python -O.
+        if self.padded_vocab_size > TIEBREAK_INDEX_SENTINEL:
+            raise ValueError(
+                f"padded_vocab_size {self.padded_vocab_size} exceeds the greedy tie-break sentinel "
+                f"{TIEBREAK_INDEX_SENTINEL}; raise TIEBREAK_INDEX_SENTINEL (keeping it a power of two)"
+            )
         # Persistent per-user ARGMAX mask [1,1,N,1] (1.0 where k==1), distributed like k_tensor. Used by
         # _adjust_values_for_tiebreak to boost the lowest-index tied-max for greedy users only. Built
         # host-side and kept in sync in reset_sampling_params (an on-device reshape of the [N] k_tensor
-        # to [1,1,N,1] is not sub-device-safe). float32 TILE so it broadcasts over the candidate width.
+        # to [1,1,N,1] is not sub-device-safe). bfloat16 TILE so it broadcasts over the candidate width
+        # and multiplies the (bfloat16) winner mask without a dtype mix; 0.0/1.0 are exact in bf16.
         self._greedy_col = ttnn.from_torch(
-            (torch.as_tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.float32),
+            (torch.as_tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
             device=self.mesh_device,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
@@ -590,9 +611,9 @@ class TTSampling(LightweightModule):
 
             # Keep the greedy tie-break mask (1.0 where k==1) in sync with k, distributed like k_tensor.
             self._greedy_col_new = ttnn.from_torch(
-                (torch.tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.float32),
+                (torch.tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
                 device=None,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=(
                     ttnn.ShardTensor2dMesh(
@@ -643,16 +664,19 @@ class TTSampling(LightweightModule):
         only narrows the window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
-            lowest_index_among_maxima = min(global_index + (rowmax - value)*LARGE)     # == idx at maxima, huge else
-        Validated on a restricted active sub-device by
+            lowest_index_among_maxima = min(global_index + not_max * SENTINEL)          # == idx at maxima, huge else
+
+        The value half runs in bfloat16 and the index half in int32, and neither dtype is incidental --
+        see the comments on each block. Validated on a restricted active sub-device by
         tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py.
         """
         scg = self.sub_core_grids
-        BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
         # Every intermediate is deallocated as soon as its last reader is issued: this runs once per
         # decode step, so leaving them to Python refcounting would hold ~9 extra buffers per step.
+
+        # Value domain, bfloat16: gathered_values is bf16, so the max reduce and the comparisons
+        # against its result are exact -- bf16 survives the FPU's source-register truncation intact.
         maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
-        idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
         is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
         not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
 
@@ -664,28 +688,43 @@ class TTSampling(LightweightModule):
         delta = ttnn.add(delta_scaled, TIEBREAK_DELTA_FLOOR, sub_core_grids=scg)  # [1,1,B,1] bf16
         ttnn.deallocate(delta_scaled)
 
-        # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
-        not_max_scaled = ttnn.multiply(not_max, BIG, sub_core_grids=scg)
+        # Index domain, int32: lowest global index among the maxima. Push the non-maxima above every
+        # real index by TIEBREAK_INDEX_SENTINEL, then take the row min.
+        #
+        # This min MUST run in int32. ttnn.min/ttnn.max on a FLOAT32 tensor go to the FPU -- only
+        # int32 and the opt-in accurate fp32 mean take the SFPU reduce path (see
+        # ttnn/cpp/ttnn/operations/reduction/generic/device/common.hpp:use_sfpu_reduce_path) -- and the
+        # FPU truncates its source registers to a 10-bit mantissa. Every index above 2**11 therefore
+        # comes back rounded to a value that equals NO actual index, the winner mask comes out empty,
+        # and the boost silently degrades to a no-op: the tie survives and the greedy token keeps
+        # flipping. That is exactly how the first version of this pass failed on device. Int32 min/max
+        # are integer-exact at every index. Keep the reduce, the mask arithmetic and the equality all
+        # in int32 -- routing any of them through float32 (or uint32, which is on the FPU path too)
+        # reintroduces the same rounding. forward() hands us uint32, so cast once here.
+        idx = ttnn.typecast(gathered_global_indices, ttnn.int32, sub_core_grids=scg)
+        offset = ttnn.multiply(not_max, TIEBREAK_INDEX_SENTINEL, sub_core_grids=scg)  # bf16, exact (2**24)
         ttnn.deallocate(not_max)
-        masked_idx = ttnn.add(idx_f, not_max_scaled, sub_core_grids=scg)
-        ttnn.deallocate(not_max_scaled)
-        greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] f32
+        offset_i32 = ttnn.typecast(offset, ttnn.int32, sub_core_grids=scg)
+        ttnn.deallocate(offset)
+        masked_idx = ttnn.add(idx, offset_i32, sub_core_grids=scg)  # int32
+        ttnn.deallocate(offset_i32)
+        greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] int32
         ttnn.deallocate(masked_idx)
 
-        is_lowidx = ttnn.eq(idx_f, greedy_i, sub_core_grids=scg)  # broadcast over W
-        ttnn.deallocate(idx_f)
+        is_lowidx_i32 = ttnn.eq(idx, greedy_i, sub_core_grids=scg)  # broadcast over W
+        ttnn.deallocate(idx)
         ttnn.deallocate(greedy_i)
+        is_lowidx = ttnn.typecast(is_lowidx_i32, ttnn.bfloat16, sub_core_grids=scg)  # 1/0 -> 1.0/0.0
+        ttnn.deallocate(is_lowidx_i32)
         is_winner = ttnn.multiply(is_max, is_lowidx, sub_core_grids=scg)  # 1.0 at exactly one candidate
         ttnn.deallocate(is_max)
         ttnn.deallocate(is_lowidx)
 
-        # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
+        # gate by k==1 (self._greedy_col [1,1,B,1] bf16); random users get boost 0 => values unchanged
         winner_gated = ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg)
         ttnn.deallocate(is_winner)
-        winner_bf16 = ttnn.typecast(winner_gated, ttnn.bfloat16, sub_core_grids=scg)
+        boost = ttnn.multiply(winner_gated, delta, sub_core_grids=scg)  # delta broadcasts over W
         ttnn.deallocate(winner_gated)
-        boost = ttnn.multiply(winner_bf16, delta, sub_core_grids=scg)  # delta broadcasts over W
-        ttnn.deallocate(winner_bf16)
         ttnn.deallocate(delta)
 
         adjusted = ttnn.add(gathered_values, boost, sub_core_grids=scg)
@@ -748,8 +787,9 @@ class TTSampling(LightweightModule):
                 output_tensor=tt_out_tok,
                 keepdim=False,
             )
-            # Argmax path: logprobs not supported (force-argmax is disabled
-            # when logprobs are enabled via format_sampling_params guard).
+            # Argmax fast-path does not compute logprobs (it never runs a softmax over
+            # the vocab). On single-chip, on-device logprobs are unsupported anyway
+            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
@@ -772,10 +812,11 @@ class TTSampling(LightweightModule):
                     indices_tensor=indices_tensor_list[i],
                     # Break exact-value ties by lowest index instead of array position, so which
                     # of a set of tied candidates enters the top-k does not depend on placement.
-                    # Best effort only -- the stable bitonic network is still an open LLK issue
+                    # Best effort only, and only where the LLK has the network at all (see
+                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
                     # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                     # guarantees the greedy pick.
-                    stable=True,
+                    stable=self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
@@ -811,10 +852,11 @@ class TTSampling(LightweightModule):
                 indices_tensor=self.tt_indices_tensor,
                 # Break exact-value ties by lowest index instead of array position, so which
                 # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only -- the stable bitonic network is still an open LLK issue
+                # Best effort only, and only where the LLK has the network at all (see
+                # self._topk_stable) -- the stable bitonic network is an open LLK issue
                 # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                 # guarantees the greedy pick.
-                stable=True,
+                stable=self._topk_stable,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
