@@ -1545,8 +1545,15 @@ def _coverage_layers(
     ops that first appear past 16 are reported as present-but-un-timed. Falls back to the config-declared
     layer pattern when the k=0 probe yields nothing (a model that reads TT_PERF_LAYERS=0 as an empty
     stack). Cached per model. Disable via PERF_MCP_COVERAGE_SIZING=0."""
+    # WHY THERE IS NO WINDOW, not merely that there is none. None is the answer for three unrelated
+    # situations -- sizing switched off, the knob proved inert, the probe found nothing -- and a caller
+    # handed a bare None cannot tell "profile everything, deliberately" from "something broke". That
+    # ambiguity is what let before_loop read a deliberate None as a failure and invent a depth of 4,
+    # export it as TT_PERF_LAYERS, and announce a 4-layer profile on a run that profiled 48. The
+    # reason was known HERE and thrown away on the way out; facts already travels, so it carries it.
     facts: dict = {}
     if os.environ.get("PERF_MCP_COVERAGE_SIZING", "1") != "1" or not node:
+        facts["no_window"] = "sizing_disabled" if node else "no_node"
         return None, facts
     cached = _coverage_cache_get(repo_root, node, case)
     if cached is not None:
@@ -1594,6 +1601,9 @@ def _coverage_layers(
                     f"work signal unchanged, so the cap never reached the builder. Profiling FULL depth."
                 )
                 _coverage_cache_put(repo_root, node, case, 0)
+                # NOT a failure: the cap was applied and measured to change nothing, so the model
+                # builds every layer whatever it is asked. Profiling full depth is the right outcome.
+                facts["no_window"] = "knob_inert"
                 return None, facts
             else:
                 _signpost = (_cov, sorted(op for op, b in first_block.items() if b >= _cov))
@@ -1632,6 +1642,9 @@ def _coverage_layers(
         )
         _coverage_cache_put(repo_root, node, case, _cov)
         return _cov, facts
+    # The k=0 probe enumerated nothing AND no config declares a layer pattern. Genuinely unknown --
+    # full depth is still the safe profile, but a reader should be told this one was not a decision.
+    facts["no_window"] = "probe_failed"
     return None, facts
 
 

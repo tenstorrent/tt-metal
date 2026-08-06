@@ -129,16 +129,6 @@ def test_a_board_management_fault_is_recognised():
     assert m.board_needs_host_reboot("") is False
 
 
-def test_it_does_not_even_try_once_when_the_kernel_has_ruled_it_out(dr, monkeypatch):
-    """Three failures tell you resets are not working; the kernel tells you they CANNOT work. There is
-    no value in spending the three."""
-    monkeypatch.setattr(dr, "_kernel_tail", lambda: "tenstorrent!2: Failed to set initial power state: -22")
-    tries = []
-    assert dr.recover("t", lambda tgt: tries.append(tgt)) is False
-    assert tries == [], "it reset a board the driver had already refused"
-    assert dr.recovery_exhausted() is True, "the run must halt, not keep polling"
-
-
 def test_an_unreadable_kernel_log_falls_back_to_counting(dr, monkeypatch):
     """Recovery must never DEPEND on dmesg: a host with dmesg_restrict=1 and no journal still gets the
     old behaviour, bounded by the limit."""
@@ -254,11 +244,32 @@ def test_note_ok_still_clears_the_crash_streak(dr):
     assert tries == [], "one ambiguous crash after an OK must not reset -- the two-strike rule"
 
 
-def test_the_kernel_verdict_is_not_cleared_by_a_stale_count(dr, monkeypatch):
-    """note_ok clears a COUNT, not a diagnosis. If the driver still reports the board-management
-    fault, recovery must stay refused however healthy the counter looks."""
-    dr.note_ok()
-    monkeypatch.setattr(dr, "_kernel_tail", lambda: "tenstorrent!2: Failed to set initial power state: -22")
+def test_the_kernel_line_does_not_gate_recovery(dr, monkeypatch):
+    """SUPERSEDED DESIGN. An earlier revision refused in ZERO attempts when the driver had logged
+    "Failed to set initial power state", on the reading that no reset could then work.
+
+    It is transient. The message fires whenever a device is OPENED while its ARC is not ready: a
+    wedged board produced 714 across a day on this box, and a HEALTHY run produced 4 in an hour while
+    continuing to optimize. Gating on it declares a working board dead at the first fault -- worse
+    than the unbounded retrying the check was added to stop."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    monkeypatch.setattr(dr, "_kernel_tail", lambda: "tenstorrent!0: Failed to set initial power state: -22")
     tries = []
-    assert dr.recover("t", lambda tgt: tries.append(tgt)) is False
-    assert tries == []
+    dr.recover("t", lambda tgt: tries.append(tgt))
+    assert tries, "a transient kernel message refused a reset outright"
+
+
+def test_the_kernel_line_still_explains_a_failure(dr, monkeypatch):
+    """Its actual job: after the resets have failed, say WHY -- "reboot the host" is actionable,
+    "unrecoverable after N attempts" is not. Run 39 sat dead until morning for want of that."""
+    assert dr.board_needs_host_reboot("tenstorrent!2: Failed to set initial power state: -22") is True
+    assert dr.board_needs_host_reboot("tenstorrent: pin_user_pages_longterm failed: -14") is False
+
+
+def test_the_kernel_read_is_scoped_to_this_boot(dr):
+    """`journalctl -k` without -b returns the last N kernel lines across EVERY boot, so a fault from a
+    previous boot reads as live. On this box: chips died, the host rebooted, all four came back
+    healthy at 1e52 -- and the check still answered True from yesterday's log."""
+    src = DR_PATH.read_text()
+    i = src.index('"journalctl"')
+    assert '"-b"' in src[i : i + 120], src[i : i + 120]

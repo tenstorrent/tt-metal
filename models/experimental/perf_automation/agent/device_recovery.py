@@ -70,7 +70,13 @@ def _kernel_tail() -> str:
     BOUNDED and best-effort: recovery must never depend on dmesg being readable, and a host that
     restricts it (dmesg_restrict=1, no journal) simply falls back to counting failures.
     """
-    for cmd in (["dmesg", "--ctime"], ["journalctl", "-k", "--no-pager", "-n", str(KERNEL_LOG_LINES)]):
+    # THIS BOOT ONLY. `journalctl -k` without -b returns the last N kernel lines across EVERY boot,
+    # so a fault from a previous boot is read as a live one. Observed on this box: chips 2 and 3 died,
+    # the host was rebooted, all four came back healthy at 1e52 -- and board_needs_host_reboot() still
+    # answered True, because yesterday's 714 "Failed to set initial power state" lines were still in
+    # the journal. That refuses recovery on a working board, which is worse than the unbounded
+    # retrying this check was added to stop. dmesg is inherently current-boot; journalctl needs -b.
+    for cmd in (["dmesg", "--ctime"], ["journalctl", "-k", "-b", "--no-pager", "-n", str(KERNEL_LOG_LINES)]):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and r.stdout:
@@ -81,12 +87,16 @@ def _kernel_tail() -> str:
 
 
 def board_needs_host_reboot(kernel_text: str = None) -> bool:
-    """Has the driver reported a fault that a PCIe reset provably cannot clear?
+    """After resets have FAILED, does the kernel say why -- a fault no PCIe reset can clear?
 
-    True means STOP RESETTING and tell the operator to reboot -- retrying is guaranteed to fail, and
-    the cost of not knowing is measured in hours: run 39 spent ~100 minutes on 34 resets and then sat
-    dead until morning, because the tool could only infer "unrecoverable" from repeated failure and
-    never read the reason sitting in the kernel log.
+    Read only as an explanation, never as a gate. The message fires whenever a device is OPENED while
+    its ARC is not ready, so it is transient by nature: a wedged board produced 714 of them across a
+    day on this box, and a healthy run produced 4 in an hour while continuing to optimize normally.
+    Gating on it would declare a working board dead at the first fault.
+
+    So the count decides WHETHER to stop, and this decides WHAT TO TELL THE OPERATOR -- "reboot the
+    host", which is actionable, instead of "unrecoverable after N attempts", which is not. Run 39 sat
+    dead until morning for want of exactly that sentence.
     """
     txt = (_kernel_tail() if kernel_text is None else str(kernel_text or "")).lower()
     return any(sig in txt for sig in UNRESETTABLE_KERNEL_SIGS)
@@ -158,9 +168,9 @@ def _run_stamp() -> str:
     round with all four chips idling at 45C.
 
     "Resets are not working" is a statement about THIS run against THIS board. A new run re-establishes
-    it in three attempts if it is still true, and the kernel's verdict (board_needs_host_reboot) stops
-    it in ZERO when the fault is one no reset can clear -- that check, not the count, is the real
-    condition. The count is only the backstop for a host where dmesg cannot be read.
+    it in three attempts if it is still true. board_needs_host_reboot then explains the failure --
+    "reboot the host" rather than "unrecoverable" -- but it does not gate, because the message it
+    reads is transient and would condemn a working board.
     """
     return str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
 
@@ -350,18 +360,15 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
                 % (where, RESET_FAILS["n"], RESET_FAIL_LIMIT)
             )
         return False
-    # AND A RESET THE KERNEL HAS ALREADY RULED OUT IS NOT WORTH ONE TRY, let alone three. `tt-smi -r`
-    # asks the card's board-management firmware, over PCIe, to cycle power; when that firmware is what
-    # is refusing, there is nothing to ask. The driver says so, and saying so is the whole difference
-    # between "retry" and "the host must reboot".
-    if board_needs_host_reboot():
-        RESET_FAILS["n"] = RESET_FAIL_LIMIT
-        if log:
-            log(
-                "device at %s needs a HOST REBOOT, not a reset: the driver reports a board-management "
-                "fault (%s) that no PCIe reset can clear" % (where, UNRESETTABLE_KERNEL_SIGS[0])
-            )
-        return False
+    # THE KERNEL LINE EXPLAINS A FAILURE; IT DOES NOT PREDICT ONE. An earlier revision treated
+    # "Failed to set initial power state" as proof that no reset could work and refused in ZERO
+    # attempts. That is wrong: the message fires whenever a device is OPENED while its ARC is not
+    # ready, which is transient. Observed on this box -- a wedged board produced 714 of them across a
+    # day, and a perfectly healthy run produced 4 in an hour while continuing to optimize. Gating on
+    # it would have declared a working board dead on the first fault.
+    #
+    # So resets are tried, bounded by the limit, and the kernel log is consulted only AFTER they have
+    # failed -- to say WHY, which is the difference between "unrecoverable" and "reboot the host".
     targets = targets_for(error_text, config_target, expand=expand)
     for tgt in targets:
         try:

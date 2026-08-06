@@ -671,38 +671,71 @@ def before_loop(
             config_ref=str(config.get("config_ref") or ""),
             depth_knob=_bl_knob,
         )
-        _bl_cov_probed = _bl_cov is not None and _bl_cov != 0
+        # NO WINDOW MEANS NO WINDOW. _coverage_layers returns None for a REASON, and the commonest
+        # reason is not failure: the signpost path returns None precisely when it has proved the depth
+        # knob INERT -- the cap left the work signal unchanged, so the model builds every layer
+        # whatever is asked of it (run.py: "Profiling FULL depth"). gemma3's build_pipeline takes no
+        # layer count at all, so there is nothing for TT_PERF_LAYERS to attach to.
+        #
+        # This read that None as "the probe failed" and substituted a literal 4 -- a number nothing
+        # derived, contradicting the ladder's own fallback of 2 (run.py: _cov = 2,
+        # "unverified-floor") -- then EXPORTED it as TT_PERF_LAYERS and announced "profiled at a
+        # SUBSTITUTED depth of 4 layers" on a run that profiled all 48. The claim was wrong, the
+        # export was wrong, and only the bridge's empirical check downstream ("did not reduce work;
+        # ignoring") kept it from mattering. A value that survives solely because something later
+        # discards it should not be produced.
+        #
+        # The depth ladder OWNS this question -- signposts, then 2/4/8/16 bounded by the declared
+        # depth, then 2 -- and it has already answered. When its answer is "no cap", TT_PERF_LAYERS is
+        # REMOVED, which is how the rest of the tool spells full depth (layer_depth.set_depth: the cap
+        # is expressed by ABSENCE, never by a sentinel, because "0" arrives as a truthy string and is
+        # read as "build zero layers").
+        _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
+        _bl_blocks = int((_bl_facts or {}).get("full_blocks") or 0)
         if _bl_cov is None or _bl_cov == 0:
-            _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
+            os.environ.pop("TT_PERF_LAYERS", None)
+            # READ THE REASON, do not infer one. _coverage_layers now says which of these it is; a
+            # deliberate "no cap" and a broken probe both profile full depth, but only one of them is
+            # a problem, and a reader cannot act on a line that will not say which.
+            _why = str((_bl_facts or {}).get("no_window") or "")
+            _said = {
+                "knob_inert": "the depth knob does not reach this model's builder (capping changed no "
+                "work), so nothing can be capped",
+                "sizing_disabled": "coverage sizing is off (PERF_MCP_COVERAGE_SIZING=0)",
+                "no_node": "no perf-test node to probe",
+                "probe_failed": "the op-signature probe found nothing and no config declares a layer "
+                "pattern -- this one is NOT a decision, it is unknown",
+            }.get(_why, "reason not reported by the coverage probe (%r)" % (_why or None))
             print(
-                "      depth-bridge WARNING: the coverage probe returned %r, so the baseline is "
-                "profiled at a SUBSTITUTED depth of %d layers. Any candidate measured at a different "
-                "depth is not comparable to it (set PERF_MCP_DEPTH_DEFAULT_LAYERS to pin this)."
-                % (_bl_cov_probed and _bl_cov or None, _bl_cov),
+                "      depth-bridge: no profiling window -- %s. The baseline profiles FULL depth "
+                "(%d blocks); nothing is capped and nothing is substituted." % (_said, _bl_blocks),
                 file=sys.stderr,
                 flush=True,
             )
-        _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
-        _bl_blocks = int((_bl_facts or {}).get("full_blocks") or 0)
         print(
             f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov} full_signal={_bl_full} full_blocks={_bl_blocks} knob={bool(_bl_knob)}",
             file=sys.stderr,
             flush=True,
         )
-        os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
-        _bl_depth = _bridge_depth_env(
-            tt_root,
-            sub_env,
-            devices,
-            perf_rel,
-            case,
-            _bl_cov,
-            full_hint=_bl_full,
-            full_blocks=_bl_blocks,
-            knob=_bl_knob,
-        )
-        if _bl_depth:
-            os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
+        if _bl_cov:
+            os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
+        # The bridge exists to find an env spelling that makes a cap REACH the builder. With no cap
+        # to apply there is nothing for it to search for, and calling it with a None depth would only
+        # rediscover -- at the price of more device probes -- what _coverage_layers already proved.
+        if _bl_cov:
+            _bl_depth = _bridge_depth_env(
+                tt_root,
+                sub_env,
+                devices,
+                perf_rel,
+                case,
+                _bl_cov,
+                full_hint=_bl_full,
+                full_blocks=_bl_blocks,
+                knob=_bl_knob,
+            )
+            if _bl_depth:
+                os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
     except Exception as _bl_e:  # noqa: BLE001
         import traceback as _tb
 
