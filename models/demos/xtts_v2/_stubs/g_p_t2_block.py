@@ -36,7 +36,6 @@ Conv1D (GPT2) is `y = x @ weight + bias` with weight `[nx, nf]` (already in
 from __future__ import annotations
 
 import ttnn
-
 from models.demos.xtts_v2._stubs.conv1_d import build as _build_conv1d
 
 _LN_EPS = 1e-5
@@ -83,7 +82,10 @@ def build_gpt2_block(device, torch_module):
     def _w(t):
         return ttnn.as_tensor(
             t.detach().contiguous().to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     ln1_w, ln1_b = _w(m.ln_1.weight), _w(m.ln_1.bias)
@@ -93,10 +95,10 @@ def build_gpt2_block(device, torch_module):
     # transpose) run through the graduated conv1_d leaf stub. Its build binds
     # bf16 TILE weight/bias and its forward does matmul(x, w) + bias — byte
     # identical to the inline version the block used before.
-    c_attn_fwd = _build_conv1d(device, attn.c_attn)         # 1024 -> 3072
-    c_proj_fwd = _build_conv1d(device, attn.c_proj)         # 1024 -> 1024
-    c_fc_fwd = _build_conv1d(device, mlp.c_fc)              # 1024 -> 4096
-    mlp_proj_fwd = _build_conv1d(device, mlp.c_proj)        # 4096 -> 1024
+    c_attn_fwd = _build_conv1d(device, attn.c_attn)  # 1024 -> 3072
+    c_proj_fwd = _build_conv1d(device, attn.c_proj)  # 1024 -> 1024
+    c_fc_fwd = _build_conv1d(device, mlp.c_fc)  # 1024 -> 4096
+    mlp_proj_fwd = _build_conv1d(device, mlp.c_proj)  # 4096 -> 1024
 
     # HiFi4 + fp32 accumulation for the attention score/context matmuls: the AR
     # decoder's greedy argmax is sensitive to bf16 accumulation error over the
@@ -108,12 +110,23 @@ def build_gpt2_block(device, torch_module):
         packer_l1_acc=True,
     )
 
-    def forward(hidden_states, *args, attn_bias=None, **kwargs):
+    def forward(
+        hidden_states,
+        *args,
+        attn_bias=None,
+        kv_out=False,
+        k_cache=None,
+        v_cache=None,
+        cur_pos=None,
+        sel_ar=None,
+        ones_c=None,
+        **kwargs,
+    ):
         x = hidden_states
 
         # --- self-attention ---
         h = ttnn.layer_norm(x, epsilon=_LN_EPS, weight=ln1_w, bias=ln1_b)
-        qkv = c_attn_fwd(h)                                 # [1, T, 3*embed]
+        qkv = c_attn_fwd(h)  # [1, T, 3*embed]
 
         # Fused split + head-reshape + key-transpose in ONE device op (no
         # ROW_MAJOR round-trips). HF's c_attn emits q|k|v as contiguous 1024
@@ -122,35 +135,70 @@ def build_gpt2_block(device, torch_module):
         # to the old slice + _split_heads path. transpose_key=True yields k as
         # [1, H, hd, T], ready for q @ k^T without a separate transpose.
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=n_heads, transpose_key=False,
-        )                                                   # each [1, H, T, hd]
+            qkv,
+            num_heads=n_heads,
+            transpose_key=False,
+        )  # each [1, H, T, hd]
 
-        # Fused FlashAttention-2: (q @ k^T) * scale (+ causal mask) -> softmax
-        # -> @ v, in ONE device op. Replaces the explicit 5-op path (score
-        # matmul, scale-multiply, mask-add, softmax, context matmul) — kills the
-        # dispatch-bound tiny 64x64x64 BMMs + the softmax/mul/add. is_causal
-        # matches the GPT2Model's lower-triangular bias; the standalone per-block
-        # PCC test (attn_bias=None) is FULL (bidirectional) attention.
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v,
-            is_causal=attn_bias is not None,
-            scale=scaling,
-            compute_kernel_config=_attn_kernel_cfg,
-        )                                                   # [1, H, T, hd]
+        if k_cache is not None:
+            # KV-cached decode step: hidden is [1,1,embed]; write the new k/v at
+            # cur_pos in the [1,H,C,hd] fp32 caches (masked in-place), then attend the
+            # single query over the whole cache with keys > cur_pos masked out.
+            # scores -> softmax -> context run in fp32 — the fused SDPA also keeps
+            # these stages in fp32, and the AR argmax flips on the accumulated bf16
+            # rounding of an unfused path. All shapes fixed, so the step is traceable.
+            C = int(k_cache.shape[2])
+            sel = ttnn.reshape(ttnn.typecast(ttnn.eq(sel_ar, cur_pos), ttnn.float32), [1, 1, C, 1])
+            keep = ttnn.subtract(ones_c, sel)
+            ttnn.add(
+                ttnn.multiply(k_cache, keep), ttnn.multiply(ttnn.typecast(k, ttnn.float32), sel), output_tensor=k_cache
+            )
+            ttnn.add(
+                ttnn.multiply(v_cache, keep), ttnn.multiply(ttnn.typecast(v, ttnn.float32), sel), output_tensor=v_cache
+            )
+            disallowed = ttnn.reshape(
+                ttnn.multiply(ttnn.typecast(ttnn.gt(sel_ar, cur_pos), ttnn.float32), -1e9), [1, 1, 1, C]
+            )
+            scores = ttnn.matmul(
+                ttnn.typecast(q, ttnn.float32), ttnn.transpose(k_cache, -1, -2), compute_kernel_config=_attn_kernel_cfg
+            )  # fp32 out (k_cache is fp32)
+            scores = ttnn.add(ttnn.multiply(scores, scaling), disallowed)  # scale=1/8 exact
+            probs = ttnn.softmax(scores, dim=-1)  # fp32
+            attn_out = ttnn.typecast(
+                ttnn.matmul(probs, v_cache, compute_kernel_config=_attn_kernel_cfg), ttnn.bfloat16
+            )  # [1,H,1,hd]
+        else:
+            # Fused FlashAttention-2: (q @ k^T) * scale (+ causal mask) -> softmax
+            # -> @ v, in ONE device op. Replaces the explicit 5-op path (score
+            # matmul, scale-multiply, mask-add, softmax, context matmul) — kills the
+            # dispatch-bound tiny 64x64x64 BMMs + the softmax/mul/add. is_causal
+            # matches the GPT2Model's lower-triangular bias; the standalone per-block
+            # PCC test (attn_bias=None) is FULL (bidirectional) attention.
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=attn_bias is not None,
+                scale=scaling,
+                compute_kernel_config=_attn_kernel_cfg,
+            )  # [1, H, T, hd]
 
         # Fused merge (inverse of the split above) — one device op, no layout churn.
-        attn_out = ttnn.transformer.concatenate_heads(attn_out)   # [1, T, embed]
+        attn_out = ttnn.transformer.concatenate_heads(attn_out)  # [1, T, embed]
         attn_out = c_proj_fwd(attn_out)
 
-        x = ttnn.add(attn_out, x)                           # residual
+        x = ttnn.add(attn_out, x)  # residual
 
         # --- MLP ---
         h = ttnn.layer_norm(x, epsilon=_LN_EPS, weight=ln2_w, bias=ln2_b)
         h = c_fc_fwd(h)
-        h = ttnn.gelu(h, fast_and_approximate_mode=True)    # gelu_new (tanh approx)
+        h = ttnn.gelu(h, fast_and_approximate_mode=True)  # gelu_new (tanh approx)
         h = mlp_proj_fwd(h)
 
-        return ttnn.add(h, x)                               # residual
+        x = ttnn.add(h, x)  # residual
+        if kv_out:
+            return x, k, v
+        return x
 
     return forward
 
