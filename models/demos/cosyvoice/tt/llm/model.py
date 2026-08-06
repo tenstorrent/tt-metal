@@ -281,8 +281,9 @@ class TtTransformerLM:
         ttnn.deallocate(ys)
         ys = None
 
-        # Trace capture: 2.22x on the decode step (34.92 -> 15.72 ms, 63.6 tok/s),
-        # verified bit-exact against the untraced path. Only the decode step is
+        # Trace capture is worth ~2.2x on the decode step, verified bit-exact
+        # against the untraced path; PERF.md carries the current figures and is
+        # the one place they are maintained. Only the decode step is
         # traced -- prefill runs once per utterance with a different shape, so
         # tracing it would buy one dispatch saving for a second capture. Capture
         # costs two warm-up passes, so it is skipped for very short generations.
