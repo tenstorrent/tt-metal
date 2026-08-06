@@ -99,7 +99,7 @@ Writes `tests/golden/*.npz` — one per module boundary, plus `manifest.json`.
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~40 s. 106 tests.
+# host tier: no device, no silicon, ~40 s. 111 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
 # device tier: needs /dev/tenstorrent. 41 tests.
@@ -172,9 +172,11 @@ non-streamed audio for the same text and seed.
 
 **Perf targets are ordinary passing tests.** If a target is missed the number is reported
 and the gap explained; `xfail` reads as concealment. The current end-to-end RTF is
-**1.096** against a target of 0.5 — see [`PERF.md`](PERF.md), which states the breakdown
-(the LLM is 69 % of it), what closed the gap from 2.120 (trace capture on both compute
-stages), and the levers that remain.
+**0.648** against a target of 0.5 — see [`PERF.md`](PERF.md), which states the breakdown
+(the LLM is 64 % of it), what took it there from 2.120, and — more usefully than a bare
+shortfall — the three measurements that **bound** what is left: a ~6.3 µs per-op floor
+that tracing does not remove, `bfloat8_b` neutral at two operating points, and explicit
+core grids losing to TTNN's default.
 
 **Two things cannot be gated on exact agreement, and both say so explicitly.** RAS
 sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio chain
