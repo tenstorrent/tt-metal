@@ -56,7 +56,8 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
- * @tparam ROUND_NEAREST: when true, applies software RNE conversion for ADD/SUB (no-op if is_fp32_dest_acc_en)
+ * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
+ *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
@@ -64,7 +65,7 @@ template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en = false,
-    bool ROUND_NEAREST = false,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_sfpu_binary(
@@ -107,7 +108,9 @@ inline void calculate_sfpu_binary(
             }
         }
 
-        if constexpr ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && !is_fp32_dest_acc_en && ROUND_NEAREST) {
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && !is_fp32_dest_acc_en &&
+            dst_rounding_mode == DstRoundingMode::NearestEven) {
             result = float32_to_bf16_rne(result);
         }
 
