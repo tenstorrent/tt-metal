@@ -1033,6 +1033,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
+    // Unpack-to-Dest overrides for the fp32 depthwise path. Empty (i.e. "leave the default") for
+    // every other conv, so no existing caller changes.
+    //
+    // Why it is needed: an fp32 operand consumed through SrcA/SrcB is rounded to TF32 on the way in
+    // (`tech_reports/op_kernel_dev/accuracy_tips/accuracy_tips.md:51-77`). That truncation is what
+    // makes an fp32 depthwise conv1d measure ~1.6e-03 against a float64 golden while the same filter
+    // written as elementwise multiply-add measures ~5e-08. Routing the SFPU multiply in
+    // `compute_depthwise_conv1d.cpp` does **not** fix it on its own -- `copy_tile` still unpacks via
+    // SrcA -- so the operands must be delivered to Dest as true fp32 for that branch to mean anything.
+    // Matmul already does exactly this for its partial reload.
+    std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
     std::vector<uint32_t> compute_kernel_args;
     if (is_conv_1d_depthwise_conv) {
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
@@ -1044,6 +1055,24 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
+
+        // Only when both operands really are fp32: a bf16 unpack already widens into the full 32-bit
+        // Dest slot, so overriding it there would be a behaviour change for no gain.
+        if (fp32_dest_acc_en && a.dtype() == DataType::FLOAT32 && b.dtype() == DataType::FLOAT32) {
+            depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+            // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
+            // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the tilized
+            // buffer leaves the activation pre-truncated. That shows up as a residual 4.154e-04 --
+            // 2^-11.2, i.e. exactly TF32 -- which is constant across shapes and which splitting the
+            // activation (but not the weight) removes.
+            for (const uint32_t cb :
+                 {get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
+                  dest_reuse_scratch_cb_id}) {
+                depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
+        }
 
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
@@ -1176,6 +1205,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = depthwise_unpack_to_dest,
     };
 
     // Helper lambda to setup mcast arguments

@@ -367,13 +367,19 @@ def test_audio_decoder_durations(mesh_device):
         resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
         mesh_device=mesh_device,
     )
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers import AutoencoderKLMiniMaxH3Audio
+    # Load the checkpoint directly rather than through the diffusers reference, as
+    # `test_tracy_audio_decode` does. This is a pure timing test -- it never evaluates the CPU
+    # reference -- so routing the state dict through `AutoencoderKLMiniMaxH3Audio` only to call
+    # `.state_dict()` on it costs a large CPU model build and makes the measurement unavailable
+    # whenever the installed diffusers lacks that class.
     from safetensors.torch import load_file
 
-    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
-    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
-    decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
+    decoder.load_torch_state_dict(
+        convert_minimax_h3_audio_state_dict(
+            load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+        ),
+        strict=False,
+    )
 
     for duration in AUDIO_DURATIONS_S:
         frames = int(round(AUDIO_LATENT_FRAMES_5S * duration / 5.0))
