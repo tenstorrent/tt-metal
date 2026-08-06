@@ -815,6 +815,50 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
         # [EMPTY_AUDIO] is forbidden; [END_AUDIO] is ALLOWED, since that is how generation stops.
 ```
 
+### [flow-08a] `semantic_code` — the mask and the argmax belong on the HOST, worth 0.353 ms/frame
+
+```text
+        SPLIT FIRST (STATUS.md 6.31). One semantic_code call is 1229 us, the second-largest line in
+        Block 2's whole map, and it decomposes as:
+
+            linear fp32 against a (3072, 8320) head   562.0 us   45.7%
+            argmax over 8320 values                   490.1 us   39.9%
+            from_torch H->D                            53.0 us    4.3%
+            add semantic_mask                          36.3 us    3.0%
+            to_torch D->H                              21.4 us    1.7%
+
+        The matmul is NOT the problem: the head is 3072x8320 fp32 = 102 MB, so 562 us is 182 GB/s,
+        which is at the roofline. The ARGMAX is the problem -- 490 us to reduce 33 KB is 0.07 GB/s,
+        so it is all launch overhead and none of it is data movement.
+
+        AND IT COSTS NOTHING TO MOVE, because this call ALREADY ended in a device->host copy. Doing
+        the reduce on the host does not add a round trip; it only makes that copy 8320 fp32 values
+        instead of 1. 33 KB is 0.17 us of PCIe. The mask add rides along for free once the logits
+        are on the host.
+
+            A shipped: linear fp32 + device mask + argmax   1213.5 us   1.000x   0 of 8 ids changed
+            B host argmax, device mask                       893.5 us   1.386x   0 of 8
+            C host argmax AND host mask  <- SHIPPED          860.3 us   1.439x   0 of 8
+            D bf16 head, device argmax                       946.9 us   1.308x   0 of 8
+            E bf16 head + host argmax + host mask            595.7 us   2.079x   0 of 8
+
+        C is EXACTLY the same fp32 arithmetic -- same values, same order, the add and the reduce
+        just happen on a different processor -- so it carries no numerical risk at all.
+
+        E IS FASTER STILL (2.079x, another 0.265 ms/frame) AND IS NOT SHIPPED. Halving the head to
+        bf16 changes the logits, and this is an ARGMAX over a vocabulary: what decides whether a
+        token flips is the top-2 GAP, not a norm. 0 of 8 real prompts moved, but 8 single frames is
+        a thin sample for a discrete decision, and the semantic token is the highest-stakes integer
+        in the model -- it feeds Block 1's next input embedding, so ONE flip redirects the entire
+        remaining generation. Needs a broad real-prompt gate before it can ship.
+
+        A NOTE ON HOW THIS WAS NEARLY GOT WRONG. Round 1 of this probe scored the bf16 candidate on
+        64 RANDOM gaussian draws and reported 0 changed ids. That is worthless -- STATUS trap #12
+        records random embeddings reading PCC 0.892 where real prompts gave 0.9994, and an argmax is
+        precisely where that bites. Round 2 pulls real hidden states out of Block 1 on the fixture
+        prompts. ALWAYS GATE ON REAL PROMPTS.
+```
+
 ### [flow-09] `__init__` — q, k and v fused into ONE weight -> one matmul instead of...
 
 ```text
