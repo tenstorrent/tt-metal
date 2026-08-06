@@ -146,7 +146,7 @@ CPMAddPackage(
 # googletest
 ############################################################################################################################
 
-if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
+if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS OR BUILD_TT_TRAIN)
     CPMAddPackage(
         NAME GTest
         GITHUB_REPOSITORY google/googletest
