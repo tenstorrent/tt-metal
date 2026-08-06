@@ -401,9 +401,8 @@ void kernel_main() {
                     Sk_chunk_t,
                     k_num_chunks,
                     tt::constants::TILE_HEIGHT);
-                // PHASE-1 (plumbing validation): range computed but the full bounds are published,
-                // so loop counts stay dense until the three-kernel handshake is proven.
-                (void)range;
+                windowed_k_lo = range.k_lo;
+                windowed_k_hi = range.k_hi;
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
