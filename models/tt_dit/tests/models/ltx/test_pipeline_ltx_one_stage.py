@@ -24,13 +24,9 @@ from models.tt_dit.utils.ltx import (
     default_ltx_gemma,
     print_ltx_timing_table,
 )
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
-# The audio vocoder's native conv1d taps run an UntilizeWithHalo gather whose config tensors
-# allocate from the dedicated L1_SMALL pool; it defaults to 0 and OOMs decode. 32 KB matches the
-# audio component tests. trace_region_size holds the AV command stream under LTX_TRACED=1.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+from .ltx_mesh_params import LTX_ONE_STAGE_MESH_PARAMS_DL
 
 
 def test_euler_step():
@@ -63,29 +59,8 @@ def test_euler_step():
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-    ],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_ONE_STAGE_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -99,7 +74,6 @@ def test_euler_step():
 )
 def test_pipeline_one_stage(
     mesh_device,
-    mesh_shape,
     sp_axis,
     tp_axis,
     num_links,
@@ -110,12 +84,14 @@ def test_pipeline_one_stage(
     is_fsdp,
     no_prompt,
 ):
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
     gemma = default_ltx_gemma()
     # ckpt / gemma always resolve (env var → local → HF repo string fallback). The pipeline's
     # resolver downloads from HF if needed.
 
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
@@ -160,6 +136,10 @@ def test_pipeline_one_stage(
         )
 
         if int(ttnn.distributed_context_get_rank()) == 0:
+            # Minimal artifact gate: the leg must not pass on missing/empty output. A calibrated
+            # VBench/CLIP quality check (like the distilled path) is the stronger follow-up.
+            assert os.path.exists(output_filename), f"pipeline produced no video at {output_filename}"
+            assert os.path.getsize(output_filename) > 0, f"pipeline produced an empty video at {output_filename}"
             logger.info(f"Saved video to: {output_filename}")
             print_ltx_timing_table(
                 pipeline,

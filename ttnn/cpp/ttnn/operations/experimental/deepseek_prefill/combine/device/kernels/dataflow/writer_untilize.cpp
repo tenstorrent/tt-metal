@@ -57,17 +57,11 @@ void kernel_main() {
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // The semaphore was created on all worker cores (including this one),
-    // so get_semaphore gives the correct L1 offset for any core with this ID.
-    uint32_t output_init_done_sem_l1_offset = get_semaphore(output_init_done_semaphore_id);
-
-    // Read sender core NOC coordinates for semaphore signaling
-    uint64_t sender_sem_noc_addrs[num_sender_cores];
-    for (uint32_t c = 0; c < num_sender_cores; c++) {
-        uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_done_sem_l1_offset);
-    }
+    // The semaphore is created on all worker cores (including this one) at a uniform L1
+    // offset, so Semaphore<>::up() resolves the correct remote address on any target core.
+    // The per-sender NOC coordinates are the last INIT_ZEROS runtime args; they are read
+    // below in the signaling loop.
+    Semaphore<> output_init_done_sem(output_init_done_semaphore_id);
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
@@ -75,9 +69,13 @@ void kernel_main() {
 #if INIT_ZEROS
     zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
-    // Signal all sender/reader cores that output-zeroing is complete
+    // Signal all sender/reader cores that output-zeroing is complete. Each core's NOC
+    // coordinates are read here (the last INIT_ZEROS runtime args) and passed to
+    // Semaphore<>::up().
     for (uint32_t c = 0; c < num_sender_cores; c++) {
-        noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
+        uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+        output_init_done_sem.up(noc, noc_x, noc_y, 1);
     }
 
     noc.async_atomic_barrier();
@@ -138,7 +136,7 @@ void kernel_main() {
     constexpr uint32_t tile_height = read_batch_size;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
 
-    // Runtime args appended after the sender_sem_noc_addrs loop above:
+    // Runtime args appended after the INIT_ZEROS sender NOC-coordinate args above:
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
     //   data_ready_semaphore_id      - sender-side sem dedicated to THIS untilizer core (one per
@@ -174,7 +172,6 @@ void kernel_main() {
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
     uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
     volatile tt_l1_ptr uint32_t* credits_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credits_sem_l1);
-    uint64_t self_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], credits_sem_l1);
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
@@ -283,7 +280,9 @@ void kernel_main() {
                     if (local_credits == 0) {
                         credits_sem.wait_min(1);
                         uint32_t n = *credits_sem_ptr;
-                        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                        // Atomic credit return: up() with a wrapped -n. Semaphore<>::down() is a
+                        // local, non-atomic decrement that would race the sender's credit increments.
+                        credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
                         noc.async_atomic_barrier();
                         local_credits += n;
                     }
@@ -332,14 +331,16 @@ void kernel_main() {
 
     credits_sem.wait_min(SLOTS_PER_UNTILIZER - local_credits);
     uint32_t n = *credits_sem_ptr;
-    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+    // Atomic credit return (see note above): up() with a wrapped -n.
+    credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
     counter_ready_sem.set(0);
     noc.async_atomic_barrier();
 
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
     noc.async_write_barrier();
-    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+    Semaphore<> sender_data_ready_sem(data_ready_semaphore_id);
+    sender_data_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
     noc.async_atomic_barrier();
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }
