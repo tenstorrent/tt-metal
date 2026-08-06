@@ -236,6 +236,14 @@ class Tensor:
         # must be supplied by the caller; see roadmap blocker 39.
         raise NotImplementedError("torch.Tensor.item() in a dry run: value-dependent shape (roadmap blocker 39)")
 
+    def tolist(self) -> list:
+        # No values, but callers that size something by len(...) (audio resample taps) need
+        # a list of the right shape. A value-dependent use fails later at item(), not here.
+        def build(shape):
+            return 0.0 if not shape else [build(shape[1:]) for _ in range(shape[0])]
+
+        return build(list(self._shape))
+
     # -- indexing ------------------------------------------------------------
     def __getitem__(self, key) -> "Tensor":
         if not isinstance(key, tuple):
@@ -333,6 +341,40 @@ def meshgrid(*grids, **k) -> tuple:
         grids = tuple(grids[0])
     sizes = [g.numel() for g in grids]
     return tuple(Tensor(list(sizes), g.dtype) for g in grids)
+
+
+def _bshape(*xs) -> Tuple[int, ...]:
+    """Broadcast the shapes of the Tensor operands (scalars are shapeless)."""
+    revs = [list(reversed(x._shape)) for x in xs if isinstance(x, Tensor)]
+    if not revs:
+        return ()
+    n = max(len(r) for r in revs)
+    out = [max((r[i] if i < len(r) else 1) for r in revs) for i in range(n)]
+    return tuple(reversed(out))
+
+
+def where(cond, a=None, b=None, **k) -> Tensor:
+    dt = next((x.dtype for x in (a, b) if isinstance(x, Tensor)), float32)
+    return Tensor(list(_bshape(cond, a, b)), dt)
+
+
+def zeros_like(x: Tensor, **k) -> Tensor:
+    return Tensor(x._shape, k.get("dtype") or x.dtype)
+
+
+ones_like = empty_like = zeros_like
+
+
+def full_like(x: Tensor, value, **k) -> Tensor:
+    return Tensor(x._shape, k.get("dtype") or x.dtype)
+
+
+def kaiser_window(window_length: int, *a, **k) -> Tensor:
+    """Signal windows (kaiser/hann/...): a 1-D constant of length window_length."""
+    return Tensor([window_length], k.get("dtype") or float32)
+
+
+hann_window = hamming_window = blackman_window = bartlett_window = kaiser_window
 
 
 def tensor(data, **k) -> Tensor:
