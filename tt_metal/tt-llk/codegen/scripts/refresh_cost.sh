@@ -33,6 +33,11 @@ if [[ -z "${START_TIME:-}" ]]; then
 fi
 : "${START_TIME:?START_TIME not exported and not found in ${LOG_DIR}/state.json}"
 
+# END_TIME exists only once the run finalizes (finalize_run writes it to state).
+# When present it caps the cost window at the run's end, so later turns in the same
+# interactive session never inflate a finished run. Absent mid-run -> no cap (live).
+END_TIME="${END_TIME:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get END_TIME 2>/dev/null || echo "")}"
+
 MODEL="${MODEL:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get MODEL 2>/dev/null || echo "")}"
 SESSION_ID="${SESSION_ID:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get SESSION_ID 2>/dev/null || echo "")}"
 PROJECT_CWD="${PROJECT_CWD:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get PROJECT_CWD 2>/dev/null || echo "")}"
@@ -44,6 +49,7 @@ fi
 
 python "${SCRIPT_DIR}/session_cost.py" \
     --since "${START_TIME}" \
+    ${END_TIME:+--until "${END_TIME}"} \
     ${MODEL:+--model "${MODEL}"} \
     ${_SESSION_ARGS:+${_SESSION_ARGS}} \
     --log-dir "${LOG_DIR}" >/dev/null 2>&1 || true
