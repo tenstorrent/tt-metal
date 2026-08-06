@@ -32,8 +32,6 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
-# Query heads per KV head (GQA 32/8). See the row fold in _block.
-REP = FM_N_HEADS // FM_N_KV_HEADS
 # Fused q++k++v width, GQA-aware. (The sub-widths were the hand-rolled split's slice
 # offsets until 6.45 replaced it with the fused op; they now only build _QKV_WIDTH.)
 _Q_WIDTH = FM_N_HEADS * FM_HEAD_DIM
@@ -128,15 +126,13 @@ class TtVoxtralFlow:
         # ~20), so trading 9 ops for 1 wins 3.836 ms/frame here at IDENTICAL accuracy. 6.45.
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]), num_heads=FM_N_HEADS,
-            num_kv_heads=FM_N_KV_HEADS, transpose_k_heads=True, memory_config=_L1)
-        # NOTES.md [flow-11] -- GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the...
-        s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
-                        kh, compute_kernel_config=COMPUTE_CONFIG,   # kh already transposed
-                        memory_config=_L1)
-        a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
-        a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
+            num_kv_heads=FM_N_KV_HEADS, transpose_k_heads=False, memory_config=_L1)
+        # NOTES.md [flow-11] -- sdpa for the interior: 4 ops -> 1, worth 2.555 ms/frame. It handles
+        # GQA natively, so the row fold and REP are unnecessary. scale=1.0 IS MANDATORY -- SCALE is
+        # folded into wqkv's q rows ([flow-09]), and the default would apply 1/sqrt(d) twice.
+        a = ttnn.transformer.scaled_dot_product_attention(
+            qh, kh, vh, is_causal=False, scale=1.0, compute_kernel_config=COMPUTE_CONFIG)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
-        a = ttnn.reshape(a, [B, FM_N_HEADS, 3, FM_HEAD_DIM])
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
                                     memory_config=_L1), memory_config=_L1)

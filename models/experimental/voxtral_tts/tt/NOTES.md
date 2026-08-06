@@ -1067,7 +1067,27 @@ transpose_k_heads=True did. It costs nothing extra -- it is the same op with a d
 permutation -- and it saves the separate ttnn.transpose the scores matmul would otherwise need.
 ```
 
-### [flow-11] `_block` — GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the...
+### [flow-11] `_block` — sdpa replaces the interior on Blackhole; the row fold is gone
+
+**REVERSED. STATUS.md §6.45.** `scaled_dot_product_attention` handles GQA natively, so the row
+fold and `REP` are both unnecessary and deleted. 4 ops become 1, worth **+2.555 ms/frame**.
+
+§6.37 rejected this on the N150 at **6.48x** the error vs fp64, and it cost a WER word. Here it
+is **1.57x** (velocity maxabs 4.043e-02 against 2.569e-02) and the discrete output does not move:
+10/288 acoustic codes vs the fp32 reference and 0/8 semantic on 8 real prompts, both identical to
+the hand-rolled path, and `--gate flow` reads 2 of 74 codes against 3. [flow-03] is explicit that
+codes, not PCC, are the gate here — "codes are what reach the audio".
+
+Long-form WER over 3 seeds: **1 wrong of 894 with sdpa against 4 without**, 15/15 `[END_AUDIO]`.
+
+`scale=1.0` IS MANDATORY: SCALE is folded into wqkv's q rows ([flow-09]), so the default applies
+1/sqrt(d) twice — §6.37 measured 3.8e-01 relative error for forgetting it.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
+
+### [flow-11-n150] GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the...
 
 ```text
         # GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the CFG fold above, and worth 1.40x

@@ -3017,6 +3017,81 @@ no other users, AICLK steady at 800 MHz and no thermal throttle. **Unexplained.*
 after that point resolve ~±0.3 ms at best, which is why this section leans on the frame-count
 gate and the pipeline rather than the step timing.
 
+### 6.44 — p150: the fused cache write LOSES, and _V_SHARD goes with it
+
+§6.20/§6.22 measured `paged_fused_update_cache` at +0.454 ms/frame on the N150. Here it is
+**0.687 ms/step SLOWER** than two plain `paged_update_cache` calls. Both are bit-identical.
+
+`_V_SHARD` existed only so the fused op would accept K and V on different cores, so it is deleted
+too — and with it the silent failure mode §6.22 warned about, where RoPE on a core whose cos/sin
+table lives elsewhere returns **3.4e38 from uninitialised L1** instead of raising.
+
+`_QKV_GRID_X` moves 8 → 1 in the same pass. §6.19 measured 1 core at +0.273 ms **worse** on the
+N150; here it is 0.461 ms **better**. Its structural finding was re-verified and still holds: feed
+`nlp_create_qkv_heads_decode` 1 / 6 / 8 / 24 / 48 cores and `qh`, `kh`, `vh` all come out **1
+core, shard (32,128)**, every time. The grid cannot reach its consumers, so only the shard fill
+sees it — and filling fewer cores is cheaper.
+
+Dedicated A/B, 14 rounds, noise floor **0.059 ms**, everything bit-identical:
+
+| arm | ms/step | vs shipped |
+|---|---|---|
+| **2 writes + 1-core qkv ← SHIPS** | **21.203** | **+0.907** |
+| 2 writes + 8-core | 21.423 | +0.687 |
+| fused + 1-core | 21.649 | +0.461 |
+| fused + 8-core (was shipped) | 22.110 | — |
+
+### 6.45 — p150: a small op costs 3.4x more, and THREE op-count decisions reverse
+
+**THE MEASUREMENT THAT EXPLAINS §6.44 AND THIS ONE.** A trivial op at Block 2's shape:
+
+    ttnn.add on [1,6,3072]     p150 67.7 us     N150 ~20 us (6.38)
+
+Block 2's five weight matmuls sum to **11.5 ms/frame here against the N150's 14.0** — better, as
+§6.41 predicts. Yet the block measured **28.4 against 20.8**. So ~17 ms is non-matmul work here
+against ~6.8 there. **On this chip OP COUNT is the dominant term**, which directly inverts §6.6's
+rule — *"what actually works is fewer, BIGGER kernels… judge a proposal on whether it makes
+kernels BIGGER, not on how many ops it deletes"*. On Blackhole, deleting ops is exactly the win.
+
+Whole Block 2 frame, interleaved, noise floor **0.002 ms**:
+
+| arm | ms/frame | vs shipped | codes ≠ fp32 |
+|---|---|---|---|
+| **fused split + sdpa ← SHIPS** | **21.861** | **+6.586** | 1/36 |
+| fused split (undoes §6.31) | 24.610 | +3.836 | 1/36 |
+| sdpa (undoes §6.37) | 25.892 | +2.555 | 1/36 |
+| shipped | 28.447 | — | 1/36 |
+
+**1. The head split — §6.31 reverses, at IDENTICAL accuracy.** The fused `nlp_create_qkv_heads`
+replaces the 9-op hand-roll. Scored on 8 real prompts against the fp32 reference: 10/288 acoustic
+codes, 0/8 semantic, velocity maxabs 2.569e-02, PCC 0.99998504 — *the same numbers as the
+hand-rolled path*, not merely close. §6.33 had already established that the hand-rolled win was a
+**system effect** rather than the op being faster, and a system effect is precisely what does not
+travel between chips.
+
+**2. sdpa for the interior — §6.37 reverses, and the accuracy objection largely dissolves.**
+4 ops → 1, and it handles GQA natively so the row fold and `REP` are deleted. §6.37 rejected it at
+**6.48x** the error vs fp64 and one WER word; here it is **1.57x** (velocity maxabs 4.043e-02 vs
+2.569e-02) and the discrete output does not move — 10/288 codes and 0/8 semantic, identical, and
+`--gate flow` reads **2 of 74 against 3**. [flow-03] is explicit that codes, not PCC, are Block
+2's gate. Long-form WER, 15 cases x 3 seeds:
+
+| seed | 0 | 1 | 2 | total |
+|---|---|---|---|---|
+| without sdpa | 2 | 2 | 0 | 4 / 894 |
+| **with sdpa** | 1 | 0 | 0 | **1 / 894** |
+
+15/15 `[END_AUDIO]` in all six runs, and gen **48.00 → 45.38 ms/frame** long-form.
+
+**3. `scale=1.0` is mandatory** — SCALE is folded into wqkv's q rows ([flow-09]), so the default
+applies 1/sqrt(d) twice. §6.37 measured 3.8e-01 relative error for forgetting it.
+
+**THE GENERALISABLE RULE FOR THIS CHIP.** Wormhole rewarded fewer, bigger kernels because its
+per-op floor was ~20 us and its DRAM ceiling was 194 GB/s. Blackhole has ~360 GB/s and a ~68 us
+per-op floor, so the balance flips: **bytes are cheap and launches are expensive.** Every
+N150-era decision of the form "trade one op for several to get a better layout" should be
+re-tested here, and so far all three that were have reversed.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
