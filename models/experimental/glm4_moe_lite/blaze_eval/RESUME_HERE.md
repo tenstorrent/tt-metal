@@ -59,21 +59,35 @@ The fix that should work is **chunked** rather than fully batched: keep the alig
 reads, give `scratch` depth ~8 instead of `num_pages=1`, issue 8 page reads, one barrier, then 8
 copies. That is 8 barriers instead of 64 at 16 KB of L1, and preserves page alignment throughout.
 
-### But fixing it does not rescue the cluster — it only reaches parity
+### FIXED, correctly, and landed in the blaze tree
 
-Even crediting both micro-ops a near-perfect fix (~7 µs each, better than the chunked estimate):
+Chunked the reads: `scratch` depth 1 -> `_READ_CHUNK = 8`, issue 8 page reads, one barrier per
+chunk. Reads stay **whole-page** deliberately — that is what avoids the alignment trap above.
 
-    core 36.5 + input ~7 + output ~7  =  ~50 µs   vs ttnn 47.4 µs   ~0.95x
+    q_kv_a fused op   117.3 -> 94.0 us     input boundary 39.7 -> ~16 us
+    PCC vs ttnn       0.999954 / 0.999938  (identical to before the change)
 
-So the ceiling for this cluster after all that kernel work is **parity, not a win**. And the
-unconditional floor is stronger still: variant A at 36.5 µs is the cluster with *both boundaries
-free*, which is 1.30x, worth ~0.5 ms of a 33.2 ms token (1.5%) — and only if the entire
-surrounding chain is converted so no boundary is ever crossed.
+chunk=32 gives only 2 us more for 4x the L1 (64 KB vs 16 KB), so 8 is the trade taken — this op's
+own docstring notes L1 headroom matters for the SDPA that follows.
 
-**Combined with the already-proven result that op count is a 0.0 ms lever under trace** (removing
-23% of all ops changed nothing, commit 18479ed4ad0) **and that the step is weight-bandwidth-bound**
-— which blaze does not change, since it streams the same bf8 bytes — there is no measured path by
-which fusing this cluster improves end-to-end decode.
+Saved as `blaze_eval/upstream/07-tile-row-replicate-chunked-reads.patch`, because
+`blaze/ops/tile_row_replicate/` is **untracked** in the tt-blaze tree — the other agent has not
+committed it, so `git diff` there reports nothing and the change would be lost on a reset. Use
+`cmp` against a backup, not `git diff`, to verify state of those files.
+
+### It still does not rescue q_kv_a — but it is worth ~3.5x more to the next op
+
+q_kv_a is now 47.5 us ttnn vs 94.0 us blaze = **0.52x**. Still a loss, still not to be integrated;
+the remaining gap is the output gather (~40 us, same barrier-per-page defect, not yet fixed) plus
+a 36.5 us core against a 47.5 us ttnn op that is simply not slow enough to beat.
+
+The fix matters because of where it lands next. `GLMOProjResidual` — the other agent's third GLM
+op, replacing **five** ttnn dispatches around the layer's largest matmul (K=5120, N=2048) — calls
+`TileRowReplicate` with **160 + 64 = 224 pages** against q_kv_a's 64. Same defect, ~3.5x the
+exposure: it would have paid ~134 us of input boundary and should now pay ~55 us. That op is the
+best remaining candidate for an e2e win, because one boundary pair amortises over far more work.
+
+**It has no test yet and is mid-development.** Do not A/B it until the other agent lands one.
 
 ### Two measurement corrections that invalidate earlier numbers
 

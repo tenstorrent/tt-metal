@@ -1,0 +1,116 @@
+--- a/blaze/ops/tile_row_replicate/op.py	2026-08-06 09:28:16.383842985 +0000
++++ blaze/ops/tile_row_replicate/op.py	2026-08-06 09:30:21.085311269 +0000
+@@ -26,6 +26,12 @@
+     return left, left + face_bytes
+ 
+ 
++# Page reads kept in flight before a NOC barrier. 8 keeps the scratch at 16 KB of L1 while cutting
++# GLM's 64-barrier read loop to 8. Only used when it divides num_tile_cols evenly, so the kernel's
++# fixed-size chunk loop never runs a partial tail.
++_READ_CHUNK = 8
++
++
+ class TileRowReplicate(MicroOp):
+     """Read one row from each 32x32 source tile onto every active core.
+ 
+@@ -113,9 +119,13 @@
+ 
+         ta_start_idx = setup_tensor_accessor(f, tensor=src, risc=Risc.DM1)
+         src_page_size = src_tile.get_tile_size(src.dtype)
++        # Depth CHUNK, not 1, so the kernel can keep CHUNK page reads in flight and pay one NOC
++        # barrier per chunk instead of one per tile. With num_pages=1 the reader stalls on a full
++        # DRAM round-trip every iteration: at GLM's K=2048 that is 64 of them, measured at 39.7 us
++        # against the 36.5 us matmul it feeds. Must stay in step with CHUNK in kernels/op.hpp.
+         scratch = f.cb_scratch(
+             name=BlazeOp.cb_name(prefix, "src_tile"),
+-            num_pages=1,
++            num_pages=_READ_CHUNK if num_tile_cols % _READ_CHUNK == 0 else 1,
+             core_ranges=cores,
+             data_format=src.dtype,
+             tile=ttnn.TileDescriptor(src_tile),
+@@ -130,6 +140,7 @@
+                 (f"{prefix}.src_page_size", src_page_size),
+                 (f"{prefix}.ta_start_idx", ta_start_idx),
+                 (f"{prefix}.num_tile_cols", num_tile_cols),
++                (f"{prefix}.read_chunk", _READ_CHUNK if num_tile_cols % _READ_CHUNK == 0 else 1),
+                 (f"{prefix}.left_face_offset", left_offset),
+                 (f"{prefix}.right_face_offset", right_offset),
+             ]
+--- a/blaze/ops/tile_row_replicate/kernels/op.hpp	2026-08-06 09:28:16.385843009 +0000
++++ blaze/ops/tile_row_replicate/kernels/op.hpp	2026-08-06 09:29:02.936394864 +0000
+@@ -23,6 +23,7 @@
+         static constexpr uint32_t src_page_size = A::src_page_size;
+         static constexpr uint32_t ta_start_idx = A::ta_start_idx;
+         static constexpr uint32_t num_tile_cols = A::num_tile_cols;
++        static constexpr uint32_t read_chunk = A::read_chunk;
+         static constexpr uint32_t left_face_offset = A::left_face_offset;
+         static constexpr uint32_t right_face_offset = A::right_face_offset;
+     };
+@@ -59,28 +60,49 @@
+         void operator()() {
+ #if defined(COMPILE_FOR_DM1)
+             if constexpr (core::is_active) {
++                // Reads are issued read_chunk pages at a time and waited on once per chunk. One
++                // barrier per tile serialises a full DRAM round-trip per iteration -- at GLM's
++                // K=2048 that is 64 of them, measured at 39.7 us against the 36.5 us matmul this
++                // feeds, so the adapter cost more than the work it existed to serve.
++                //
++                // The reads stay whole-page on purpose. Fetching just the two 32-byte face lines
++                // moves 32x less data and measured 36 us faster, but successive destinations land
++                // at 32-mod-64 while Blackhole DRAM reads want 64-byte alignment: it returned
++                // PCC 0.71 instead of 0.999. Page-aligned reads plus an L1-side copy keep the
++                // latency win without the alignment hazard.
++                //
++                // read_chunk divides num_tile_cols exactly (emit() falls back to 1 otherwise), so
++                // there is no partial tail, and scratch is sized to match so reserving a whole
++                // chunk cannot block.
+                 constexpr uint32_t face_line_bytes = 16 * sizeof(uint16_t);
+-                for (uint32_t tile_id = 0; tile_id < dm1::num_tile_cols; ++tile_id) {
+-                    cb_reserve_back(dm1::scratch, 1);
+-                    uint32_t tile = get_write_ptr(dm1::scratch);
+-                    noc_async_read_page(tile_id, init_state.reader, tile);
++                constexpr uint32_t words = face_line_bytes / sizeof(uint32_t);
++                for (uint32_t base = 0; base < dm1::num_tile_cols; base += dm1::read_chunk) {
++                    cb_reserve_back(dm1::scratch, dm1::read_chunk);
++                    const uint32_t chunk = get_write_ptr(dm1::scratch);
++                    for (uint32_t i = 0; i < dm1::read_chunk; ++i) {
++                        noc_async_read_page(base + i, init_state.reader, chunk + i * dm1::src_page_size);
++                    }
+                     noc_async_read_barrier();
+-                    cb_push_back(dm1::scratch, 1);
+-                    cb_wait_front(dm1::scratch, 1);
++                    cb_push_back(dm1::scratch, dm1::read_chunk);
++                    cb_wait_front(dm1::scratch, dm1::read_chunk);
+ 
+-                    cb_reserve_back(dm1::dst, 1);
+-                    uint32_t dst = get_write_ptr(dm1::dst);
+-                    volatile tt_l1_ptr uint32_t* src_left =
+-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + dm1::left_face_offset);
+-                    volatile tt_l1_ptr uint32_t* src_right =
+-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + dm1::right_face_offset);
+-                    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+-                    for (uint32_t i = 0; i < face_line_bytes / sizeof(uint32_t); ++i) {
+-                        out[i] = src_left[i];
+-                        out[i + face_line_bytes / sizeof(uint32_t)] = src_right[i];
++                    cb_reserve_back(dm1::dst, dm1::read_chunk);
++                    const uint32_t dst_base = get_write_ptr(dm1::dst);
++                    for (uint32_t i = 0; i < dm1::read_chunk; ++i) {
++                        const uint32_t tile = chunk + i * dm1::src_page_size;
++                        volatile tt_l1_ptr uint32_t* src_left =
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + dm1::left_face_offset);
++                        volatile tt_l1_ptr uint32_t* src_right =
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + dm1::right_face_offset);
++                        volatile tt_l1_ptr uint32_t* out =
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_base + i * 2 * face_line_bytes);
++                        for (uint32_t w = 0; w < words; ++w) {
++                            out[w] = src_left[w];
++                            out[w + words] = src_right[w];
++                        }
+                     }
+-                    cb_push_back(dm1::dst, 1);
+-                    cb_pop_front(dm1::scratch, 1);
++                    cb_push_back(dm1::dst, dm1::read_chunk);
++                    cb_pop_front(dm1::scratch, dm1::read_chunk);
+                 }
+             }
+ #endif
