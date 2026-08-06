@@ -379,6 +379,138 @@
         "rotating-sender",
         "loopback-completion-verified"
       ]
+    },
+    {
+      "id": "topk:multicore:final-readiness",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.cpp",
+      "dispatch": "multicore TopK final coordinator and local workers",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp"
+      ],
+      "migration_unit": "topk-multicore-final-readiness",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "TOPK-MULTICORE",
+        "McastHostFixture: Gate 0 passed 25/25",
+        "test_mcast_pipe.py: Gate 0 passed 77/77"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:2", "counter-signal-only"]
+    },
+    {
+      "id": "layernorm:sharded:pre-allgather-reduce",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
+      "dispatch": "is_pre_all_gather=true; shared helper builder must be split first",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp"
+      ],
+      "migration_unit": "layernorm-sharded-pre-allgather",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "LN-PRE-ALLGATHER",
+        "LN-POST-ALLGATHER",
+        "LN-SHARDED",
+        "McastHostFixture: Gate 0 passed 25/25",
+        "test_mcast_pipe.py: Gate 0 passed 77/77"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:3", "builder-split-prerequisite"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy interleaved mcast_in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "api-007-prerequisite"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor interleaved mcast_in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "api-007-prerequisite"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "api-007-prerequisite"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "api-007-prerequisite"]
+    },
+    {
+      "id": "matmul-in0-mcast:sparse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse Matmul MCAST_IN0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-SPARSE-IN0",
+        "compile-focused without-nnz case passed under --dev from an empty cache; sender 14177997899853619887, receiver 18131090411884538285"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "api-007-prerequisite", "fresh-jit-verified"]
     }
   ],
   "entries": [
@@ -386,8 +518,8 @@
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
       "op_family": "matmul",
       "role": "sender",
-      "tag": "clean",
-      "status": "deferred",
+      "tag": "refactor-high",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -395,20 +527,17 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: shared data-ready semaphore also carries VALID/IGNORE_BATCH typed control values; target-baseline implementation preserved.",
+      "census_note": "Pending API-007 materialization: preserve the shared data-ready semaphore's VALID/IGNORE_BATCH typed control values.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "typed-control-values",
-        "exact-baseline-restored"
+        "typed-control-values"
       ]
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
       "op_family": "matmul",
       "role": "receiver",
-      "tag": "clean",
-      "status": "deferred",
+      "tag": "refactor-high",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -416,12 +545,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: shared data-ready semaphore also carries VALID/IGNORE_BATCH typed control values; target-baseline implementation preserved.",
+      "census_note": "Pending API-007 materialization: preserve the shared data-ready semaphore's VALID/IGNORE_BATCH typed control values.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "typed-control-values",
-        "exact-baseline-restored"
+        "typed-control-values"
       ]
     },
     {
@@ -886,7 +1012,7 @@
       "op_family": "normalization",
       "role": "sender",
       "tag": "refactor",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -894,12 +1020,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: send_signal() does not wait/reset receiver acknowledgements; target-baseline implementation preserved.",
+      "census_note": "Pending migration: API-003 handshaked signal-only behavior is implemented at v10.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "acked-signal-only",
-        "exact-baseline-restored"
+        "acked-signal-only"
       ]
     },
     {
@@ -907,7 +1030,7 @@
       "op_family": "normalization",
       "role": "receiver",
       "tag": "refactor",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -915,12 +1038,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: receive_signal() does not acknowledge sender readiness; target-baseline implementation preserved.",
+      "census_note": "Pending migration: API-003 handshaked signal-only behavior is implemented at v10.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "acked-signal-only",
-        "exact-baseline-restored"
+        "acked-signal-only"
       ]
     },
     {
@@ -1170,7 +1290,7 @@
       "op_family": "data_movement + reduction",
       "role": "receiver",
       "tag": "clean",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -1178,12 +1298,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: no-handshake ReceiverPipe constructor can race with and erase the first host-initialized VALID signal; target-baseline implementation preserved.",
+      "census_note": "Pending migration: API-008 resolves readiness with the existing no-handshake Counter mode and host-zero initialization.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "race-free-no-handshake-init",
-        "exact-baseline-restored"
+        "race-free-no-handshake-init"
       ]
     },
     {
@@ -1191,7 +1308,7 @@
       "op_family": "data_movement + reduction",
       "role": "sender",
       "tag": "refactor",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -1199,12 +1316,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: paired no-handshake receiver initialization is not race-free; target-baseline implementation preserved.",
+      "census_note": "Pending migration: API-008 resolves readiness with the existing no-handshake Counter mode and host-zero initialization.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "race-free-no-handshake-init",
-        "exact-baseline-restored"
+        "race-free-no-handshake-init"
       ]
     },
     {

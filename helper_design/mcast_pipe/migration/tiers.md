@@ -1,4 +1,55 @@
-# mcast_pipe API v9 host-integration tiers — 2026-07-30
+# mcast_pipe rollout tiers
+
+## Re-entry — next host/kernel migrations (2026-08-06)
+
+Mode: `halt`, preapproved by the user for fully automated execution. Current
+helper: `MCAST_PIPE_API_VERSION=10`. Gate 0 passed before production edits:
+`McastHostFixture.*` 25/25 and the complete helper/device-wire suite 77/77
+under `--dev`.
+
+Mapping coverage is high for all three units. The previously unmapped sparse
+binding now has `MM-SPARSE-IN0`: its exact without-`nnz` case passed from an
+empty isolated cache with 0/29 JIT hits and produced sender hash
+`14177997899853619887` and receiver hash `18131090411884538285`. No selected
+unit has a low-confidence coverage gap.
+
+### Tier 2 — Multicore TopK final readiness
+
+Unit: `topk-multicore-final-readiness`; one factory and two kernels. Use the
+existing no-handshake Counter signal channel with an adopted, host-zeroed
+readiness semaphore. Preserve the operation-owned arrival counter and value /
+index transfers. Validation: one fresh-cache W=8192 case, full
+`TOPK-MULTICORE`, host/helper suites, rebuild, and per-kernel perf.
+
+### Tier 3 — Sharded LayerNorm pre-allgather
+
+Unit: `layernorm-sharded-pre-allgather`; one required binding and two kernels.
+First split the shared reader compile-time argument builder and validate
+`LN-PRE-ALLGATHER`, `LN-POST-ALLGATHER`, and `LN-SHARDED` with no behavior
+change. Then migrate the one-stage `Mcast2D` and two-stage `Mcast1D` control
+geometries using v10 handshaked Flag signal operations. The shared-builder
+split is the load-bearing prerequisite and remains inside this tier.
+
+### Tier 0 re-entry, then Tier 4 — Matmul in0 interleaved
+
+API-007 is an accepted caller-facing extension: Flag `send_signal(value)` and
+value-returning `receive_signal()`. Materialize and unit-test it through
+`tune-dm-helper`, bump the API version, then re-enter this rollout and remigrate
+all 13 kernels and 12 current host bindings as Tier 0 before net-new Matmul.
+
+The Tier-4 Matmul unit contains both kernels and all five required bindings:
+1D legacy/descriptor, 2D legacy/descriptor, and sparse 1D. Validation includes
+the full `MM-SPARSE-IN0`, `MM-IN0-INTERLEAVED`, and
+`MM-BLOCK-SHARDED-HYBRID` guard inventory plus sparse-path perf. The in0 helper
+wire is emitted only in interleaved branches; block-sharded ABI remains raw.
+
+Failure policy: the first failing unit stops the rollout with its entire diff
+left in the tree and its ledger rows still pending. Device tests and tiers run
+strictly sequentially.
+
+---
+
+# Historical mcast_pipe API v9 host-integration tiers — 2026-07-30
 
 ## Re-entry — Conv2D width-sharded activation (2026-08-03)
 

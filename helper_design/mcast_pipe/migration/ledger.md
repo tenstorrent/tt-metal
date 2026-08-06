@@ -1,4 +1,4 @@
-# mcast_pipe migration ledger — API v10, verified 2026-08-05
+# mcast_pipe migration ledger — API v10, Gate 0 verified 2026-08-06
 
 Source of truth: `ledger.json`. Test inventories are in `test_map.json`;
 failure isolation and JIT evidence are in the per-kernel migration logs.
@@ -12,14 +12,17 @@ ledger was remapped from that line to its post-rebase equivalent on 2026-08-03.
 The v8 July ledger is historical input, not the current result. Every one of
 its 19 production migrations was re-audited against the current v10 helper.
 Remediation also added the previously raw Conv 1D sender and both GroupNorm v2
-senders; the subsequent sort and width-sharded Conv re-entries produce the current
-24-row production set (13 migrated plus 11 concretely blocked).
+senders; the subsequent sort and width-sharded Conv re-entries produce the
+24-row production set. On 2026-08-06, six previously blocked rows moved to
+pending for the three approved units, leaving 13 migrated, 6 pending, and 5
+still concretely blocked.
 
 ## Host-helper re-entry state
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
-their intake tests are green. Twelve required bindings across six units are
-now fully current at API v10:
+their 2026-08-06 intake tests are green: `McastHostFixture.*` passed 25/25 and
+the complete device/wire helper suite passed 77/77 under `--dev`. Twelve
+required bindings across six units are fully current at API v10:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
@@ -29,6 +32,14 @@ now fully current at API v10:
 | `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | mapped production geometry is zero-edge; synthetic splitter geometry 3/3; legacy perf +0.248%; Welford perf -0.485%; inventories 108/2 each; fixed/default 19/6 |
 | `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | handshaked row-start + no-handshake sub-stage Pipes; long 7/7; Ht=2 2/2; helper 77/77; perf +1.195124% |
 | `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
+
+Seven bindings across the next three units are pending:
+
+| Unit | Required bindings | Kernel rows | Gate-A state |
+|---|---:|---:|---|
+| `topk-multicore-final-readiness` | 1 | 2 | API-008 resolves the old race with existing Counter mode; `TOPK-MULTICORE` coverage high |
+| `layernorm-sharded-pre-allgather` | 1 | 2 | API-003 implemented; shared reader-argument builder split required before migration |
+| `matmul-in0-mcast-interleaved` | 5 | 2 | API-007 materialization required; sparse binding device-verified from an empty cache with exact sender/receiver JIT artifacts |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
@@ -79,10 +90,11 @@ width-sharded Conv hybrid followed atomically in `fe866a1d0c4`.
 The paired `writer_single_row_multi_core.cpp` is deliberately not in this table: it has no Pipe
 face. It remains a deferred/helper-neutral ledger row after coupled runtime-ABI cleanup.
 
-## Deferred or rolled back (11)
+## Historical deferred or rolled-back state before the 2026-08-06 re-entry
 
-All eleven files match the target baseline exactly. They are not partial
-migrations.
+This table records the prior state. The six TopK, pre-allgather LayerNorm, and
+interleaved Matmul in0 rows are now pending as described above; the other rows
+remain deferred. No row is a partial migration.
 
 | Area | Kernel(s) | Blocker |
 |---|---|---|

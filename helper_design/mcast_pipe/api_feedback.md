@@ -395,3 +395,64 @@ Three independent real-time-profiler medians were 38,362.905, 38,377.304, and
 38,414.444 ns. Their median, 38,377.304 ns, is +0.958% versus the immediate
 pre-migration parent at 38,013.031 ns and improves on the migrated 38,682.593
 ns result (+1.761%).
+
+## API-007 — Let Flag signals carry caller-supplied control values
+
+- **Date:** 2026-08-06
+- **Status:** Accepted
+- **Surface:** `dataflow_kernel_lib::SenderPipe::send_signal()` and
+  `ReceiverPipe::receive_signal()`
+- **Migration evidence:** Matmul in0 sparsity batch-validity exchange in
+  `reader_bmm_tile_layout_in0_sender_padding.cpp` /
+  `reader_bmm_tile_layout_in0_receiver.cpp`
+
+### Required behavior
+
+The Matmul in0 semaphore cell carries both ordinary data-ready notifications
+and a three-state batch-validity control value: `INVALID` (0), `VALID` (1), or
+`IGNORE_BATCH` (2). The receiver waits for a non-zero value and branches on the
+observed value. Replacing this with a payload transfer would add packets and L1
+storage to the skipped-batch path, so the helper must preserve the existing
+one-word semaphore protocol.
+
+Extend the Flag specialization so the sender can provide a small non-zero
+value while retaining `VALID` as the default:
+
+```cpp
+sender.send_signal(value);  // value defaults to VALID
+const uint32_t value = receiver.receive_signal();
+```
+
+The receiver waits for `>= VALID`, returns the observed value, and clears the
+Flag to `INVALID` exactly once. Counter mode remains monotone and does not gain
+typed values. Handshake behavior remains governed solely by the channel's
+existing configuration.
+
+### Resolution
+
+Accepted for materialization through `tune-dm-helper` before the Matmul in0
+migration. This is a caller-facing method-semantics extension and therefore
+must bump `MCAST_PIPE_API_VERSION`, add focused Flag tests for `VALID` and
+`IGNORE_BATCH`, and remigrate the existing v10 fleet as Tier 0 before net-new
+Matmul work resumes.
+
+## API-008 — Use Counter mode for race-free TopK readiness
+
+- **Date:** 2026-08-06
+- **Status:** Implemented
+- **Surface:** existing no-handshake `DataReadyMode::Counter` signal channel
+- **Migration evidence:** multicore TopK final-coordinator readiness exchange
+
+### Resolution
+
+No new helper feature is required. TopK's readiness notification is a repeated
+event, not a level whose historical `VALID`/`INVALID` spelling must be
+preserved. Express it with the existing no-handshake Counter channel, adopt the
+host-created readiness semaphore initialized to zero, and remove per-round
+receiver clears. The worker-to-coordinator arrival counter remains
+operation-owned.
+
+This formulation both avoids constructor initialization of a remotely written
+Flag and closes the existing lost-wakeup window in which a worker can clear the
+next round's `VALID` after its prior-round arrival has released the
+coordinator. The helper API and wire remain at v10 for this migration.

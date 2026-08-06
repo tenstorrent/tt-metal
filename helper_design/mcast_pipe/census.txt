@@ -5,8 +5,8 @@
 # pure-receiver halves are spelled with Semaphore<>::set/up/wait only (no mcast token) — caught by sweep.
 
 # ===== matmul =====
-ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp — role: sender | tag: clean | KNOWN INSTANCE; canonical P1
-ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp — role: receiver | tag: clean | P1 receiver; 3-state flag wait_min
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp — role: sender | tag: refactor-high | status: pending | KNOWN INSTANCE; canonical P1; API-007 accepted
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp — role: receiver | tag: refactor-high | status: pending | P1 receiver; 3-state flag wait_min; API-007 accepted
 ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp — role: hybrid | tag: clean | KNOWN INSTANCE; P1
 ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp — role: receiver | tag: clean | P1 receiver
 ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp — role: hybrid | tag: refactor | P2 worker-type-dispatched (3 runtime core types)
@@ -32,8 +32,8 @@ ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_
 ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp — role: receiver | tag: clean | C1
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect; raw-L1 src
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp — role: receiver | tag: clean | C2
-ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp — role: sender | tag: refactor | C2 flag-only; atomic-barrier
-ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp — role: receiver | tag: refactor | C2; atomic-barrier
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp — role: sender | tag: refactor | status: pending | C2 flag-only; atomic-barrier; API-003 implemented
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp — role: receiver | tag: refactor | status: pending | C2; atomic-barrier; API-003 implemented
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp — role: sender | tag: refactor | C2 multi-rect
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp — role: receiver | tag: refactor | C2
@@ -52,8 +52,8 @@ ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/de
 ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/reader_indexer_score.cpp — role: hybrid | tag: refactor | chain-link STAR: relay_multicast write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN — helper cannot express yet
 
 # ===== data_movement + reduction =====
-ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp — role: receiver | tag: clean | cleanest modern receiver
-ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp — role: sender | tag: refactor | unicast scatter + up(counter)
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp — role: receiver | tag: clean | status: pending | Counter readiness; API-008
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp — role: sender | tag: refactor | status: pending | unicast scatter + up(counter); API-008
 ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp — role: hybrid | tag: refactor | richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast)
 ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp — role: sender | tag: migrated-v9 | object API; Counter send_signal Pipe face; ready/done waits stay op-owned; code 7337302b564
 ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp — role: receiver | tag: migrated-v9 | Counter receive_signal Pipe face; row-ready up stays op-owned; code 7337302b564
