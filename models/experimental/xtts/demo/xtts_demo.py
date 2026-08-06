@@ -233,6 +233,10 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args):
         min_new_tokens=args.min_tokens_resolved,
     )
     wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
+    logger.info(
+        f"  replay split: setup {perf['setup_replay_s']:.3f}s | decode {perf['decode_replay_s']:.3f}s "
+        f"({codes.shape[1]} codes) | vocoder {perf['vocoder_replay_s']:.3f}s"
+    )
     return _postprocess(wav_np), codes, float(perf["replay_s"]), float(perf["compile_s"])
 
 
