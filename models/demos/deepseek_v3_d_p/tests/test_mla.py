@@ -780,10 +780,10 @@ def _run_chunked_prefill(
                     )
                     for val in (u, kv_actual, valid_end)
                 )
-            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
-            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
-            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
-            # (slot comes from metadata[0]).
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
             tt_out = mla_tt.forward(
                 hidden_states=tt_h,
                 rope_tensors=indexed_rope,
