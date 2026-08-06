@@ -51,15 +51,9 @@ def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
     return _PLANAR_OUT_BUF
 
 
-# BT.601 coefficients for inputs in [-1, 1] -> uint8 [0, 255]
-_BT601_Y_COEFF = (32.74, 64.28, 12.48, 125.5)
-_BT601_CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
-_BT601_CR_COEFF = (56.00, -46.89, -9.11, 128.0)
-
-
 def _bt601_yuv_coefficients():
-    """Default BT.601 YUV coefficients for ttnn.experimental.yuv_conversion."""
-    return ttnn.experimental.YUVCoefficients(y=list(_BT601_Y_COEFF), cb=list(_BT601_CB_COEFF), cr=list(_BT601_CR_COEFF))
+    """Default BT.601 coefficients: input in [-1, 1] -> limited-range uint8."""
+    return ttnn.experimental.yuv_bt601_coefficients()
 
 
 def _yuv_planar_d2h(
@@ -272,7 +266,7 @@ def fast_device_to_host_yuv(
          on the inter-host axis of the bf16 BCTHW input.
       2. Permute BCTHW -> BCHWT (T moves to the last position) and reshape to
          drop the B=1 dim, landing in CHWT — the layout the YUV kernel expects.
-      3. ``ttnn.experimental.yuv_conversion`` runs on each device's local shard,
+      3. ``ttnn.experimental.rgb_to_yuv`` runs on each device's local shard,
          producing 3 uint8 outputs (Y full-res, Cb/Cr 4:2:0 subsampled).
       4. Async ``cpu(blocking=False)`` on all three outputs followed by a
          single ``synchronize_device`` so the D2H reads overlap.
@@ -397,7 +391,7 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_CHWT, coefficients)
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")

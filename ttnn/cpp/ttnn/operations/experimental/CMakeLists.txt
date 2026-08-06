@@ -18,7 +18,6 @@
 # metalium-developers-convolutions
 add_subdirectory(adaptive_pool)
 add_subdirectory(conv3d)
-add_subdirectory(yuv_conversion)
 add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
