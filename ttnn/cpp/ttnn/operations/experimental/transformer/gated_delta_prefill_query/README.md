@@ -53,19 +53,18 @@ returns correctly-shaped/typed outputs. **The recurrence is NOT implemented yet*
 `O` / `state'` values are not yet meaningful (the outputs are allocated but not
 written). What *is* implemented:
 
-- **Work distribution (factory):** one V-head's recurrence per core. Each K-head is
-  replicated across its `gva_ratio = Nv/Nk` V-heads, so a `v_head` core reads K-head
-  `v_head / gva_ratio` (blocked GVA, matching `repeat_interleave(rf)` in the torch
-  reference). All grid cores are used: the `Nv` V-heads are spread balanced-greedily
-  over the grid, and cores beyond `Nv` split a V-head's **sequence** (never the hidden
-  dim) into more sections. Cores sharing a V-head are the group a later step will
-  tree-reduce (their `v_head_id`/`section_id`/`num_sections` are already passed as
-  runtime args).
-- **K read (reader kernel):** each core streams its seq-tile range into `cb_k`, one
-  block at a time. A block is `block_height` seq-tiles tall × the **full hidden dim**
-  (`out_block_size` tiles), where `out_block_size` is seeded from `num_out_blocks` and
-  rounded down to a multiple of `d_tiles` (`TT_FATAL` asserts the alignment). `cb_k` is
-  sized to exactly one block.
+- **Work distribution (factory):** exactly one V-head per core — `num_cores = Nv`, **no
+  intra-head splitting**. Core `i` owns V-head `i` and sweeps its *entire* sequence in one
+  pass, so the recurrence stays sequential inside a core and needs no cross-core scan or
+  reduction. Each K-head is replicated across its `gva_ratio = Nv/Nk` V-heads, so core `i`
+  reads K-head `i / gva_ratio` (blocked GVA, matching `repeat_interleave(rf)` in the torch
+  reference). Cores beyond `Nv` are unused. Per-core runtime args are just
+  `k_addr, k_head_id, v_head_id, v_addr`; `seq_tiles` is a compile-time arg for both the
+  reader and the compute kernel.
+- **K/V read (reader kernel):** each core streams its head's whole `[S, d]` section into
+  `cb_k`, then into `cb_v`, hidden-major one tile at a time (`cb[kd * seq_tiles + s]`), and
+  both stay resident for the full sweep. `cb_k`/`cb_v` are each sized to
+  `seq_tiles * d_tiles` tiles.
 - **Compute:** placeholder — just drains `cb_k` so the reader can't deadlock.
 - `q`/`v`/`gate`/`decay`/`state` are validated but not yet read.
 
@@ -128,8 +127,8 @@ With the workaround the interface test passes (2/2).
    adding their CBs alongside `cb_k`.
 2. Compute: L2-norm q/k, scale q; per-block delta-rule scan over the core's seq
    section accumulating into the V-head state (matmul + eltwise per step, or chunked).
-3. Per-V-head **tree reduction** across the section cores (metadata already passed:
-   `v_head_id`/`section_id`/`num_sections`; add the peer-core topology).
+3. Chunk the sweep so the intermediate CBs (`cb_gram`/`cb_kkt`/`cb_solve`, currently sized
+   to the whole per-core sequence) stay within L1 for long prefills.
 4. Final `o = h @ q` per V-head → pack O `[1,1,Nv,d]`; write O and `state'`
    (re-introduce the writer).
 5. Enable `UnpackToDestFp32` for fp32 state math (see `dit_layernorm_pre_all_gather`

@@ -7,22 +7,19 @@
 // This is the multi-core skeleton of the real op. The recurrence itself is NOT implemented
 // yet; this step establishes the multi-core work distribution and a correct K read path:
 //
-//   * Work is distributed one V-head per core. Each K-head is replicated across its
-//     gva_ratio (= Nv/Nk) V-heads, so a core for v_head reads K-head (v_head / gva_ratio).
-//   * All available cores are used: the Nv V-heads are spread balanced-greedily over the
-//     whole compute grid, and any cores beyond Nv split a V-head's sequence into more
-//     sections (split is always along sequence, never the hidden dim). Cores sharing a
-//     V-head form the group that a later step will tree-reduce.
-//   * The reader streams its core's whole K section into cb_k (hidden-major, one tile at a time),
-//     then its V section into cb_v the same way — both kept resident for later stages.
+//   * Work is distributed exactly one V-head per core: Nv cores, no intra-head splitting.
+//     A core owns its V-head's ENTIRE sequence and sweeps it in one pass, so the recurrence
+//     is sequential within a core and needs no cross-core reduction. Each K-head is replicated
+//     across its gva_ratio (= Nv/Nk) V-heads, so a core for v_head reads K-head
+//     (v_head / gva_ratio).
+//   * The reader streams its core's whole K head into cb_k (hidden-major, one tile at a time),
+//     then its V head into cb_v the same way — both kept resident for later stages.
 //   * The compute kernel does the first real math: K @ K^T, one gram_block x gram_block output
 //     block at a time. Per block it reads gram_block x 1 chunks and accumulates the partial
 //     product over the hidden dim (kt = 1 per step), then packs the block into cb_kkt. The rest
 //     of the recurrence and the outputs (O, state') come next — O/state' NOT yet written.
 
 #include "gated_delta_prefill_query_device_operation.hpp"
-
-#include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -54,70 +51,23 @@ tt::tt_metal::ProgramDescriptor GatedDeltaPrefillQueryProgramFactory::create_des
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
 
-    // One V-head's recurrence lands on at least one core, so we need at least Nv cores.
+    // One V-head's recurrence lands on exactly one core, so we need at least Nv cores.
     TT_FATAL(
         num_cores_avail >= Nv,
         "gated_delta_prefill_query needs at least num_v_heads ({}) cores; the compute grid has {}",
         Nv,
         num_cores_avail);
 
-    // ---- Prefill K-buffer sizing hyperparameter ----
-    // out_block_size is the cb_k capacity, in TILES — how many K tiles can be buffered before
-    // the reader blocks on the compute consumer. It is seeded from num_out_blocks (a rough
-    // target of how many chunks to split the sequence into) and then rounded DOWN to a multiple
-    // of d_tiles so the buffer holds a whole number of full-hidden-dim seq-rows (the reader
-    // pushes one d_tiles-wide row at a time). out_block_size / d_tiles is the buffering depth in
-    // seq-rows.
-    constexpr uint32_t num_out_blocks = 1;
-    const uint32_t target_block_tiles = (seq_tiles * d_tiles + num_out_blocks - 1) / num_out_blocks;
-    uint32_t out_block_size = (target_block_tiles / d_tiles) * d_tiles;  // round down to hidden-dim alignment
-    if (out_block_size == 0) {
-        out_block_size = d_tiles;  // never smaller than one full hidden-dim row
-    }
-    TT_FATAL(
-        out_block_size % d_tiles == 0,
-        "out_block_size ({}) must be a multiple of d_tiles ({})",
-        out_block_size,
-        d_tiles);
-
-    // ---- Core work distribution (maximize utilization) ----
-    // Spread all available cores over the Nv V-heads balanced-greedily: each V-head gets
-    // base (= C/Nv) sections, the first (C % Nv) V-heads get one extra, so no core is idle.
-    // A V-head's seq_tiles are split into contiguous, balanced seq ranges across its sections.
-    // Sections are capped at seq_tiles (a section needs >= 1 seq-tile); only cores beyond
-    // Nv * seq_tiles stay unused (short sequences only).
-    struct CoreWork {
-        uint32_t v_head;
-        uint32_t k_head;
-        uint32_t section_id;
-        uint32_t num_sections;
-        uint32_t seq_tile_start;
-        uint32_t seq_tile_count;
-    };
-    std::vector<CoreWork> work;
-    work.reserve(num_cores_avail);
-
-    uint32_t max_seq_tile_count = 0;  // longest section, for cb_kkt sizing
-    const uint32_t base_sections = num_cores_avail / Nv;
-    const uint32_t extra_sections = num_cores_avail % Nv;
-    for (uint32_t v = 0; v < Nv; ++v) {
-        uint32_t sections = base_sections + (v < extra_sections ? 1u : 0u);
-        sections = std::min(sections, seq_tiles);  // cannot have more sections than seq-tiles
-        if (sections == 0) {
-            sections = 1;
-        }
-        const uint32_t seq_base = seq_tiles / sections;
-        const uint32_t seq_rem = seq_tiles % sections;
-        uint32_t start = 0;
-        for (uint32_t s = 0; s < sections; ++s) {
-            const uint32_t count = seq_base + (s < seq_rem ? 1u : 0u);
-            work.push_back({v, v / gva_ratio, s, sections, start, count});
-            start += count;
-            max_seq_tile_count = std::max(max_seq_tile_count, count);
-        }
-    }
-    const uint32_t num_cores = static_cast<uint32_t>(work.size());
+    // ---- Core work distribution: one V-head per core, whole sequence, no intra-head split ----
+    // Core i owns V-head i for all seq_tiles tokens, and reads K-head i / gva_ratio (blocked GVA,
+    // matching repeat_interleave(gva_ratio) in the torch reference). Cores beyond Nv are unused:
+    // the recurrence is sequential along the sequence, so splitting a head across cores would
+    // require a cross-core scan/reduction — the whole-sweep-per-head shape avoids that entirely.
+    const uint32_t num_cores = Nv;
     const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+
+    // cb_k / cb_v each hold one V-head's whole [S, d] section, resident for the full sweep.
+    const uint32_t kv_section_tiles = seq_tiles * d_tiles;
 
     const tt::DataFormat k_df = datatype_to_dataformat_converter(k.dtype());  // bf16
     const uint32_t k_tile_bytes = tt::tile_size(k_df);
@@ -146,9 +96,9 @@ tt::tt_metal::ProgramDescriptor GatedDeltaPrefillQueryProgramFactory::create_des
 
     ProgramDescriptor program;
 
-    // ---- Reader: streams this core's whole K section into cb_k (hidden-major, one tile at a
+    // ---- Reader: streams this core's whole K head into cb_k (hidden-major, one tile at a
     //      time, each hidden column's seq-tiles contiguous so a gram_block x 1 chunk is
-    //      contiguous), then its V section into cb_v the same way. CT args:
+    //      contiguous), then its V head into cb_v the same way. CT args:
     //      [d_tiles, seq_tiles, <k TensorAccessorArgs...>, <v TensorAccessorArgs...>]. ----
     std::vector<uint32_t> reader_ct_args{d_tiles, seq_tiles};
     TensorAccessorArgs(k.buffer()).append_to(reader_ct_args);
@@ -174,12 +124,13 @@ tt::tt_metal::ProgramDescriptor GatedDeltaPrefillQueryProgramFactory::create_des
     //      += identity via dest reuse (no pack/unpack round trip) -> unit lower-triangular tiles
     //      in cb_kkt. Doing masking after the matmuls keeps the matmul<->eltwise switch to once
     //      (all bf16, no format reformats). cb_k is NOT popped (kept resident). CT args:
-    //      [d_tiles, gram_block]. ----
+    //      [d_tiles, gram_block, seq_tiles] — the height is compile-time now that a core always
+    //      sweeps its head's whole sequence. ----
     KernelDescriptor compute_kernel;
     compute_kernel.kernel_source = kdir + "compute/gated_delta_prefill_query.cpp";
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = all_cores;
-    compute_kernel.compile_time_args = {d_tiles, gram_block};
+    compute_kernel.compile_time_args = {d_tiles, gram_block, seq_tiles};
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = false,  // bf16 DST so a full 4x4 = 16-tile output block fits
@@ -187,47 +138,37 @@ tt::tt_metal::ProgramDescriptor GatedDeltaPrefillQueryProgramFactory::create_des
         .math_approx_mode = math_approx_mode};
 
     // ---- Per-core runtime args ----
+    // Core i <-> V-head i; the seq range is always the whole sequence, so only the head ids are
+    // per-core (seq_tiles is a compile-time arg for both kernels).
     reader_kernel.runtime_args.reserve(num_cores);
-    compute_kernel.runtime_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % grid.x, i / grid.x};
-        const CoreWork& w = work[i];
-        // Reader: k_addr, k_head_id, seq_tile_start, seq_tile_count, v_head_id, section_id,
-        // num_sections, v_addr. (section_id/num_sections reserved for the future tree reduction.)
-        reader_kernel.emplace_runtime_args(
-            core,
-            {k.buffer(),
-             w.k_head,
-             w.seq_tile_start,
-             w.seq_tile_count,
-             w.v_head,
-             w.section_id,
-             w.num_sections,
-             v.buffer()});
-        // Compute: number of seq-tiles this core owns (= result strip length).
-        compute_kernel.emplace_runtime_args(core, {w.seq_tile_count});
+        // Reader: k_addr, k_head_id, v_head_id, v_addr.
+        reader_kernel.emplace_runtime_args(core, {k.buffer(), i / gva_ratio, i, v.buffer()});
     }
 
     program.kernels.push_back(std::move(reader_kernel));
     program.kernels.push_back(std::move(writer_kernel));
     program.kernels.push_back(std::move(compute_kernel));
 
-    // ---- cb_k / cb_v: K and V inputs, each sized to one hidden-dim-aligned block. ----
+    // ---- cb_k / cb_v: this core's whole K and V head sections, resident for the full sweep. ----
     program.cbs.push_back(CBDescriptor{
-        .total_size = out_block_size * k_tile_bytes,
+        .total_size = kv_section_tiles * k_tile_bytes,
         .core_ranges = all_cores,
         .format_descriptors = {
             {CBFormatDescriptor{.buffer_index = cb_k, .data_format = k_df, .page_size = k_tile_bytes}}}});
     program.cbs.push_back(CBDescriptor{
-        .total_size = out_block_size * k_tile_bytes,
+        .total_size = kv_section_tiles * k_tile_bytes,
         .core_ranges = all_cores,
         .format_descriptors = {
             {CBFormatDescriptor{.buffer_index = cb_v, .data_format = k_df, .page_size = k_tile_bytes}}}});
 
     // ---- cb_kkt: K @ K^T result, in gram_block x gram_block output blocks. Sized to hold the
-    //      whole per-core result since there is no consumer yet: ceil(H/gram_block) blocks of up
-    //      to gram_block^2 tiles (H = longest section). ----
-    const uint32_t gram_blocks = (max_seq_tile_count + gram_block - 1) / gram_block;
+    //      whole per-core result since there is no consumer yet: ceil(S/gram_block) blocks of up
+    //      to gram_block^2 tiles. NOTE: now that a core owns the whole sequence, these scaffold
+    //      CBs (cb_kkt/cb_gram/cb_solve) scale with seq_tiles and will overflow L1 for long
+    //      prefills — they become chunk-sized/streaming when the recurrence lands. ----
+    const uint32_t gram_blocks = (seq_tiles + gram_block - 1) / gram_block;
     const uint32_t kkt_capacity_tiles = gram_blocks * gram_block * gram_block;
     program.cbs.push_back(CBDescriptor{
         .total_size = kkt_capacity_tiles * kkt_tile_bytes,

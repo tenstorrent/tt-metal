@@ -6,9 +6,9 @@
 Interface test for ttnn.experimental.gated_delta_prefill_query.
 
 The op is being built up incrementally. This step establishes the multi-core work
-distribution (one V-head per core, each K-head replicated across its GVA group, extra cores
-splitting a V-head's sequence) and a correct K read path in the reader; the compute kernel is
-still a placeholder that just drains K. The gated delta-rule recurrence — and therefore the
+distribution (exactly one V-head per core sweeping that head's whole sequence, each K-head
+replicated across its GVA group, no intra-head splitting) and a correct K/V read path in the
+reader; the compute kernel is still WIP. The gated delta-rule recurrence — and therefore the
 values of O / state' — are NOT implemented yet, so this test only pins the *interface*
 (registration, shapes, layouts, dtypes) and that the op dispatches on the full grid without
 hanging. Value checks return once the recurrence lands.

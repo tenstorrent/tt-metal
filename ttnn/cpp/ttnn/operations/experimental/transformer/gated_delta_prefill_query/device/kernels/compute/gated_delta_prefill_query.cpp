@@ -4,7 +4,8 @@
 //
 // Compute for the gated-delta prefill-then-query op — K @ K^T + unit-lower-triangular mask (WIP).
 //
-// The core's K section is Height(seq) x Hidden(d) tiles, laid out hidden-major in cb_k. All
+// The core owns one V-head's whole sequence: its K section is Height(seq_tiles) x Hidden(d_tiles)
+// tiles, laid out hidden-major in cb_k, and is swept in a single pass (no intra-head split). All
 // matmuls are done first, then all the masking, so the matmul <-> eltwise mode switch happens
 // once (no per-tile data-format reformats; everything is bf16).
 //
@@ -31,10 +32,10 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    const uint32_t seq_tile_count = get_arg_val<uint32_t>(0);  // seq-tiles (height) owned by this core
-
     constexpr uint32_t d_tiles = get_compile_time_arg_val(0);     // hidden-dim tiles (contraction)
     constexpr uint32_t gram_block = get_compile_time_arg_val(1);  // G: output block is G x G
+    // One V-head per core, whole sequence in one sweep — so the height is the full seq_tiles.
+    constexpr uint32_t seq_tile_count = get_compile_time_arg_val(2);
 
     constexpr uint32_t cb_k = tt::CBIndex::c_0;      // K section, hidden-major, resident
     constexpr uint32_t cb_kkt = tt::CBIndex::c_1;    // unit lower-triangular result
