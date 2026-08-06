@@ -35,17 +35,6 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
     uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
     // Update the tile counters values
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
-    // [TEN-4746 / #48552] Fence the PACK-side TDMA tile-counter mutation before any following
-    // counter op (WAIT_FREE / reserve / wait_front) on the same tc_id can read it. PUSH_TILES is a
-    // TDMA-class op executed on PACK0; a back-to-back SYNC-class counter read reaches the tile-counter
-    // engine before PUSH_TILES retires and latches a wrong-Neo counter address (observed as a
-    // TILE_COUNTERS index 0x10000 fault on the K-spill matmul path via cb_intermed0). RISC-core delay
-    // alone does NOT fix this; a real backend stall until PACK0/THCON are idle is required.
-    TTI_STALLWAIT(
-        ckernel::p_stall::STALL_TDMA | ckernel::p_stall::STALL_SYNC,
-        0,
-        ckernel::p_stall::THCON,
-        ckernel::p_stall::PACK0);
 
     local_dfb_interface.wr_entry_ptr = 0;
     dfb_advance_slot(local_dfb_interface, slot, num_tiles);
