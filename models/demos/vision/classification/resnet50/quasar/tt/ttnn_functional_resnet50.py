@@ -53,8 +53,10 @@ def _pcc(dev, gold):
     """
     # float64: device garbage often lands at finite-but-huge magnitudes (~1e37) whose square (1e74)
     # overflows float32 in the norm/dot -> spurious nan PCC. double() keeps the reduction finite.
-    d = dev.reshape(-1, dev.shape[-1]).double()
-    g = gold.reshape(-1, gold.shape[-1]).double()
+    # detach: the golden is the pretrained torch model output (requires_grad=True); without detach the
+    # final float() cast warns ("converting a tensor with requires_grad to a scalar").
+    d = dev.reshape(-1, dev.shape[-1]).double().detach()
+    g = gold.reshape(-1, gold.shape[-1]).double().detach()
     r = min(d.shape[0], g.shape[0])
     c = min(d.shape[1], g.shape[1])
     d = d[:r, :c].reshape(-1)
