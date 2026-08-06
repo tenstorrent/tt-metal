@@ -103,6 +103,11 @@ class SamplingGenerator:
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
+        # Device sampling reads whatever parameters the device currently holds, so the
+        # first device-sampling step of a lifecycle must upload them. Tracked rather
+        # than assumed: nothing else distinguishes "reuse the resident parameters" from
+        # "never uploaded any", and the second silently samples from defaults.
+        self._params_uploaded = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
@@ -277,6 +282,11 @@ class SamplingGenerator:
                 the only way to keep exactly one advance per sampled token when state
                 application and sampling are separate calls.
         """
+        if not (self._params_uploaded or reload_sampling_params):
+            raise ValueError(
+                "device sampling has no resident parameters yet; the first decode of a "
+                "sampling lifecycle requires reload_sampling_params=True"
+            )
         if sampling_params_chunks is not None:
             self.apply_decode_state(
                 sampling_params_chunks,
@@ -305,6 +315,7 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
+        self._params_uploaded = True
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
