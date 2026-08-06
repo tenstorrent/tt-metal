@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -31,6 +32,7 @@ void bind_concat(nb::module_& mod) {
 
         Keyword Args:
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
+            implementation (str, optional): "auto" (default), "native", or "codegen".
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -46,7 +48,8 @@ void bind_concat(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor").noconvert() = nb::none(),
         nb::arg("groups") = 1,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

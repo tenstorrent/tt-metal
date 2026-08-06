@@ -19,15 +19,28 @@ ConcatCodegenDeviceOperation::program_factory_t ConcatCodegenDeviceOperation::se
 }
 
 void ConcatCodegenDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "ConcatCodegen needs 1 or more input tensors!");
+    const auto& first_input = input_tensors.at(0);
+    auto shape_first = first_input.logical_shape();
+    TT_FATAL(
+        operation_attributes.dim < shape_first.rank(), "ConcatCodegen dim specified is larger than input tensor rank.");
+    shape_first[operation_attributes.dim] = 0;
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to concat need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == first_input.device(), "Operands to concat need to be on the same device!");
+        TT_FATAL(input.layout() == first_input.layout(), "All Tensors should have same layouts.");
+        TT_FATAL(input.dtype() == first_input.dtype(), "All Tensors should have same dtypes.");
+        TT_FATAL(input.logical_shape().rank() == shape_first.rank(), "ConcatCodegen input tensor ranks must be equal");
+        auto curr_shape = input.logical_shape();
+        curr_shape[operation_attributes.dim] = 0;
+        TT_FATAL(curr_shape == shape_first, "ConcatCodegen tensors differ in shape across non-concat dimensions.");
     }
     TT_FATAL(
-        ttnn::operations::data_movement::concat_codegen::supported_by_codegen(),
+        ttnn::operations::data_movement::concat_codegen::supported_by_codegen(
+            input_tensors, operation_attributes.dim, operation_attributes.output_mem_config),
         "Input is not supported by ConcatCodegen");
 }
 
