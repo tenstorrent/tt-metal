@@ -931,6 +931,11 @@ def test_qwen_demo_text(
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
+                    # Penalties cannot rebuild their prompt mask without the real
+                    # tokens, and a state reset that omits them keeps the previous
+                    # batch's mask on device rather than failing.
+                    prompt_tokens=input_tokens_prefill_pt,
+                    output_tokens=prefilled_token,
                     reload_inputs=reload_decode_inputs,
                     reload_page_table=False,
                     reload_sampling_params=(device_sampling_params is not None and reload_decode_inputs),

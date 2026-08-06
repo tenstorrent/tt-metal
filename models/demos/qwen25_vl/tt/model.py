@@ -345,8 +345,13 @@ class Transformer(TTTransformer):
     # the simple single-gather argmax path.
     #
     # Fix: route greedy decode through the force-argmax path (enabled in
-    # __init__ below) and run sampling eagerly so the all-gather re-acquires a
-    # fresh semaphore. The decode token input cannot alias the sampling output.
+    # __init__ below), re-stage the decode trace inputs from host every step, and run
+    # sampling eagerly so the all-gather re-acquires a fresh
+    # multi_device_global_semaphore each step instead of reusing one frozen into a
+    # captured trace. The decode token input also cannot alias the sampling output, so
+    # nothing writes the next token back on device either. The flag below turns a
+    # request for a partial reload into an error; what keeps vLLM from making one is
+    # the adapter leaving ``supports_async_decode`` off.
     _tt_supports_decode_token_feedback = False
     _tt_disable_sampling_trace = True
 

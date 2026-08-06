@@ -104,6 +104,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         indices = indices[:batch_size]
         if torch.any(indices < 0) or torch.any(indices >= batch_size):
             raise ValueError(f"slot_remap entries must be in [0, {batch_size})")
+        # vLLM sends the identity on every layout-stable decode, which is most of them,
+        # so skip the gather rather than copying the whole delta tensor per step.
+        if torch.equal(indices, torch.arange(batch_size, dtype=torch.long)):
+            return
         rope_setup.rope_deltas = rope_setup.rope_deltas.index_select(0, indices).clone()
 
     def decode_forward(
