@@ -289,34 +289,39 @@ its result was already being shipped off it.
 
 ## 7. What is open
 
-**Ranked by size of prize.**
+**Ranked by size of prize. Rewritten for the p150 — three of the N150's open items are closed
+here and are in §8 instead.**
 
-- **The 31 unused tile rows — measured, `§6.35`, and the biggest lead.** Decode uses 1 row of every
-  32. In Block 2, **4 utterances cost 1.18× the time of 1 — 3.4× throughput** (844.9 → 995.1 µs per
-  `_block`). The 32-row ceiling is **our own constant**, not the hardware: `_NORM_SHARD` is hardcoded
-  `(32, 96)` and raises at 48 rows while `wqkv` handles 48 fine. **The fix has a reference
-  implementation in-tree — see §9.** This is *throughput, not latency*: per-utterance RTF is unchanged.
-- **w2 in BFP8 — a genuine open decision, `§6.38`.** Worth **2.644 ms/step** (5.5% of a frame), the
-  largest single win left. Upstream cost is real and reproducible (mean 0.92→1.16%, p90 1.28→1.68%).
-  But the output evidence is **1 wrong word in 822 against 0 in 822** — which no test calls
-  significant. To settle: all 15 cases × 3+ seeds on both arms.
-- **bf16 semantic head** — `§6.31` candidate E, 2.079× on `semantic_code`, another 0.265 ms/frame. Held
-  back because it moves the *semantic* token, which feeds Block 1's next input, so one flip redirects
-  the rest of the utterance. Needs a broad real-prompt gate, not 8 frames.
-- **Block 2's 7 Euler steps → 5** — ~28% of Block 2, but a listening call, not a metric one. No gate
-  can tell you whether it still sounds right.
-- **`nlp_create_qkv_heads` upstream issue is unwritten.** ~97 µs floor; worth 1.233 ms/frame to
-  hand-roll around in Block 2 (`§6.31`). Block 1's decode variant has the same shape. The
-  `halo_gather` out-of-range NOC write also deserves one.
+- **The 31 unused tile rows — `§6.35`, still the biggest lead, and now easier.** Block 2's decode
+  uses 6 rows of every 32; 4 utterances cost 1.18× the time of 1, i.e. **3.4× throughput**. §6.38
+  named the blocker as `_NORM_SHARD`'s hardcoded `(32, 96)`, which raises at 48 rows — **that
+  constant no longer exists on this fork (§6.40)**, so the stated obstacle is gone and the lead
+  should be re-costed. Still *throughput, not latency*: per-utterance RTF will not move.
+- **Block 2's `_trunk` sequence build** — `§6.36` put lines 174+176 (a 3-way concat and a reshape)
+  at 1.449 ms/frame combined on the N150, the largest genuinely untouched item, and small ops cost
+  **3.4× more here** (§6.45). Never re-measured on this chip. Most likely next win.
+- **`wo` and Block 2's `w2` run at ~40% of the ceiling** (§6.41) — both N=3072, and §6.41 shows the
+  p150 penalises *narrow* N. §6.43 proved blocking cannot reach it and the isolated gap is
+  overlapped away, so this needs a different attack: §6.28's DRAM-sharded matmul was rejected
+  against a 194 GB/s ceiling that no longer holds.
+- **Block 2's 7 Euler steps → 5** — ~28% of Block 2, but a listening call, not a metric one.
+- **bf16 semantic head** — `§6.31` candidate E, 2.079× on `semantic_code`. Never re-measured here.
+  Held back because it moves the *semantic* token, so one flip redirects the rest of the utterance.
+- **Block 3 has never been touched on this chip.** It is 0.4% of wall (§6.10) so the prize is
+  small, but every constant in it is a Wormhole number.
+- **Two upstream issues still unwritten**: the `halo_gather` out-of-range NOC write (`[pipe-02]`,
+  still live in ttnn — we only stopped calling it), and, if it reproduces here,
+  `nlp_create_qkv_heads`' floor.
 
 **Unexplained, logged rather than resolved:**
 
-- **The 1.233 ms mechanism (`§6.33`).** The hand-rolled head split is *not* faster in isolation, yet
-  the block is 1.233 ms/frame faster. Candidate causes listed; none verified. The tracy op profiler
-  (§9) is the tool for this.
-- **`[flow-10]`'s 158 µs vs today's ~112–127 µs** for what should be the same hand-rolled split.
-- **`§6.8`'s absolute levels don't reproduce.** Ruled out gate code, model code, reference, ttnn build,
-  prefill rows, prompt selection.
+- **The microbenchmark noise degraded ~40× mid-session** (§6.43) — 0.005 ms spread early, 1.9 ms
+  later, with host load 0.69, no other users, AICLK steady at 800 MHz, no thermal throttle. Every
+  step-level number taken after that resolves ~±0.3 ms at best. **Re-establish the noise floor
+  before trusting a small effect.**
+- **Why `_SDPA_PRG` survives the whole step and `_WO_PRG` did not** (§6.43/§6.46). Plausibly `wo`
+  sits between two large matmuls that hide it; unverified.
+- **`§6.8`'s absolute levels don't reproduce** — an N150-era open item, inherited, never chased.
 
 ---
 
@@ -324,26 +329,48 @@ its result was already being shipped off it.
 
 Full numbers in STATUS; this is the index so you don't spend a day on a closed question.
 
+**⚠ FIRST, THE SIX THAT REVERSED.** These were settled on the N150 and are settled the OTHER WAY
+here. The parent branch's verdict is wrong on this chip; do not restore any of them.
+
+| N150 verdict | p150 verdict |
+|---|---|
+| width-sharded decode RMSNorm, both blocks (`§6.9`/`§6.18`) | **interleaved** — sharding LOSES 4.4–4.5 ms/frame and is further from fp32 truth (`§6.39`/`§6.40`) |
+| `wo` needs a tuned program config (`§6.25`) | **no config** — inert on the step, and removing it is bit-exact (`§6.43`) |
+| fused KV cache write + `_V_SHARD` (`§6.20`/`§6.22`) | **two plain writes** — the fused one is 0.687 ms/step slower (`§6.44`) |
+| `_QKV_GRID_X = 8`, 1 core is worse (`§6.19`) | **1 core**, 0.461 ms/step better (`§6.44`) |
+| hand-rolled 9-op head split in Block 2 (`§6.31`) | **fused op** — +3.836 ms/frame at identical accuracy (`§6.45`) |
+| `sdpa` for Block 2's interior REJECTED (`§6.37`) | **shipped** — +2.555 ms/frame; 1.57× the fp64 error here, not 6.48×, codes unmoved (`§6.45`) |
+
+**The reason all six flipped is one pair of numbers (`§6.41`/`§6.45`): the p150 has ~360 GB/s and
+a ~68 µs per-op floor against the N150's 194–202 GB/s and ~20 µs. Bytes are cheap, launches are
+expensive, so deleting ops wins where `§6.6` wanted fewer, bigger kernels.**
+
+**Settled on the p150 (measured here):**
+
+| tried | verdict |
+|---|---|
+| fusing w1+w3 into one 3072×18432 matmul | still **rejected**, but NOT for `§6.24`'s reason — the fused matmul is now 1.03× **faster** (372 vs 362 GB/s); it loses 21–23 µs/layer on the split and the lost free `activation="silu"` (`§6.42`) |
+| `w2` in BFP8 | **no gain** — half the bytes, identical 206 µs; `§6.38`'s "largest single win left" is worth zero here (`§6.41`) |
+| `_SDPA_PRG` alternatives | k=128 is faster and degrades at pos 128 and 1000; k=512 8×2 is the only config exact at all 13 positions (`§6.46`) |
+| ranking by distance-from-roofline | **not a signal here** — `wo` at 39% of ceiling is entirely overlapped away (`§6.43`) |
+
+**Settled on the N150, not re-tested here — treat as probable, not proven:**
+
 | tried | verdict |
 |---|---|
 | BFP4 weights | 8.4× the error for 12% of the time |
-| fusing w1+w3 into one 3072×18432 matmul | **4× slower** — matmul bandwidth collapses past N≈9216 |
 | ttnn's fused q+k RoPE | wrong convention (interleaved vs our half-split); 0.236 ms to adopt |
-| device tracing **as a shipping strategy** | +0.35 ms and three silent failure modes. (As a *measurement* tool it is fine and confirmed dispatch is 0% — `§6.38`) |
-| lower math fidelity (HiFi2 / LoFi) | Block 2: **slower and 9× worse** (`[flow-03]`). Block 1: ~4 ms for 10–20× the code errors |
-| DRAM-sharded matmul for the norm output | 1.66× slower even with blocking tuned; closed three ways (`§6.28`) |
-| one-op interleaved `rms_norm` in Block 2 | 2.4× **slower** than three sharded ops — sharding is the fast path |
+| device tracing **as a shipping strategy** | +0.35 ms and three silent failure modes |
+| lower math fidelity (HiFi2 / LoFi) | Block 2: **slower and 9× worse** (`[flow-03]`); Block 1: ~4 ms for 10–20× the code errors |
+| DRAM-sharded matmul for the norm output | 1.66× slower with blocking tuned (`§6.28`) — **but decided against a 194 GB/s ceiling; worth re-opening (§7)** |
 | folding CFG + Euler into a weighted reduce | 1.543× isolated, **zero** whole-block, flips an FSQ boundary |
 | permuting straight from `av` in the unfold | 1.77× faster and **returns garbage** |
-| project-then-duplicate in `_solve` | 0.785× isolated. The redundant matmul is ~1 µs; duplicating a 3072-wide result rather than a 36-wide input costs +12 µs (`§6.34`) |
-| `ttnn.repeat` instead of `ttnn.concat` to duplicate | 1.8× worse |
-| **`sdpa` for Block 2's attention interior** | 5.9× on the op, **+0.816 ms/frame** on the block — but 6.48× the error vs fp64 truth and **cost one WER word**. Reverted (`§6.37`). Needs `scale=1.0` if retried, plus a multi-seed study to settle worse-vs-different |
-| `ttnn.add_` / `ttnn.multiply_` in place | bit-exact, 1.14–1.20× isolated, **+0.001 ms** whole-block over 6 rounds (`§6.37`) |
-| residual-as-bias, **Block 1** | w2's add is already free |
-| residual-as-bias, **Block 2** | **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
-| `ttnn.swiglu` | `TT_THROW`s on a concatenated pair; would need w1/w3 fused, which is 4× slower |
-| `_solve` tensors moved into L1 | neutral-to-worse, monotonically (`§6.37`): 20.916 → 20.946 → 20.974 → 21.046 ms |
-| **eliminating CFG** | costs only **1.8%** (0.322 ms/frame), because 3 rows and 6 rows both pad to one 32-row tile and the row fold reads each weight once. `p2`'s known-zero half is also free (65.1 µs either way). "CFG doubles the work" does not hold here (`§6.35`) |
+| project-then-duplicate in `_solve` | 0.785× isolated (`§6.34`) |
+| `ttnn.repeat` instead of `ttnn.concat` | 1.8× worse |
+| `ttnn.add_` / `ttnn.multiply_` in place | bit-exact, **+0.001 ms** whole-block over 6 rounds (`§6.37`) |
+| residual-as-bias | Block 1: w2's add is already free. Block 2: **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
+| `_solve` tensors moved into L1 | neutral-to-worse, monotonically (`§6.37`) |
+| **eliminating CFG** | costs only **1.8%** (0.322 ms/frame) — "CFG doubles the work" does not hold (`§6.35`) |
 
 ---
 
