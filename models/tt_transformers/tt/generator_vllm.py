@@ -31,7 +31,7 @@ except ImportError:
     from vllm.multimodal.inputs import MultiModalDataDict
 
 import ttnn
-from models.common.decode_contract import require_full_input_reload
+from models.common.decode_contract import per_layer_page_tables_need_upload, require_full_input_reload
 from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -241,15 +241,6 @@ class HybridAttentionForCausalLM(Generator):
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    @staticmethod
-    def _reload_per_layer_page_tables(reload_inputs: bool = True, reload_page_table: bool = False) -> bool:
-        """Whether the explicit contract requests per-layer page-table upload.
-
-        Defaults are the conservative full refresh: a caller that omits the commands
-        must fail in ``Generator.decode_forward``, which names them, not here.
-        """
-        return bool(reload_inputs or reload_page_table)
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
@@ -1026,7 +1017,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None and self._reload_per_layer_page_tables(
+        if per_submesh is not None and per_layer_page_tables_need_upload(
             kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False)
         ):
             for m, pt_for_submesh in zip(self.model, per_submesh):
@@ -1101,7 +1092,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None and self._reload_per_layer_page_tables(
+        if per_submesh is not None and per_layer_page_tables_need_upload(
             kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False)
         ):
             for m, pt_for_submesh in zip(self.model, per_submesh):

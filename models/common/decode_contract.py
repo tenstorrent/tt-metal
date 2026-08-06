@@ -31,6 +31,15 @@ than silently degrading; see ``require_full_input_reload``.
 """
 
 
+def per_layer_page_tables_need_upload(reload_inputs: bool = True, reload_page_table: bool = False) -> bool:
+    """Whether a hybrid-attention model must re-upload its per-layer page tables.
+
+    Defaults are the conservative full refresh: a caller that omits the commands must
+    fail in ``decode_forward``, which names them, not here.
+    """
+    return bool(reload_inputs or reload_page_table)
+
+
 def require_full_input_reload(
     adapter: str,
     *,
