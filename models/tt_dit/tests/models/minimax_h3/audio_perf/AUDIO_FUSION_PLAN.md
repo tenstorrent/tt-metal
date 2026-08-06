@@ -124,9 +124,17 @@ Design, in the order to build it:
      bias is `C_out` wide and snake needs `2 * C_out` values (alpha **and** inv_beta), and the CB is
      sized to `C_out`. inv_beta cannot be folded into the weights either, because it scales
      `sin(alpha*x)^2` rather than `x`, so the conv cannot absorb it.
-   * *A brand-new optional input tensor.* Correct, but it touches `Conv2dInputs`, validate,
-     compute_output_specs, the conv2d and conv1d invoke chains, pybind, the program factory and the
-     reader -- six-plus files before anything can be compiled once.
+   * *Reuse the `bias` CB by passing a 2*C-wide bias.* Verified dead, not assumed --
+     `conv2d_op_program_factory_common.cpp:288-292` sizes it
+     `num_pages = enable_bias ? per_core_out_matrix_width_ntiles : 0`, i.e. from the conv's output
+     width, so a wider bias tensor gets no extra pages.
+
+   **What is left is the optional-input-tensor route, and it is now the only one.** A CB is
+   kernel-filled device scratch, not something the host populates at program build, so the parameters
+   have to arrive as a tensor. That means `Conv2dInputs`, validate, compute_output_specs, the conv2d
+   and conv1d invoke chains, pybind, the program factory and the reader -- six-plus files before a
+   first compile. Budget for that rather than looking for a shortcut; three have now been eliminated
+   by inspection and the search itself has cost more than the change will.
 
 4. **The weights CB sizes itself from the weight tensor's shape, so no op-signature change is
    needed.** `conv2d_op_sharded_program_factory.cpp:260-262` takes
