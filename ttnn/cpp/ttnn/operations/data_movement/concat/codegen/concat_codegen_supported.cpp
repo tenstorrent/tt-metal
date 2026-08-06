@@ -36,8 +36,7 @@ bool nonwidth_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_met
     for (const auto& t : input_tensors) {
         cb_page = std::max(cb_page, static_cast<uint32_t>(t.buffer()->aligned_page_size()));
     }
-    return ttnn::prim::plan_concat_batch(
-               cb_page, ttnn::prim::kConcatNonWidthBatch, ttnn::prim::concat_l1_budget(device))
+    return ttnn::prim::plan_concat_cb(cb_page, ttnn::prim::kConcatNonWidthBatch, ttnn::prim::concat_l1_budget(device))
         .has_value();
 }
 
@@ -88,7 +87,7 @@ bool width_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal:
     if (scratch_page > l1_budget) {
         return false;
     }
-    return ttnn::prim::plan_concat_batch(out_page, ttnn::prim::kConcatWidthWriteBatch, l1_budget - scratch_page)
+    return ttnn::prim::plan_concat_cb(out_page, ttnn::prim::kConcatWidthWriteBatch, l1_budget - scratch_page)
         .has_value();
 }
 

@@ -462,14 +462,15 @@ ttnn::Tensor concat(
                     chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
                 }
 
-                chunk_outputs.push_back(
-                    ttnn::concat(chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids));
+                chunk_outputs.push_back(ttnn::concat(
+                    chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids, implementation));
             }
 
             if (chunk_outputs.size() == 1) {
                 return chunk_outputs[0];
             }
-            return ttnn::concat(chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids);
+            return ttnn::concat(
+                chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids, implementation);
         }
     }
 

@@ -25,15 +25,21 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-std::optional<uint32_t> plan_concat_batch(uint32_t page_size, uint32_t max_batch, uint64_t l1_budget_bytes) {
+std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batch, uint64_t l1_budget_bytes) {
     if (page_size == 0) {
-        return max_batch;
+        return ConcatCbPlan{max_batch, 2 * max_batch};
     }
-    const uint64_t max_fit = l1_budget_bytes / (2ull * page_size);
-    if (max_fit == 0) {
-        return std::nullopt;
+    const uint64_t double_buffered_fit = l1_budget_bytes / (2ull * page_size);
+    if (double_buffered_fit > 0) {
+        const uint32_t batch = static_cast<uint32_t>(std::min<uint64_t>(max_batch, double_buffered_fit));
+        return ConcatCbPlan{batch, 2 * batch};
     }
-    return static_cast<uint32_t>(std::min<uint64_t>(max_batch, max_fit));
+    // Double buffering doesn't fit even at batch=1; fall back to the single-
+    // buffered BATCH<=1 kernel path, which only needs depth=1.
+    if (static_cast<uint64_t>(page_size) <= l1_budget_bytes) {
+        return ConcatCbPlan{1, 1};
+    }
+    return std::nullopt;
 }
 
 uint32_t concat_l1_budget(IDevice* device) {
@@ -153,8 +159,9 @@ ProgramDescriptor create_descriptor_rm(
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t cb_page = std::max(
         {out_page, static_cast<uint32_t>(src0->aligned_page_size()), static_cast<uint32_t>(src1->aligned_page_size())});
-    const auto batch = plan_concat_batch(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
-    TT_FATAL(batch.has_value(), "ConcatCodegen: RM concat CB page ({} B) does not fit per-core L1", cb_page);
+    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
+    TT_FATAL(plan.has_value(), "ConcatCodegen: RM concat CB page ({} B) does not fit per-core L1", cb_page);
+    const uint32_t batch = plan->batch;
 
     const uint32_t accum = num_accum_sticks(output.logical_shape(), dim);
     const uint32_t ppb_0 = accum * in0.logical_shape()[dim];
@@ -165,7 +172,7 @@ ProgramDescriptor create_descriptor_rm(
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * (*batch) * cb_page,
+        .total_size = plan->depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kCbIn,
@@ -176,7 +183,7 @@ ProgramDescriptor create_descriptor_rm(
 
     std::vector<uint32_t> reader_ct = {
         kCbIn,
-        *batch,
+        batch,
         2,
         ppb_0,
         ppb_1,
@@ -195,7 +202,7 @@ ProgramDescriptor create_descriptor_rm(
 
     std::vector<uint32_t> writer_ct = {kCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
-    writer_ct.push_back(*batch);
+    writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
@@ -251,16 +258,16 @@ ProgramDescriptor create_descriptor_rm_width(
 
     const uint64_t l1_budget = concat_l1_budget(device);
     TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM width-concat scratch CB does not fit per-core L1");
-    const auto write_batch = plan_concat_batch(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
-    TT_FATAL(
-        write_batch.has_value(), "ConcatCodegen: RM width-concat CB page ({} B) does not fit per-core L1", out_page);
+    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
+    TT_FATAL(plan.has_value(), "ConcatCodegen: RM width-concat CB page ({} B) does not fit per-core L1", out_page);
+    const uint32_t write_batch = plan->batch;
 
     const CoreSplit split = split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * (*write_batch) * out_page,
+        .total_size = plan->depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = out_page}}},
@@ -272,11 +279,11 @@ ProgramDescriptor create_descriptor_rm_width(
             .buffer_index = kCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
     });
 
-    // Read batch matches write_batch: the CB depth below (2*write_batch pages)
-    // is only actually pipelined if the reader fills it write_batch pages at a
-    // time instead of reserving/barriering one page per stick.
+    // Read batch matches write_batch: the CB depth above is only actually
+    // pipelined if the reader fills it write_batch pages at a time instead of
+    // reserving/barriering one page per stick.
     std::vector<uint32_t> reader_ct = {
-        kCbIn, in0_stick, in1_stick, out_page, in0_page, in1_page, kCbScratch, in1_noc_alignment, *write_batch};
+        kCbIn, in0_stick, in1_stick, out_page, in0_page, in1_page, kCbScratch, in1_noc_alignment, write_batch};
     TensorAccessorArgs(*src0).append_to(reader_ct);
     TensorAccessorArgs(*src1).append_to(reader_ct);
 
@@ -289,7 +296,7 @@ ProgramDescriptor create_descriptor_rm_width(
 
     std::vector<uint32_t> writer_ct = {kCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
-    writer_ct.push_back(*write_batch);
+    writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
@@ -326,8 +333,9 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
     const uint32_t in_page = static_cast<uint32_t>(src0->aligned_page_size());
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t cb_page = std::max(in_page, out_page);
-    const auto batch = plan_concat_batch(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
-    TT_FATAL(batch.has_value(), "ConcatCodegen: RM N-way concat CB page ({} B) does not fit per-core L1", cb_page);
+    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
+    TT_FATAL(plan.has_value(), "ConcatCodegen: RM N-way concat CB page ({} B) does not fit per-core L1", cb_page);
+    const uint32_t batch = plan->batch;
 
     const uint32_t accum = num_accum_sticks(output.logical_shape(), dim);
     std::vector<uint32_t> sticks_per_block(n_inputs);
@@ -340,13 +348,13 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * (*batch) * cb_page,
+        .total_size = plan->depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = cb_page}}},
     });
 
-    std::vector<uint32_t> reader_ct = {kCbIn, *batch, n_inputs, cb_page, in_page};
+    std::vector<uint32_t> reader_ct = {kCbIn, batch, n_inputs, cb_page, in_page};
     TensorAccessorArgs(*src0).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
@@ -358,7 +366,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
     std::vector<uint32_t> writer_ct = {kCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
-    writer_ct.push_back(*batch);
+    writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
@@ -412,17 +420,16 @@ ProgramDescriptor create_descriptor_rm_width_nway(
 
     const uint64_t l1_budget = concat_l1_budget(device);
     TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM N-way width-concat scratch CB does not fit per-core L1");
-    const auto write_batch = plan_concat_batch(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
+    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
     TT_FATAL(
-        write_batch.has_value(),
-        "ConcatCodegen: RM N-way width-concat CB page ({} B) does not fit per-core L1",
-        out_page);
+        plan.has_value(), "ConcatCodegen: RM N-way width-concat CB page ({} B) does not fit per-core L1", out_page);
+    const uint32_t write_batch = plan->batch;
     const CoreSplit split = split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * (*write_batch) * out_page,
+        .total_size = plan->depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = out_page}}},
@@ -439,9 +446,9 @@ ProgramDescriptor create_descriptor_rm_width_nway(
     // for every input's direct-write destination-offset check.
     const uint32_t noc_alignment = static_cast<uint32_t>(input_tensors[0].buffer()->alignment());
     // Read batch matches write_batch, same as the 2-tensor width builder: the
-    // CB depth below (2*write_batch pages) is only pipelined if the reader
-    // fills it write_batch pages at a time instead of one page per barrier.
-    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, *write_batch, noc_alignment};
+    // CB depth above is only pipelined if the reader fills it write_batch
+    // pages at a time instead of one page per barrier.
+    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, write_batch, noc_alignment};
     TensorAccessorArgs(*input_tensors[0].buffer()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
@@ -453,7 +460,7 @@ ProgramDescriptor create_descriptor_rm_width_nway(
 
     std::vector<uint32_t> writer_ct = {kCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
-    writer_ct.push_back(*write_batch);
+    writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
