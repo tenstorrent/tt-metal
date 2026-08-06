@@ -100,18 +100,10 @@ class _FakeSamplingGenerator:
 
 
 def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
-    class _FakeDeepseekGenerator:
-        _apply_sampling_state = DeepseekGenerator._apply_sampling_state
-        _sampling_device_slot = DeepseekGenerator._sampling_device_slot
-        _sampling_device_slots = DeepseekGenerator._sampling_device_slots
-        _sampling_device_positions = DeepseekGenerator._sampling_device_positions
-        _sampling_params_for_user_slots = DeepseekGenerator._sampling_params_for_user_slots
-        _sampling_history_for_user_slots = DeepseekGenerator._sampling_history_for_user_slots
-        _sampling_device_history = DeepseekGenerator._sampling_device_history
-        _sampling_device_slot_remap = DeepseekGenerator._sampling_device_slot_remap
-        _apply_sampling_slot_remap = DeepseekGenerator._apply_sampling_slot_remap
-        _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
-
+    # Subclass rather than copy method references: the slot-layout helpers call each
+    # other and the params normalizers, so an explicit list silently rots into
+    # AttributeError as soon as one of them grows a callee.
+    class _FakeDeepseekGenerator(DeepseekGenerator):
         def __init__(self):
             self.batch_size_per_row = batch_size_per_row
             self.batch_size = batch_size_per_row * sampling_dp
