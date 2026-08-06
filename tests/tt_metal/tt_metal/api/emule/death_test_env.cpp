@@ -25,13 +25,27 @@
 // under the TT_METAL_USE_EMULE block in sources.cmake), so non-emule builds are
 // unaffected. See docs/ASAN.md "Death tests under the fiber engine".
 
+// It also neutralizes TT_METAL_EMULE_ASAN_CHECKS for the suite. Every test here
+// asserts that one specific check fires (or provably does not), so a developer or
+// CI shell that exports a narrowed check list would turn most of them into
+// confusing "failed to die" reports rather than an honest signal. Forcing "all"
+// after flag parsing makes the suite depend only on what each test sets itself.
+// A test that wants a narrowed list sets it in its own body — see
+// test_asan_check_selection.cpp, which is why this is a plain setenv here and not
+// something the selection tests have to work around.
+
+#include <cstdlib>
+
 #include <gtest/gtest.h>
 
 namespace {
 
 class EmuleThreadsafeDeathStyle : public ::testing::Environment {
 public:
-    void SetUp() override { GTEST_FLAG_SET(death_test_style, "threadsafe"); }
+    void SetUp() override {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        ::setenv("TT_METAL_EMULE_ASAN_CHECKS", "all", /*overwrite=*/1);
+    }
 };
 
 const ::testing::Environment* const kEmuleThreadsafeDeathStyle =

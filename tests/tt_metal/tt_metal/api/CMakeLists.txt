@@ -100,6 +100,16 @@ set_target_properties(
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
 
+    # Let the emule tests see the REAL host_sanitizers.hpp declarations instead of
+    # its non-emule inline no-ops. TT_METAL_USE_EMULE is PRIVATE on the metal lib,
+    # so a test target must opt in explicitly (same reason and same form as
+    # tests/tt_metal/tt_metal/data_movement/CMakeLists.txt). Without it a test that
+    # calls the facade — test_asan_check_selection.cpp's per-check queries,
+    # test_host_alignment.cpp's controls — silently links the no-op and asserts
+    # nothing. The define only selects a header branch; the symbols it declares are
+    # already in the emule libtt_metal this binary links.
+    target_compile_definitions(unit_tests_api_lib PRIVATE TT_METAL_USE_EMULE=1)
+
     # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
     # includes the emule kernel-side context header (jit_hw/internal/
     # emule_thread_ctx.h) directly, which isn't on the shared api test lib's

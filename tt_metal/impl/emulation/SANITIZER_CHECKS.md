@@ -12,6 +12,21 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 **Common mechanics**
 - All checks are gated by one env var, **`TT_METAL_EMULE_ASAN=1`**, off by
   default (one exception: *CB Reservation Overflow* is always on — see §8).
+- **`TT_METAL_EMULE_ASAN_CHECKS`** narrows *which* checks run under that switch:
+  a comma-separated list of `uaf, host_align, metadata, oob, padding, semaphore,
+  cb_boundary, cb_reservation, noc_race, noc_align, dirty_cb, object_intent`.
+  Absent/empty/`all` means every check. Useful because a violation `abort()`s the
+  process, so the first check to fire hides the others — narrowing the list is how
+  you isolate one. An **unrecognized name falls back to every check**, never to
+  none: a typo must not be able to silence the sanitizers and report clean.
+  *CB Reservation Overflow* stays on when deselected (§8's deadlock reason), and
+  for `metadata` only the ASAN report is gated — `check_program_metadata_size`'s
+  `TT_THROW` is a functional validator, not a sanitizer. The host parses the list
+  once per launch into `EmuleOobTensorState::check_mask` and arms
+  `__emule_self->san.check_mask`; the name↔bit mapping is defined once in
+  tt-emule's `jit_hw/internal/emule_thread_ctx.h`. `cb_boundary_strict` and
+  `object_intent_strict` are derived from the mask. Full rationale:
+  tt-emule `docs/ASAN.md` "Per-check selection".
 - Each fires a single `[ASAN ERROR] <Category>: …` line, then a unified
   diagnostic trace (see *Diagnostic trace* below), then `abort()`s — every site
   calls `__emule_asan_panic()` instead of a bare `abort()`.

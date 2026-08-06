@@ -76,6 +76,19 @@ inline bool dirty_cb_check_skipped() {
 // production host path.
 #ifdef TT_METAL_USE_EMULE
 
+// Per-check selection (TT_METAL_EMULE_ASAN_CHECKS): which sanitizers this run
+// enables. Unset/empty/"all" -> every check, so an existing run is unaffected.
+// `check_bit` is an EmuleAsanCheck value; it is taken as a plain uint32_t because
+// the bits are defined in tt-emule's jit_hw/internal/emule_thread_ctx.h and this
+// header must stay includable by the `tt_metal` target, which has no tt-emule
+// include path. Re-read per call, like the master switch, so a test can toggle it.
+uint32_t asan_check_mask();
+bool asan_check_enabled(uint32_t check_bit);
+// Name-based query ("oob", "dirty_cb", ...; see EMULE_ASAN_CHECK_NAMES). Lets a
+// caller without the tt-emule include path — e.g. the test binary — ask about a
+// check without duplicating the bit values. Unknown name -> false.
+bool asan_check_enabled_by_name(const char* name);
+
 // Use-After-Free: `op` touched a buffer that is not currently allocated.
 void check_buffer_allocated(const Buffer& buffer, const char* op);
 
@@ -106,6 +119,9 @@ void register_logical_size(const Buffer& buffer, DeviceAddr logical_size);
 
 #else  // !TT_METAL_USE_EMULE — inline no-ops so callers stay #ifdef-free.
 
+inline uint32_t asan_check_mask() { return 0; }
+inline bool asan_check_enabled(uint32_t) { return false; }
+inline bool asan_check_enabled_by_name(const char*) { return false; }
 inline void check_buffer_allocated(const Buffer&, const char*) {}
 inline void check_host_l1_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
 inline void check_host_dram_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}

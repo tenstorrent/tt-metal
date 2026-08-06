@@ -184,7 +184,7 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     // ASAN out-of-bounds DRAM check (inert when TT_METAL_EMULE_ASAN off — ranges stay null). Range-test
     // in 32 bits to match the live-range registry (uint32_t start/end); the 64-bit offset is used only
     // for the backing-store address. Assumes DRAM addresses fit in 32 bits (true for every WH/BH config).
-    if (__emule_self->san.dram_tensor_ranges != nullptr &&
+    if (__emule_self->san.dram_tensor_ranges != nullptr && (__emule_self->san.check_mask & EMULE_ASAN_CHK_OOB) != 0 &&
         static_cast<uint32_t>(offset) >= __emule_self->san.dram_unreserved_base) {
         uint32_t addr = static_cast<uint32_t>(offset);
         bool in_tensor = false;
@@ -210,8 +210,8 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     emule_require_self(__func__);
     // ASAN illegal-semaphore-region check (inert when ASAN off — range end stays 0).
-    if (__emule_self->san.sem_l1_range_end > 0 && offset >= __emule_self->san.sem_l1_range_start &&
-        offset < __emule_self->san.sem_l1_range_end) {
+    if (__emule_self->san.sem_l1_range_end > 0 && (__emule_self->san.check_mask & EMULE_ASAN_CHK_SEMAPHORE) != 0 &&
+        offset >= __emule_self->san.sem_l1_range_start && offset < __emule_self->san.sem_l1_range_end) {
         __emule_asan_panic(
             "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
             offset,

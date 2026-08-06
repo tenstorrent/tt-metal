@@ -10,6 +10,8 @@
 #include "host_sanitizers.hpp"
 
 #include <cstddef>
+#include <cstdlib>  // std::getenv (per-check mask)
+#include <cstring>  // std::strcmp (name lookup)
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -20,6 +22,7 @@
 #include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "emule_live_ranges.hpp"
+#include "jit_hw/internal/emule_thread_ctx.h"  // EmuleAsanCheck bits + emule_asan_parse_checks
 
 // Single definition lives in emule_asan_panic.cpp, linked into the same libtt_metal.
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
@@ -37,8 +40,29 @@ uint32_t host_alignment_requirement(const IDevice* device, uint32_t size) {
 }
 }  // namespace
 
+// Re-read + re-parse per call, matching emule_asan_enabled(): a static cache would
+// stick to the first value seen and break combined gtest runs that setenv between
+// tests. Only ever reached behind the master switch, i.e. once per host API call
+// or once per launch — never on a per-access path (the kernel side reads the mask
+// out of the fiber state instead).
+uint32_t asan_check_mask() { return emule_asan_parse_checks(std::getenv("TT_METAL_EMULE_ASAN_CHECKS")); }
+
+bool asan_check_enabled(uint32_t check_bit) { return (asan_check_mask() & check_bit) != 0; }
+
+bool asan_check_enabled_by_name(const char* name) {
+    if (name == nullptr) {
+        return false;
+    }
+    for (const auto& e : EMULE_ASAN_CHECK_NAMES) {
+        if (std::strcmp(e.name, name) == 0) {
+            return asan_check_enabled(e.bit);
+        }
+    }
+    return false;
+}
+
 void check_buffer_allocated(const Buffer& buffer, const char* op) {
-    if (!emule_asan_enabled()) {
+    if (!emule_asan_enabled() || !asan_check_enabled(EMULE_ASAN_CHK_UAF)) {
         return;
     }
     if (!buffer.is_allocated()) {
@@ -54,7 +78,7 @@ void check_buffer_allocated(const Buffer& buffer, const char* op) {
 }
 
 void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op) {
-    if (!emule_asan_enabled()) {
+    if (!emule_asan_enabled() || !asan_check_enabled(EMULE_ASAN_CHK_HOST_ALIGN)) {
         return;
     }
     // Query the real requirement (1 on the byte-granular host->L1 path) rather than
@@ -67,7 +91,7 @@ void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t s
 }
 
 void check_host_dram_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op) {
-    if (!emule_asan_enabled()) {
+    if (!emule_asan_enabled() || !asan_check_enabled(EMULE_ASAN_CHK_HOST_ALIGN)) {
         return;
     }
     const uint32_t alignment = host_alignment_requirement(device, size);
@@ -109,7 +133,10 @@ void check_program_metadata_size(Program& program) {
 }
 
 void report_metadata_overflow(bool is_emulated, const char* what) {
-    if (is_emulated && emule_asan_enabled()) {
+    // Gates only the ASAN panic. check_program_metadata_size's TT_THROW stays
+    // unconditional: it is the functional validator its caller depends on, not a
+    // sanitizer, so deselecting `metadata` must not change program-load behaviour.
+    if (is_emulated && emule_asan_enabled() && asan_check_enabled(EMULE_ASAN_CHK_METADATA)) {
         __emule_asan_panic("[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n", what);
     }
 }

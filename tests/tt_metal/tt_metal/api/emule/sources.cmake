@@ -20,6 +20,7 @@ list(
     UNIT_TESTS_API_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/death_test_env.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_alignment_writes.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_asan_check_selection.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_cb_leak.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_cb_pages.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_host_alignment.cpp

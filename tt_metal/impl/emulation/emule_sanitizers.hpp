@@ -39,6 +39,13 @@ namespace tt::tt_metal::emule {
 // (__emule_self->san) by set_sanitizer_thread_locals.
 struct EmuleOobTensorState {
     bool asan_enabled = false;
+    // Which checks this launch runs (EmuleAsanCheck bits, from
+    // TT_METAL_EMULE_ASAN_CHECKS). Copied into the fiber state for the kernel-side
+    // checks; the host-side checks consult asan_check_enabled() directly. Declared
+    // as a plain uint32_t so this header stays free of jit_hw includes — the
+    // `tt_metal` target that pulls in host_sanitizers.hpp has no tt-emule include
+    // path. The bit values live in jit_hw/internal/emule_thread_ctx.h.
+    uint32_t check_mask = 0;
     uint32_t l1_unreserved_base = 0;
     const uint64_t* tensor_ranges = nullptr;
     uint32_t tensor_ranges_count = 0;

@@ -144,6 +144,7 @@ void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_ba
     san.l1_padding_ranges_count = oob.l1_padding_ranges_count;
     san.l1_host_ranges = oob.l1_host_ranges;
     san.l1_host_ranges_count = oob.l1_host_ranges_count;
+    san.check_mask = oob.check_mask;
     san.cb_boundary_strict = oob.cb_boundary_strict;
     san.pending_noc_reads = 0;
 }
@@ -172,6 +173,7 @@ void clear_sanitizer_thread_locals() {
         san.cb_wait_file[i] = nullptr;
         san.cb_wait_line[i] = 0;
     }
+    san.check_mask = EMULE_ASAN_CHK_ALL;
     san.cb_boundary_strict = false;
     san.pending_noc_reads = 0;
     san.kernel_name = nullptr;
@@ -237,8 +239,9 @@ void sweep_per_kernel_dirty_cbs(
     if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
-    // Per-check opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB); see host_sanitizers.hpp.
-    if (dirty_cb_check_skipped()) {
+    // Deselected via TT_METAL_EMULE_ASAN_CHECKS, or via the older dedicated
+    // TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB (kept working; see host_sanitizers.hpp).
+    if ((oob.check_mask & EMULE_ASAN_CHK_DIRTY_CB) == 0 || dirty_cb_check_skipped()) {
         return;
     }
     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
@@ -269,8 +272,13 @@ void sweep_per_kernel_dirty_cbs(
 OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     OobStateOwner owner;
     const bool asan = emule_asan_enabled();
+    const uint32_t checks = asan ? asan_check_mask() : 0u;
     owner.state.asan_enabled = asan;
-    owner.state.cb_boundary_strict = asan;
+    owner.state.check_mask = checks;
+    // cb_boundary_strict / object_intent_strict predate the mask and stay as the
+    // gates their checks already read; they are DERIVED here so the mask remains
+    // the single place a check is turned on or off.
+    owner.state.cb_boundary_strict = (checks & EMULE_ASAN_CHK_CB_BOUNDARY) != 0;
     if (!asan) {
         return owner;
     }
@@ -287,7 +295,7 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
         static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     owner.state.dram_tensor_ranges = owner.dram_live_ranges.empty() ? &kEmptyRange : owner.dram_live_ranges.data();
     owner.state.dram_tensor_ranges_count = static_cast<uint32_t>(owner.dram_live_ranges.size());
-    owner.state.object_intent_strict = true;
+    owner.state.object_intent_strict = (checks & EMULE_ASAN_CHK_OBJECT_INTENT) != 0;
 
     owner.padding_ranges = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
     if (!owner.padding_ranges.empty()) {
