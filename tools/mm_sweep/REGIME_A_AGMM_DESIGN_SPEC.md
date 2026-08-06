@@ -92,3 +92,47 @@ appropriate flush/credit. Drain writes and non-posted atomics before kernel exit
 Start by reading the production `regime_a_matmul`,
 `experimental/ccl/all_gather_minimal_matmul_async`, and current mux-v2 unit tests. Reuse fabric connection,
 packet, teardown, and flow-control primitives; do not invent a private mux protocol.
+
+## Appendix A: balanced bidirectional delivery for direct-L1 (per-core stream plan)
+
+This is §"Device-level schedule" expressed for direct-L1, where the transport unit is one consumer core's
+cb0 slot 0 rather than a device-level shard. It is a **required correction**: the first direct-L1
+implementation assigned each ring position a single direction by `ring_pos` parity, so a stripe travelled
+`tp-1` hops from its origin instead of `tp/2`. Same bytes, worse latency, and it inflates `T_ready_max` —
+the leading term of the ring bound.
+
+**Terms.** `ppr = 8/tp` ring positions per source rank (`tp | 8`). Forward reach `f = tp/2`, backward reach
+`b = tp-1-f`. Position `p` has origin rank `r(p)`; on device `d`, `fd = (d-r) mod tp`, `bd = (r-d) mod tp`.
+
+**Per-core rule.** For core `(kk, p)`, exactly one case applies (`fd+bd = tp` and `f+b = tp-1` make the two
+arrival cases mutually exclusive and jointly exhaustive):
+
+| case | role | sends |
+|---|---|---|
+| `fd == 0` | origin: read the stripe from the LOCAL in0 shard | forward **and** backward |
+| `1 <= fd <= f` | arrives on the forward stream at depth `fd` | forward, iff `fd < f` |
+| `1 <= bd <= b` | arrives on the backward stream at depth `bd` | backward, iff `bd < b` |
+
+Arrival depth `w(p,d) = fd if fd <= f else bd`; max depth `f = tp/2`. Each core still receives **exactly
+one** stripe and relays it at most once, so relay source remains the consume destination and no relay
+buffer exists.
+
+**Waves.** Depth `w > 0` delivers rank `d-w`'s positions via forward, plus rank `d+w`'s via backward when
+`w <= b`. So per device:
+
+```text
+wave 0            ppr positions  = K/tp    (local, no fabric)
+waves 1..b       2ppr positions  = 2K/tp   (one full shard from each direction)
+wave f (antipode) ppr positions  = K/tp    (forward only at even tp)
+```
+
+which sums to `K` and reproduces the device-level wave table above. tp=4: `K/4, K/2, K/4`. tp=8:
+`K/8, 2K/8 x3, K/8`.
+
+**Invariants preserved.** Sends per device are unchanged at `ppr*(tp-1)` per ring slice — origins send twice
+but two terminals now send nothing (`ppr*(2 + (f-1) + (b-1)) = ppr*(tp-1)`) — so total fabric bytes and total
+mux clients are identical, and no tile crosses fabric twice per destination. What changes is the split
+between the two muxes, from even to `f:b` (tp=4: `2ppr:ppr`), which per-direction mux sizing already handles.
+
+**Scope.** Host-only: the direction/depth assignment in the direct-L1 stream plan. The kernel already
+supports a core driving two muxes (the LINE-origin case) and gates on a single arrival semaphore.
