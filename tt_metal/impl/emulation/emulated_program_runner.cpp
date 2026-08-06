@@ -348,7 +348,14 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
             noc_addr,
             device_id);
-        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
+        if (auto* mapped = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
+            return mapped;
+        }
+        // Wormhole's PCIe base (0x800000000) is lower than ordinary NOC
+        // addresses containing non-zero x/y coordinates. A threshold check
+        // alone therefore also matches worker/DRAM NOC addresses. If the
+        // address is not in the mapped-sysmem registry, continue with normal
+        // NOC coordinate resolution below.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -1516,8 +1523,9 @@ static std::map<std::string, std::string> build_kernel_defines(
         defines["EMULE_TILE_C_DIM"] = tc.str();
     }
 
-    // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
-    // into its TU, mirroring silicon genfiles.cpp::emit_compute_scalar_descriptors.
+    // Thread the compute kernel's resolved math_fidelity / fp32_dest_acc_en /
+    // dst_full_sync_en into its TU, mirroring silicon
+    // genfiles.cpp::{emit_math_scalar_descriptors,emit_compute_scalar_descriptors}.
     // dest_helpers.hpp::DEST_AUTO_LIMIT must resolve identically in a program's
     // reader and compute kernels (e.g. multi-core H-reduce interleaves input
     // tiles in chunks of DEST_AUTO_LIMIT). The factory already injects
@@ -1527,6 +1535,7 @@ static std::map<std::string, std::string> build_kernel_defines(
     if (kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         const auto kernel_config = kernel.config();
         if (const auto* cc = std::get_if<ComputeConfig>(&kernel_config)) {
+            defines["MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(cc->math_fidelity));
             defines["DST_ACCUM_MODE"] = cc->fp32_dest_acc_en ? "1" : "0";
             defines["ENABLE_FP32_DEST_ACC"] = cc->fp32_dest_acc_en ? "1" : "0";
             defines["DST_SYNC_FULL"] = cc->dst_full_sync_en ? "1" : "0";
