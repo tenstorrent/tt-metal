@@ -45,6 +45,7 @@
 
 #include "context/metal_context.hpp"
 #include "device/device_manager.hpp"
+#include "tt_metal/common/env_lib.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
@@ -96,12 +97,23 @@ constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 // contention; only a device that answers none of them has actually stopped serving its counter.
 constexpr uint32_t kResyncFailuresBeforeStalled = 16;
 
-// Records a device may hold staged, waiting for the probe that closes the interval they ran in. Fixed and preallocated:
-// the drain thread must never touch the allocator, and one interval of records is two orders of magnitude below this,
-// so reaching it means the drain has stalled -- at which point the D2H FIFO is the elastic buffer, not this.
-constexpr size_t kStagedCapacityRecords = 8192;
+// Records a device may hold staged, waiting for the probe that closes the interval they ran in. Fixed and preallocated,
+// because the drain thread must never touch the allocator.
+//
+// Sized to the FIFO, not to the interval: the FIFO is the scarce buffer -- once it fills the device backpressures onto
+// its L1 ring and records are lost on device -- while staging is ordinary host memory. As deep as the FIFO, the FIFO
+// can always be emptied in full, so running out of staging headroom can only mean the whole FIFO is already absorbed
+// and there is nothing left to drain. Anything shallower makes headroom a reason the drain stops with pages still
+// queued. One page decodes to at most one record, so the FIFO can hold no more than fifo_pages records; with room for
+// one more read on top, staging absorbs everything queued plus whatever this pass reads and push_back can never
+// reallocate. Sized this way so that draining the FIFO never waits for records to be published: the FIFO is what the
+// device backpressures onto, and making its drain depend on publication -- which waits on a probe -- is what lets a
+// delay in publication stall the device itself.
+constexpr size_t kStagedCapacityRecords = RealtimeProfilerRuntimeSizes::fifo_pages + kMaxSocketPagesPerRead;
 
 // How long the record at the head of a device's staging buffer may fail to close before it is treated as unmappable.
+// Staging as deep as the FIFO keeps headroom from ever being the reason a drain stops, but it cannot help a record that
+// will never close: that one still fills staging, just later. This is what bounds it.
 // A real record waits at most one sync interval for the probe that closes it; anything still stuck three orders of
 // magnitude past that has a timestamp no probe will ever reach -- a torn 64-bit read of the device counter decodes as a
 // plausible start/end pair, so the malformed check in stage_pages does not catch it. Dropping it is the only way
@@ -588,6 +600,9 @@ void RealtimeProfilerReceiver::stage_pages(
 // has yet read past stays staged until one does.
 bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
     if (dev_state.staged.empty()) {
+        // Nothing is waiting on a near side, so nothing has to be kept. Skipping this is what lets the history grow
+        // without bound on a device with no records in flight.
+        dev_state.clock_sync->retire_probes_before(std::numeric_limits<uint64_t>::max());
         return false;
     }
 
@@ -892,21 +907,25 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
     }
     // One page decodes to at most one record, so bounding the read by the staging headroom is what keeps `staged` from
     // ever growing past the capacity it was given. Pages left behind wait in the FIFO, which is sized for exactly that.
+    // Clamped rather than refused: staging is deep enough that this only binds once publication has stopped entirely,
+    // and reading whatever still fits keeps the FIFO moving even then. Reported because a drain that reads nothing
+    // looks exactly like an idle device.
     const size_t staged_headroom = kStagedCapacityRecords - dev_state.staged.size();
-    if (staged_headroom == 0) {
-        // Nothing can be read until staging drains, so the FIFO backs up behind it. Reported because it is otherwise
-        // indistinguishable from an idle device: both read zero pages.
+    if (staged_headroom < kMaxSocketPagesPerRead) {
         TT_LOG_WARNING_THROTTLED(
             last_staging_full_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] Device {} staging is full ({} records) and none could be closed, so its FIFO is not "
-            "being drained; {} of {} pages are queued",
+            "[Real-time profiler] Device {} has {} record(s) staged that could not be published, leaving room for only "
+            "{} more; {} of {} FIFO pages are queued",
             dev_state.chip_id,
             dev_state.staged.size(),
+            staged_headroom,
             available,
             RealtimeProfilerRuntimeSizes::fifo_pages);
-        return 0;
+        if (staged_headroom == 0) {
+            return 0;
+        }
     }
     const uint32_t num_pages_to_read =
         std::min({available, kMaxSocketPagesPerRead, static_cast<uint32_t>(staged_headroom)});
