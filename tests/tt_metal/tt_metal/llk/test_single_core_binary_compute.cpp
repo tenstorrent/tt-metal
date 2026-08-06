@@ -89,6 +89,16 @@ struct SingleCoreBinaryConfig {
     // Only meaningful for the *_with_dest_reuse ops; see BroadcastDim.
     BroadcastDim broadcast_dim = BroadcastDim::NONE;
     bool acc_to_dest = false;
+    // FP32 dest accumulation. This is *not* a define and not derived from the data formats: it is
+    // the ComputeGen1Config::enable_32_bit_dest / ComputeGen2Config::enable_32_bit_dest field on the
+    // compute KernelSpec's hw_config. MakeGen1ComputeConfig copies it into
+    // ComputeConfig::fp32_dest_acc_en, and jit_build emits it as `constexpr bool DST_ACCUM_MODE`
+    // (genfiles.cpp emit_compute_scalar_descriptors) -- a constexpr, not a macro, so the kernel's
+    // `#if defined(DST_ACCUM_MODE)` branches are dead on the JIT path and only the LLK template
+    // arguments see it. binary_dest_reuse_tiles forwards DST_ACCUM_MODE to llk_math_eltwise_binary
+    // as is_fp32_dest_acc_en together with clear_fp32_dst_acc=true, which is what selects ZEROACC's
+    // 32-bit addressing mode on the ELWMUL dest-reuse path.
+    bool fp32_dest_acc = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
@@ -217,6 +227,26 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     // input0 is deliberately left fully random rather than masked down to the broadcast row/column:
     // every datum outside the broadcast source then differs from its broadcast value, so a dropped
     // BroadcastType shows up as a whole-tile mismatch instead of silently still matching.
+    //
+    // test_config.fp32_dest_acc deliberately does not change the golden. Both of the effects it
+    // normally introduces are provably no-ops for this test's operand shapes:
+    //
+    //  - "DEST holds float32 and is only narrowed by the packer": the golden already accumulates in
+    //    float and narrows exactly once, at the pack_vector<uint32_t, bfloat16> below. With a 16-bit
+    //    DEST the FPU result is instead rounded to bf16 on the DEST write and the packer is then an
+    //    identity conversion (pack_src_format for a Float16_b CB is Float16_b either way, see
+    //    get_single_pack_src_format), so it is also one rounding. For ELWMUL the multi-pass fidelity
+    //    accumulation is the only place the two differ, and fp32 DEST is strictly the more accurate
+    //    of the two against this exact-float golden -- it cannot turn a passing case into a failure.
+    //
+    //  - "MOVD2A reads the high 16 bits of a 32-bit DEST word": true here (a Float16_b CB keeps
+    //    unpack_dst_format == Float16_b even under fp32 dest acc -- get_unpack_dst_formats only
+    //    consults unpack_conditional_dst_format for Float32 CBs -- so SrcA stays 16-bit-configured
+    //    and move_d2a_fixed_face's TTI_MOVD2A(0, ...) truncates). But the only thing ever written to
+    //    DEST before that MOVD2A is copy_tile of the bf16 input2 tile, i.e. a bf16 value widened to
+    //    float32 with its low 16 mantissa bits zero. Truncating that back to its high half is
+    //    lossless, so the tt-llk _dest_to_src_reg model would be an identity here. It would only
+    //    start to matter if this test folded more than one op into the same DEST tile.
     if (test_config.broadcast_dim != BroadcastDim::NONE) {
         TT_FATAL(
             test_config.binary_op.find("_with_dest_reuse") != std::string::npos,
@@ -436,14 +466,20 @@ bool single_core_binary(
         .hw_config = writer_hw_config,
     };
 
+    // enable_32_bit_dest is the only route to fp32 dest accumulation: it becomes
+    // ComputeConfig::fp32_dest_acc_en and then the generated `constexpr bool DST_ACCUM_MODE`.
+    // No explicit unpack_modes entry is needed here -- program_spec only demands one for a *Float32*
+    // DFB under enable_32_bit_dest, and every DFB in this test is Float16_b.
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
             .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -531,13 +567,28 @@ bool single_core_binary(
     return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);
 }
 
-/// @brief Shared body for the dest-reuse + SrcB-broadcast cases: run one op / broadcast dimension
-/// over the four supported MathFidelity levels (index 1 is unused), mirroring the non-broadcast
-/// dest-reuse tests above.
+// Streamed into GTEST_SKIP() by every dest-reuse + broadcast test; see the block comment above the
+// first of them for the per-arch reasoning.
+constexpr const char* kDestReuseBroadcastSkipReason =
+    "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+
+/// @brief Shared body for the dest-reuse + SrcB-broadcast cases: run one op / broadcast dimension /
+/// dest-accumulation width over the four supported MathFidelity levels (index 1 is unused),
+/// mirroring the non-broadcast dest-reuse tests above.
+///
+/// fp32_dest_acc is a separate axis rather than a second helper because it is orthogonal to the op
+/// and the broadcast dimension, and because it is the axis the motivating consumer (the Welford
+/// group_norm kernel) actually runs in: it builds its compute kernel with fp32_dest_acc_en = true.
+/// It is also the axis that exposed the ZEROACC addressing-mode bug one layer down in tt-llk, where
+/// a 16-bit-addressed ZEROACC against a 32-bit DEST corrupted everything past the first 128 datums
+/// per block on the ELWMUL dest-reuse path. tt-metal's binary_dest_reuse_tiles passes
+/// clear_fp32_dst_acc=true alongside DST_ACCUM_MODE, so these cases are the regression guard for
+/// that pairing rather than a reproducer for it.
 void run_dest_reuse_broadcast_sweep(
     const std::vector<std::shared_ptr<distributed::MeshDevice>>& devices,
     const std::string& binary_op,
-    BroadcastDim broadcast_dim) {
+    BroadcastDim broadcast_dim,
+    bool fp32_dest_acc) {
     for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -550,13 +601,15 @@ void run_dest_reuse_broadcast_sweep(
             .core = CoreCoord(0, 0),
             .binary_op = binary_op,
             .broadcast_dim = broadcast_dim,
+            .fp32_dest_acc = fp32_dest_acc,
             .math_fidelity = MathFidelity(i),
         };
         log_info(
             tt::LogTest,
-            "binary_op = {}, broadcast = {}, Math Fidelity = {}",
+            "binary_op = {}, broadcast = {}, fp32_dest_acc = {}, Math Fidelity = {}",
             binary_op,
             broadcast_dim_to_type.at(broadcast_dim),
+            fp32_dest_acc,
             i);
         for (auto& device : devices) {
             ASSERT_TRUE(single_core_binary(device, test_config));
@@ -771,52 +824,116 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 // The fixture stays LLKMeshDeviceFixtureSlowDispatchOnly (not LLKBlackholeSingleCardFixture)
 // because this file drives programs with detail::LaunchProgram, which is slow-dispatch only, and
 // because the merge-gate slow-dispatch jobs select tests by that exact suite name.
+//
+// Each op x broadcast dimension is run twice: once with a 16-bit DEST and once with fp32 dest
+// accumulation (the *Fp32DestAcc cases). The second half is what the Welford group_norm kernel
+// actually asks for, and it is the axis that turned a latent ZEROACC addressing-mode bug into an
+// observable failure one layer down in tt-llk -- see run_dest_reuse_broadcast_sweep.
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastRow) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/false);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastCol) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/false);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastRow) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/false);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastCol) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/false);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastRow) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW);
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/false);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastCol) {
     if (this->arch_ != ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "binary_dest_reuse_tiles with a SrcB broadcast is only supported on Blackhole";
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
     }
     unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
-        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL);
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/false);
+}
+
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastRowFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/true);
+}
+
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuseBcastColFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "add_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/true);
+}
+
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastRowFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/true);
+}
+
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuseBcastColFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "sub_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/true);
+}
+
+// The ELWMUL cases are the load-bearing ones for the fp32 axis: ELWMUL is the only dest-reuse op
+// that reaches the per-face ZEROACC in eltwise_binary_run_with_dest_reuse (ELWADD/ELWSUB take the
+// non-ZEROACC branch in llk_math_eltwise_binary.h), and it accumulates into DEST unconditionally on
+// WH/BH, so a DEST face cleared with the wrong addressing width corrupts the result instead of
+// being overwritten.
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastRowFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::ROW, /*fp32_dest_acc=*/true);
+}
+
+TEST_F(
+    LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuseBcastColFp32DestAcc) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << unit_tests::compute::binary::kDestReuseBroadcastSkipReason;
+    }
+    unit_tests::compute::binary::run_dest_reuse_broadcast_sweep(
+        this->devices_, "mul_with_dest_reuse", unit_tests::compute::binary::BroadcastDim::COL, /*fp32_dest_acc=*/true);
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAdd) {
