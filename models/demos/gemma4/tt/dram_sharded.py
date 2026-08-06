@@ -372,10 +372,13 @@ def interleaved_prefill_config(m, k, n):
     config at long context would blow L1. Above the cutoff (and for decode,
     M<=32) we return ``(None, None)`` and the caller behaves exactly as before.
 
-    Output is L1 *block-sharded* (sweep overall winner for QKV: ~1.40x vs auto),
-    not interleaved L1. Callers that need interleaved/DRAM for
-    ``nlp_create_qkv_heads`` / reshape must ``sharded_to_interleaved`` after the
-    matmul. Deliberately *not* included: a width-sharded weight measured slightly
+    Output is L1 *interleaved* (not block-sharded). The QKV sweep's block-sharded
+    out was ~1.40x vs auto *as a matmul*, but ``nlp_create_qkv_heads`` cannot
+    consume it — the forced ``sharded_to_interleaved`` (~5–6 µs) makes the
+    end-to-end package a wash-to-loss (same lesson as ``GEMMA4_OPROJ_TUNED``).
+    L1 interleaved out skips that S2I; heads split reads it directly.
+
+    Deliberately *not* included: a width-sharded weight measured slightly
     faster again, but the same weight tensor also serves decode, and decode's
     auto-selected matmul rejects a width-sharded in1 with a circular-buffer
     TT_THROW. That variant needs a second weight copy, so it is not free and is
@@ -396,7 +399,7 @@ def interleaved_prefill_config(m, k, n):
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    return prefill_progcfg(m, k, n), l1_block_sharded_memcfg(m, n), compute_kernel_config
+    return prefill_progcfg(m, k, n), ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
 def _out_subblock_hw(per_core_n, per_core_m):
@@ -438,13 +441,16 @@ def _pick_1d_cores(n_tiles, grid_x, grid_y, prefer=42):
     return max(candidates, key=lambda c: (-abs(c - prefer), c))
 
 
-def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None):
+def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fuse_batch=False):
     """1D-multicast prefill program config (``MatmulMultiCoreReuseMultiCast1D``).
 
     Sweep family for the fused gate+up shape: every core holds all of M and a
     slice of N. Measured winner for M=128 K=5376 N=5376 (31B TP=8) is
     ``1d_c42_bw4`` — see ``test_gate_up_matmul_sweep``. Returns ``None`` when
     no valid core count divides N-tiles into the worker grid.
+
+    ``fuse_batch`` must be ``True`` when in0 is sharded (ttnn TT_FATAL otherwise);
+    leave ``False`` for the interleaved-in0 sweep winner path.
     """
     if grid_size is None:
         grid_size = prefill_grid_default()
@@ -473,7 +479,7 @@ def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None):
         out_subblock_w=out_w,
         per_core_M=mt,
         per_core_N=per_core_n,
-        fuse_batch=False,
+        fuse_batch=fuse_batch,
         fused_activation=None,
         mcast_in0=True,
         gather_in0=False,
@@ -498,7 +504,8 @@ def interleaved_gate_up_prefill_config(m, k, n):
     measured ``in0+out`` L1 interleaved up to ISL 1024 on WH; above that (and for
     decode ``M<=32``) return ``None`` and keep the prior auto path. Callers that
     want the full win should also move in0 to L1 interleaved when it is still in
-    DRAM (rms_norm leaves it there by default).
+    DRAM — or accept a keep-sharded LN output and S2I it straight into L1
+    (``SharedMLP._prepare_prefill_act``), skipping the post-LN DRAM bounce.
     """
     if not TILE_SIZE < m <= _PREFILL_CUTOFF:
         return None, None, None
@@ -549,6 +556,56 @@ def _progcfg_grid_xy(program_config):
     if hasattr(grid, "x"):
         return int(grid.x), int(grid.y)
     return int(grid[0]), int(grid[1])
+
+
+def width_shard_core_count(memcfg):
+    """Number of cores in a width-sharded memory config, or ``None``."""
+    if memcfg is None or not memcfg.is_sharded():
+        return None
+    spec = memcfg.shard_spec
+    if spec is None:
+        return None
+    box = spec.grid.bounding_box().grid_size()
+    return int(box.x) * int(box.y)
+
+
+def width_shard_matches_1d_progcfg(memcfg, program_config) -> bool:
+    """True when a width-sharded in0's core grid equals the 1D matmul grid.
+
+    ``MatmulMultiCoreReuseMultiCast1D`` with ``mcast_in0=True`` expects each core
+    to hold ``(M, K/cores)`` — the same layout ``RMSNorm`` / CCL L1-gather emit.
+    Matching the grid lets gate_up consume keep-sharded LN output with no S2I.
+    """
+    if memcfg is None or program_config is None or not memcfg.is_sharded():
+        return False
+    spec = memcfg.shard_spec
+    if spec is None:
+        return False
+    box = spec.grid.bounding_box().grid_size()
+    pc_x, pc_y = _progcfg_grid_xy(program_config)
+    return int(box.x) == pc_x and int(box.y) == pc_y
+
+
+def prefill_progcfg_1d_for_width_sharded_in0(m, k, n, in0_memcfg, grid_size=None):
+    """1D progcfg whose core grid matches ``in0_memcfg``, or ``None`` if impossible.
+
+    Prefers the sharded-in0 core count (LN island, typically 56 on WH for
+    hidden=5376) over the interleaved-in0 sweep winner (42). ``nt`` must still
+    divide evenly. ``fuse_batch=True`` is required by ttnn when in0 is sharded.
+    ``in0_block_w`` must divide *per-core* K tiles (``kt/cores``), not full ``kt``
+    — e.g. 56 cores → 3 K-tiles/core → ``in0_block_w`` in {1,3}, not 4.
+    """
+    cores = width_shard_core_count(in0_memcfg)
+    if cores is None:
+        return None
+    kt = math.ceil(k / TILE_SIZE)
+    if kt % cores:
+        return None
+    in0_block_w = _find_largest_divisor(kt // cores, max_div=4)
+    pc = prefill_progcfg_1d(m, k, n, cores=cores, grid_size=grid_size, fuse_batch=True, in0_block_w=in0_block_w)
+    if pc is None or not width_shard_matches_1d_progcfg(in0_memcfg, pc):
+        return None
+    return pc
 
 
 def _out_shard_matches_progcfg(out_memcfg, program_config) -> bool:
@@ -740,9 +797,16 @@ class DramShardedLinear:
             x_run = x_work
             if pad:
                 x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
-            x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
-            if pad:
-                x_run.deallocate(True)
+            # Upstream keep-sharded LN may already be width-sharded; skip the
+            # reshard when the layout matches, otherwise L1→L1 to_memory_config.
+            if x_run.is_sharded() and x_run.memory_config() == self._act_memcfg:
+                x_sh = x_run
+                sharded_owned = bool(pad)  # padded copy must be freed; view of x must not
+            else:
+                x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
+                sharded_owned = True
+                if pad:
+                    x_run.deallocate(True)
             out = ttnn.linear(
                 x_sh,
                 self.weight,
@@ -750,7 +814,8 @@ class DramShardedLinear:
                 compute_kernel_config=compute_kernel_config,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
-            x_sh.deallocate(True)
+            if sharded_owned:
+                x_sh.deallocate(True)
             out = ttnn.to_memory_config(out, out_mc)
             if pad:
                 out_pad = out
@@ -763,6 +828,11 @@ class DramShardedLinear:
             return _restore(out)
 
         # Prefill on the width-sharded weight via the 2D matmul kernel.
+        # Keep-sharded LN / residual island may hand us L1 width-sharded in0;
+        # the 2D prefill kernel wants interleaved. Caller still owns ``x``.
+        if x_work.is_sharded():
+            x_work = ttnn.sharded_to_interleaved(x_work, ttnn.DRAM_MEMORY_CONFIG)
+
         if M <= _PREFILL_CUTOFF:
             pc = self._prefill_pc(M)
             out = ttnn.linear(
