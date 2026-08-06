@@ -22,7 +22,7 @@ code change was warranted.
 
 API-001 is implemented. `MCAST_PIPE_API_VERSION=10` adds `rotating_span` as the sixth uniform CT
 word and removes the third template argument from `McastArgs`. All 13 migrated kernels and 12 host
-bindings remain current; API-002 face metadata and RT compaction remain deferred.
+bindings remain current; API-002 compile-time sender/receiver-face enforcement remains deferred.
 
 - `./build_metal.sh`: passed.
 - `McastHostFixture.*`: 25/25; complete helper device suite: 73/73.

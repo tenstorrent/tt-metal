@@ -79,7 +79,7 @@ Blackhole p100a at AICLK 800, using 3 warmups and 20 measured records.
 - Bump `MCAST_PIPE_API_VERSION` to v10 and update every emitter, kernel, test, changelog entry, and ledger row.
 - Because Gate 2 removed all size assumptions, production callers should need only removal of the third template
   argument; downstream operation layouts remain chained.
-- API-002 remains explicitly deferred: no face metadata or RT compaction in this rollout.
+- API-002 sender/receiver-face enforcement remains explicitly deferred from this rollout.
 - Gate:
   - Rebuild host code.
   - Host gtests verify exact fixed/rotating wire contents and chaining.
@@ -270,7 +270,7 @@ This section is the durable record of the automated execution of this plan. Comm
 - Removed the caller-supplied rotating template parameter. `McastArgs<CT_BASE, RT_BASE>` now derives
   fixed/rotating mode, receiver type, sender count, runtime width, and both next offsets from the
   constexpr sixth CT word. The width-sharded Conv activation reader and rotating helper kernel were
-  updated to the two-argument decoder. API-002 face metadata and RT compaction remain explicitly
+  updated to the two-argument decoder. API-002 sender/receiver-face enforcement remains explicitly
   deferred.
 - Updated exact host-wire expectations for fixed, rotating, divergent, and degenerate `Mcast1D` and
   `Mcast2D` layouts. `./build_metal.sh` passed; `McastHostFixture.*` passed 25/25; the complete helper

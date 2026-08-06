@@ -20,7 +20,8 @@ feedback round lands.
   within the 1.5% gate. The previously passing migrated snapshot measured
   `49,850.05759004791 ns`, confirming no migration-commit regression.
 - **Result:** all seven gates are green. The helper remains API v10; API-002
-  face metadata and RT compaction remain deliberately deferred.
+  compile-time sender/receiver-face enforcement remains deliberately deferred.
+  RT compaction is no longer part of that open feedback.
 
 ---
 
@@ -73,7 +74,8 @@ feedback round lands.
   next offsets from the constexpr sixth word. Zero denotes the fixed four-word RT layout; a nonzero
   value denotes `4 + 2 * rotating_span` RT words.
 - **Callers:** all migrated emitters now provide the sixth word and every production kernel uses the
-  two-argument decoder. API-002 face metadata and RT compaction remain explicitly deferred.
+  two-argument decoder. API-002 sender/receiver-face enforcement remains explicitly deferred; RT
+  compaction is not tracked as follow-up work.
 - **Safety:** Gate 2's opaque-boundary audit was completed before this wire change. A new durable
   audit rejects a third `McastArgs` template argument in any migrated kernel.
 - **Validation:** `./build_metal.sh`, `McastHostFixture` 25/25, and the complete helper device suite
