@@ -253,9 +253,9 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                     - layout
-                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - TILE
-                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - ROW_MAJOR
 
             Memory Support:
@@ -264,6 +264,8 @@ void py_module(nb::module_& mod) {
 
             Limitations:
                 -  tensor must be on the host.
+                -  INT8 (like UINT8) is host-only: device typecast/tilize are not yet supported for it,
+                   so INT8 conversions run on host.
         )doc",
         &ttnn::to_dtype,
         nb::arg("tensor"),
