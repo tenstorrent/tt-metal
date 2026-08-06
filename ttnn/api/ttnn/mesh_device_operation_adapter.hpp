@@ -412,7 +412,7 @@ public:
             const tensor_return_value_t& tensor_return_value,
             const tt::tt_metal::WorkloadDescriptor* workload_descriptor = nullptr) {
             CollectedTensorBuffers collected;
-            auto& buffers = collected.buffers;
+            ttsl::SmallVector<tt::tt_metal::Buffer*, 16>& buffers = collected.buffers;
             extract_tensor_buffers_into(tensor_args, buffers);
             collected.num_input_buffers = buffers.size();
             extract_tensor_buffers_into(tensor_return_value, buffers);
