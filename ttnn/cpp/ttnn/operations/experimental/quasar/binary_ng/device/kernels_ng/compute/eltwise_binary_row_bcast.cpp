@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

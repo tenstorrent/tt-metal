@@ -33,6 +33,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_dfb.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 // One (N,C) slab's worth of work: expand the broadcast operand's single-element tile once into llk_post,
 // then run the binary op freq times (reusing the expanded tile) against the streamed OTHER operand. Mirrors

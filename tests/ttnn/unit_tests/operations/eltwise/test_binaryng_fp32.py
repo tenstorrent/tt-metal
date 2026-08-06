@@ -221,8 +221,8 @@ def test_add_fp32_input_activ(device, shape):
 
 
 def test_logaddexp_fp32(device):
-    x_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
-    y_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
+    x_torch = torch.tensor([[1, 90, 100, -120, 10000, -10000]], dtype=torch.float32)
+    y_torch = torch.tensor([[1, 88, 95, -118, 9999, -10000]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -230,13 +230,14 @@ def test_logaddexp_fp32(device):
     z_tt_out = ttnn.logaddexp(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
+    assert torch.isfinite(tt_out).all()
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
 def test_logaddexp2_fp32(device):
-    x_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
-    y_torch = torch.tensor([[2, 3, 4, 5]], dtype=torch.float32)
+    x_torch = torch.tensor([[1, 120, 130, -150, 10000, -10000]], dtype=torch.float32)
+    y_torch = torch.tensor([[2, 118, 125, -148, 9999, -10000]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -244,6 +245,7 @@ def test_logaddexp2_fp32(device):
     z_tt_out = ttnn.logaddexp2(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
+    assert torch.isfinite(tt_out).all()
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 

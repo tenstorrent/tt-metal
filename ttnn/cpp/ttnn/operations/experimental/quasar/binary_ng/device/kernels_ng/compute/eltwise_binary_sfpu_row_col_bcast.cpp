@@ -30,6 +30,7 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,

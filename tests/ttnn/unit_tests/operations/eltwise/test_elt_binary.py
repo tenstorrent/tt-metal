@@ -52,13 +52,41 @@ def test_ldexp(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logaddexp(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logaddexp, -80, 80)
+    run_elt_binary_test_range(device, h, w, ttnn.logaddexp, -100, 100)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logaddexp2(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logaddexp2, -60, 100, pcc=0.993)
+    run_elt_binary_test_range(device, h, w, ttnn.logaddexp2, -150, 150, pcc=0.993)
+
+
+def run_elt_binary_extreme_bf16_test(device, ttnn_function, x_torch, y_torch, *, pcc=0.9999):
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_fn(x_torch, y_torch)
+
+    input_tensor_a = ttnn.from_torch(x_torch, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(y_torch, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.isfinite(output_tensor).all()
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+def test_logaddexp_extreme_bf16(device):
+    x_torch = torch.tensor([[1, 90, 100, -120, 10000, -10000]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[1, 88, 95, -118, 9999, -10000]], dtype=torch.bfloat16)
+    run_elt_binary_extreme_bf16_test(device, ttnn.logaddexp, x_torch, y_torch)
+
+
+def test_logaddexp2_extreme_bf16(device):
+    x_torch = torch.tensor([[1, 120, 130, -150, 10000, -10000]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[2, 118, 125, -148, 9999, -10000]], dtype=torch.bfloat16)
+    run_elt_binary_extreme_bf16_test(device, ttnn.logaddexp2, x_torch, y_torch, pcc=0.993)
 
 
 @pytest.mark.parametrize("h", [64])

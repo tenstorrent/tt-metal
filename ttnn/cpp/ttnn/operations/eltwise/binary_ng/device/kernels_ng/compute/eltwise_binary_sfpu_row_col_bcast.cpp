@@ -27,6 +27,7 @@
 #include "api/compute/isclose.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 

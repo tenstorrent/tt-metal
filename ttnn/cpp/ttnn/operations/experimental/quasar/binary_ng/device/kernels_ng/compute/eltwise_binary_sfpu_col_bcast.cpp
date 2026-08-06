@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"

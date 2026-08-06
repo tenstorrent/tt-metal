@@ -29,6 +29,7 @@
 #include "api/compute/bcast.h"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 ALWI void process_tile(
     tt::CBIndex cb_bcast,

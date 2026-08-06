@@ -24,6 +24,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_dfb.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);

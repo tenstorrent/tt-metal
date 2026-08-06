@@ -8,6 +8,7 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
