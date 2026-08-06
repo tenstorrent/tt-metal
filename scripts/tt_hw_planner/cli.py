@@ -11185,6 +11185,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--matmul-sweep-pcc", type=float, default=0.99, help="matmul-sweep min PCC to accept a config")
     popt.add_argument("--matmul-sweep-iters", type=int, default=5, help="matmul-sweep timed reps per config")
     popt.add_argument("--matmul-sweep-max-shapes", type=int, default=0, help="matmul-sweep distinct-shape cap (0=all)")
+    popt.add_argument(
+        "--persist",
+        action="store_true",
+        help="keep this run's MEMORY -- which knobs and rungs have been tried, and the full-pipeline "
+        "bar -- under ~/.perf_mcp/<model>_<task>/ instead of /tmp, so a reboot or a later run resumes "
+        "instead of restarting. Off by default: /tmp self-cleans, which is right for a one-off. Use "
+        "it when you expect to run this model more than once. The worktree and build still go to "
+        "/tmp either way -- they are a disposable sandbox, and everything worth keeping is committed "
+        "to the run's branch.",
+    )
     popt.set_defaults(func=cmd_optimize)
 
     pao = sub.add_parser(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -621,6 +622,27 @@ def cmd_optimize(args) -> int:
             os.environ["PERF_MCP_MATMUL_SWEEP_PCC"] = str(getattr(args, "matmul_sweep_pcc", 0.99))
             os.environ["PERF_MCP_MATMUL_SWEEP_ITERS"] = str(getattr(args, "matmul_sweep_iters", 5))
             os.environ["PERF_MCP_MATMUL_SWEEP_MAX_SHAPES"] = str(getattr(args, "matmul_sweep_max_shapes", 0))
+        # --persist: keep the run's MEMORY somewhere a reboot does not erase.
+        #
+        # tmpstate.state_dir() is `PERF_MCP_STATE_DIR or tempfile.gettempdir()`, and nothing sets that
+        # variable -- so by default the attempt history, the ledger and the full-pipeline bar all live
+        # in /tmp. That is the right home for a WORKTREE, which is a disposable sandbox whose only
+        # durable output is committed to the run's branch. It is the wrong home for the record of what
+        # has already been tried: lose it and the next run re-runs every knob it had already proved
+        # useless, which is exactly what the rung-closure enforcement exists to prevent.
+        #
+        # Keyed per model so two models never share a history, and OPT-IN so the default keeps /tmp's
+        # self-cleaning. LEDGER_DIR follows it because measurements.py resolves the ledger relative to
+        # the state dir; setting one without the other splits them apart and the report then silently
+        # finds no anchors -- the defect measurements.py:213 documents. setdefault, so an operator who
+        # exported either by hand still wins.
+        if getattr(args, "persist", False):
+            _slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_demo.name or "model")).strip("_") or "model"
+            _persist_dir = Path.home() / ".perf_mcp" / _slug
+            _persist_dir.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("PERF_MCP_STATE_DIR", str(_persist_dir))
+            os.environ.setdefault("PERF_MCP_LEDGER_DIR", str(_persist_dir))
+            print(f"  [optimize/cc] --persist: run memory in {_persist_dir} (survives reboots; /tmp does not)")
         result = run_cc(
             run_demo,
             run_root,
