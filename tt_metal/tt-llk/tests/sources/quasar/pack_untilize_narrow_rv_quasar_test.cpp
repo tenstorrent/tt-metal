@@ -293,10 +293,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //   W = (FULL_CT_DIM-1)*32 + LAST_TILE_W_DATUMS   (LAST_TILE_W_DATUMS in {8,16,24,32})
     // A Quasar tile is 32x32 = 4 faces of 16x16 -> 64 DEST rows; tile t starts at DEST row t*64.
     // l1_addr is 16B-granular = 8 datums (16-bit format).
-    constexpr std::uint32_t TILE_W_DATUMS                = 32; // full tile width
-    [[maybe_unused]] const std::uint32_t matrix_w_datums = (FULL_CT_DIM - 1) * TILE_W_DATUMS + LAST_TILE_W_DATUMS;
-    [[maybe_unused]] const std::uint32_t base_16B        = params.buffer_Res[0] >> 4;
-    [[maybe_unused]] const std::uint32_t last_t          = FULL_CT_DIM - 1;
+    [[maybe_unused]] constexpr std::uint32_t FACE_R_DIM    = tensor_shape.face_r_dim;                     // DEST rows per face (16)
+    [[maybe_unused]] constexpr std::uint32_t FACE_C_DIM    = tensor_shape.face_c_dim;                     // datums per face-row (16)
+    [[maybe_unused]] constexpr std::uint32_t ROWS_PER_TILE = tensor_shape.total_num_faces() * FACE_R_DIM; // DEST rows per tile (64)
+    [[maybe_unused]] constexpr std::uint32_t TILE_W_DATUMS = tensor_shape.total_col_dim();                // datums per tile row (32)
+    [[maybe_unused]] const std::uint32_t matrix_w_datums   = (FULL_CT_DIM - 1) * TILE_W_DATUMS + LAST_TILE_W_DATUMS;
+    [[maybe_unused]] const std::uint32_t base_16B          = params.buffer_Res[0] >> 4;
+    [[maybe_unused]] const std::uint32_t last_t            = FULL_CT_DIM - 1;
 
     // Pack one DEST face-row (16 datums) of tile t to its untilized output slot.
     //
@@ -312,7 +315,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // (the very thing this demo works around). So the software recompute is fundamental here.
     [[maybe_unused]] auto pack_row = [&](std::uint32_t t, std::uint32_t row)
     {
-        g0.f.input_addr = t * 64 + row; // DEST row of tile t
+        g0.f.input_addr = t * ROWS_PER_TILE + row; // DEST row of tile t
 
         const std::uint32_t lo5  = row & 0x1F;
         const std::uint32_t rol  = ((lo5 << 1) | (lo5 >> 4)) & 0x1F;
@@ -320,7 +323,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t R    = slot >> 1;          // output tile-row 0..31
         const std::uint32_t g    = slot & 1;           // col group (0: cols0-15, 1: cols16-31)
 
-        const std::uint32_t l1_datum = R * matrix_w_datums + t * TILE_W_DATUMS + g * 16;
+        const std::uint32_t l1_datum = R * matrix_w_datums + t * TILE_W_DATUMS + g * FACE_C_DIM;
         g0.f.l1_addr                 = base_16B + (l1_datum >> 3); // datums -> 16B units (bf16)
 
         volatile std::uint32_t rv_res = do_rv_pacr(g0.val, g1.val, g2.val);
@@ -365,15 +368,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
             // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
             // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned -> no spill).
-            const bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
-            const std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
+            // g=1 (cols 16-31 = faces 1,3) is only needed when the kept width exceeds one face
+            // (FACE_C_DIM); otherwise read faces 0,2 only -> loop through face 2 (< 3*FACE_R_DIM)
+            // and skip face 1. When g=1 is needed, read all faces (< ROWS_PER_TILE).
+            const bool last_needs_g1         = (LAST_TILE_W_DATUMS > FACE_C_DIM);
+            const std::uint32_t last_row_end = last_needs_g1 ? ROWS_PER_TILE : 3u * FACE_R_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t row = 0; row < last_row_end; row++)
                 {
-                    if (!last_needs_g1 && row == 16)
+                    if (!last_needs_g1 && row == FACE_R_DIM)
                     {
-                        row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
+                        row += FACE_R_DIM; // g=0 only -> skip face 1 (rows FACE_R_DIM..2*FACE_R_DIM-1) -> jump to face 2
                     }
                     pack_row(last_t, row);
                 }
@@ -382,7 +388,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // the narrow tile left in the leading columns.
                 for (std::uint32_t t = 0; t < last_t; t++)
                 {
-                    for (std::uint32_t row = 0; row < 64; row++)
+                    for (std::uint32_t row = 0; row < ROWS_PER_TILE; row++)
                     {
                         pack_row(t, row);
                     }
