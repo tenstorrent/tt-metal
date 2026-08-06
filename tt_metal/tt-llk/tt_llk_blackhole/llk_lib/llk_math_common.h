@@ -47,6 +47,13 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     // LLK sanitizer hooks
     llk::san::math_operand_configure(srca_data_format, srcb_data_format);
 
+#if defined(TT_COMPILER_EMITS_MATH_CONFIG)
+    // U10 oracle: when a kernel computes through the compiler-managed Tensix
+    // compute intrinsics, the SFPI compiler emits the hw_configure baseline
+    // itself (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base),
+    // so this LLK call is a no-op. The kernel source defines
+    // TT_COMPILER_EMITS_MATH_CONFIG to opt in.
+#else
     // SFPU_Fp32_enabled (written below) is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
@@ -69,6 +76,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
     _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
+#endif
 }
 
 /**
