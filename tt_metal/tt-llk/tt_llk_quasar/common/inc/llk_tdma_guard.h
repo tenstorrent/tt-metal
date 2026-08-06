@@ -14,8 +14,7 @@
 // This guard tracks, per TRISC and per dfb id, whether a WAIT is still "armed" (issued with no TDMA
 // on that dfb since). Arm in the WAIT, disarm in the data-moving llk_unpack_*/llk_pack_* executes,
 // assert-disarmed in the POP/PUSH. It is a debug-only aid: when LLK asserts are disabled the macros
-// compile to nothing (zero cost). This is not needed on Wormhole/Blackhole, hence it lives in the
-// Quasar-only tree rather than tt-llk/common.
+// compile to nothing (zero cost).
 //
 // dfb ids are in [0..31], so a single uint32_t bitmask covers every dataflow buffer.
 
