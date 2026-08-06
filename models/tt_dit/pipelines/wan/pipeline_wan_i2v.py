@@ -36,12 +36,12 @@ _CHECKPOINT_DIR_ENV = "WAN22_I2V_CHECKPOINT_DIR"
 # forward and the fallback conv3d blocking table.
 _ENCODER_T_CHUNK_BY_MESH = {
     (4, 8): 16,
-    (4, 32): None,
+    (4, 32): 40,
 }
 
-# Truncated VAE encode: encode only the first 33 pixel frames (-> 9 latent frames) and
+# Truncated VAE encode: encode only the first I2V_ENCODE_FRAMES pixel frames and
 # replicate the last latent to fill the remaining slots.
-_I2V_ENCODE_FRAMES = 33
+_I2V_ENCODE_FRAMES = os.environ.get("I2V_ENCODE_FRAMES", 81)
 
 
 def _resolve_checkpoint(repo_id: str) -> str:
@@ -243,7 +243,7 @@ class WanPipelineI2V(WanPipeline):
         if mesh_shape not in _ENCODER_T_CHUNK_BY_MESH:
             logger.info(f"Image encoder: fallback conv3d blockings (no entry for mesh {mesh_shape})")
             return 0, 0, None
-        chunk = _ENCODER_T_CHUNK_BY_MESH[mesh_shape] or _I2V_ENCODE_FRAMES
+        chunk = min((_ENCODER_T_CHUNK_BY_MESH[mesh_shape] or _I2V_ENCODE_FRAMES), _I2V_ENCODE_FRAMES)
         logger.info(f"Image encoder: conv3d blockings for {self._width}x{self._height} T={chunk}")
         return self._height, self._width, chunk
 
