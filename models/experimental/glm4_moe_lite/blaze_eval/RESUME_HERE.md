@@ -510,3 +510,36 @@ Together these plausibly account for most of the 53 µs. `D` at W=4 is 86.5 µs 
 47.4; the core is 16.1 and the input boundary 17.2, so the gather has to come down to roughly
 14 µs for the drop-in to break even — which is in range if both fixes land, but is not a
 certainty. **Measure, do not assume.**
+
+### Gather chunking landed — and the residual is write amplification, not barriers
+
+Applied the same chunked-barrier fix to `GatherRowToDRAM` (`_WRITE_CHUNK = 8`, tile CB depth 8,
+one barrier per chunk). Patch: `upstream/09-gather-row-to-dram-chunked-writes.patch`.
+PCC unchanged: 0.999954/0.999938 at W=1, 0.999947/0.999957 at W=4.
+
+| config | full op | vs ttnn 47.4 |
+|---|---:|---:|
+| W=1, original | 117.3 µs | 0.40x |
+| W=1, + replicate fix | 94.0 | 0.50x |
+| W=4, + widening | 86.4 | 0.55x |
+| W=4, + gather chunking | **78.6** | **0.60x** |
+| W=4, write_chunk=32 | 77.1 | 0.62x |
+
+**1.52x faster than where this started, all gated — and still a 0.62x loss.**
+
+chunk=32 buys only 1.5 µs over chunk=8 for 4x the L1, so the barriers are essentially gone. The
+residual gather cost (~44 µs) is **write amplification**: it writes a full 2 KB DRAM page per
+output tile when only **64 bytes** (row 0, two face lines) are meaningful — 32x more traffic than
+needed, plus a scalar loop zeroing all 512 words of each page.
+
+### The one remaining idea, and its hazard
+
+Write only row 0: two 32-byte `noc_async_write`s per tile at page offsets 0 and 512, skipping the
+zeroing entirely (the destination is pre-allocated and only row 0 is ever read downstream).
+That removes ~44 µs and would put the op near 34 µs — **comfortably under ttnn's 47.4**.
+
+**The hazard is the one that already bit me once.** 32-byte writes put successive addresses at
+32-mod-64, and Blackhole DRAM wants 64-byte alignment; the analogous read optimisation in
+`TileRowReplicate` returned PCC 0.71 for exactly this reason. Either pair the two face lines into
+one 64-byte aligned write, or verify alignment before trusting any speedup. **The PCC gate in
+`native_boundary_ab.py` catches it in one run — do not skip it.**
