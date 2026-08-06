@@ -111,6 +111,21 @@ def parse_args():
         help='"cpu", "cuda", "cuda:0", or "auto" (default). "auto" uses device_map="auto" — GPU if '
         "available with CPU/disk offload, otherwise pure CPU.",
     )
+    ap.add_argument(
+        "--prefill-chunk",
+        type=int,
+        default=2048,
+        help="Feed the prompt through the model in chunks of this many tokens, carrying "
+        "past_key_values between calls (default: 2048). Bounds peak activation memory — a "
+        "single-shot 56K-token forward can OOM even on 500GB. Set to 0 to force one-shot.",
+    )
+    ap.add_argument(
+        "--attn-impl",
+        default="sdpa",
+        choices=["sdpa", "eager", "flash_attention_2"],
+        help="attn_implementation passed to from_pretrained (default: sdpa, avoids materializing "
+        "the full attention matrix).",
+    )
     return ap.parse_args()
 
 
@@ -133,8 +148,21 @@ def tokenize_prompt(tokenizer, prompt: str, max_tokens, use_chat_template: bool)
             add_generation_prompt=True,
             tokenize=True,
         )
+        # Some transformers versions return list-of-strings for chat templates; re-tokenize the
+        # templated text to force ids.
+        if ids and isinstance(ids[0], str):
+            text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            ids = tokenizer(text, add_special_tokens=False)["input_ids"]
     else:
         ids = tokenizer(prompt)["input_ids"]
+    if not ids or not isinstance(ids[0], int):
+        raise TypeError(
+            f"tokenizer returned non-int ids (sample={ids[:5]!r}). Try --no-chat-template."
+        )
     if max_tokens and len(ids) > max_tokens:
         print(f"[tokenize] truncating {len(ids)} tokens -> {max_tokens}")
         ids = ids[:max_tokens]
@@ -209,6 +237,7 @@ def main():
         torch_dtype=compute_dtype,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
+        attn_implementation=args.attn_impl,
     )
     if args.device == "auto":
         load_kwargs["device_map"] = "auto"
@@ -233,23 +262,46 @@ def main():
     print(f"{'=' * 70}\n", flush=True)
 
     input_ids = torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
-    # Route input to the model's own device (device_map="auto" may place embeddings on GPU).
     first_param_device = next(model.parameters()).device
     input_ids = input_ids.to(first_param_device)
 
+    chunk = args.prefill_chunk if args.prefill_chunk and args.prefill_chunk > 0 else seq_len
+    past_key_values = None
     t0 = time.time()
     with torch.no_grad():
-        outputs = model(
-            input_ids=input_ids,
-            use_cache=True,
-            output_attentions=False,
-            output_hidden_states=False,
-            return_dict=True,
-        )
+        if chunk >= seq_len:
+            outputs = model(
+                input_ids=input_ids,
+                use_cache=True,
+                output_attentions=False,
+                output_hidden_states=False,
+                return_dict=True,
+            )
+            past_key_values = outputs.past_key_values
+            del outputs
+        else:
+            n_chunks = (seq_len + chunk - 1) // chunk
+            print(f"[forward] chunked prefill: {n_chunks} × {chunk}-token segments", flush=True)
+            chunk_progress = tqdm(total=seq_len, desc="Prefill (chunked)", unit="tok")
+            for start in range(0, seq_len, chunk):
+                end = min(start + chunk, seq_len)
+                seg = input_ids[:, start:end]
+                outputs = model(
+                    input_ids=seg,
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                    return_dict=True,
+                )
+                past_key_values = outputs.past_key_values
+                del outputs
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                chunk_progress.update(end - start)
+            chunk_progress.close()
     forward_time = time.time() - t0
 
-    past_key_values = outputs.past_key_values
-    del outputs  # free the logits/etc. before iterating KV
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
