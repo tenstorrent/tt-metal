@@ -387,4 +387,18 @@ def note_crash(where: str, reset, error_text: str = "", config_target: str = "",
 
 
 def note_ok() -> None:
+    """The device WORKED. Clear both counters -- crash streak and reset failures.
+
+    RESET_FAILS used to clear in exactly one place: inside recover(), after a reset came back healthy.
+    That was harmless while nothing read the counter. Once recover() started REFUSING at the limit it
+    became a one-way door -- clearing required a successful reset, and resetting was refused -- so a
+    single bad session disabled recovery permanently. Run 39's dead board left reset_fails=34 in the
+    durable state file; it survived the board being fixed, a host reboot, and a fresh run on healthy
+    hardware, and halted that run before its first round with the board idling at 45C.
+
+    A profile that completes is proof the device is fine, and proof outranks a stale count. This is
+    the same rule the crash counter already followed -- note_ok cleared CONSEC_CRASH for exactly this
+    reason -- applied to the counter that now has teeth.
+    """
     CONSEC_CRASH["n"] = 0
+    RESET_FAILS["n"] = 0

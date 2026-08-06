@@ -171,3 +171,52 @@ def test_the_halt_tells_the_operator_to_reboot():
     assert "board_needs_host_reboot" in win
     assert "REBOOT THE HOST" in win
     assert "device_unrecoverable" in win, "the non-diagnosed case must keep its own halt reason"
+
+
+# ---------------------------------------------------------------- the limit must not be a one-way door
+
+
+def test_a_working_device_clears_the_reset_count(dr):
+    """THE REGRESSION THE GUARD CREATED. RESET_FAILS cleared in exactly one place -- inside recover(),
+    after a reset came back healthy. Harmless while nothing read it; once recover() REFUSED at the
+    limit, clearing required a successful reset and resetting was refused. A one-way door.
+
+    Run 39's dead board left reset_fails=34 in the DURABLE state file. It survived the board being
+    fixed, a host reboot and a fresh run on healthy hardware, then halted that run before its first
+    round with the board idling at 45C. A profile that completes is proof the device is fine, and
+    proof outranks a stale count."""
+    for _ in range(dr.RESET_FAIL_LIMIT + 5):
+        dr.recover("t", lambda tgt: None)
+    assert dr.recovery_exhausted() is True
+    dr.note_ok()
+    assert dr.recovery_exhausted() is False, "a healthy device did not clear the count"
+
+
+def test_after_clearing_it_will_reset_again(dr):
+    """Not just the flag -- the behaviour. The next crash must actually get its resets back."""
+    for _ in range(dr.RESET_FAIL_LIMIT + 2):
+        dr.recover("t", lambda tgt: None)
+    dr.note_ok()
+    tries = []
+    for _ in range(dr.RESET_FAIL_LIMIT + 3):
+        dr.recover("t", lambda tgt: tries.append(tgt))
+    assert len(tries) == dr.RESET_FAIL_LIMIT, tries
+
+
+def test_note_ok_still_clears_the_crash_streak(dr):
+    """Unchanged behaviour: it cleared CONSEC_CRASH before and must keep doing so."""
+    dr.note_crash("t", lambda tgt: None, error_text="something ambiguous")
+    dr.note_ok()
+    tries = []
+    dr.note_crash("t", lambda tgt: tries.append(tgt), error_text="something ambiguous")
+    assert tries == [], "one ambiguous crash after an OK must not reset -- the two-strike rule"
+
+
+def test_the_kernel_verdict_is_not_cleared_by_a_stale_count(dr, monkeypatch):
+    """note_ok clears a COUNT, not a diagnosis. If the driver still reports the board-management
+    fault, recovery must stay refused however healthy the counter looks."""
+    dr.note_ok()
+    monkeypatch.setattr(dr, "_kernel_tail", lambda: "tenstorrent!2: Failed to set initial power state: -22")
+    tries = []
+    assert dr.recover("t", lambda tgt: tries.append(tgt)) is False
+    assert tries == []
