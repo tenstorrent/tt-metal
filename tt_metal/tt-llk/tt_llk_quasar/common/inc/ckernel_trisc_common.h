@@ -328,6 +328,8 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t FPU_SFPU    = 2; // math(FPU) -> isolate-SFPU on dest register
+    constexpr static std::uint32_t SFPU_FPU    = 3; // isolate-SFPU -> math(FPU) on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
@@ -477,6 +479,35 @@ inline tdma_descriptor_t construct_tdma_desc(
     }
 
     validate_buffer_desc<MODE>(buf_desc);
+
+    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+
+    return tdma_desc;
+}
+
+/**
+ * @brief Builds a TDMA descriptor for an operand streamed through SrcS (UNP_S / PACK1).
+ *
+ * The SrcS path walks a tile as slice_count slices of XDIM x ydim datums rather
+ * than as faces, so the geometry comes from @ref srcs_dims instead of a
+ * TensorShape -- construct_tdma_desc cannot express it.
+ *
+ * @param base_l1_16B: L1 base address of the operand, in 16B units.
+ * @param data_format: L1 data format.
+ * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table, values = 0-31.
+ * @param reg_data_format: SrcS register format; also selects 32-bit SrcS mode.
+ * @note Register the result with @ref _configure_buf_desc_table_ before use.
+ */
+inline tdma_descriptor_t construct_srcs_tdma_desc(unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
+{
+    const bool srcs_32bit_mode = _is_srcs_32bit_mode_(static_cast<DataFormat>(reg_data_format));
+
+    buffer_descriptor_u buf_desc = {0};
+    buf_desc.f.x_dim             = srcs_dims::XDIM;
+    buf_desc.f.y_dim             = srcs_dims::ydim(srcs_32bit_mode);
+    buf_desc.f.z_dim             = srcs_dims::ZDIM;
+    buf_desc.f.l1_addr_16B       = base_l1_16B;
+    buf_desc.f.format            = static_cast<std::uint8_t>(data_format);
 
     tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 

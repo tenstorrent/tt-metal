@@ -14,10 +14,12 @@ construction. The dicts are:
     OUTPUT_DIMS          op name to lambda(src_a, src_b), set via _output_dims class attr
 """
 
+import re
 from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
 
 from fuser.compute_pipeline import ComputePipeline
 from fuser.fpu_node import FpuNode
+from fuser.isolate_sfpu_node import IsolateSfpuNode
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
 from fuser.sfpu_node import SfpuNode
@@ -58,6 +60,33 @@ SUPPORTED_TILE_SIZES = {
     (16, 16),
     (32, 16),
 }
+
+# Reserved token used by isolate_sfpu nodes to reference the Dest register file
+# instead of an L1 operand. An operand may not be named this.
+DEST = "dest"
+
+# A dest path token is 'dest' (tile 0) or 'dest[<tile index>]' — the tile index
+# selects which dest tile within the block is read/written.
+_DEST_PATH_RE = re.compile(r"^dest(?:\[(\d+)\])?$")
+
+
+def is_dest_path(value) -> bool:
+    return isinstance(value, str) and _DEST_PATH_RE.fullmatch(value) is not None
+
+
+def dest_path_index(value) -> Optional[int]:
+    """Return the dest tile index for a 'dest'/'dest[i]' token, else None."""
+    if not isinstance(value, str):
+        return None
+    m = _DEST_PATH_RE.fullmatch(value)
+    if m is None:
+        return None
+    return int(m.group(1)) if m.group(1) is not None else 0
+
+
+def is_isolate_node(node) -> bool:
+    """True if the math entry is a TRISC3 isolate Sfpu node."""
+    return getattr(node, "type", None) in ("IsolateUnarySfpu", "IsolateBinarySfpu")
 
 
 def reject(condition, message):
@@ -314,6 +343,133 @@ class BinarySfpuMathSchema(BaseModel):
         return None
 
 
+class _IsolateSfpuSchemaBase(BaseModel):
+    """Shared schema for isolate_sfpu nodes (Quasar TRISC3 SrcS data path).
+
+    src_a/src_b/output reference an L1 operand (SrcS path) or a dest token
+    'dest' / 'dest[<tile index>]' (Dest path, tile index within the block).
+    Each architecture subclass sets _sfpu_map, mapping each supported
+    MathOperation to the IsolateSfpu class implementing it on the third
+    thread's SrcS register file. Isolate nodes are entries of the ordered math
+    list, so they interleave with Fpu nodes in pipeline order.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    _sfpu_map: ClassVar[dict] = {}
+
+    operation: MathOperation
+    approximation_mode: ApproximationMode = ApproximationMode.No
+    iterations: Annotated[int, Field(ge=1)] = 8
+    src_a: str = Field(..., min_length=1)
+    output: str = Field(..., min_length=1)
+
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, v):
+        if isinstance(v, str):
+            try:
+                v = MathOperation[v]
+            except KeyError:
+                raise ValueError(f"Unknown operation: {v}")
+        if not isinstance(v, MathOperation):
+            raise ValueError(f"Invalid operation: {v}")
+        if v not in cls._sfpu_map:
+            supported = sorted(op.name for op in cls._sfpu_map)
+            raise ValueError(
+                f"{v.name} is not a supported isolate SFPU operation "
+                f"(supported: {supported})"
+            )
+        return v
+
+    @field_validator("src_a", "output", mode="after")
+    @classmethod
+    def validate_path(cls, v):
+        if is_dest_path(v):
+            return v
+        if v.startswith("dest"):
+            raise ValueError(
+                f"invalid dest path '{v}': expected 'dest' or 'dest[<tile index>]'"
+            )
+        return v
+
+    def _resolve_operand(self, name: str, operands, is_input: bool):
+        if is_dest_path(name):
+            return None
+        operand = operands.get(name)
+        if operand is None:
+            raise ValueError(f"Operand '{name}' not found")
+        if is_input:
+            operand.is_input = True
+        else:
+            operand.is_output = True
+        return operand
+
+    def _resolve_path(self, name: str, operands, is_input: bool):
+        return (self._resolve_operand(name, operands, is_input), dest_path_index(name))
+
+    def to_node(self, operands):
+        src_a, src_a_dest_idx = self._resolve_path(self.src_a, operands, is_input=True)
+        output, output_dest_idx = self._resolve_path(
+            self.output, operands, is_input=False
+        )
+        return self._build_node(
+            src_a, src_a_dest_idx, output, output_dest_idx, operands
+        )
+
+    def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
+        return None
+
+
+class IsolateUnarySfpuMathSchema(_IsolateSfpuSchemaBase):
+    """Base schema for unary isolate_sfpu nodes (type="IsolateUnarySfpu")."""
+
+    type: Literal["IsolateUnarySfpu"]
+
+    def _build_node(self, src_a, src_a_dest_idx, output, output_dest_idx, operands):
+        sfpu = type(self)._sfpu_map[self.operation](
+            self.operation,
+            self.approximation_mode,
+            self.iterations,
+        )
+        return IsolateSfpuNode(
+            sfpu=sfpu,
+            src_a=src_a,
+            src_a_dest_index=src_a_dest_idx,
+            output=output,
+            output_dest_index=output_dest_idx,
+        )
+
+
+class IsolateBinarySfpuMathSchema(_IsolateSfpuSchemaBase):
+    """Base schema for binary isolate_sfpu nodes (type="IsolateBinarySfpu")."""
+
+    type: Literal["IsolateBinarySfpu"]
+    src_b: str = Field(..., min_length=1)
+
+    @field_validator("src_b", mode="after")
+    @classmethod
+    def validate_src_b_path(cls, v):
+        return cls.validate_path(v)
+
+    def _build_node(self, src_a, src_a_dest_idx, output, output_dest_idx, operands):
+        src_b, src_b_dest_idx = self._resolve_path(self.src_b, operands, is_input=True)
+        sfpu = type(self)._sfpu_map[self.operation](
+            self.operation,
+            self.approximation_mode,
+            self.iterations,
+        )
+        return IsolateSfpuNode(
+            sfpu=sfpu,
+            src_a=src_a,
+            src_a_dest_index=src_a_dest_idx,
+            src_b=src_b,
+            src_b_dest_index=src_b_dest_idx,
+            output=output,
+            output_dest_index=output_dest_idx,
+        )
+
+
 class FpuMathSchemaBase(BaseModel):
     """Base schema for FPU math nodes (type="Fpu").
 
@@ -489,16 +645,23 @@ class OperationSchemaBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "OperationSchemaBase":
-        if not any(isinstance(e, PackSchema) for e in self.pack):
-            raise ValueError("pack list must contain at least one Pack entry")
-        if not isinstance(self.pack[-1], PackSchema):
-            raise ValueError("pack list must end with a Pack entry")
+        if not self.math and not self.pack:
+            raise ValueError("operation must have at least one math or pack entry")
+        if self.pack:
+            if not any(isinstance(e, PackSchema) for e in self.pack):
+                raise ValueError("pack list must contain at least one Pack entry")
+            if not isinstance(self.pack[-1], PackSchema):
+                raise ValueError("pack list must end with a Pack entry")
 
         self._validate_dest_consumers()
+        self._validate_isolate_sfpu()
+        self._validate_dest_ordering()
         self._arch_validate()
         return self
 
     def _validate_dest_consumers(self):
+        if not self.math:
+            return
         first = self.math[0] if self.math else None
         operation = getattr(first, "operation", None)
         reuses_dest = (
@@ -510,6 +673,127 @@ class OperationSchemaBase(BaseModel):
                 f"{operation} cannot be the first math operation: "
                 "Dst must already contain data"
             )
+
+    @staticmethod
+    def _is_isolate(node) -> bool:
+        return is_isolate_node(node)
+
+    def _isolate_nodes(self):
+        """TRISC3 isolate entries of the ordered math list, in pipeline order."""
+        return [m for m in self.math if type(self)._is_isolate(m)]
+
+    def _math_thread_nodes(self):
+        """MATH-thread entries of the ordered math list (Fpu / inline Sfpu)."""
+        return [m for m in self.math if not type(self)._is_isolate(m)]
+
+    @staticmethod
+    def _is_inline_sfpu(node) -> bool:
+        return getattr(node, "type", None) in ("UnarySfpu", "BinarySfpu")
+
+    def _dest_access(self, node) -> Tuple[bool, bool]:
+        """(reads_dest, writes_dest) for one math entry.
+
+        Fpu nodes always write dest (their result goes to dest) and additionally
+        read it when using unpack_to_dest, reuse_dest, or a dest-consuming
+        operation. Inline Sfpu nodes read dest (SrcA) and write it back. Isolate
+        nodes read/write dest only where a path token is a dest path.
+        """
+        t = getattr(node, "type", None)
+        if t == "Fpu":
+            reads = (
+                node.unpack_to_dest == UnpackToDest.Yes
+                or getattr(node, "reuse_dest", None)
+                not in (None, EltwiseBinaryReuseDestType.NONE)
+                or node.operation in type(self).dest_consuming_operations
+            )
+            return reads, True
+        if t in ("UnarySfpu", "BinarySfpu"):
+            return True, True
+        if type(self)._is_isolate(node):
+            reads = is_dest_path(node.src_a) or is_dest_path(
+                getattr(node, "src_b", None)
+            )
+            writes = is_dest_path(node.output)
+            return reads, writes
+        return False, False
+
+    def _validate_isolate_sfpu(self):
+        """Cross-checks between TRISC3 isolate nodes and the rest of the pipeline.
+
+        The shared SFPU unit has a single dest dvalid client slot, so an operation
+        cannot mix MATH-thread inline Sfpu nodes with TRISC3 isolate nodes. The
+        SrcS register file has two input slots but no SrcS+SrcS helper yet, so a
+        binary isolate node needs at least one dest operand.
+        """
+        if not self._isolate_nodes():
+            return
+
+        math_types = {getattr(m, "type", None) for m in self.math}
+        pack_types = {getattr(p, "type", None) for p in self.pack}
+        if math_types & {"UnarySfpu", "BinarySfpu"} or pack_types & {
+            "UnarySfpu",
+            "BinarySfpu",
+        }:
+            raise ValueError(
+                "cannot mix inline UnarySfpu/BinarySfpu (MATH or PACK thread) with "
+                "isolate Sfpu nodes (TRISC3): both drive the shared SFPU unit"
+            )
+
+        for node in self._isolate_nodes():
+            if node.type == "IsolateBinarySfpu" and not (
+                is_dest_path(node.src_a) or is_dest_path(node.src_b)
+            ):
+                raise ValueError(
+                    "binary isolate_sfpu with both operands from L1 (SrcS+SrcS) is "
+                    "not supported yet: at least one of src_a/src_b must be a dest "
+                    "path ('dest' or 'dest[<tile index>]')"
+                )
+
+    def _validate_dest_ordering(self):
+        """Every dest read must follow a dest producer earlier in the pipeline.
+
+        Walks the ordered math list tracking whether dest has been produced. A
+        node may read dest if it was produced earlier, or if the node itself
+        writes dest first (e.g. an unpack_to_dest Fpu node self-produces before
+        its own read). The pack list reads dest, so it also requires a producer.
+        """
+        produced_dest = False
+        for node in self.math:
+            reads, writes = self._dest_access(node)
+            if reads and not (produced_dest or writes):
+                raise ValueError(
+                    f"math node of type '{getattr(node, 'type', None)}' reads 'dest' "
+                    "but nothing earlier in the math list has written dest"
+                )
+            if writes:
+                produced_dest = True
+
+        if self.pack and not produced_dest:
+            raise ValueError(
+                "pack list requires a dest producer: add a math node that writes "
+                "dest (an Fpu node or an isolate_sfpu node writing 'dest')"
+            )
+
+        # The FPU_SFPU handshake issues one MATH->TRISC3 token per isolate dest
+        # read, produced by the immediately preceding MATH-thread node. An isolate
+        # dest read must therefore be adjacent to a MATH-thread producer; a run of
+        # consecutive isolate dest reads would need an isolate->isolate handoff,
+        # which is not supported yet.
+        for i, node in enumerate(self.math):
+            if not type(self)._is_isolate(node):
+                continue
+            reads_dest = is_dest_path(node.src_a) or is_dest_path(
+                getattr(node, "src_b", None)
+            )
+            if not reads_dest:
+                continue
+            prev = self.math[i - 1] if i > 0 else None
+            if prev is None or type(self)._is_isolate(prev):
+                raise ValueError(
+                    "isolate_sfpu node reading 'dest' must be immediately preceded "
+                    "by a MATH-thread node (its dest producer); consecutive isolate "
+                    "dest reads are not supported by the FPU_SFPU handshake yet"
+                )
 
     def _arch_validate(self):
         pass
@@ -526,7 +810,7 @@ class OperationSchemaBase(BaseModel):
         """
         output_tile_shapes = []
 
-        for m in self.math:
+        for m in self._math_thread_nodes():
             if not hasattr(m, "src_a"):
                 continue
             src_a_ts = operands.get(m.src_a).tile_shape
@@ -552,6 +836,16 @@ class OperationSchemaBase(BaseModel):
             output_tile_shapes = [
                 operands.get(e.output).tile_shape for e in pack_schemas
             ]
+
+        for node in self._isolate_nodes():
+            if not is_dest_path(node.output):
+                output_tile_shapes.append(operands.get(node.output).tile_shape)
+
+        if not output_tile_shapes:
+            raise ValueError(
+                "could not resolve an output tile shape: operation has no math, "
+                "pack, or isolate_sfpu entries with an L1 output"
+            )
 
         first = output_tile_shapes[0]
         for ts in output_tile_shapes[1:]:
@@ -585,18 +879,36 @@ class OperationSchemaBase(BaseModel):
             )
 
         block_tiles = (block_r // tile_r) * (block_c // tile_c)
-        dest_faces = 32 if self.dest_sync == DestSync.Half else 64
-        if dest_acc:
-            dest_faces //= 2
-        dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
+        uses_dest = bool(self.pack) or any(
+            any(rw) for rw in (self._dest_access(m) for m in self.math)
+        )
+        if uses_dest:
+            dest_faces = 32 if self.dest_sync == DestSync.Half else 64
+            if dest_acc:
+                dest_faces //= 2
+            dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
 
-        if block_tiles > dest_tile_capacity:
-            raise ValueError(
-                f"Block size {self.block_size} requires {block_tiles} tiles "
-                f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
-                f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
-                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
-            )
+            if block_tiles > dest_tile_capacity:
+                raise ValueError(
+                    f"Block size {self.block_size} requires {block_tiles} tiles "
+                    f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
+                    f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
+                    f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+                )
+
+        for node in self._isolate_nodes():
+            for path_name, path in (
+                ("src_a", node.src_a),
+                ("src_b", getattr(node, "src_b", None)),
+                ("output", node.output),
+            ):
+                idx = dest_path_index(path)
+                if idx is not None and idx >= block_tiles:
+                    raise ValueError(
+                        f"isolate_sfpu {path_name} references dest tile index "
+                        f"{idx} but block size {self.block_size} only has "
+                        f"{block_tiles} tiles"
+                    )
 
         for p in self.pack:
             p._block_size = self.block_size
@@ -605,7 +917,22 @@ class OperationSchemaBase(BaseModel):
 
         pack_nodes = [p.to_node(operands) for p in self.pack]
 
-        math_ops = [m.to_node(operands) for m in self.math]
+        # Stamp each built node with its position in the merged, order-preserving
+        # math[] list so codegen can reconstruct the exact FPU<->isolate-SFPU
+        # interleave (used for the FPU_SFPU/SFPU_FPU handshake placement).
+        merged_order = {id(m): i for i, m in enumerate(self.math)}
+
+        def build_ordered(schemas):
+            nodes = []
+            for m in schemas:
+                node = m.to_node(operands)
+                node.order_index = merged_order[id(m)]
+                node._dest_access = self._dest_access(m)
+                nodes.append(node)
+            return nodes
+
+        math_ops = build_ordered(self._math_thread_nodes())
+        isolate_nodes = build_ordered(self._isolate_nodes())
 
         has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
         has_fpu = any(isinstance(node, FpuNode) for node in math_ops)
@@ -634,14 +961,16 @@ class OperationSchemaBase(BaseModel):
         kwargs.update(self._arch_kwargs())
 
         return L1Operation(
-            math=ComputePipeline(math_ops, pack_nodes),
+            math=ComputePipeline(
+                math_ops, pack_nodes, isolate_sfpu_nodes=isolate_nodes
+            ),
             max_output_dimensions=max_out_dims,
             **kwargs,
         )
 
     def _calculate_max_output_dimensions(self, operands) -> Tuple[int, int]:
         dims = []
-        for m in self.math:
+        for m in self._math_thread_nodes():
             op_dims = m.get_output_dimensions(operands)
             if op_dims is not None:
                 dims.append(op_dims)
@@ -652,6 +981,19 @@ class OperationSchemaBase(BaseModel):
                 for e in self.pack
                 if isinstance(e, PackSchema)
             ]
+
+        if not dims:
+            dims = [
+                operands.get(n.output).dimensions
+                for n in self._isolate_nodes()
+                if not is_dest_path(n.output)
+            ]
+
+        if not dims:
+            raise ValueError(
+                "could not resolve output dimensions: operation has no math, pack, "
+                "or isolate_sfpu entries with an L1 output"
+            )
 
         bound_r = min(d[0] for d in dims)
         bound_c = min(d[1] for d in dims)

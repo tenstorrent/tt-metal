@@ -1,0 +1,21 @@
+# TRISC3-only op: L1 -> SrcS -> SFPU (Square) -> SrcS -> L1.
+# No UNPACK/MATH/PACK thread work at all -- self-contained on the isolate
+# SFPU thread (Path 1 in trisc3_sfpu_design.md).
+#
+# 64x64 covers 4 tiles, so this exercises the per-tile L1 counter arming as
+# well as the multi-face slice streaming within a tile.
+
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "output_A"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "IsolateUnarySfpu"
+        operation: "Square"
+        src_a: "input_A"
+        output: "output_A"

@@ -25,7 +25,7 @@ from pydantic import (
 
 from .fuser_config import FuserConfig, GlobalConfig
 from .operand import OperandRegistry
-from .validator import PackSchema
+from .validator import DEST, PackSchema, is_dest_path, is_isolate_node
 
 FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
@@ -73,6 +73,16 @@ class OperandDefinition(BaseModel):
     tile_dims: Optional[
         Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     ] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if v == DEST:
+            raise ValueError(
+                f"'{DEST}' is a reserved token for the Dest register file and "
+                "cannot be used as an operand name"
+            )
+        return v
 
     @field_validator("dims")
     @classmethod
@@ -140,6 +150,37 @@ class FuserConfigSchema(BaseModel):
                     seen_operands.add(node.src_a)
                 if hasattr(node, "src_b"):
                     seen_operands.add(node.src_b)
+
+            for node in op.math:
+                if not is_isolate_node(node):
+                    continue
+                refs = [node.src_a, node.output]
+                if hasattr(node, "src_b"):
+                    refs.append(node.src_b)
+                for ref in refs:
+                    if is_dest_path(ref):
+                        continue
+                    if ref not in formats:
+                        raise ValueError(
+                            f"isolate_sfpu operand '{ref}' is not defined in 'operands'"
+                        )
+                    op_def = next(o for o in self.operands if o.name == ref)
+                    tile_dims = (
+                        op_def.tile_dims if op_def.tile_dims is not None else (32, 32)
+                    )
+                    if tile_dims != (32, 32):
+                        raise ValueError(
+                            f"isolate_sfpu operand '{ref}' must be a 32x32 tile, "
+                            f"got {tile_dims}"
+                        )
+                if is_dest_path(node.output):
+                    continue
+                if node.output in seen_operands:
+                    raise ValueError(f"cannot use '{node.output}' as output twice")
+                seen_operands.add(node.output)
+                for ref in (node.src_a, getattr(node, "src_b", None)):
+                    if ref is not None and not is_dest_path(ref):
+                        seen_operands.add(ref)
 
             pack_schemas = [e for e in op.pack if isinstance(e, PackSchema)]
 

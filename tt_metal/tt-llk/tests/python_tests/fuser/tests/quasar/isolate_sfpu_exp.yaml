@@ -1,0 +1,21 @@
+# TRISC3-only op: L1 -> SrcS -> SFPU (Exp) -> SrcS -> L1.
+#
+# Exp runs on Quasar's SFPU nonlinear unit (p_sfpnonlinear::EXP_MODE), so it is
+# a single instruction like Square rather than the polynomial expansion the
+# Dest path uses -- accuracy matches the hardware LUT.
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: "Float16_b"
+  - name: "output_A"
+    dims: [32, 32]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "IsolateUnarySfpu"
+        operation: "Exp"
+        approximation_mode: true
+        src_a: "input_A"
+        output: "output_A"

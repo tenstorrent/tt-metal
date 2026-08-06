@@ -76,6 +76,12 @@ class GoldenCheck:
             if not self._check_output(pack_node.output):
                 passed = False
 
+        for node in operation.math.isolate_sfpu_nodes:
+            if node.output is None:
+                continue
+            if not self._check_output(node.output):
+                passed = False
+
         if self.verbose:
             if passed:
                 logger.success("PASS")
@@ -98,26 +104,24 @@ class GoldenCheck:
         """
         sources = []
         seen = set()
-        for node in operation.math.math_nodes:
+        for node in list(operation.math.math_nodes) + list(
+            operation.math.isolate_sfpu_nodes
+        ):
             if not hasattr(node, "src_a"):
                 continue
-            for src in (node.src_a, node.src_b):
+            for src in (node.src_a, getattr(node, "src_b", None)):
                 if src is not None and id(src) not in seen:
                     seen.add(id(src))
                     sources.append(src)
 
         max_input_rtol = max((s.acc_rtol for s in sources), default=0.0)
         max_input_atol = max((s.acc_atol for s in sources), default=0.0)
+        min_input_pcc = min((s.acc_pcc for s in sources), default=1.0)
 
-        for pack in operation.math.pack_nodes:
-            if not isinstance(pack, PackNode):
-                continue
-            output = pack.output
+        def assign_tolerance(output) -> None:
             base_tol = tolerances.get(output.data_format)
             base_rtol = base_tol.rtol if base_tol else DEFAULT_BASE_RTOL
             base_atol = base_tol.atol if base_tol else DEFAULT_BASE_ATOL
-
-            min_input_pcc = min((s.acc_pcc for s in sources), default=1.0)
             base_pcc = GoldenCheck._FORMAT_PCC.get(output.data_format, DEFAULT_BASE_PCC)
 
             # Relative errors multiply together because the new operation
@@ -134,6 +138,17 @@ class GoldenCheck:
 
             # Correlation degrades multiplicatively through each stage.
             output.acc_pcc = min_input_pcc * base_pcc
+
+        for pack in operation.math.pack_nodes:
+            if not isinstance(pack, PackNode):
+                continue
+            assign_tolerance(pack.output)
+
+        # Self-contained SrcS isolate nodes pack their own L1 output (no
+        # PackNode involved); dest-path isolate nodes have no L1 output here.
+        for node in operation.math.isolate_sfpu_nodes:
+            if node.output is not None:
+                assign_tolerance(node.output)
 
     def check_pipeline(self, config: FuserConfig) -> bool:
         result = True

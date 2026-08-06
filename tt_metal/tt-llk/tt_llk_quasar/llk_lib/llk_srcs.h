@@ -57,7 +57,10 @@ inline void _llk_unpack_srcs_(
 
     for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
-        TT_UNPACR2_TILE_INC(0b0, 0b1 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
+        // Args are (Dst_Tile_Idx_Inc, Src_Tile_Idx_Inc). For UNPACR2 the source
+        // is L1 and the destination is SrcS, so this advances the L1 tile index
+        // and holds the SrcS slice index; the SrcS bank rotates on dvalid.
+        TT_UNPACR2_TILE_INC(0b0 /*hold SrcS slice*/, 0b1 /*advance L1 tile*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }
 }
 
@@ -82,7 +85,10 @@ inline void _llk_pack_srcs_(
 
     for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
-        TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
+        // Args are (Dst_Tile_Idx_Inc, Src_Tile_Idx_Inc). For PACR1 the roles are
+        // reversed relative to UNPACR2: the source is SrcS and the destination
+        // is L1, so this advances the L1 tile index and holds the SrcS slice.
+        TT_PACR1_TILE_INC(0b1 /*advance L1 tile*/, 0b0 /*hold SrcS slice*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }
 }
 

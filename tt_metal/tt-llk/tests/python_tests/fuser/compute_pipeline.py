@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from helpers.llk_params import GoldenType
 
-from .arch_common import fpu_common, pack_common, unpack_common
+from .arch_common import fpu_common, isolate_sfpu_common, pack_common, unpack_common
 from .base_fpu import Fpu
 from .base_sfpu import Sfpu
 from .base_unpacker import Unpacker
@@ -25,14 +25,17 @@ from .sfpu_node import SfpuNode
 class ComputePipeline:
     math_nodes: List[Union[FpuNode, SfpuNode]]
     pack_nodes: List[Union[PackNode, SfpuNode]]
+    isolate_sfpu_nodes: List[SfpuNode]
 
     def __init__(
         self,
         math_nodes: List[Union[FpuNode, SfpuNode]],
         pack_nodes: List[Union[PackNode, SfpuNode]],
+        isolate_sfpu_nodes: List[SfpuNode] = None,
     ):
         self.math_nodes = math_nodes
         self.pack_nodes = pack_nodes
+        self.isolate_sfpu_nodes = isolate_sfpu_nodes if isolate_sfpu_nodes else []
 
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
@@ -192,6 +195,8 @@ class ComputePipeline:
             for cu in self.math_nodes
             if isinstance(cu, FpuNode) and cu.unpacker is not None
         ]
+        if not unpack_ops:
+            return ""
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
@@ -249,14 +254,67 @@ class ComputePipeline:
 
         return code
 
+    def _sfpu_handoff_flags(self) -> dict:
+        """Per math-thread node: (wait_before_sfpu, signal_sfpu_after).
+
+        Derived from the merged, order-preserving pipeline order (order_index
+        stamped by the validator). A flag is only set at a run boundary where an
+        isolate-SFPU dest handoff is actually implied:
+          - wait_before: this node starts a MATH-thread run that reads dest and
+            the immediately preceding node is an isolate that wrote dest
+            (backward SFPU->FPU handoff).
+          - signal_after: this node ends a MATH-thread run that wrote dest and
+            the immediately following node is an isolate that reads dest
+            (forward FPU->SFPU handoff).
+        Returns {} when the pipeline order is unavailable (hand-built pipelines).
+        """
+        flags: dict = {}
+        if not self.isolate_sfpu_nodes:
+            return flags
+        all_nodes = list(self.math_nodes) + list(self.isolate_sfpu_nodes)
+        if not all(getattr(n, "order_index", None) is not None for n in all_nodes):
+            return flags
+        math_ids = {id(n) for n in self.math_nodes}
+        merged = sorted(all_nodes, key=lambda n: n.order_index)
+        for i, node in enumerate(merged):
+            if id(node) not in math_ids:
+                continue
+            prev = merged[i - 1] if i > 0 else None
+            nxt = merged[i + 1] if i + 1 < len(merged) else None
+            wait_before = (
+                prev is not None
+                and id(prev) not in math_ids
+                and prev.writes_dest
+                and self._node_reads_dest(node)
+            )
+            signal_after = (
+                nxt is not None and id(nxt) not in math_ids and nxt.reads_dest
+            )
+            flags[id(node)] = (wait_before, signal_after)
+        return flags
+
+    @staticmethod
+    def _node_reads_dest(node) -> bool:
+        """Whether a MATH-thread node consumes dest, per the validator's analysis."""
+        access = getattr(node, "_dest_access", None)
+        return access[0] if access is not None else False
+
+    def _isolate_uses_dest(self) -> bool:
+        return any(not n.self_contained for n in self.isolate_sfpu_nodes)
+
     def math_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        if not self.math_nodes:
+            return ""
         code = f"// Operation {operation.stage_id}: Math Setup\n"
         fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
+        sfpu_flags = self._sfpu_handoff_flags()
 
         init_code = config.sentinel.hw_configure_math(config, operation)
         init_code += fpu_common.math_pack_sync_init(config, operation)
+        if self._isolate_uses_dest():
+            init_code += isolate_sfpu_common.sfpu_math_sync_init(config, operation)
         if hoist_reconfig and fpu_ops and not config.skip_math_init:
             init_code += config.sentinel.configure_math(config, operation, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
@@ -272,6 +330,9 @@ class ComputePipeline:
         def batch_body(block: BlockData):
             body = fpu_common.math_wait_for_dest(config, operation)
             for cu in self.math_nodes:
+                wait_before, signal_after = sfpu_flags.get(id(cu), (False, False))
+                if wait_before:
+                    body += isolate_sfpu_common.math_wait_for_sfpu(config, operation)
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, operation, cu)
@@ -284,6 +345,8 @@ class ComputePipeline:
                     body += cu.sfpu_init(operation, config, block)
                     body += cu.sfpu_run(operation, config, block)
                     body += cu.sfpu_uninit(operation, config, block)
+                if signal_after:
+                    body += isolate_sfpu_common.math_signal_sfpu(config, operation)
             body += fpu_common.math_dest_section_done(config, operation)
             return body
 
@@ -300,6 +363,64 @@ class ComputePipeline:
 
         return code
 
+    def sfpu_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        if not self.isolate_sfpu_nodes:
+            return ""
+        code = f"// Operation {operation.stage_id}: Isolate SFPU Setup\n"
+
+        self_contained = [n for n in self.isolate_sfpu_nodes if n.self_contained]
+        dest_nodes = [n for n in self.isolate_sfpu_nodes if not n.self_contained]
+
+        # Self-contained SrcS->SFPU->SrcS nodes own their whole data path and
+        # never touch Dest, so they need neither the MATH<->TRISC3 handshake nor
+        # the dest block loop: SrcS has no dest-capacity constraint, and each
+        # node iterates its own tiles inside _llk_sfpu_srcs_.
+        init_code = ""
+        for node in self_contained:
+            init_code += node.sfpu_init(operation, config, None)
+        if dest_nodes:
+            init_code += isolate_isolate_sfpu_common.sfpu_sync_init(config, operation)
+        code += self._zone(config, "INIT", init_code)
+
+        run_code = ""
+        for node in self_contained:
+            run_code += node.sfpu_run(operation, config, None)
+        code += self._zone_loop(config, "TILE_LOOP", run_code)
+
+        if dest_nodes:
+
+            def batch_body(block: BlockData):
+                body = ""
+                for node in dest_nodes:
+                    if node.reads_dest:
+                        body += isolate_isolate_sfpu_common.sfpu_wait_for_math(
+                            config, operation
+                        )
+                    body += node.sfpu_init(operation, config, block)
+                    body += node.sfpu_run(operation, config, block)
+                    body += node.sfpu_uninit(operation, config, block)
+                    if node.writes_dest:
+                        body += isolate_isolate_sfpu_common.sfpu_signal_math(
+                            config, operation
+                        )
+                body += isolate_isolate_sfpu_common.sfpu_dest_section_done(
+                    config, operation
+                )
+                return body
+
+            code += self._zone_loop(
+                config,
+                "TILE_LOOP",
+                self._batch_loop(operation, config, batch_body),
+            )
+
+        uninit_code = ""
+        for node in self_contained:
+            uninit_code += node.sfpu_uninit(operation, config, None)
+        code += self._zone(config, "INIT", uninit_code)
+
+        return code
+
     def _all_same_pack_formats(self) -> bool:
         pack_only = self._get_pack_nodes()
         if len(pack_only) <= 1:
@@ -308,6 +429,8 @@ class ComputePipeline:
         return all(pn.output.data_format == first_fmt for pn in pack_only[1:])
 
     def pack_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        if not self.pack_nodes:
+            return ""
         code = f"// Operation {operation.stage_id}: Packer\n"
         pack_only = self._get_pack_nodes()
         hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
@@ -436,6 +559,29 @@ class ComputePipeline:
                 pack_node.output.l1_golden = result
             else:
                 pack_node.output._master_golden = result
+
+        # Self-contained SrcS->SFPU->SrcS isolate nodes pack their own L1 output
+        # (no PackNode involved), so they produce their golden straight from
+        # their L1 input rather than from the pipeline's dest tensor.
+        for node in self.isolate_sfpu_nodes:
+            if not node.self_contained:
+                continue
+
+            config.sentinel.configure_golden(
+                config, operation, output_format=node.output.data_format
+            )
+
+            input_tensor = (
+                node.src_a.raw_data
+                if golden_type == GoldenType.L1_GOLDEN
+                else node.src_a.master_golden
+            )
+            result = node.golden(input_tensor, operation, config)
+
+            if golden_type == GoldenType.L1_GOLDEN:
+                node.output.l1_golden = result
+            else:
+                node.output._master_golden = result
 
     def __str__(self):
         result = "Math:"

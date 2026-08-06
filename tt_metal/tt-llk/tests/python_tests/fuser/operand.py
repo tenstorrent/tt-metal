@@ -217,6 +217,10 @@ class Operand:
     def cpp_desc_name(self) -> str:
         return f"{self.name}_desc"
 
+    @property
+    def cpp_srcs_desc_name(self) -> str:
+        return f"{self.name}_srcs_desc"
+
     def cpp_value(self, dest_acc: bool) -> str:
         buffer_size = calculate_tile_size_bytes(
             data_format=self.data_format,
@@ -244,6 +248,30 @@ class Operand:
         if self.buf_desc_id is None:
             return ""
         return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_desc_name}.buf_desc);\n"
+
+    def cpp_srcs_tdma_decl_init(self) -> str:
+        """Declare the SrcS-shaped TDMA descriptor for the isolate SFPU thread.
+
+        UNP_S and PACK1 walk a tile as SrcS slices rather than faces, so the
+        geometry comes from srcs_dims (x=XDIM, y=ydim(mode), z=ZDIM) instead of
+        the operand's TensorShape -- hence a dedicated constructor rather than
+        construct_tdma_desc. reg_data_format is set here (not patched later like
+        the unpack/pack descriptors) because the SrcS path does not convert
+        formats: the operand's format is both the L1 and the register format.
+        """
+        return (
+            f"tdma_descriptor_t {self.cpp_srcs_desc_name} = "
+            f"ckernel::trisc::construct_srcs_tdma_desc("
+            f"{hex(self.l1_address)} / 16, "
+            f"{self.data_format.cpp_underlying_value}, "
+            f"{self.buf_desc_id}, "
+            f"{self.data_format.cpp_underlying_value});\n"
+        )
+
+    def emit_srcs_buf_desc_table_entry(self) -> str:
+        if self.buf_desc_id is None:
+            return ""
+        return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_srcs_desc_name}.buf_desc);\n"
 
 
 class OperandRegistry:

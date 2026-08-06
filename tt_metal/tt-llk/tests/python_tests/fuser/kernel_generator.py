@@ -10,8 +10,11 @@ from typing import Dict
 
 from helpers.chip_architecture import ChipArchitecture
 
+from .arch_common import isolate_sfpu_common
+from .fpu_node import FpuNode
 from .fuser_config import FuserConfig
 from .operand import OperandRegistry
+from .pack_node import PackNode
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -41,8 +44,25 @@ class UnpackKernelGenerator:
 
         buf_desc_init = ""
         if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            # Only operands actually consumed by a real UNP_A/UNP_B unpacker need
+            # a standard tile-shaped buf_desc_table entry from this thread. An
+            # operand referenced only by an isolate_sfpu node (SrcS path) is
+            # unpacked by the ISOLATE_SFPU thread itself via UNP_S, with its own
+            # SrcS-shaped descriptor at the same buf_desc_id -- registering it
+            # again here (tile-shaped) would race/clobber that entry.
+            # Operand is a mutable dataclass (unhashable) -- dedup by id().
+            unpack_operand_ids = {
+                id(operand)
+                for op in self.config.pipeline
+                for cu in op.math.math_nodes
+                if isinstance(cu, FpuNode) and cu.unpacker is not None
+                for operand in (cu.src_a, cu.src_b)
+                if operand is not None
+            }
             reg = self.config.operand_registry
-            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_inputs())
+            buf_desc_init = OperandRegistry.emit_operand_init(
+                [op for op in reg.get_all_inputs() if id(op) in unpack_operand_ids]
+            )
 
         code = (
             f"\n"
@@ -106,16 +126,54 @@ class SfpuKernelGenerator:
         if self.config.global_config.architecture != ChipArchitecture.QUASAR:
             return ""
 
-        return (
+        # Collect all unique headers from all isolate SFPU nodes.
+        all_headers = set()
+        for op in self.config.pipeline:
+            for node in op.math.isolate_sfpu_nodes:
+                all_headers.update(node.get_headers())
+
+        # Generate include statements
+        includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
+
+        # Generate isolate SFPU calls for all operations
+        sfpu_calls = "".join(
+            [op.sfpu(self.config.global_config) for op in self.config.pipeline]
+        )
+
+        # The TRISC3 ELF is built for every Quasar fused test and trisc.cpp calls
+        # run_kernel unconditionally, so this block is always emitted -- a test
+        # with no isolate nodes gets an empty body, never a missing symbol.
+
+        # This thread owns the descriptors for the operands it streams through
+        # SrcS, on both the UNP_S and PACK1 sides -- the UNPACK and PACK threads
+        # deliberately skip them (see UnpackKernelGenerator). They are SrcS-shaped
+        # rather than tile-shaped, hence the dedicated emitter.
+        srcs_operands = []
+        seen = set()
+        for op in self.config.pipeline:
+            for node in op.math.isolate_sfpu_nodes:
+                for operand in (node.src_a, node.src_b, node.output):
+                    if operand is not None and id(operand) not in seen:
+                        seen.add(id(operand))
+                        srcs_operands.append(operand)
+        buf_desc_init = isolate_sfpu_common.emit_operand_init(srcs_operands)
+
+        code = (
             f"\n"
             f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
             f"\n"
+            f"{includes}\n"
+            f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
+            f"{buf_desc_init}"
+            f"{sfpu_calls}"
             f"}}\n"
             f"\n"
             f"#endif\n"
         )
+
+        return code
 
 
 class PackKernelGenerator:
@@ -139,8 +197,20 @@ class PackKernelGenerator:
 
         buf_desc_init = ""
         if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            # Same reasoning as UnpackKernelGenerator: an operand referenced only
+            # by an isolate_sfpu node's SrcS output is packed by the ISOLATE_SFPU
+            # thread itself via PACK1, with its own buf_desc_table entry -- only
+            # register a standard PACK0 entry here for real PackNode outputs.
+            pack_operand_ids = {
+                id(pack_node.output)
+                for op in self.config.pipeline
+                for pack_node in op.math.pack_nodes
+                if isinstance(pack_node, PackNode)
+            }
             reg = self.config.operand_registry
-            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_outputs())
+            buf_desc_init = OperandRegistry.emit_operand_init(
+                [op for op in reg.get_all_outputs() if id(op) in pack_operand_ids]
+            )
 
         code = (
             f"\n"

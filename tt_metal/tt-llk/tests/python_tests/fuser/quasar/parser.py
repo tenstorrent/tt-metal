@@ -32,6 +32,8 @@ from fuser.validator import (
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
+    IsolateBinarySfpuMathSchema,
+    IsolateUnarySfpuMathSchema,
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
@@ -56,6 +58,8 @@ from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.transpose_dest import TransposeDestFpu
 from .fpu.unary_broadcast import UnaryBroadcastFpu
+from .isolate_sfpu.exp import ExpIsolateSfpu
+from .isolate_sfpu.square import SquareIsolateSfpu
 from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
@@ -280,6 +284,14 @@ UNARY_SFPU_OPS = {
     MathOperation.GreaterThanEqualZero,
 }
 
+# Isolate SFPU ops runnable on TRISC3's SrcS path. Each entry is the class
+# emitting that op's per-slice instruction sequence; adding an op means adding
+# a module under isolate_sfpu/ and a line here.
+ISOLATE_UNARY_SFPU_MAP = {
+    MathOperation.Square: SquareIsolateSfpu,
+    MathOperation.Exp: ExpIsolateSfpu,
+}
+
 BINARY_SFPU_OPS = {
     MathOperation.SfpuElwadd,
     MathOperation.SfpuElwmul,
@@ -307,8 +319,24 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class QuasarIsolateUnarySfpuSchema(IsolateUnarySfpuMathSchema):
+    _sfpu_map: ClassVar = ISOLATE_UNARY_SFPU_MAP
+
+
+class QuasarIsolateBinarySfpuSchema(IsolateBinarySfpuMathSchema):
+    # No binary op has a SrcS implementation yet: a binary isolate node needs
+    # two input slices, and the two-operand SrcS helper is still pending.
+    _sfpu_map: ClassVar = {}
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        QuasarUnarySfpuMathSchema,
+        QuasarBinarySfpuMathSchema,
+        QuasarIsolateUnarySfpuSchema,
+        QuasarIsolateBinarySfpuSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -325,5 +353,5 @@ PackEntrySchema = Union[
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
 
-    math: List[MathSchema] = Field(..., min_length=1)
-    pack: List[PackEntrySchema] = Field(..., min_length=1)
+    math: List[MathSchema] = Field(default_factory=list)
+    pack: List[PackEntrySchema] = Field(default_factory=list)
