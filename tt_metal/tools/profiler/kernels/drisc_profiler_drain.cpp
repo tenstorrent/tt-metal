@@ -176,7 +176,12 @@ void kernel_main() {
     // the read barrier compares against stale counters and returns early.
     noc_local_state_init(kReadNoc);
 #endif
+    // Does constructing Noc{kReadNoc} move the RUNTIME global `noc_index`? It matters: the library
+    // noc_async_write_barrier() defaults to that global, while the writes are issued on the COMPILE-TIME
+    // NOC_INDEX. If they diverge, the barrier guarding staging reuse watches the wrong NoC.
+    const uint32_t noc_index_before = noc_index;
     Noc noc{kReadNoc};
+    const uint32_t noc_index_after = noc_index;
     UnicastEndpoint src;
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
@@ -205,6 +210,10 @@ void kernel_main() {
     // which are OUTSIDE ship_run and so were invisible: a stale phase 4 after a dropped frame
     // made it look like the write path was blocking when execution had already moved on.
     constexpr uint32_t kPhDropped = 10, kPhBar1 = 11, kPhBar2 = 12, kPhBarTail = 13;
+    // 14 = socket_barrier() in the exit tail. It had NO marker, so a kernel blocked there reported the
+    // loop's stale 12 and was twice mis-diagnosed as the sweep-body write barrier. Every blocking call
+    // needs its own marker or the phase word lies by omission.
+    constexpr uint32_t kPhSockBar = 14;
     *hb = 0;
     *phase = kPhaseInit;
 
@@ -483,6 +492,7 @@ void kernel_main() {
     // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
     // like the write barrier did. Skip both when we already know the consumer is gone.
     const bool consumer_gone = egress_dead || credit_timeouts != 0;
+    *phase = kPhSockBar;
     if (!consumer_gone) {
         socket_barrier(sender);
     }
@@ -528,6 +538,10 @@ void kernel_main() {
     out[33] = credit_timeouts;
     out[34] = dropped_frames;
     out[35] = egress_dead ? 1u : 0u;
+    out[36] = noc_index_before;
+    out[37] = noc_index_after;
+    out[38] = NOC_INDEX;
+    out[39] = kReadNoc;
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
