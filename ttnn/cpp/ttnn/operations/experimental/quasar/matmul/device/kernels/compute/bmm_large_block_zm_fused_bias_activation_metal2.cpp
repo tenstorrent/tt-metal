@@ -44,8 +44,13 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 #include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// [#48552 DIAG - REVERT AFTER] DPRINT-neutralize REMOVED so compute-kernel DPRINT is active, to localize the
-// single-core K-spill TILE_COUNTERS 0x10000 fault on the UNPACK thread (ring watcher is unavailable on Quasar).
+// [#48552 DIAG - REVERT AFTER] Neutralize ALL compute DPRINT again, then re-enable ONLY the `mmpre` marker via
+// MMPRE (DEVICE_PRINT survives the #undef). This isolates whether the marker RIGHT BEFORE matmul_block ALONE
+// masks the single-core K-spill TILE_COUNTERS 0x10000 race -- i.e. whether the wait->matmul-unpack boundary is
+// the TEN-4746 trap point. All other DPRINTs (pre-existing MMC* + got_in/acq/reload/mmpost) become no-ops.
+#undef DPRINT
+#define DPRINT(...) ((void)0)
+#define MMPRE(...) DEVICE_PRINT(__VA_ARGS__)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -385,7 +390,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                UNPACK(DPRINT(  // [#48552 DIAG] about to issue the matmul unpack for this K-tile
+                                UNPACK(MMPRE(  // [#48552 DIAG] ONLY active marker: matmul-unpack boundary
                                     "U mmpre sb={},{} k={} in0i={} in1i={}\n",
                                     (uint32_t)in0_subblock,
                                     (uint32_t)in1_subblock,
