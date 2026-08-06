@@ -54,6 +54,20 @@ from loguru import logger
 # native activation and retilizing as its first phase keeps everything in one dispatch and
 # removes the extra ttnn ops entirely.
 #
+# PROGRESS ON THE FIX. Passing a CBHandle instead of a tensor avoids the get_tile() call
+# entirely, and `cb_from_tensor` does accept a tile override -- but only when `page_size` is
+# given too, because row-major otherwise forces `eff_tile_desc = None`
+# (fused_program.py:1380-1387). With `tile=Tile([1,32]), page_size=64` the tile error goes away
+# and the next check is reached:
+#
+#     K mismatch: act gives 32, weights gives 2048
+#
+# `K_from_act = act_handle.num_pages * act_tile_w` (dram_streaming_matmul/common.py:278), so the
+# CB needs 64 pages, not 1. `_resolve_tensor_geometry` derives that from a `total_size` kwarg,
+# but `total_size` is NOT plumbed through to `BlazeProgram.cb_from_tensor`, which rejects it.
+# So the remaining work is one of: plumb `total_size` through, or build the handle via the
+# lower-level CB API that does expose page count.
+#
 # Verified so far: with blaze's own activation the fused op gates at PCC 0.9999 for both outputs.
 # ---------------------------------------------------------------------------
 
