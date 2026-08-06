@@ -35,6 +35,10 @@ void kernel_main() {
 
     constexpr uint32_t READ_BATCH = 4;
     constexpr uint32_t WRITE_BATCH = 4;
+    // Must match the factory's output CB depth: std::max<uint32_t>(4, Wt_index).
+    constexpr uint32_t OUT_CB_DEPTH = (Wt_index > 4) ? Wt_index : 4;
+    // Read-pointer position within the output CB ring (see the Phase 2 clamp below).
+    uint32_t out_cb_pos = 0;
 
     // Input tensor accessor (for DRAM reads)
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
@@ -77,6 +81,13 @@ void kernel_main() {
         uint32_t tiles_written = 0;
         while (tiles_written < Wt_index) {
             uint32_t batch = (Wt_index - tiles_written < WRITE_BATCH) ? (Wt_index - tiles_written) : WRITE_BATCH;
+            // cb_pop_front wraps the read pointer only when a pop lands exactly on the
+            // ring end (dataflow_api.h pop contract), and a flat multi-tile read must
+            // not cross it: clamp each batch to the remaining distance to the wrap.
+            const uint32_t to_wrap = OUT_CB_DEPTH - out_cb_pos;
+            if (batch > to_wrap) {
+                batch = to_wrap;
+            }
             output_buffer.wait_front(batch);
             uint32_t l1_offset = 0;
             for (uint32_t b = 0; b < batch; b++) {
@@ -91,6 +102,10 @@ void kernel_main() {
             noc.async_write_barrier();
             output_buffer.pop_front(batch);
             tiles_written += batch;
+            out_cb_pos += batch;
+            if (out_cb_pos == OUT_CB_DEPTH) {
+                out_cb_pos = 0;
+            }
         }
     }
 }
