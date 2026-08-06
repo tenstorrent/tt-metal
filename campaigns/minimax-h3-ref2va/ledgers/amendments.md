@@ -509,3 +509,58 @@ both of which pass. A config search that falls back, not a ref2va defect.
 a configuration production does not use (`SINGLE_DEVICE` with empty `device_params`, twice; a line
 fabric config, once). The cheapest guard is to copy the *whole* device-params dict from the gate that
 already ships the surrounding pipeline, and change only what a measurement forces you to change.
+
+---
+
+## Amendment 128 (2026-08-06) — conditioning is provably not a no-op (signal 0.080038 against a floor of exactly 0); the *directional* half of that gate used the wrong instrument and the wrong references
+
+**Assumed** (campaign plan, §7): that a Mandelbrot fractal against a stripe field, compared by
+whole-frame luminance correlation, would show each output resembling the reference it was given.
+
+**Measured.** Mesh 4×8, ring params, `l1_small_size=16384`, commit `4d04f289379`, `transformer_ref`,
+seed 0, 1344×768 / 124 frames / 50 steps, three generations. Both references 2048×2048, so the packed
+layout is identical row for row and every noise draw has the same shape in the same order — the noise
+is bit-identical and the only difference between the two requests is reference *content*.
+
+```
+run-to-run floor      0.000000     (the same request twice)
+reference-swap signal 0.080038     mean absolute pixel value, over [0, 1]
+resemblance to fractal   A = -0.1175   B = -0.0503
+resemblance to stripes   A =  0.0028   B =  0.0000
+```
+
+**The decisive half passed, and passed in the strongest available form.** The pipeline is
+**bit-reproducible** — the same request twice differs by exactly 0.000000 — so an implementation that
+ignored its reference would score a swap signal of exactly 0.000000 as well. It scores **0.080038**.
+There is no threshold to argue about: the null hypothesis produces zero and the measurement does not.
+Separately, `test_ref2va_reference_order_changes_the_request` passed at divergence **0.097555**
+(padded 54272), so reference *order* also reaches the output, not just reference identity.
+
+**The directional half failed, and the instrument is the reason.** `-0.1175 > -0.0503` is false. Two
+mistakes, both mine:
+
+1. **The metric.** Whole-frame luminance correlation asks whether the reference's *pixels* appear at the
+   same *coordinates*. That is what an `fl2va` keyframe does, because it is pinned to frame 0. A ref2va
+   reference is not pinned to anything — it conditions what the output is *of*. So the metric measures a
+   property the feature does not have, and its output is noise: every number above is within ±0.12 of
+   zero, including the ones for the reference the run was actually given.
+2. **The references.** A Mandelbrot fractal and a stripe field are content the model has no way to
+   render for this prompt. Whatever conditioning does with them, it cannot be to make the output look
+   like them, so even a perfect instrument would have little to find.
+
+**What changes.** The gate keeps the divergence half unchanged — it is decisive — and gains an absolute
+floor (`signal > 0.01`) so a *shrinking* effect is caught as well as a vanishing one. The directional
+half is rebuilt:
+
+- **References**: a real decoded frame against **the same frame with its colours inverted**. Identical
+  size, identical texture and edge statistics, opposite palette. So the two references disagree about
+  exactly one thing, and it is a thing a reference plausibly transfers and that is measurable.
+- **Instrument**: CLIP image-image cosine similarity (`open_clip`, already the t2va gate's tool),
+  which is semantic rather than positional. Mean RGB distance is reported alongside as the
+  interpretable companion.
+
+**Method note.** This is the campaign plan's own §7 warning landing on the plan's own gate: *"before you
+believe a gate, ask what value it would return if the feature were entirely absent."* I applied that
+test to the divergence check, where it works, and never applied it to the directional check — where the
+answer is "the same noise it returns now". Asking it of *every* assertion, not just the headline one,
+is the rule that would have caught this before three generations of Galaxy time.

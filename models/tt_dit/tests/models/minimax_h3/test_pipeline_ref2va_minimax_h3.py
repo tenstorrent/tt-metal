@@ -108,44 +108,72 @@ def _reference_video() -> Path:
     return path
 
 
-def _stripe_image(width: int, height: int) -> Image.Image:
-    """A high-contrast diagonal stripe field: structured, and nothing a prompt produces.
+def _real_frame_image() -> Image.Image:
+    """One decoded frame of the real clip, as a photographic image reference."""
+    from ....pipelines.minimax_h3.packing_ref2va import decode_reference_video
 
-    The counterpart to the fractal in the discriminator. It must have *structure* --
-    a flat field has zero variance and no correlation is defined against it -- and it
-    must be the same size, so the two requests share a layout row for row.
+    frames, _, _ = decode_reference_video(_reference_video())
+    return Image.fromarray(frames[0])
+
+
+def _inverted(image: Image.Image) -> Image.Image:
+    """The same photograph with its colours inverted.
+
+    The discriminator's second reference, and chosen for what it holds CONSTANT: identical
+    size (so the packed layout and the noise stream are unchanged), identical texture and
+    edge statistics, and an opposite palette. So the only thing the two references disagree
+    about is colour -- which is among the most transferable things a reference carries, and
+    is directly measurable in the output.
+
+    The earlier attempt used a Mandelbrot fractal against a stripe field and measured
+    whole-frame luminance correlation. Both were mistakes and are recorded as such
+    (am. 128): the references were content the model has no way to render at all, and
+    luminance correlation asks whether the reference's *pixels* appear at the same
+    *positions*, which is not what conditioning does.
     """
-    y, x = np.mgrid[0:height, 0:width]
-    stripes = (((x + y) // 64) % 2).astype(np.float32)
-    rgb = np.stack([stripes, 1.0 - stripes, ((x - y) // 96 % 2).astype(np.float32)], axis=-1)
-    return Image.fromarray((rgb * 255).astype(np.uint8))
+    return Image.fromarray(255 - np.asarray(image.convert("RGB")))
 
 
-def _grey_frames(frames: torch.Tensor) -> np.ndarray:
-    """``(F, H, W)`` luminance in [0, 1] from a ``(1, 3, F, H, W)`` output."""
-    video = frames[0].float().cpu().numpy()
-    return (0.299 * video[0] + 0.587 * video[1] + 0.114 * video[2]).astype(np.float64)
+def _frames_of(output) -> np.ndarray:
+    """``(F, H, W, 3)`` uint8 frames from a pipeline output."""
+    return (output.video[0].permute(1, 2, 3, 0).float().cpu().numpy() * 255).astype(np.uint8)
 
 
-def _resemblance(frames: torch.Tensor, image: Image.Image) -> float:
-    """Mean per-frame correlation between an output and a reference image.
+def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
+    """Mean CLIP image-image cosine similarity between sampled output frames and a reference.
 
-    Deliberately crude and deliberately whole-frame: this is not a quality metric,
-    it is a *direction* indicator, and it is only ever used to compare two numbers
-    measured the same way in the same test.
+    Semantic rather than positional, which is the property that matters: a reference
+    conditions what the output is *of* and what it looks like, not which pixel goes where.
+    `open_clip` is already in `python_env` and is the instrument the t2va gate uses.
     """
-    grey = _grey_frames(frames)
-    target = np.asarray(image.convert("L").resize((grey.shape[2], grey.shape[1]), Image.Resampling.LANCZOS))
-    target = (target.astype(np.float64) / 255.0).reshape(-1)
-    target = target - target.mean()
-    if not np.any(target):
-        raise ValueError("the reference image has no structure, so no correlation is defined against it")
-    scores = []
-    for frame in grey:
-        centred = frame.reshape(-1) - frame.mean()
-        denominator = np.linalg.norm(centred) * np.linalg.norm(target)
-        scores.append(0.0 if denominator == 0 else float(centred @ target / denominator))
+    from ...dataset_eval.clip_encoder import CLIPEncoder
+
+    encoder = CLIPEncoder()
+    frames = _frames_of(output)
+    indices = np.linspace(0, frames.shape[0] - 1, num_frames).round().astype(int)
+
+    with torch.no_grad():
+        reference_features = encoder.model.encode_image(encoder.preprocess(image).unsqueeze(0)).float()
+        reference_features /= reference_features.norm(dim=-1, keepdim=True)
+        scores = []
+        for index in indices:
+            frame = encoder.preprocess(Image.fromarray(frames[index])).unsqueeze(0)
+            features = encoder.model.encode_image(frame).float()
+            features /= features.norm(dim=-1, keepdim=True)
+            scores.append(float((features @ reference_features.T).squeeze()))
     return float(np.mean(scores))
+
+
+def _colour_distance(output, image: Image.Image) -> float:
+    """Euclidean distance between an output's mean RGB and a reference's, over [0, 1].
+
+    The interpretable companion to the CLIP number: with an inverted-colour reference pair
+    this is the single most direct measure of whether the palette carried across. Reported
+    always; the CLIP similarity is what the gate asserts on.
+    """
+    output_mean = _frames_of(output).reshape(-1, 3).mean(axis=0) / 255.0
+    reference_mean = np.asarray(image.convert("RGB")).reshape(-1, 3).mean(axis=0) / 255.0
+    return float(np.linalg.norm(output_mean - reference_mean))
 
 
 def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -267,8 +295,8 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     measured floor rather than a threshold anyone chose.
     """
     pipeline = _pipeline(mesh_device)
-    fractal = create_fractal_image(1024, 1024)
-    stripes = _stripe_image(1024, 1024)
+    normal = _real_frame_image()
+    inverted = _inverted(normal)
 
     def generate(image):
         return pipeline(
@@ -281,45 +309,58 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
             seed=SEED,
         )
 
-    a = generate(fractal)
-    a_repeat = generate(fractal)
-    b = generate(stripes)
+    a = generate(normal)
+    a_repeat = generate(normal)
+    b = generate(inverted)
 
     floor = _divergence(a.video, a_repeat.video)
     signal = _divergence(a.video, b.video)
-    to_fractal = (_resemblance(a.video, fractal), _resemblance(b.video, fractal))
-    to_stripes = (_resemblance(a.video, stripes), _resemblance(b.video, stripes))
+    to_normal = (_clip_resemblance(a, normal), _clip_resemblance(b, normal))
+    to_inverted = (_clip_resemblance(a, inverted), _clip_resemblance(b, inverted))
+    colour = (_colour_distance(a, normal), _colour_distance(b, inverted))
+    crossed = (_colour_distance(a, inverted), _colour_distance(b, normal))
 
     logger.info(
         f"ref2va discriminator: run-to-run floor {floor:.6f}, reference-swap signal {signal:.6f} "
-        f"(ratio {signal / max(floor, 1e-9):.1f}x) | resemblance to fractal A={to_fractal[0]:.4f} "
-        f"B={to_fractal[1]:.4f} | to stripes A={to_stripes[0]:.4f} B={to_stripes[1]:.4f}"
+        f"(ratio {signal / max(floor, 1e-9):.1f}x) | CLIP to normal A={to_normal[0]:.4f} "
+        f"B={to_normal[1]:.4f} | CLIP to inverted A={to_inverted[0]:.4f} B={to_inverted[1]:.4f} | "
+        f"colour distance to own reference A={colour[0]:.4f} B={colour[1]:.4f}, "
+        f"to the other A={crossed[0]:.4f} B={crossed[1]:.4f}"
     )
-    for stem, output in (("discriminate_fractal", a), ("discriminate_stripes", b)):
+    for stem, output in (("discriminate_normal", a), ("discriminate_inverted", b)):
         _write(output, stem)
 
-    # 1. The same request twice must be close. If this is large the floor is
-    #    meaningless and so is everything below it, so it fails loudly rather than
-    #    silently widening the bar.
+    # 1. The same request twice must be reproducible. If it is not, the floor is
+    #    meaningless and so is everything measured against it, so this fails loudly
+    #    rather than silently widening the bar.
     assert floor < 0.02, f"the same request twice diverged by {floor:.6f}; the pipeline is not reproducible"
 
-    # 2. Swapping the reference must move the output by far more than that floor.
-    #    A no-op implementation scores signal == floor exactly, since the layout and
-    #    the noise are identical between the two requests.
+    # 2. THE GATE THE NULL HYPOTHESIS FAILS. Both references are the same size, so the
+    #    packed layout is identical row for row and every noise draw has the same shape
+    #    in the same order -- the noise is bit-identical. An implementation that ignored
+    #    the reference would therefore score `signal == floor` exactly. Measured against
+    #    a floor of 0, so any nonzero signal is attributable to reference content alone;
+    #    the absolute size is reported so a *shrinking* effect is visible too.
     assert signal > 10 * floor, (
         f"swapping the reference moved the output by {signal:.6f} against a run-to-run floor of "
-        f"{floor:.6f} ({signal / max(floor, 1e-9):.1f}x): the reference is not conditioning the output"
+        f"{floor:.6f}: the reference is not conditioning the output"
+    )
+    assert signal > 0.01, (
+        f"swapping the reference moved the output by only {signal:.6f} mean absolute pixel value; "
+        "the effect is present but too small to call conditioning"
     )
 
-    # 3. Directional, and threshold-free: each output must resemble the reference it
-    #    was actually given more than the one it was not.
-    assert to_fractal[0] > to_fractal[1], (
-        f"the fractal-conditioned output resembles the fractal {to_fractal[0]:.4f}, no more than the "
-        f"stripe-conditioned one does ({to_fractal[1]:.4f})"
+    # 3. Directional, and threshold-free: each output must resemble the reference it was
+    #    actually given more than it resembles the one it was not. Semantic (CLIP), not
+    #    positional -- a reference conditions what the output is *of*, and asking whether
+    #    its pixels reappear at the same coordinates measures nothing (am. 128).
+    assert to_normal[0] > to_normal[1], (
+        f"the normally-conditioned output is no closer to its own reference ({to_normal[0]:.4f}) than "
+        f"the inverted-conditioned one is ({to_normal[1]:.4f})"
     )
-    assert to_stripes[1] > to_stripes[0], (
-        f"the stripe-conditioned output resembles the stripes {to_stripes[1]:.4f}, no more than the "
-        f"fractal-conditioned one does ({to_stripes[0]:.4f})"
+    assert to_inverted[1] > to_inverted[0], (
+        f"the inverted-conditioned output is no closer to its own reference ({to_inverted[1]:.4f}) than "
+        f"the normally-conditioned one is ({to_inverted[0]:.4f})"
     )
 
 
@@ -334,8 +375,8 @@ def test_ref2va_reference_order_changes_the_request(mesh_device, reset_seeds):
     labels differ.
     """
     pipeline = _pipeline(mesh_device)
-    fractal = create_fractal_image(1024, 1024)
-    stripes = _stripe_image(1024, 1024)
+    normal = _real_frame_image()
+    inverted = _inverted(normal)
 
     def generate(references):
         return pipeline(
@@ -348,8 +389,8 @@ def test_ref2va_reference_order_changes_the_request(mesh_device, reset_seeds):
             seed=SEED,
         )
 
-    forward = generate([MiniMaxH3Reference(image=fractal), MiniMaxH3Reference(image=stripes)])
-    reversed_ = generate([MiniMaxH3Reference(image=stripes), MiniMaxH3Reference(image=fractal)])
+    forward = generate([MiniMaxH3Reference(image=normal), MiniMaxH3Reference(image=inverted)])
+    reversed_ = generate([MiniMaxH3Reference(image=inverted), MiniMaxH3Reference(image=normal)])
 
     divergence = _divergence(forward.video, reversed_.video)
     logger.info(f"ref2va reference order: divergence {divergence:.6f}, padded_len={pipeline.last_padded_len}")
