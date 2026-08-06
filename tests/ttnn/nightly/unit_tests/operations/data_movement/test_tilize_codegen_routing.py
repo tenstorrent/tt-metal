@@ -28,16 +28,202 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
+_DEMOTED = [
+    (
+        [1, 4, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 4, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 1, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 12, 64, 96],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 12, 64, 96],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [2, 96, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [224, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [224, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [3, 2, 128, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [3, 2, 128, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [3, 2, 64, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [3, 2, 64, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+]
+_DEMOTED_IDS = [
+    "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
+    "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
+    "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
+    "[2, 1, 96, 32]|memory_config=dram|uint16|row_major",
+    "[2, 1, 96, 32]|memory_config=dram|uint32|row_major",
+    "[2, 1, 96, 32]|memory_config=l1|int32|row_major",
+    "[2, 1, 96, 32]|memory_config=l1|uint16|row_major",
+    "[2, 1, 96, 32]|memory_config=l1|uint32|row_major",
+    "[2, 12, 64, 96]|memory_config=dram|bfloat16|row_major",
+    "[2, 12, 64, 96]|memory_config=l1|bfloat16|row_major",
+    "[2, 32, 32]|memory_config=dram|int32|row_major",
+    "[2, 32, 32]|memory_config=dram|uint16|row_major",
+    "[2, 32, 32]|memory_config=dram|uint32|row_major",
+    "[2, 32, 32]|memory_config=l1|int32|row_major",
+    "[2, 32, 32]|memory_config=l1|uint16|row_major",
+    "[2, 32, 32]|memory_config=l1|uint32|row_major",
+    "[2, 96, 32]|memory_config=dram|float32|row_major",
+    "[2, 96, 32]|memory_config=l1|float32|row_major",
+    "[224, 32]|memory_config=dram|bfloat16|row_major",
+    "[224, 32]|memory_config=l1|bfloat16|row_major",
+    "[3, 2, 128, 32]|memory_config=dram|float32|row_major",
+    "[3, 2, 128, 32]|memory_config=l1|float32|row_major",
+    "[3, 2, 64, 32]|memory_config=dram|float32|row_major",
+    "[3, 2, 64, 32]|memory_config=l1|float32|row_major",
+]
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout", _DEMOTED, ids=_DEMOTED_IDS)
+def test_tilize_codegen_demotion(device, shape, kwargs, dtype, layout):
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto routed a perf-demoted case to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
 _ACCEPTED = [
     (
-        [32, 32],
+        [1, 32, 64],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
         ttnn.int32,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
 ]
 _ACCEPTED_IDS = [
-    "[32, 32]|memory_config=dram|int32|row_major",
+    "[1, 32, 64]|memory_config=dram|int32|row_major",
 ]
 
 
