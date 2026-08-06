@@ -301,7 +301,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": 100_000_000 if env == "T3K" else 50_000_000,
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without an

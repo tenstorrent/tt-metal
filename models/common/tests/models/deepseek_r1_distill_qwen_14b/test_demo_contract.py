@@ -57,6 +57,26 @@ def test_demo_case_manifest_is_preserved():
     assert ast.literal_eval(optimizations.args[1]) == ["performance", "accuracy"]
 
 
+def test_demo_reserves_trace_space_by_mesh(monkeypatch):
+    for mesh_name, mesh_shape, trace_region_size in (
+        ("N300", (1, 2), 50_000_000),
+        ("T3K", (1, 8), 100_000_000),
+    ):
+        monkeypatch.setenv("MESH_DEVICE", mesh_name)
+        device_params = _demo_function(
+            "_ttnn_mesh_device_param_from_env",
+            {
+                "os": os,
+                "pytest": pytest,
+                "_MESH_DEVICE_TO_SHAPE": {mesh_name: mesh_shape},
+                "ttnn": SimpleNamespace(FabricConfig=SimpleNamespace(FABRIC_1D=object())),
+            },
+        )()
+
+        assert device_params["mesh_shape"] == mesh_shape
+        assert device_params["trace_region_size"] == trace_region_size
+
+
 def test_demo_warmup_compiles_eager_programs_before_trace_capture():
     calls = []
     config = SimpleNamespace(trace=TraceConfig("all"), device_sampling_enabled=True)
