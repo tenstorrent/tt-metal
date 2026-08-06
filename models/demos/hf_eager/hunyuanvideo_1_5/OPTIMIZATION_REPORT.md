@@ -358,6 +358,63 @@ section is measured unless explicitly marked otherwise.
   dominates more at 111,600 tokens.
 - Both flags default off pending the 720p A/B and a clean re-baseline.
 
+### Wan SDPA chunk preset at Hunyuan shapes (rejected -- does not run)
+
+- `HY_DIT_SDPA_PRESET=wan_bh_sp8tp4` (q=288, k=512) was carried as an
+  unbenchmarked A/B candidate. Measured at 480p I2V 121f/25 steps on top of the
+  fused-heads flags with `HY_CFG_PADDING_POLICY=masked`:
+
+  | preset | s/step | result |
+  |---|---:|---|
+  | `hunyuan` (q=128, k=512) | 1.76 | passed |
+  | `wan_bh_sp8tp4` (q=288, k=512) | -- | **aborts** |
+
+- The failure is not a regression but a hard stop: `TT_THROW: Statically
+  allocated circular buffers in program N clash with L1 buffers on core range
+  [0-0 - 11-8]`, repeated across many programs. The larger query chunk needs
+  more L1 for its circular buffers than is available alongside the resident L1
+  buffers at Hunyuan's 49,408-token latent length.
+- This confirms the original caution for a concrete reason: Wan's tuned query
+  shape does not transfer to Hunyuan's token lengths and CCL core reservation.
+  The `hunyuan` preset stays the only working setting; the candidate can be
+  closed rather than left pending.
+
+### Elementwise fusion (measured, low yield -- deprioritised)
+
+- Motivation: the 13f device profile puts ELEMENTWISE at 15.7% of device kernel
+  time (Ternary 9.7% + BinaryNg 4.8%) at 100% core utilisation. Core count is
+  therefore not the lever; fusion is, because it cuts bytes moved. This is the
+  pattern behind PR #51400's expert-tail megakernel (10 ops -> 1).
+- Measured at the real per-rank 480p/121f shapes (M=6176, C=2048, bf16):
+
+  | chain | time |
+  |---|---:|
+  | `multiply(h, g)` | 180.6 us |
+  | `add(h, a)` | 173.6 us |
+  | `addcmul(h, a, g)` (residual update) | 245.9 us |
+  | `layer_norm(h)` | 143.6 us |
+  | `layer_norm -> addcmul` (real norm2 chain) | 383.5 us |
+  | `layer_norm(h, weight, bias)` (modulation folded) | **207.4 us** |
+
+- The chain is additive (383.5 vs 389.5 us for the parts), so each op does pay a
+  full DRAM round-trip and fusion is genuinely available. Folding the AdaLN
+  modulation into LayerNorm's own `weight`/`bias` is **1.85x** on that chain.
+- **But it is not legal in the configuration we want.** AdaLN's `scale`/`shift`
+  are `(Bp, 1, C)`, i.e. per batch row, while `layer_norm`'s `weight`/`bias` are
+  per channel. Folding requires `Bp == 1`, which means the `separate` CFG policy
+  -- and `separate` costs 7s of denoise versus `masked` (100 physical DiT runs
+  instead of 50). The two optimisations are mutually exclusive and `masked`
+  is worth more.
+- Scale check: the whole hidden-stream elementwise chain is roughly 136 ms of a
+  ~1.6 s 121f step (~8.5%), and the realistic per-fusion savings are 1-3% each,
+  each needing a custom JiT `generic_op` kernel. Poor return for the effort.
+- Important caveat this exposes about the profile itself: **the 13f capture
+  overstates elementwise share for production 121f runs.** Elementwise scales
+  linearly with tokens while attention scales quadratically, so at 49,408 tokens
+  attention takes a much larger slice and every linear-scaling category shrinks
+  proportionally. Use 13f ratios to rank *within* the linear ops, not to size
+  them against attention.
+
 ### Sharded LayerNorm across the full core grid (rejected on measurement)
 
 - Hypothesis, from tt-metal PR #51400's width-sharded RMSNorm win on gpt-oss:
