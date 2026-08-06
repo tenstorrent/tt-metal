@@ -9,8 +9,8 @@ single-run differences below ~8 % are not signal.
 
 | metric | before | after |
 |---|---|---|
-| decode 5 s (fp32) | 1.286 s | **1.169 s** |
-| decode 10 s / 15 s (fp32) | 2.482 / 3.929 s | **2.260 / 3.623 s** |
+| decode 5 s (fp32) | 1.286 s | **1.157 s** |
+| decode 10 s / 15 s (fp32) | 2.482 / 3.929 s | **2.256 / 3.583 s** |
 | decode 5 s (bf16, opt-in) | did not run | **0.959 s** |
 | PSNR vs `MINIMAX_H3_AUDIO_ACCURATE=1` | 39.46 dB | **42.86 dB** |
 | PSNR, bf16 | — | 34.93 dB (gate: 28 dB) |
@@ -49,6 +49,11 @@ have landed near the floor.
 
 **5. Stale gate re-derived** (`2b761a35e70`) — `test_depthwise_mac_is_more_accurate_than_conv1d`
 asserted MAC beats conv1d by 100x, which change 1 made false. Both are now gated at fp32 grade.
+
+**6. Wider timestep fold** (`a805896d13e`) — the fold in change 3 stopped at one tile width. Lifting
+that to a target of C=256 (the factor need only divide T, and need not be a power of two) is worth
+4.5-5.2x on the snake at the tail, bit-exact. End to end it is ~1 %, because the snake is only 140 ms
+of the stage; see `AUDIO_FUSION_PLAN.md` for why that closes the cheap row-widening work.
 
 ## Not achieved
 

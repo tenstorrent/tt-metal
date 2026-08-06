@@ -48,22 +48,37 @@ About 45 of every 53 ops are scaffolding around 8 real convolutions.
 
 ## Plan, in dependency order
 
-**Step 1 — widen rows through the tail. No new kernel.**
+**Step 1 — widen rows through the tail. DONE (`a805896d13e`), and close to exhausted.**
 
-The snake already folds timesteps into channels and is bit-exact doing it (`SnakeBeta._fold_factor`),
-but it caps the fold at one tile width, C=32, taking 3.68x where 11.78x is available. Two changes:
+`SnakeBeta._fold_factor` capped the fold at one tile width, required a power of two, and bailed for
+C >= 32. None of that was necessary -- the factor only has to divide T. Also note the padding idea
+below was unnecessary and is dropped: T=165606 admits a fold of 21 directly (2 x 3 x 7 x 3943), so
+nothing needs padding.
 
-* raise the cap so C reaches 128-256 rather than 32;
-* pad T to a multiple of the fold factor. T=165606 factors as 2 x 3 x 27601, so it admits a fold of
-  only 2 today; padding to 165632 admits 32. The pad is ~26 rows against a 12x speedup, but it costs
-  an op, so it only pays if the folded layout is **held across consecutive ops** rather than folded and
-  unfolded around each one.
+Measured on the snake, all bit-exact (maxdiff 0.0, pure re-indexing):
 
-Applies to every per-channel/elementwise op in the tail: the snake, the residual adds, the scale
-multiplies. It does **not** apply to the FIRs as-is -- convolution along T does not survive folding T
-into C without a polyphase rewrite.
+    shape              before    after   speedup
+    s4 C32  T124206     2.65     1.87     1.42x
+    s5 C16  T82806      1.85     0.79     2.34x
+    s5 C16  T165606     3.52     1.29     2.73x
+    s6 C8   T165606     3.57     0.80     4.46x
+    s6up C8 T331212     6.98     1.34     5.21x
 
-Expected: the tail's elementwise work drops toward 1/4 to 1/10. Verify with `snake_bench.py`.
+Tile occupancy is second-order: C=168 pads to 192 and still wins, having cut rows 21-fold.
+
+**End to end it is worth ~1 %** -- 1.157 / 2.256 / 3.583 s against 1.169 / 2.260 / 3.623, inside the
++-8 % spread. The snake is 140 ms of a 1401 ms stage and the previous fold had already taken part of
+it, so 5x on the snake cannot exceed ~8 % even in principle.
+
+**Correction to this plan's original framing.** Step 1 was written as an independent cheap win before
+the kernel. It is not. Row-widening only pays broadly if it reaches the FIR path -- ~2500 of the 6955
+ops -- and a convolution along T cannot fold T into C without a polyphase rewrite. So row-widening is
+**part of Step 2, not a precursor to it**, and there is no remaining low-hanging fruit before the
+kernel. The elementwise residual adds and scale multiplies are the only unconverted per-channel ops
+left, and they are a small share.
+
+What Step 1 does leave behind is a validated technique the kernel should use internally, and the
+knob to tune it (`MINIMAX_H3_AUDIO_FOLD_TARGET`, default 256).
 
 **Step 2 — fuse the band.** The real kernel.
 
