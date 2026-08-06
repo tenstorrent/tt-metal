@@ -118,10 +118,12 @@ void tilize_in(uint32_t in_num_subblocks) {
         UNPACK(DPRINT("TZ wf b={}\n", b));
         in_dfb.wait_front(in_block_w);
         PACK(DPRINT("TZ rb b={}\n", b));
+        PACK(TTI_NOP);  // Pack TDMA interpose between prior push_back and this reserve_back
         out_dfb.reserve_back(in_block_w);
         PACK(DPRINT("TZ pb b={}\n", b));
         out_dfb.push_back(in_block_w);
         UNPACK(DPRINT("TZ pf b={}\n", b));
+        UNPACK(TTI_NOP);  // Unpack TDMA interpose between wait_front and pop_front
         in_dfb.pop_front(in_block_w);
     }
 }
@@ -141,11 +143,13 @@ inline void reblock_and_untilize(
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         PACK(DPRINT("RB rb h={}\n", h));
+        PACK(TTI_NOP);
         out_cb.reserve_back(out_block_w);
         PACK(DPRINT("RB pb h={}\n", h));
         out_cb.push_back(out_block_w);
     }
     UNPACK(DPRINT("RB pf\n"));
+    UNPACK(TTI_NOP);
     interm_cb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
@@ -285,6 +289,7 @@ void kernel_main() {
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
                     UNPACK(DPRINT("M0 pf(skip) kb={}\n", (uint32_t)in0_block_w_i));
+                    UNPACK(TTI_NOP);
                     cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
@@ -317,6 +322,7 @@ void kernel_main() {
                                 (uint32_t)in0_block_w_i,
                                 (uint32_t)in0_subblock_i,
                                 (uint32_t)in1_subblock_i));
+                            UNPACK(TTI_NOP);
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
                         }
 
@@ -330,6 +336,7 @@ void kernel_main() {
                                 (uint32_t)in0_block_w_i,
                                 (uint32_t)in0_subblock_i,
                                 (uint32_t)in1_subblock_i));
+                            PACK(TTI_NOP);
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             // [#48552 DFB-ONLY] tile_regs_wait / pack_reconfig_l1_acc / pack_tile removed.
                             PACK(DPRINT(
@@ -402,8 +409,10 @@ void kernel_main() {
                 }
 
                 UNPACK(DPRINT("M0 pf kb={}\n", (uint32_t)in0_block_w_i));
+                UNPACK(TTI_NOP);
                 cb_mm_in0.pop_front(in0_block_num_tiles);
                 UNPACK(DPRINT("I1 pf kb={}\n", (uint32_t)in0_block_w_i));
+                UNPACK(TTI_NOP);
                 cb_in1.pop_front(in1_block_num_tiles);
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
@@ -424,8 +433,10 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         UNPACK(DPRINT("B mp-pf i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
+                        UNPACK(TTI_NOP);
                         cb_matmul_partials.pop_front(out_subblock_num_tiles);
                         PACK(DPRINT("B out-rb i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
+                        PACK(TTI_NOP);
                         cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         PACK(DPRINT("B out-pb i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         cb_untilize_mode_out.push_back(out_subblock_num_tiles);
@@ -454,10 +465,12 @@ void kernel_main() {
                         UNPACK(DPRINT("U wf r={}\n", r));
                         cb_matmul_partials.wait_front(out_block_w);
                         PACK(DPRINT("U rb r={}\n", r));
+                        PACK(TTI_NOP);
                         cb_out.reserve_back(out_block_w);
                         PACK(DPRINT("U pb r={}\n", r));
                         cb_out.push_back(out_block_w);
                         UNPACK(DPRINT("U pf r={}\n", r));
+                        UNPACK(TTI_NOP);
                         cb_matmul_partials.pop_front(out_block_w);
                     }
                 }
