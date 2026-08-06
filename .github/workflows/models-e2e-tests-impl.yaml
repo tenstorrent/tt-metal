@@ -160,6 +160,7 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online
@@ -239,6 +240,16 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - name: Upload tt-train metrics data to AWS SFTP bucket
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.test-group.team == 'train' && hashFiles('docker-job/generated/tt-train-metrics/*.json') != '' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
+          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+          path: /work
       - name: Report and Validate Perf and Accuracy targets
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         shell: bash
