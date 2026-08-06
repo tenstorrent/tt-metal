@@ -1215,3 +1215,53 @@ fast state" correction recorded earlier the same day was over-generalized from a
 work and cannot be relied on. Post-freeze degradation looks stickier than post-hang degradation, though with
 one sample of each that is a shape, not a mechanism. A cold power cycle remains the only cure measured to work
 repeatedly (`tt-smi -r` is now measured NOT to work at all, and IRD reservation restarts did not either).
+
+## §N+3 — Matched test: why the Tensix drainer cannot hang the card (bh-05, 2026-08-06)
+
+"The Tensix never hung the card" was only ever *never observed*, and the one comparative sweep was
+order-confounded (DRISC got first crack at each new lower delay and hung at 50; the Tensix never got there).
+Worse, **delay is the wrong axis**: the Tensix drainer only runs under slow dispatch, which de-synchronizes
+producers, so the same delay is not the same load. Matched on the right axis instead:
+
+**ACTIVE EGRESS = payload ÷ (busy sweeps × mean busy sweep)** — bandwidth while the drainer is actually
+draining. Same kernel, same results block, both core types. Payload is fixed at 1,102,970 words (4.41 MB).
+
+| delay | DRISC (fast dispatch) | Tensix (slow dispatch) |
+|---|---|---|
+| 500 | 2.13 GB/s | 1.61 GB/s |
+| 300 | 3.18 / 3.26 | 2.20 |
+| 200 | **4.92 / 5.08** (clean, 0 stalls) | 2.68 |
+| 150 | **PCIe HANG** | 3.04 |
+| 100 | — | 3.49 / 3.51 |
+| 50 | — | 4.04 / 4.16 |
+| 25 | — | 4.50, **1596 producer stalls** |
+| 0 | — | **4.62**, **1663 producer stalls** |
+
+**The Tensix ceiling is 4.62 GB/s, below the 5.08 GB/s the DRISC sustained cleanly.** And delay 0 is a real
+ceiling, not a limit of how hard it was pushed: the producers STALL there (1663), which means the drainer is
+saturated and backing them up, so more producer pressure buys no more egress. Confirmed with 20 consecutive
+runs at delay 0 — zero hangs, ack write 167–184 ns throughout, full captures.
+
+So the answer is mechanistic rather than statistical: **the Tensix drainer cannot generate the egress rate that
+hangs the card.** Two compounding causes — slow dispatch spreads the payload over 28–50 short busy sweeps where
+the DRISC concentrates it into 13–26 long ones, and the drainer's own throughput ceiling lands under the
+DRISC's demonstrated-safe level.
+
+### What this does NOT establish
+
+- **Egress rate is a working model for the trigger, not a proven mechanism.** It is the axis the DRISC data
+  correlates with. The delay-150 egress number does not exist, because the run that hangs the card never
+  completes — so the hang boundary is only bracketed as **> 5.08 GB/s**.
+- **The ceiling is configuration-specific**: 110 producers, one drainer, slow dispatch. Slow dispatch is not a
+  choice for the Tensix (a resident non-CQ program cannot coexist with fast dispatch), so it is structural
+  today — but any future setup that pushes a Tensix past ~5 GB/s voids the argument.
+
+### The knee is NOT a safety limit — retract that rule
+
+Today's hang was at **delay 150, ABOVE the recorded knee of 125**, and the run before it (delay 200) reported
+**0 producer stalls across all 110 cores**. No counter warned. This is the third card-level event on the DRISC
+path in one day (a freeze at delay 500, a hang at 150) and **none of them required a below-knee run**. Treat
+"stay above the knee" as insufficient rather than protective, and do not leave DRISC sweeps unattended.
+
+**Run the Tensix arm FIRST** in any future comparison — on a known-good card, before a DRISC pass that may take
+the box with it. That ordering is what made this measurement possible at all.
