@@ -66,8 +66,16 @@ def timed(device, make_op):
 def main() -> int:
     device = ttnn.open_device(device_id=0, l1_small_size=131072, trace_region_size=402653184)
     try:
-        for dt, name in ((ttnn.bfloat16, "bfloat16"), (ttnn.bfloat8_b, "bfloat8_b")):
-            mk = lambda x: ttnn.from_torch(x, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)  # noqa: E731
+        # bfloat8_b separates layout cost from byte cost; L1 separates it from DRAM
+        # latency. If the misaligned shift is re-tiling compute, neither should move it.
+        for dt, mc, name in (
+            (ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, "bfloat16 / DRAM"),
+            (ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, "bfloat8_b / DRAM"),
+            (ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, "bfloat16 / L1"),
+        ):
+            mk = lambda x: ttnn.from_torch(  # noqa: E731
+                x, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
+            )
             buf = mk(torch.randn(1, H, MAX_LEN, DK))
             one = mk(torch.randn(1, H, 1, DK))
             tile = mk(torch.randn(1, H, TILE, DK))
