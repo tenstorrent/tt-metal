@@ -1696,9 +1696,10 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
     )
     device_input = ttnn.to_device(host_input, device=mesh_device)
     model._ring_metadata_external = True
-    # Size the ring gather to the whole cache once, so one capture is valid for every
-    # chunk; per-chunk validity comes from the kv_actual_isl metadata tensor instead.
-    model.ccl_manager.ring_logical_n_override = context_len
+    # logical_n stays per-chunk: the sliding halo layout is built from it at program-create
+    # time and needs the capturing chunk's true geometry. The gather extent no longer
+    # depends on it on the metadata path (compute_gather_valid_Ht bounds to full capacity
+    # there and the all-gather reader narrows per dispatch from kv_actual_isl).
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
