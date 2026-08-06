@@ -10,13 +10,19 @@ a target is missed the number is stated with the reason and the identified lever
 Both architectures, same tt-metal commit. Headline figures below are Blackhole; the Wormhole
 side-by-side has its own section.
 
-| | Blackhole | Wormhole |
-|---|---|---|
-| Device | `p150a`, 32 GB | n300 (T3000, `TT_VISIBLE_DEVICES=0`), 12 GB |
-| Compute grid | **13 × 10 = 130 cores** | **8 × 8 = 64 cores** |
-| Host | 16 cores, 62 GB | 32 cores, 512 GB |
-| tt-metal | `b5e9cba196` | `b5e9cba196` |
-| Date | `2026-08-06` | `2026-08-06` |
+| | Blackhole `p150a` | Blackhole `p150b` | Wormhole n300 |
+|---|---|---|---|
+| Machine | Tavern | Tiptoe (Quietbox) | Titan (T3000) |
+| Devices | 1 × 32 GB | 4 × 32 GB, one used | 4 × 12 GB, one used |
+| Compute grid | **13 × 10 = 130** | **13 × 10 = 130** | **8 × 8 = 64** |
+| Host | 16 cores, 62 GB | 32 cores, 512 GB | 32 cores, 512 GB |
+| tt-metal | `b5e9cba196` | `b5e9cba196` | `b5e9cba196` |
+| Date | `2026-08-06` | `2026-08-06` | `2026-08-06` |
+
+The two Blackhole boards report the same architecture and the same compute grid, and `p150b`
+measures **~5 % slower per token** on identical work (`7.07` vs `6.73 ms` explicit; `5.87` vs
+`5.58` fused). `p150a` is the headline part; `p150b` is a second, independent Blackhole
+measurement rather than a replacement for it.
 
 ## Benchmark commands
 ```bash
@@ -378,31 +384,63 @@ code, since that box entered its daily reboot before a same-day re-run could be 
 
 ### End-to-end RTF
 
-| | Blackhole | Wormhole | WH : BH |
+164 tokens producing 3.274 s of audio. Each row adds one change to the row above it, so the column
+reads top to bottom as the order the work landed.
+
+| | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| explicit chain — `COSYVOICE_SDPA_DECODE=0` | `0.533` | `0.950` | 1.78× |
-| **fused decode attention** — default | **`0.477`** ✅ | `0.891` | 1.87× |
-| **+ in-place KV** — `COSYVOICE_KV_INPLACE=1` | **`0.449`** ✅ | `0.736` | 1.64× |
-| **+ cached CFM trace** — default | *pending re-measure* | **`0.628`** | — |
+| explicit chain, no CFM cache | `0.533` | `0.584` | `0.950` |
+| **+ fused decode attention** (F48) | **`0.477`** ✅ | `0.523` | `0.891` |
+| **+ cached CFM trace** (F53) | *`0.367` projected* | **`0.436`** ✅ | — |
+| **+ in-place KV** (`COSYVOICE_KV_INPLACE=1`) | `0.449`* ✅ | **`0.398`** ✅ | **`0.628`** |
 
-The last row landed after the Blackhole box entered its daily reboot, so only the Wormhole figure
-is measured. On the capture/replay split below it should take Blackhole to roughly `0.36`; that is
-a projection and is labelled as one until it is run.
+**Best measured: `0.398` on Blackhole `p150b`, `0.628` on Wormhole.** `RTF < 0.5` is met on both
+Blackhole boards and missed on Wormhole.
 
-**`RTF < 0.5` is met on Blackhole and missed on Wormhole.** At its best setting n300 lands at
-`0.736`, 47 % over the gate. Everything else in Stage 1 passes on both.
+*The `p150a` in-place figure is measured **without** the CFM trace cache, which did not exist when
+that box was last reachable — it is `0.449`, not a fully-loaded number. The `0.367` above it is the
+only projection in this document: `p150a`'s flow stage scaled by the `1.81×` the cache is measured to
+give on `p150b`. Everything else here was run.
+
+### Where each change is worth what
+
+| change | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| fused decode attention, on the step | `−17.1 %` | `−17.0 %` | `−11.0 %` |
+| cached CFM trace, on the flow stage | — | **`1.81×`** | `1.50×` |
+| cached CFM trace, on the solver alone | — | **`2.37×`** | `1.67×` |
+| in-place KV cache, on the step | `1.12×` | `1.15×` | **`1.42×`** |
+| trace capture, on the decode step | `3.72×` | — | `1.72×` |
+
+Two of these are worth reading as architecture facts rather than numbers.
+
+**The fused attention is identical across the two Blackhole boards** — `−17.1 %` and `−17.0 %` — and
+smaller on Wormhole. Two independent boards agreeing to a tenth of a percent is the strongest
+evidence in this document that the change does what it is claimed to do.
+
+**The CFM trace cache pays more on the faster part**, `2.37×` against `1.67×`. Trace capture is
+largely fixed host and programming work, so as the replay it is amortised against gets shorter, the
+capture is a larger share of what is left. The corollary is uncomfortable and worth stating: **the
+faster the silicon, the more of this stage was setup.**
+
+**The in-place KV cache runs the other way**, `1.42×` on Wormhole against `1.12–1.15×` on Blackhole,
+which is why it stays opt-in on `p150a` and is worth turning on by default on n300.
 
 ### Where the time goes, at the best setting
 
-| stage | Blackhole | Wormhole | WH : BH |
-|---|---:|---:|---:|
-| LLM (164 tokens) | `0.817 s` | `1.302 s` | 1.59× |
-| Flow decoder (10 Euler steps) | `0.603 s` | `1.021 s` | 1.69× |
-| HiFT vocoder | `0.051 s` | `0.087 s` | 1.71× |
-| **Total** | **`1.470 s`** | **`2.411 s`** | **1.64×** |
+Fully loaded — fused attention, cached CFM trace and in-place KV all on:
 
-The ratio is close to flat across three stages of very different shape, and close to the **2.03×
-ratio in core count** (130 vs 64). Nothing here is disproportionately hurt by the smaller part.
+| stage | `p150b` | n300 | n300 : `p150b` |
+|---|---:|---:|---:|
+| LLM (164 tokens) | `0.859 s` | `1.290 s` | 1.50× |
+| Flow decoder (10 Euler steps) | `0.375 s` | `0.683 s` | 1.82× |
+| HiFT vocoder | `0.069 s` | `0.084 s` | 1.22× |
+| **Total** | **`1.303 s`** | **`2.056 s`** | **1.58×** |
+
+The overall ratio, `1.58×`, sits well inside the **2.03× ratio in core count** (130 vs 64), so
+neither part is disproportionately hurt. The spread between stages is wider than it looks — the
+vocoder is nearly architecture-neutral at `1.22×` because it is dominated by two large
+`conv_transpose2d` calls, while the flow at `1.82×` is the most core-hungry stage in the model.
 
 ### Decode step, and what each change is worth
 
@@ -484,17 +522,20 @@ conditioning, cached against uncached, compared solve by solve. **PCC `1.0000000
 
 ### Accuracy and tests
 
-| | Blackhole | Wormhole |
-|---|---:|---:|
-| traced vs untraced | `1.0000000000` | `1.0000000000` |
-| in-place, worst PCC over 72 steps | `0.9987379437` | `0.9991855486` |
-| moving-cache control at the same width | `0.9988754970` | `0.9991229346` |
-| test suite | **155 passed** | **154 passed, 1 failed** |
+| | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| traced vs untraced | `1.0000000000` | `1.0000000000` | `1.0000000000` |
+| in-place, worst PCC over 72 steps | `0.9987379437` | — | `0.9991855486` |
+| CFM trace cache, 3 solves, new conditioning each | — | `1.0000000000` | `1.0000000000` |
+| test suite | **155 passed** | **155 passed** | **154 passed, 1 failed** |
 
-Traced-vs-untraced is bit-exact on both. The single Wormhole failure is
-`test_device_streamed_matches_non_streamed` — mel-space PCC `0.218` against a `0.85` gate, the
-arch-specific streaming defect recorded in F42 and unrelated to anything here. It is why **R3
-(streaming) is Blackhole-only**.
+Traced-vs-untraced is bit-exact everywhere, and so is the cached CFM trace across three consecutive
+solves with different conditioning — the test that would catch a stale `_packed_const`.
+
+The single Wormhole failure is `test_device_streamed_matches_non_streamed`, mel-space PCC `0.218`
+against a `0.85` gate. **Two independent Blackhole boards now pass it**, which upgrades F42's
+reading from "arch-specific, probably" to arch-specific on the evidence: it is a Wormhole defect,
+not a property of one machine. It is why **R3 (streaming) is Blackhole-only**.
 
 ## Accuracy
 
