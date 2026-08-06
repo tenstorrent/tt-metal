@@ -2321,7 +2321,7 @@ def _run_full_pipeline_ms():
     # The test already declares the unit (TT_PERF_ISL_TOKENS / TT_PERF_OSL_TOKENS, both 128). Honour it:
     # take OSL from the declared value so the measured unit and the reported unit are the same thing.
     # PERF_MCP_FULLPIPE_TOKENS still overrides for a cheap steering measurement.
-    env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or os.environ.get(
+    env["TT_PERF_OSL_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or os.environ.get(
         "TT_PERF_OSL_TOKENS", "128"
     )
     env.setdefault("TT_PERF_TRACE", "1")
@@ -2470,7 +2470,7 @@ def _run_full_pipeline_ms():
     pf = statistics.median(prefills) if prefills else None
     if dec is not None or pf is not None:
         isl = env.get("TT_PERF_SEQ_LEN", os.environ.get("TT_PERF_SEQ_LEN", "128"))
-        osl = env.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
+        osl = env.get("TT_PERF_OSL_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
         tsu = (1000.0 / dec) if dec else 0.0
         # mesh/TP/DP/shard come solely from the run's marker; when it is absent they stay None and we
         # print 'unknown' rather than a fabricated topology.
@@ -3285,7 +3285,7 @@ def _full_depth_op_probe():
     env["TT_METAL_HOME"] = repo
     env["PYTHONPATH"] = repo
     _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
-    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env["TT_PERF_OSL_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]
     if case:

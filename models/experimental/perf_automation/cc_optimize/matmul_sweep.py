@@ -253,7 +253,7 @@ def enumerate_matmul_sigs(node: str, case: Optional[str] = None, repo_root: Opti
     env["TT_METAL_HOME"] = str(repo)
     env["PYTHONPATH"] = str(repo)
     _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
-    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env["TT_PERF_OSL_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, str(_CC_DIR / "_op_sig_probe.py"), node]
     if case:

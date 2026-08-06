@@ -684,7 +684,7 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     from agent.layer_depth import set_depth as _set_depth
 
     _set_depth(env, k)
-    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env["TT_PERF_OSL_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
@@ -1653,7 +1653,7 @@ def _print_scorecard(
         isl = os.environ.get("TT_PERF_SEQ_LEN") or "(default)"
         # Same fallback the skeleton uses, so the scorecard reports the OSL that RAN. "4" here printed
         # OSL=4 on a run measuring 128 whenever the variable was unset.
-        osl = os.environ.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
+        osl = os.environ.get("TT_PERF_OSL_TOKENS", "128")
         L = ["  ┌─ optimize scorecard — pipeline: %s" % pipe.get("task", "?")]
         L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
         if facts.get("parallelism_known"):

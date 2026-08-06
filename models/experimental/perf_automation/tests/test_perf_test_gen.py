@@ -9,7 +9,7 @@ import json
 
 from agent.perf_test_gen import generate_perf_test
 
-_VALID = "import ttnn\ndef test_text_generation_perf(device):\n    import os\n    os.environ.get('TT_PERF_MAX_NEW_TOKENS')\n    pass\n"
+_VALID = "import ttnn\ndef test_text_generation_perf(device):\n    import os\n    os.environ.get('TT_PERF_OSL_TOKENS')\n    pass\n"
 _PREFILL_ONLY = "import ttnn\ndef test_text_generation_perf(device):\n    pass\n"
 
 

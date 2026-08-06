@@ -8,13 +8,13 @@ The generated perf test states its measurement unit explicitly:
 and then two separate things threw it away:
 
   1. PERF_OSL_TOKENS was DECORATIVE. The decode loop is bounded by a DIFFERENT variable --
-     `for _ in range(max(1, PERF_MAX_NEW_TOKENS))` -- which defaulted to 4. So the declared unit and
+     `for _ in range(max(1, PERF_OSL_TOKENS))` -- which defaulted to 4. So the declared unit and
      the executed unit were never the same number.
 
   2. The full-pipeline gate then pinned that variable to 1, with no comment justifying it, in a file
      where nearly every decision carries a paragraph:
 
-         env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
+         env["TT_PERF_OSL_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
 
 One decode step is not a decode measurement. What it costs, all visible in the scorecard:
 
@@ -69,7 +69,7 @@ def mcp(tmp_path, monkeypatch):
 def _gate_osl_expr():
     """The line in _run_full_pipeline_ms that sets the decode-loop cap."""
     src = GATE.read_text()
-    i = src.index('env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS")')
+    i = src.index('env["TT_PERF_OSL_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS")')
     return src[i : i + 200]
 
 
@@ -116,17 +116,17 @@ def test_the_declared_value_wins_when_no_override(mcp, monkeypatch):
 def test_the_scorecard_osl_is_not_hardcoded_to_one(mcp):
     """OSL=1 in the scorecard is what made 'per token' a blended number."""
     src = GATE.read_text()
-    assert 'osl = env.get("TT_PERF_MAX_NEW_TOKENS", "1")' not in src
+    assert 'osl = env.get("TT_PERF_OSL_TOKENS", "1")' not in src
 
 
 # ---------------------------------------------------------------- declared == executed
 
 
 def test_the_generated_test_loops_over_the_declared_osl(mcp):
-    """PERF_OSL_TOKENS was printed as the unit while PERF_MAX_NEW_TOKENS (default 4) bounded the
+    """PERF_OSL_TOKENS was printed as the unit while PERF_OSL_TOKENS (default 4) bounded the
     loop -- so the reported unit and the executed unit were different numbers."""
     src = GEN.read_text()
-    assert 'os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4")' not in src, "loop cap still defaults to 4"
+    assert 'os.environ.get("TT_PERF_OSL_TOKENS", "4")' not in src, "loop cap still defaults to 4"
     assert "TT_PERF_OSL_TOKENS" in src, "loop cap does not fall back to the declared OSL"
 
 
@@ -138,35 +138,39 @@ def test_the_op_signature_probe_still_uses_one_token(mcp):
     src = GATE.read_text()
     i = src.index("_op_sig_probe.py")
     window = src[max(0, i - 900) : i]
-    assert 'env["TT_PERF_MAX_NEW_TOKENS"] = "1"' in window, "the op-sig probe should still cap at 1"
+    assert 'env["TT_PERF_OSL_TOKENS"] = "1"' in window, "the op-sig probe should still cap at 1"
 
 
 # ---------------------------------------------------------------- the PROFILE runs the declared OSL too
 
 
-def test_the_perf_node_runner_does_not_pin_four_tokens(mcp):
+def test_the_perf_node_runner_keeps_a_cheap_validation_cap(mcp):
     """THE SITE THAT SURVIVED THE FIRST FIX. The skeleton reads
 
-        TT_PERF_MAX_NEW_TOKENS or TT_PERF_OSL_TOKENS
+        TT_PERF_OSL_TOKENS or TT_PERF_OSL_TOKENS
 
     so an env value WINS OUTRIGHT and the OSL fallback can never fire. _run_perf_node did
-    `env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")`, so every run through it -- including the one whose
+    `env.setdefault("TT_PERF_OSL_TOKENS", "4")`, so every run through it -- including the one whose
     tracy capture ranks ops -- executed 4 decode steps while printing PERF_OSL_TOKENS=128.
 
     Cost, measured on gemma-3-12b-it run 39: decode ops were sampled 4 times instead of 128, so their
     gap_ms was ~32x under-counted against prefill's single big pass. 72 of 138 shaped attempts went to
     prefill matmuls, which cannot move tok/s/u at all.
     """
+    SUPERSEDED = """This asserted the 4 was GONE from _run_perf_node, on the belief that the profile
+    ran through it. It does not -- profile_model -> measure_runs -> probes.make_run_profiled -- so
+    raising it here only made VALIDATION 32x slower and fixed nothing. The token count now belongs to
+    measure.py, where the ranking is actually sampled; validation keeps its cheap cap, because "does
+    this test run at all" is answered as well by 4 tokens as by 128."""
     src = GEN.read_text()
-    assert 'setdefault("TT_PERF_MAX_NEW_TOKENS", "4")' not in src
-    i = src.index('setdefault("TT_PERF_MAX_NEW_TOKENS"')
-    assert "TT_PERF_OSL_TOKENS" in src[i : i + 120], src[i : i + 120]
+    i = src.index('setdefault("TT_PERF_OSL_TOKENS"')
+    assert '"4"' in src[i : i + 80], SUPERSEDED
 
 
 def test_the_bound_itself_is_kept(mcp):
     """The setdefault must NOT simply be deleted: it is what stops a generative loop running forever
     when nothing else caps it."""
-    assert 'setdefault("TT_PERF_MAX_NEW_TOKENS"' in GEN.read_text()
+    assert 'setdefault("TT_PERF_OSL_TOKENS"' in GEN.read_text()
 
 
 def test_the_authoring_prompt_no_longer_teaches_four(mcp):
@@ -180,7 +184,7 @@ def test_the_authoring_prompt_no_longer_teaches_four(mcp):
 def test_the_scorecard_reports_the_osl_that_ran(mcp):
     """run.py printed OSL=4 whenever the variable was unset, on a run measuring 128."""
     run_src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
-    assert 'os.environ.get("TT_PERF_MAX_NEW_TOKENS") or "4"' not in run_src
+    assert 'os.environ.get("TT_PERF_OSL_TOKENS") or "4"' not in run_src
 
 
 def test_the_marker_buffer_is_not_a_reason_for_a_small_cap(mcp):
@@ -189,3 +193,45 @@ def test_the_marker_buffer_is_not_a_reason_for_a_small_cap(mcp):
     literal is not reintroduced on that reasoning."""
     src = GEN.read_text()
     assert "TT_PERF_FLUSH_EVERY" in src and "ReadDeviceProfiler" in src
+
+
+# ---------------------------------------------------------------- the PROFILE, not just validation
+
+
+def test_the_profile_sets_the_token_count(mcp):
+    """WHERE THE EARLIER FIX MISSED. It changed _run_perf_node, on the belief that the profile came
+    through there. It does not:
+
+        profile_model -> _profile_with_zero_row_retry -> _profile_once
+                      -> measure_runs -> probes.make_run_profiled
+
+    Neither measure.py nor probes.py set a token count, so the generated test fell back to its own
+    literal -- 4 in every test written before today -- and the ranking kept under-counting decode 32x
+    while the commit message claimed otherwise."""
+    src = (Path(__file__).resolve().parent.parent / "agent" / "measure.py").read_text()
+    assert "TT_PERF_OSL_TOKENS" in src, "the profile still inherits whatever the test hardcoded"
+    i = src.index('xenv["TT_PERF_OSL_TOKENS"]')  # the assignment, not the comment above it
+    assert "TT_PERF_OSL_TOKENS" in src[i : i + 400], "it does not fall back to the DECLARED unit"
+
+
+def test_an_explicit_cap_still_wins_on_the_profile(mcp):
+    """The op-signature probe caps at 1 deliberately -- it only enumerates WHICH ops run, and 128
+    there is pure waste."""
+    src = (Path(__file__).resolve().parent.parent / "agent" / "measure.py").read_text()
+    i = src.index('xenv["TT_PERF_OSL_TOKENS"]')
+    assert 'os.environ.get("TT_PERF_OSL_TOKENS")' in src[i : i + 400], "an explicit cap is ignored"
+
+
+def test_the_slow_profile_can_be_bought_back(mcp):
+    """128 steps is ~32x the markers and ~32x the eager time of 4, every round. Someone who wants the
+    quick, skewed ranking should not have to edit the tool."""
+    src = (Path(__file__).resolve().parent.parent / "agent" / "measure.py").read_text()
+    assert "PERF_MCP_PROFILE_TOKENS" in src
+
+
+def test_validation_keeps_its_cheap_cap(mcp):
+    """_run_perf_node answers "does the generated test run at all", which 4 tokens establish as well
+    as 128. Raising it there made validation 32x slower and fixed nothing."""
+    src = GEN.read_text()
+    i = src.index('setdefault("TT_PERF_OSL_TOKENS"')
+    assert '"4"' in src[i : i + 80], src[i : i + 80]

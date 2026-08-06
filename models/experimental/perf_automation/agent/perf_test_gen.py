@@ -27,7 +27,12 @@ import pytest
 import ttnn
 # from <model>.tt.<generator> import <Generator>   # lift the import from the demo
 
-PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+# ONE VARIABLE FOR ONE THING. There were two: PERF_OSL_TOKENS, which the test PRINTED, and
+# PERF_OSL_TOKENS, which the loop actually RAN -- with its own default of 4, from the generator's
+# first commit. So a declared OSL of 128 was reported while 4 executed, and every profile sampled a
+# thirty-second of the request it claimed to measure. Two names for one quantity is how a setting can
+# be honoured and ignored at the same time. TT_PERF_OSL_TOKENS is GONE; a probe that wants a
+# cheaper unit sets TT_PERF_OSL_TOKENS, and then the declared unit and the executed one still agree.
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 # ISL / OSL -- THE MEASUREMENT CONDITIONS, and they default to a REALISTIC operating point rather
 # than to whatever example prompt reads naturally. Left unspecified, a generated perf test used the
@@ -105,7 +110,7 @@ def test_<task>_perf(device_params, device):
                     _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
         _fw0 = time.monotonic()
         try:
-            out = ...  # run the pipeline BOUNDED (cap decode via PERF_MAX_NEW_TOKENS, or one forward)
+            out = ...  # run the pipeline BOUNDED (PERF_OSL_TOKENS decode steps, or one forward)
             try: ttnn.ReadDeviceProfiler(device)
             except Exception: pass
         finally:
@@ -407,15 +412,13 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
     def _once(ev):
         env = dict(os.environ)
         env.setdefault("TT_PERF_TRACE", "1")
-        # THE DECLARED OSL, not 4. This setdefault BOUNDS a generative loop that would otherwise run
-        # forever, which is why it stays -- but 4 made it the MEASUREMENT CONDITION. Because the
-        # skeleton reads `TT_PERF_MAX_NEW_TOKENS or TT_PERF_OSL_TOKENS`, an env value of "4" wins
-        # outright and the OSL fallback can never fire: the test printed PERF_OSL_TOKENS=128 and
-        # looped 4. The profile that ranks ops then sampled 4 decode steps of a 128-step request,
-        # under-counting every decode op ~32x and promoting prefill work that cannot move tok/s/u.
-        # The 12000-marker buffer is NOT the reason for a small cap -- the drain in the same skeleton
-        # empties it every TT_PERF_FLUSH_EVERY ops, so a long capture is slower, not unsafe.
-        env.setdefault("TT_PERF_MAX_NEW_TOKENS", os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+        # VALIDATION, not measurement. This answers "does the generated test run at all", which four
+        # tokens establish as well as a hundred and twenty-eight, and the cap keeps a generative loop
+        # from running forever. It sets the SAME variable everything else uses -- there is no longer a
+        # second one -- so the test still reports the unit it executed. An earlier revision raised it
+        # to the declared OSL believing the PROFILE came through here; it does not (profile_model ->
+        # measure_runs -> probes.make_run_profiled), so that only made validation 32x slower.
+        env.setdefault("TT_PERF_OSL_TOKENS", "4")
         env.pop("TT_METAL_DEVICE_PROFILER", None)
         env.update(ev)
         cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
@@ -1146,7 +1149,7 @@ def generate_perf_test(
         "nothing recorded, so the reported throughput silently described a six-token context. Echo "
         "PERF_ISL_TOKENS= and PERF_OSL_TOKENS= so the conditions are in the log.\n"
         "- BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode "
-        "loop via env TT_PERF_MAX_NEW_TOKENS, defaulting to the DECLARED PERF_OSL_TOKENS so the executed "
+        "loop via PERF_OSL_TOKENS -- the SAME value the test declares and prints, never a second variable "
         "unit is the one the test reports -- never a smaller literal, or the profile samples a fraction "
         "of the request and every recurring op is under-counted; or a SINGLE forward if there's no "
         "loop), AND drain "
@@ -1350,10 +1353,10 @@ def generate_perf_test(
             )
             prev_draft = content
             continue
-        if demo_is_generative and "TT_PERF_MAX_NEW_TOKENS" not in content:
+        if demo_is_generative and "PERF_OSL_TOKENS" not in content:
             stall += 1
             feedback = _correction_feedback(
-                "generative pipeline but the test omits the decode-loop cap (TT_PERF_MAX_NEW_TOKENS) — it "
+                "generative pipeline but the test omits the decode-loop cap (PERF_OSL_TOKENS) — it "
                 "would profile a prefill-only slice. Add the capped decode loop.",
                 "",
                 content,
