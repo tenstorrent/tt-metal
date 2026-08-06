@@ -543,3 +543,54 @@ That removes ~44 µs and would put the op near 34 µs — **comfortably under tt
 `TileRowReplicate` returned PCC 0.71 for exactly this reason. Either pair the two face lines into
 one 64-byte aligned write, or verify alignment before trusting any speedup. **The PCC gate in
 `native_boundary_ab.py` catches it in one run — do not skip it.**
+
+## RESULT: q_kv_a is now FASTER than ttnn — 1.29x, gated
+
+Writing only row 0 of each destination tile was the last piece. The gather had staged a full tile,
+zeroed all 512 words with a scalar loop, and written the whole 2 KB page to deliver **64 bytes** —
+32x the needed traffic. Replaced with two 32-byte writes per tile at page offsets 0 and 512.
+
+**The alignment hazard did not bite, and why is worth keeping:** both offsets are multiples of 64,
+so the DRAM side is 64-byte aligned as Blackhole requires. The `TileRowReplicate` attempt that gave
+PCC 0.71 failed because its *L1 destination* advanced by 32 and landed at 32-mod-64. Same idea,
+other side of the transfer, opposite outcome — check which side carries the alignment requirement
+before assuming a partial transfer is unsafe.
+
+Full arc, every step PCC-gated against the ttnn op it replaces:
+
+| step | full op | vs ttnn 47.4 |
+|---|---:|---:|
+| original | 117.3 µs | 0.40x |
+| + `TileRowReplicate` chunking | 94.0 | 0.50x |
+| + `DRAMStreamingMatmul` widening (W=4) | 86.4 | 0.55x |
+| + gather barrier chunking | 78.6 | 0.60x |
+| + **gather row-0-only writes** | **36.8** | **1.29x** |
+
+**3.19x faster than where this started, and beating the shipping path.** By W: W=1 0.85x,
+W=2 0.95x, **W=4 1.29x** (PCC 0.999947/0.999957 throughout). W=4 is required — there is no win at
+the default worker count.
+
+Upper bound if it translates: **+0.51 ms/token of 33.2 ms (~1.5%)**. An upper bound, and the traced
+regime has repeatedly failed to honour cluster wins here — **measure, do not assume.**
+
+### Must be resolved before shipping
+
+The row-0-only write is **batch=1 only**: it writes one row per destination tile because that is
+all decode at bs=1 needs. A batched destination needs the per-row loop restored, guarded on batch.
+Correct for the measured configuration, not general.
+
+### o_proj: two small blockers, neither from the widening
+
+1. **W=1:** `ResidualAdd needs 8 addressable DST tiles ... fp32_dest_acc_en=True ... gives 4.`
+   Bench fix: pass `dst_full_sync_en=True` on the `FusedProgram`, as `BlazeCompiler` does.
+2. **W=4:** `out width (2048) does not match o_weights N (8192)`. `GLMOProjResidual.emit` computes
+   `hidden = weights_shard[1] * len(worker_cores)` — the same core-count/bank-count conflation
+   already fixed in `common.py`. Needs the true bank count.
+
+o_proj remains the better target: N=2048 divides exactly at W=2/W=4, so it pays none of the
+768->1024 padding waste q_a/kv_a do.
+
+### Next
+1. Fix the two o_proj blockers; re-run `oproj_residual_ab.py` at W=4.
+2. Enable `GLM4_MOE_LITE_BLAZE_QKV_A=1` **with `BLAZE_DSM_WORKERS_PER_BANK=4`** and measure traced
+   e2e in the blaze tree against **34.8 ms** (not 33.2).

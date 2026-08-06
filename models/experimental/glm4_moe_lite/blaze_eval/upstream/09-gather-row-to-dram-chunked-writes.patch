@@ -34,7 +34,7 @@
                  (f"{prefix}.ta_start_idx", ta_start_idx),
              ]
 --- a/blaze/ops/gather_row_to_dram/kernels/op.hpp	2026-08-06 17:45:18.048316217 +0000
-+++ blaze/ops/gather_row_to_dram/kernels/op.hpp	2026-08-06 17:45:18.067316431 +0000
++++ blaze/ops/gather_row_to_dram/kernels/op.hpp	2026-08-06 17:48:40.291589491 +0000
 @@ -26,6 +26,7 @@
          static constexpr Semaphore receiver_semaphore = A::receiver_semaphore;
          static constexpr uint32_t num_senders = A::num_senders;
@@ -51,11 +51,23 @@
          static constexpr uint32_t ta_start_idx = A::ta_start_idx;
      };
      template <typename Args>
-@@ -77,23 +79,31 @@
+@@ -77,24 +79,25 @@
                  constexpr uint32_t face_bytes = 16 * 16 * sizeof(uint16_t);
                  cb_wait_front(dm0::staging, dm0::num_pages);
                  uint32_t rows = get_read_ptr(dm0::staging);
--                for (uint32_t page = 0; page < dm0::num_pages; ++page) {
++                // Write ONLY row 0 of each destination tile: 64 bytes of a 2 KB page. The old
++                // path staged a full tile, zeroed all 512 words with a scalar loop, then wrote the
++                // whole page -- 32x the traffic the data needs, and ~44 us of this op's cost.
++                //
++                // Alignment, which is the thing that broke the analogous read optimisation in
++                // TileRowReplicate (PCC 0.71): here both destination offsets, page*2048 and
++                // page*2048 + 512, are multiples of 64, so the DRAM side is 64-byte aligned as
++                // Blackhole wants. The L1 source is the staging row at rows + page*64.
++                //
++                // No zeroing: the destination is pre-allocated zero and only row 0 is ever written
++                // or read. NOTE this is row-0-only and therefore batch=1; a batched destination
++                // needs the per-row loop back.
+                 for (uint32_t page = 0; page < dm0::num_pages; ++page) {
 -                    cb_reserve_back(dm0::tile, 1);
 -                    uint32_t out_addr = get_write_ptr(dm0::tile);
 -                    volatile tt_l1_ptr uint32_t* out =
@@ -66,35 +78,18 @@
 -                    for (uint32_t i = 0; i < 8; ++i) {
 -                        out[i] = row[i];
 -                        out[face_bytes / sizeof(uint32_t) + i] = row[8 + i];
-+                // Pages are staged write_chunk at a time and waited on once per chunk. A barrier
-+                // per page serialises a full DRAM round-trip per output tile -- 32 of them at
-+                // N=1024 -- which is most of this op's measured ~53 us against the 16 us matmul it
-+                // drains. Same fix already proven on TileRowReplicate.
-+                for (uint32_t base = 0; base < dm0::num_pages; base += dm0::write_chunk) {
-+                    cb_reserve_back(dm0::tile, dm0::write_chunk);
-+                    const uint32_t chunk_addr = get_write_ptr(dm0::tile);
-+                    for (uint32_t j = 0; j < dm0::write_chunk; ++j) {
-+                        volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-+                            chunk_addr + j * dm0::dst_page_size);
-+                        for (uint32_t i = 0; i < dm0::dst_page_size / sizeof(uint32_t); ++i) out[i] = 0;
-+                        volatile tt_l1_ptr uint32_t* row =
-+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows + (base + j) * 64);
-+                        for (uint32_t i = 0; i < 8; ++i) {
-+                            out[i] = row[i];
-+                            out[face_bytes / sizeof(uint32_t) + i] = row[8 + i];
-+                        }
-+                    }
-+                    cb_push_back(dm0::tile, dm0::write_chunk);
-+                    cb_wait_front(dm0::tile, dm0::write_chunk);
-+                    for (uint32_t j = 0; j < dm0::write_chunk; ++j) {
-+                        noc_async_write_page(base + j, writer, chunk_addr + j * dm0::dst_page_size);
-                     }
+-                    }
 -                    cb_push_back(dm0::tile, 1);
 -                    cb_wait_front(dm0::tile, 1);
 -                    noc_async_write_page(page, writer, get_read_ptr(dm0::tile));
-                     noc_async_write_barrier();
+-                    noc_async_write_barrier();
 -                    cb_pop_front(dm0::tile, 1);
-+                    cb_pop_front(dm0::tile, dm0::write_chunk);
++                    const uint64_t dst = get_noc_addr(page, writer);
++                    const uint32_t src = rows + page * 64;
++                    noc_async_write(src, dst, 32);
++                    noc_async_write(src + 32, dst + face_bytes, 32);
                  }
++                noc_async_write_barrier();
                  cb_pop_front(dm0::staging, dm0::num_pages);
              }
+ #endif
