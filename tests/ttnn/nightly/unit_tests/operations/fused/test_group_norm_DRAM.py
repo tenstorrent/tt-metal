@@ -238,6 +238,46 @@ def test_group_norm_DRAM_row_major(
     )
 
 
+# Welford + interleaved ROW_MAJOR must fail (legacy-only feature).
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_rejects_welford(device, input_layout, output_layout, expect_error):
+    N, C, H, W = 1, 480, 1, 64
+    num_groups = 8
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+
+    tt_input = ttnn.from_torch(
+        torch.rand((N, 1, H * W, C), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
+
+    with expect_error(RuntimeError, "not supported on the Welford path"):
+        ttnn.group_norm(
+            tt_input,
+            num_groups=num_groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=output_layout,
+            core_grid=grid_size,
+            inplace=False,
+            num_out_blocks=1,
+            use_welford=True,
+        )
+
+
 # Optional weight/bias and input-mask coverage, one representative shape.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
