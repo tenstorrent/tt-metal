@@ -426,7 +426,7 @@
     bh_quietbox_2:
       timeout: 45
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
@@ -698,7 +698,7 @@
     wh_galaxy_perf:
       timeout: 30
       tier: 1
-      release_ready: true
+      release_ready: false
     bh_quietbox_2:
       timeout: 35
       tier: 1
@@ -809,7 +809,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
