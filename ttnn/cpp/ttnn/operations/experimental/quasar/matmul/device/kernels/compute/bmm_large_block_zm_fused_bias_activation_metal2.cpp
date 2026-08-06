@@ -498,20 +498,56 @@ void kernel_main() {
                         // matches the bias section's wait_front(out_subblock_num_tiles),
                         // satisfying the CB API requirement that all wait_front
                         // increments on a given CB are identical.
+#ifdef ARCH_QUASAR
+                        // TEN-4746: bare wait→pop races POP_TILES past WAIT_TILES; interpose a
+                        // real unpack TDMA (dummy copy of tile 0). NOP/DMANOP are insufficient.
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
                     // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
+#ifdef ARCH_QUASAR
+                        // TEN-4746: bare wait→pop races POP_TILES past WAIT_TILES; interpose a
+                        // real unpack TDMA (dummy copy of tile 0). NOP/DMANOP are insufficient.
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;

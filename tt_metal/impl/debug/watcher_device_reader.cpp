@@ -301,11 +301,11 @@ private:
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
-    void DumpSyncRegs() const;
+    void DumpSyncRegs(bool to_stdout = false) const;
     // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
     // programmed remapper pairs so the bypass dump can skip them.
     std::unordered_set<uint32_t> DumpTileCountersWithRemapper() const;
-    void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
+    void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}, bool to_stdout = false) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -851,6 +851,10 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(true);
     DumpRingBuffer(true);
+    // Assert path throws before the periodic DumpSyncRegs() call, and that call is also gated on
+    // TT_METAL_WATCHER_DUMP_ALL. Always host-read tile counters here so TILE_COUNTERS faults
+    // (and other Quasar sync asserts) print live TC state without relying on the debug ring buffer.
+    DumpSyncRegs(/*to_stdout=*/true);
     LogRunningKernels();
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
@@ -1129,7 +1133,7 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     }
 }
 
-void WatcherDeviceReader::Core::DumpSyncRegs() const {
+void WatcherDeviceReader::Core::DumpSyncRegs(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
     if (hal.has_stream_registers()) {
@@ -1168,43 +1172,74 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
                 remapped_tc_keys = DumpTileCountersWithRemapper();
             }
         }
-        DumpTileCountersBypass(remapped_tc_keys);
+        DumpTileCountersBypass(remapped_tc_keys, to_stdout);
     }
 }
 
-void WatcherDeviceReader::Core::DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys) const {
+void WatcherDeviceReader::Core::DumpTileCountersBypass(
+    const std::unordered_set<uint32_t>& skip_tc_keys, bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
-    // NEO side for reading tiles_available directly
-    // In bypass mode, producer/consumer share same TC
+    // NEO side for reading tiles_available / space_available / capacity.
+    // Mirror covers all 32 TCs per Neo (DM pool [0,16) + tensix-only [16,32)). Host previously
+    // only walked the DM pool (NOC_NUM_TILE_COUNTERS = 4*16); compute DFBs often use tensix-only
+    // TCs, so dump the full bank. Remapper skip keys still use neo_id*16+tc_id for DM TCs only.
     uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
     uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
     uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+    // SPACE_AVAILABLE is the word between TILES_AVAILABLE (0x8) and BUFFER_CAPACITY (0x10).
+    const uint32_t neo_tc_space_available_offset = neo_tc_tiles_available_offset + sizeof(uint32_t);
 
-    for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
-        if (skip_tc_keys.contains(i)) {
-            continue;
+    const uint32_t num_neos =
+        (hal.get_num_tile_counters() + dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM - 1) / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+
+    auto emit = [&](const std::string& line) {
+        fprintf(reader_.f, "\n  %s", line.c_str());
+        if (to_stdout) {
+            log_info(tt::LogMetal, "{}", line);
         }
-        uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
-        uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+    };
 
-        uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
+    for (uint32_t neo_id = 0; neo_id < num_neos; neo_id++) {
+        for (uint32_t tc_id = 0; tc_id < dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc_id++) {
+            // Remapper skip set only covers DM-visible TCs (keys = neo*16 + tc for tc<16).
+            if (tc_id < dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM) {
+                const uint32_t dm_key = neo_id * dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id;
+                if (skip_tc_keys.contains(dm_key)) {
+                    continue;
+                }
+            }
 
-        auto capacity_data = reader_.env.get_cluster().read_core(
-            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
-        uint32_t buffer_capacity = capacity_data[0];
+            uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
 
-        auto tiles_avail_data = reader_.env.get_cluster().read_core(
-            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
-        uint32_t tiles_to_consume = tiles_avail_data[0];
+            auto capacity_data = reader_.env.get_cluster().read_core(
+                reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
+            uint32_t buffer_capacity = capacity_data[0];
 
-        // tiles_to_consume > 0 means posted != acked (consumer has unprocessed tiles)
-        // Sanity: tiles_to_consume can't exceed buffer_capacity
-        if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
-            // Bypass mode: producer/consumer share same TC; producer identity not available without DFB config
-            fprintf(reader_.f, "\n  remapper:N/A NEO_%u tc_id:%u tiles_to_consume:%u", neo_id, tc_id, tiles_to_consume);
+            auto tiles_avail_data = reader_.env.get_cluster().read_core(
+                reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
+            uint32_t tiles_to_consume = tiles_avail_data[0];
+
+            auto space_avail_data = reader_.env.get_cluster().read_core(
+                reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_space_available_offset, sizeof(uint32_t));
+            uint32_t space_available = space_avail_data[0];
+
+            // Dump programmed TCs (capacity>0) and any non-zero occupancy/overflow — including
+            // tiles_to_consume > capacity, which the old filter dropped but is exactly the
+            // TILE_COUNTERS fault signature.
+            if (buffer_capacity == 0 && tiles_to_consume == 0) {
+                continue;
+            }
+            emit(fmt::format(
+                "NEO_{} tc_id:{}{} capacity:{} tiles_avail:{} space_avail:{}",
+                neo_id,
+                tc_id,
+                tc_id >= dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM ? " (tensix-only)" : "",
+                buffer_capacity,
+                tiles_to_consume,
+                space_available));
         }
     }
 }
@@ -1226,8 +1261,8 @@ std::unordered_set<uint32_t> WatcherDeviceReader::Core::DumpTileCountersWithRema
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     auto claim_neo_tc = [&](uint32_t client_id, uint32_t tc_id) {
-        // Bypass dump only scans NEO overlay TC banks (tc_id < 16 per Neo). Tensix-only TCs
-        // (>= 16) are not in that scan, so they need no skip entry.
+        // Remapper skip keys use neo_id*16+tc for the DM-visible pool. Tensix-only TCs (>= 16)
+        // are always dumped by DumpTileCountersBypass and need no skip entry.
         if (client_id < overlay::NEO_0 || tc_id >= dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM) {
             return;
         }
