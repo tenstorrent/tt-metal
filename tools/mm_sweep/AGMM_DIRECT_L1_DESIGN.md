@@ -216,41 +216,78 @@ tuning. It was not independently confirmed with a DRAM byte counter.
 What direct-L1 did deliver: -22.7 us against Phase 1, and the fused path went from +28.3 us WORSE than the
 unfused composition to +5.6 us worse than it. It is still 39% above the gate.
 
-### The 25.7 us is fabric-bandwidth-bound -- ruled out, not guessed
+### What the 25.7 us is NOT
 
-Two things were measured to close this off, because "the fabric costs 25.7 us" has very different
-consequences depending on whether it is per-transaction overhead or bandwidth:
+- **It is not per-packet overhead.** The mux slot holds header THEN payload, and `kMuxChannelBufferBytes`
+  was hardcoded to 4096 -- BELOW the fabric's own 4352-byte max payload -- so direct-L1 was capped at ONE
+  2 KiB bf16 tile per packet. Deriving the sizes from the fabric
+  (`get_tt_fabric_max_payload_size_bytes` / `get_tt_fabric_channel_buffer_size_bytes`) fits two tiles.
+  **Measured: 120.7 -> 120.2 us, nowait 101.7 -> 101.3.**
 
-- **Packet size is not it.** The mux slot holds header THEN payload, and `kMuxChannelBufferBytes` was
-  hardcoded to 4096 -- BELOW the fabric's own 4352-byte max payload -- so direct-L1 was capped at ONE 2 KiB
-  bf16 tile per packet. Deriving the sizes from the fabric instead (`get_tt_fabric_max_payload_size_bytes`,
-  `get_tt_fabric_channel_buffer_size_bytes`) fits two tiles, halving packet count, headers, mux slot
-  handoffs and NoC transactions. **Measured: 120.7 -> 120.2 us, and nowait 101.7 -> 101.3.** Nothing.
-  Verified in effect, not assumed -- `TT_REGIME_A_LOG_CFG=1` prints `packet=4096B ... channel=4400B`.
-- **More links are not available.** `num_links=3` and `4` both fail with *"Requested link index 2 is out of
-  bounds. 2 ethernet channels available"*: **2 links is the hardware maximum on this axis**, and the
+  That is the RIGHT magnitude, not a null result, and it is worth being precise about because the intuition
+  "pack the packet, get utilisation" is correct in direction. The channel buffer is 4400 B for a 4352 B
+  payload, so the header is 48 B: wire overhead goes from 48/2096 = 2.3% to 48/4144 = 1.2%. Payload bytes on
+  the wire do not change -- only the header amortises -- so the predicted win is ~1.1% of the term, ~0.3 us
+  against ~0.5 us measured. Packing helps by exactly the header fraction and no more. What this rules out is
+  the much larger effect you would see if per-packet PROCESSING (mux slot handoffs, credit round-trips, NoC
+  transaction issue rate) were the limit.
+
+  Verified in effect rather than assumed: `TT_REGIME_A_LOG_CFG=1` prints `packet=4096B ... channel=4400B`.
+- **It is not fixable with more links.** `num_links=3` and `4` both fail with *"Requested link index 2 is out
+  of bounds. 2 ethernet channels available"*: **2 links is the hardware maximum on this axis**, and the
   measurements already use it.
 
-1.92 MB of egress in 25.7 us is ~75 GB/s over those 2 links. So the fabric is saturated, the byte count is
-already the irreducible `(tp-1)/tp` of the activation, and **25.7 us is a floor** that neither packing nor
-parallelism can lower.
+**CORRECTION.** An earlier version of this section divided 1.92 MB by 25.7 us, called it ~75 GB/s, and
+concluded the fabric was saturated and 25.7 us was a hard floor. That inference is invalid: 25.7 us is the
+MARGINAL exposed cost (the wall-clock difference between fabric present and absent), not the transfer time.
+If any part of the transfer already hides under compute -- and the fused path's 25.7 us against a 36.6 us
+standalone all-gather says some does -- then the true wire time is larger than 25.7 us and the exposed
+portion is a scheduling property, not a bandwidth one. Bytes/marginal-cost is not a bandwidth.
+
+### TRIED AND REVERTED: deferring the fabric drain past the on-chip ring
+
+The obvious attack on the 25.7 us, and it makes things worse. The sender does
+`open -> payload -> credit -> write_barrier -> atomic_barrier -> close` and only THEN enters the on-chip
+ring, so every sending core blocks on its own 32 KB draining before doing any ring or compute work.
+`close()` does not have to happen there -- slot 0 is the send source and is never rewritten, and no packet
+headers are allocated after the prologue -- so the drain can be deferred until after the ring, where the
+ring's own `noc_async_write_barrier()` covers it.
+
+Measured (medium/tp4/ring/2 links, 4 blocks):
+
+    immediate drain (committed)   118.1 us   block medians 116.7 / 118.5 / 120.0 / 117.8
+    deferred drain                127.3 us   block medians 118.7 / 127.3 / 139.5 / 146.2   (min 109, max 159)
+    deferred, nowait              100.6 us   vs 101.3 immediate
+
+So with nothing waiting it is marginally BETTER (100.6 vs 101.3 -- the core does get on with its own work
+sooner), and with the real dependency it is much worse AND much less stable. That combination points at
+contention rather than scheduling: deferring moves the egress into the window where the on-chip ring is
+running, the ring sits on the arrival chain, and delaying it amplifies through every downstream core.
+
+**The ring is the dominant NoC consumer, by an order of magnitude.** Each core forwards `shard_bytes` once
+per ring step: `(G-1) * 32 KB = 224 KB` per core, and at the picked Pk=10 / 80-core config that is
+**~17.9 MB of L1-to-L1 traffic per device against 1.92 MB of fabric traffic** -- roughly 9x. So the fabric
+egress is not filling idle NoC; it is competing with the ring for it, and the current code is already doing
+the right thing by draining before the ring rather than inside it.
+
+That also retires the framing that the 25.7 us is "additive because it is not scheduled well". It is
+additive because it is real NoC occupancy in a program that already saturates the NoC on-chip. (Consistent
+with the measurement, not proven by it -- the 17.9 MB is derived from the config, not counted.)
 
 ### What is left
 
-1. **Get the egress off the writer's critical path.** The one lever the above does NOT rule out. The sender
-   currently does `open -> payload -> credit -> write_barrier -> atomic_barrier -> close` and only THEN
-   enters the on-chip ring, so every sending core blocks on its own 32 KB draining before it does any ring
-   or compute work. The barrier is needed before `close()`, but `close()` does not have to happen there:
-   slot 0 is the send source and is never overwritten, so the drain can be deferred to the end of the
-   kernel and overlap with the ring and the matmul. This attacks the 25.7 us without moving fewer bytes,
-   which is why it is now first.
-2. **The ring's zero-overlap bound, 19.0 us.** Unchanged and exactly as analysed above: `makespan >=
-   T_ready_max + G*delta`. Per-wave rings (one ring per arrival wave instead of one ring over the whole
-   gathered K) is the fix, giving `T_ready_max + T_mm/tp`.
+1. **The ring's zero-overlap bound, 19.0 us.** `makespan >= T_ready_max + G*delta`. Per-wave rings (one ring
+   per arrival wave instead of one ring over the whole gathered K) is the fix, giving
+   `T_ready_max + T_mm/tp`. Now the only identified lever that has not been tried and measured.
+2. **The on-chip ring's 17.9 MB itself**, if the 25.7 us is to move at all. That is Regime-A's core
+   structure (the activation is deliberately replicated across the 8-bank ring), so it is a much larger
+   question than this change -- but it, not the fabric, is what the fabric is queueing behind.
 
-Arithmetic worth keeping in view: floor 76.0 + a 25.7 us fabric floor = 101.7, still above the 86.9 us gate.
-So removing the 19.0 us stall alone does NOT reach the gate -- item 1 (making the fabric cost concurrent
-rather than additive) is what decides whether the gate is reachable at all for this shape at 2 links.
+Arithmetic worth keeping in view: floor 76.0 + the 25.7 us exposed fabric cost = 101.7, still above the
+86.9 us gate. **So per-wave rings alone does not reach the gate** -- it targets the 19.0 us, and 101.7 is
+what is left when that is gone. Reaching 86.9 for this shape needs the fabric's 25.7 us to come down too,
+and the deferred-drain experiment above says that will not come from rescheduling it; it needs either fewer
+bytes on the NoC or less competition from the on-chip ring.
 
 ## Scope limits of the implementation
 
