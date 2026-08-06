@@ -66,12 +66,11 @@ public:
         // what kResyncProbes exists for.
         uint64_t clock_reads = 0;
         std::chrono::nanoseconds busy{};
-        // Chords resolved, and how many of them had a probe inside to measure the clock's departure against. The bow
-        // term is silent on a settled clock, which is correct and indistinguishable from a term that never had any
-        // evidence to work with -- the failure the inferred curvature it replaced went unnoticed for. Reported so the
-        // difference is visible without a throttling workload.
+        // Chords resolved, and how many had a third probe available to read the clock's departure from. The departure
+        // is silent on a settled clock, which is correct and indistinguishable from a term that never had any evidence
+        // at all -- the failure the inferred curvature it replaced went unnoticed for. Reported so the two stay apart.
         uint64_t chords_placed = 0;
-        uint64_t chords_with_interior_probe = 0;
+        uint64_t chords_with_bow_evidence = 0;
     };
 
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
@@ -205,9 +204,10 @@ public:
     [[nodiscard]] Cost cost() const { return cost_; }
 
 private:
-    // What the retained probes say the clock did between two of them that the chord through them does not capture. Zero
-    // when no probe lies inside the chord, which is the absence of evidence, not a claim of linearity.
-    [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t open_index, uint64_t close_index) const;
+    // What the retained probes say the clock did between `close_index - 1` and `close_index` that the line through them
+    // does not capture. Zero when there is no third probe to read it from, which is the absence of evidence rather than
+    // a claim of linearity.
+    [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t close_index) const;
 
     // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
     // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record is

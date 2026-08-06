@@ -468,14 +468,13 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         total.clock_reads += cost.clock_reads;
         total.busy += cost.busy;
         total.chords_placed += cost.chords_placed;
-        total.chords_with_interior_probe += cost.chords_with_interior_probe;
+        total.chords_with_bow_evidence += cost.chords_with_bow_evidence;
     }
     const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
     const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
     const auto busy = total.busy - sync_cost_at_last_report_.busy;
     const uint64_t chords = total.chords_placed - sync_cost_at_last_report_.chords_placed;
-    const uint64_t with_interior =
-        total.chords_with_interior_probe - sync_cost_at_last_report_.chords_with_interior_probe;
+    const uint64_t with_evidence = total.chords_with_bow_evidence - sync_cost_at_last_report_.chords_with_bow_evidence;
     const auto window = now - last_sync_cost_report_;
     sync_cost_at_last_report_ = total;
     last_sync_cost_report_ = now;
@@ -486,8 +485,9 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread; {} chords placed, {:.1f}% with a probe inside to "
-        "measure the clock's departure against",
+        "{:.2f}us mean per resync, {:.2f}% of the receiver thread; {} chords placed, {:.1f}% with a third probe to "
+        "read "
+        "the clock's departure from",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
         resyncs,
@@ -496,7 +496,7 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
         100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count(),
         chords,
-        chords == 0 ? 0.0 : 100.0 * static_cast<double>(with_interior) / static_cast<double>(chords));
+        chords == 0 ? 0.0 : 100.0 * static_cast<double>(with_evidence) / static_cast<double>(chords));
 }
 
 uint32_t RealtimeProfilerReceiver::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }

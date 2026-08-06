@@ -160,56 +160,54 @@ std::chrono::nanoseconds RealtimeProfilerClockSync::departure_from_chord(
                                (static_cast<double>(interior.ticks) - static_cast<double>(open.ticks)) * inv_rate;
     const double measured_ns = static_cast<double>(interior.host.time_since_epoch().count());
     const auto departure = std::chrono::nanoseconds(static_cast<int64_t>(std::abs(measured_ns - on_chord_ns)));
-    // A probe's own read noise accounts for bracket/2 of any distance, so only what is left is the clock's.
-    return departure - std::min(departure, placement_error(interior.bracket));
+    // Three brackets explain part of any distance before the clock does: the interior probe's own read, and the two the
+    // line was drawn through, since a line through points known to +/-b/2 is itself only that well placed anywhere
+    // between them. Only what survives all three is the clock's.
+    const auto explained_by_reads = placement_error(interior.bracket) + interpolation_error(open, close);
+    return departure - std::min(departure, explained_by_reads);
 }
 
-std::chrono::nanoseconds RealtimeProfilerClockSync::measured_bow(uint64_t open_index, uint64_t close_index) const {
-    std::chrono::nanoseconds worst{};
-    for (uint64_t i = open_index + 1; i < close_index; i++) {
-        worst = std::max(worst, departure_from_chord(probe_at(open_index), probe_at(close_index), probe_at(i)));
-    }
-    if (worst != std::chrono::nanoseconds::zero() || close_index > open_index + 1) {
-        return worst;
-    }
-    // A chord of a single probe gap has no probe inside it, by definition, and that is the ordinary case whenever
-    // records are sparse enough that probes land further apart than the span floor -- which is exactly the throttling
-    // workload the bow matters for. So the chord is widened by one probe on the near side, where the record's own near
-    // anchor then sits inside it and can be measured against it. Charged unscaled: the departure was measured across
-    // roughly twice the record's own span and the bow of a rate step grows with span, so this over-states rather than
-    // invents.
-    if (open_index == oldest_probe()) {
+std::chrono::nanoseconds RealtimeProfilerClockSync::measured_bow(uint64_t close_index) const {
+    // The pair placing a record is adjacent, so nothing lies inside it and the clock's departure has to be read one
+    // probe out: the probe between `close_index - 2` and `close_index` was not fitted to the line through them, so its
+    // distance from that line is the departure there. Scaled by the span ratio, because a rate step bows the trajectory
+    // in proportion to the span it acts over and the triple spans roughly twice the pair.
+    if (close_index < oldest_probe() + 2) {
         return {};
     }
-    return departure_from_chord(probe_at(open_index - 1), probe_at(close_index), probe_at(open_index));
+    const Anchor& outer = probe_at(close_index - 2);
+    const Anchor& open = probe_at(close_index - 1);
+    const Anchor& close = probe_at(close_index);
+    const auto departure = departure_from_chord(outer, close, open);
+    if (departure == std::chrono::nanoseconds::zero() || close.host <= outer.host) {
+        return {};
+    }
+    const auto pair_span = close.host - open.host;
+    const auto triple_span = close.host - outer.host;
+    return departure * pair_span.count() / triple_span.count();
 }
 
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::place(uint64_t ticks) {
     const uint64_t probes_begin = oldest_probe();
     // The caller probes after reading a batch, so a record's timestamps are always behind the newest probe and this
     // clamp is a no-op. It exists so the pair is a pair whatever it is handed: past the far anchor place_on_chord
-    // charges the distance, which is the same thing a separate single-anchor path would have done with more code.
+    // charges the distance.
     const uint64_t close_index = std::min(first_probe_at_or_past(ticks), probes_end_ - 1);
-    const Anchor& closing = probe_at(close_index);
-
-    // Near side: the newest probe far enough from the far side to take a slope from, and the oldest retained one when
-    // none is. warm_up() leaves four probes spanning kRateBaseline before any record exists and probes are only ever
-    // appended, so a pair wide enough to take a slope from is always in the ring.
-    uint64_t open_index = probes_begin;
-    for (uint64_t i = close_index; i-- > probes_begin;) {
-        if (closing.host - probe_at(i).host >= sync_interval() / 2) {
-            open_index = i;
-            break;
-        }
+    if (close_index == probes_begin) {
+        // Nothing retained before it, so there is no pair. After warm_up() this means the ring lapped past `ticks`, and
+        // no later pass would help; publish_pages rejects the record.
+        return std::nullopt;
     }
 
-    const auto baseline = baseline_rate();
-    auto chord = plan_chord_mapping(probe_at(open_index), closing, baseline, measured_bow(open_index, close_index));
+    auto chord = plan_chord_mapping(
+        probe_at(close_index - 1), probe_at(close_index), baseline_rate(), measured_bow(close_index));
     if (!chord.has_value()) {
         return std::nullopt;
     }
     ++cost_.chords_placed;
-    cost_.chords_with_interior_probe += close_index > open_index + 1;
+    // Counts whether a third probe existed to read the departure from, not whether it read nonzero. A settled clock
+    // reads zero, and that has to stay distinguishable from having had nothing to read.
+    cost_.chords_with_bow_evidence += close_index >= probes_begin + 2;
     last_published_sync_error_ = chord->mapping.sync_error;
     return chord;
 }
@@ -219,14 +217,12 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     const Anchor& closing,
     const std::optional<BaselineRate>& baseline,
     std::chrono::nanoseconds measured_bow) {
-    // A chord much shorter than the interval asked for places records inside it just fine, but its slope is uncertain
-    // by (both brackets)/span and that slope is published as `frequency`. A consumer evaluating the mapping away from
-    // the record would then see slope_noise * distance, which is how a few-us chord becomes microseconds of error.
-    //
-    // Non-monotone ticks are refused with it, which is the whole of what a pair is checked for: the counter is read low
-    // word first and that latches the high word (see the arch c_tensix_core.h), so the composed 64-bit value cannot
-    // tear on either side, and a probe landing somewhere the clock could not have been is not a thing that happens.
-    if (closing.host <= open.host || closing.ticks <= open.ticks || closing.host - open.host < sync_interval() / 2) {
+    // Monotonicity is the whole of what a pair is checked for. There is no minimum span: a timestamp between two probes
+    // cannot be further off than the worse of them however short the span, because a straight line's largest departure
+    // from another is at their endpoints -- while the clock's own departure from the line grows with span. Narrower is
+    // strictly better, and the slope's own noise, which does grow as span shrinks, reaches nothing: it is not what a
+    // record is published with, and inside the chord it is pinned at both ends.
+    if (closing.host <= open.host || closing.ticks <= open.ticks) {
         return std::nullopt;
     }
     const double span_ns =

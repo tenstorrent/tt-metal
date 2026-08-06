@@ -298,13 +298,18 @@ TEST(RealtimeProfilerChordMapping, SecantRecoversTheRateAndPlacesTheAnchorOnTheC
     EXPECT_NEAR(closing_host_ns, static_cast<double>(closing.host.time_since_epoch().count()), 1.0);
 }
 
-// A slope is only as good as the span it was measured over; below half an interval the previous one is better.
-TEST(RealtimeProfilerChordMapping, ChordTooShortToTakeASlopeFromIsRefused) {
+// Narrower is better, not worse: a timestamp between two probes cannot be further off than the worse of them however
+// short the span, so there is no minimum. The floor that used to be here guarded a consumer of the chord's own slope
+// that stopped existing when the published rate became the baseline's.
+TEST(RealtimeProfilerChordMapping, AVeryShortChordIsStillUsableAndBoundedByItsEndpoints) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto barely_later =
-        anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 4, kNominalRate, kProbeBracket);
+        anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 100, kNominalRate, kProbeBracket);
 
-    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, std::nullopt, {}).has_value());
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, std::nullopt, {});
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, barely_later));
 }
 
 // The counter is read low word first and that latches the high word, so a composed timestamp cannot tear and a pair is
@@ -397,10 +402,11 @@ TEST(RealtimeProfilerChordMapping, ClockDepartureMeasuredAtAnInteriorProbeIsChar
     auto interior = anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 2, kNominalRate, kProbeBracket);
     interior.host += kDeparture;
 
+    // Its own read explains bracket/2, and the line it is measured against another bracket/2, so both come off.
     const auto bow = RealtimeProfilerClockSync::departure_from_chord(open, closing, interior);
     EXPECT_NEAR(
         static_cast<double>(bow.count()),
-        static_cast<double>((kDeparture - kProbeBracket / 2).count()),
+        static_cast<double>((kDeparture - kProbeBracket).count()),
         static_cast<double>(kProbeBracket.count()));
 
     const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, bow);
