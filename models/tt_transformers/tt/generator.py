@@ -1270,6 +1270,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         reset_sampling_state: bool,
         **kwargs,
     ):
+        """Run one decode step, executing the caller's reload commands exactly.
+
+        Args:
+            slot_remap: ``remap[i] = j`` means slot *i* now holds the request that was
+                at slot *j*, in global slot indices. Applied to the sampler's per-slot
+                state; models with their own slot-indexed state consume it as well.
+            reload_inputs: Host token/position/page-table inputs are authoritative for
+                this step; restage all of them. Subsumes ``reload_page_table``.
+            reload_page_table: Copy only the page-table trace input, preserving
+                device-produced token and position state. Ignored when
+                ``reload_inputs`` is set.
+            reload_sampling_params: Upload temperature/top-k/top-p/penalties.
+            reset_sampling_state: Rebuild per-slot penalty history and seeds.
+
+        See ``models/common/decode_contract.py`` for the full contract.
+        """
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
 
