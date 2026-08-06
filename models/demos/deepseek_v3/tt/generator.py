@@ -1139,7 +1139,13 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def _apply_sampling_slot_remap(self, slot_remap: torch.Tensor | list[int] | None) -> None:
         if slot_remap is None:
             return
-        self.sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
+        # vLLM delivers slot_remap on every contract decode, including host-sampling
+        # steps. The device sampler is built lazily on the first device-sampling
+        # call, so there is no per-slot state to move until it exists.
+        sampling_generator = getattr(self, "sampling_generator", None)
+        if sampling_generator is None:
+            return
+        sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
 
     def _sampling_device_seed_slots(self, seeds: list[int | None], batch_size: int) -> list[int | None]:
         seed_slot_count = self.sampling_generator.seed_manager.max_batch_size
