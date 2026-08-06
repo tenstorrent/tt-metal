@@ -53,9 +53,8 @@ namespace {
 // conservative for it; that costs nothing, since it is a tie there anyway.
 constexpr uint64_t k_direct_rs_max_input_bytes = 512ull << 10;
 
-// tt::tt_fabric::Topology is a scoped enum with no fmt formatter, and Ring-vs-Torus is worth reading in
-// the dispatch warning below: it separates the 1D hop-count routing regime from the 2D
-// destination-node one, which the direct op handles along different code paths.
+// Topology is a scoped enum with no fmt formatter; Ring vs Torus is worth reading in the warning below
+// (it separates the 1D hop-count routing regime from the 2D destination-node one).
 const char* direct_rs_topology_name(tt::tt_fabric::Topology topology) {
     switch (topology) {
         case tt::tt_fabric::Topology::Ring: return "Ring";
@@ -89,12 +88,9 @@ bool use_direct_reduce_scatter(
         compute_kernel_config.has_value()) {
         return false;
     }
-    // Same reasoning for the two options the direct op cannot express. Its staging buffer is not the ring
-    // op's intermediate -- placement (L1-sharded / L1-interleaved / DRAM) is derived from the shape by
-    // reduce_scatter_direct_staging_spec and is not caller-selectable -- so an explicit
-    // intermediate_memory_config could not be honoured. Semaphore placement is likewise the factory's own
-    // choice. Note use_l1_small_for_semaphores is a plain bool, so "explicitly false" is indistinguishable
-    // from the default; only an explicit true can be detected and declined here.
+    // Same for the two the direct op cannot express: staging placement is shape-derived, not caller-
+    // selectable, and semaphore placement is the factory's. use_l1_small_for_semaphores is a plain bool,
+    // so only an explicit true is detectable.
     if (intermediate_memory_config.has_value() || use_l1_small_for_semaphores) {
         return false;
     }
@@ -195,11 +191,9 @@ ttnn::Tensor reduce_scatter(
             compute_kernel_config,
             intermediate_memory_config,
             use_l1_small_for_semaphores)) {
-        // Diagnostic: the direct path is otherwise completely silent (no logging, and no perf model, so
-        // it reports PM_IDEAL 0.0), which makes "did this shape take the fast path?" unanswerable from a
-        // CI log. Warning level so it survives default log filtering. Deduplicated by shape rather than
-        // emitted once per process: reduce_scatter runs inside per-step model loops, so an unconditional
-        // warning would flood, but one line per distinct call site is bounded and says which shapes hit.
+        // The direct path is otherwise silent (no logging, no perf model), so a CI log cannot answer
+        // "did this shape take it?". Warning level to survive filtering; deduplicated by shape because
+        // reduce_scatter runs inside per-step model loops.
         {
             // Non-const so decltype(key) is a valid std::set value_type.
             auto key = std::make_tuple(

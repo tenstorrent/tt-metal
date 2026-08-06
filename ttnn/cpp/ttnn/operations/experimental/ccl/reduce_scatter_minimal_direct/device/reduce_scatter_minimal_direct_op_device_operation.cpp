@@ -95,14 +95,9 @@ static TensorSpec reduce_scatter_direct_staging_spec(
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type)));
 }
 
-// Checks that must run on EVERY invocation, not just the cache miss that built the program. On a hit the
-// cached workload is reused and only buffer addresses are patched from these tensors, so anything that
-// would make a same-shaped tensor address differently -- page config, memory config, dtype, a different
-// mesh device, or an unallocated buffer -- has to be re-verified each time. Comparing the full
-// tensor_spec() is what the regular reduce-scatter cache-hit validator does
-// (reduce_scatter_device_operation.cpp:32-40), and for the persistent buffers it is also exactly the
-// documented contract: they are required to come from reduce_scatter_minimal_direct_create_persistent_buffers,
-// which builds them from this same compute_output_specs, so a conforming tensor matches byte for byte.
+// Runs on EVERY invocation: a program-cache hit reuses the workload and only patches buffer addresses,
+// so anything that would make a same-shaped tensor address differently must be re-checked. Full
+// tensor_spec() equality matches the ring op's validator and the create_persistent_buffers contract.
 static void validate_direct_tensors_every_invocation(
     const ReduceScatterMinimalDirectDeviceOperation::operation_attributes_t& args,
     const ReduceScatterMinimalDirectDeviceOperation::tensor_args_t& tensor_args) {
@@ -169,8 +164,7 @@ void ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss(
         input_tensor.logical_shape()[args.dim],
         args.num_devices);
 
-    // Persistent-buffer specs are checked by validate_direct_tensors_every_invocation above, which also
-    // runs on cache hits.
+    // Persistent-buffer specs: see validate_direct_tensors_every_invocation.
 }
 
 ReduceScatterMinimalDirectDeviceOperation::spec_return_value_t
@@ -238,18 +232,14 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device for reduce_scatter_minimal_direct");
 
     const auto mesh_shape = mesh_device->shape();
-    // A 2-element per-axis table is indexed by cluster_axis below, so an out-of-range axis has to be a
-    // controlled failure here rather than an out-of-bounds read on the way to device-op validation.
+    // cluster_axis indexes 2-element tables below: fail cleanly rather than read out of bounds.
     TT_FATAL(
         !cluster_axis.has_value() || cluster_axis.value() < 2,
         "reduce_scatter_minimal_direct cluster_axis {} is out of range; only axes 0 and 1 exist",
         cluster_axis.value_or(0));
-    // An absent cluster_axis means "the one axis that wraps", which is only unambiguous on a line mesh.
-    // On a mesh with both extents > 1 the loop below would activate BOTH axes, making num_devices their
-    // product while active_axis (and hence the fabric connections the factory opens) covers only one --
-    // the kernels would then wait on contributions from devices they cannot route to, and hang. Require
-    // the caller to name the axis instead. reduce_scatter_minimal_direct_is_applicable declines the same
-    // case, so the ttnn.reduce_scatter dispatch stays on the ring op rather than reaching this TT_FATAL.
+    // An absent cluster_axis only names a unique wrapping axis on a line mesh. With both extents > 1 the
+    // loop below activates BOTH axes, so num_devices becomes their product while routing covers one --
+    // the kernels then await contributions they cannot route to, and hang. is_applicable declines it too.
     TT_FATAL(
         cluster_axis.has_value() || mesh_shape[0] == 1 || mesh_shape[1] == 1,
         "reduce_scatter_minimal_direct requires an explicit cluster_axis on a {} mesh: with both extents "

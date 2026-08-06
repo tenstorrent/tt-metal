@@ -160,9 +160,7 @@ void kernel_main() {
                 noc.async_writes_flushed();
             }
         }
-        // Free noc_semaphore_wait_min by necessity, not preference: init_sem is a GlobalSemaphore ADDRESS
-        // from a runtime arg, while Semaphore<> can only be built from a per-program semaphore_id that it
-        // resolves via get_semaphore<>(). See the matching note in the reader.
+        // Free function: init_sem arrives as a GlobalSemaphore address. See the reader's note.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem), (invocation + 1) * num_dests);
     }
 
@@ -256,9 +254,7 @@ void kernel_main() {
 
     fabric_connection.close_start();
 
-    // Barrier through the Noc object rather than the free functions: both resolve to noc_index today, so
-    // this is not a live difference, but it keeps the NoC selection in one place -- constructing `noc` with
-    // an explicit id would otherwise leave these two barriers silently on the default NoC.
+    // Via the Noc object so an explicitly-constructed `noc` cannot leave these on the default NoC.
     noc.async_write_barrier();
     noc.async_atomic_barrier();
 
