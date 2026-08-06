@@ -149,6 +149,36 @@ they could plausibly consume the win — which is exactly why blaze fuses whole 
 single matmuls, and why the fused ops (blocked on F4's down projection and F11's gather) are
 where the real prize sits.
 
+### A GLM-specific FusedOp, built from micro-ops: `GLMQKVAProjection` — 9.43x
+
+blaze's own MLA fused ops cannot express this model (F3: 20 heads), and its MoE ones are blocked
+(F4 down, F11 gather). But `DRAMStreamingMatmul` is correct at every GLM shape, so the
+projections can be fused directly. `blaze/ops/glm_qkv_a_projection/` composes the two that share
+an activation — modelled on `swiglu`'s gate/up pair, stopping before the Gather that deadlocks:
+
+    act ──► DRAMStreamingMatmul(w_q_a)  ──► q_a_out    pop_act=False, act stays live
+        └─► DRAMStreamingMatmul(w_kv_a) ──► kv_a_out   pop_act=True, last consumer
+
+| impl | dispatches | cores | µs | q_a PCC | kv_a PCC |
+|---|---:|---:|---:|---:|---:|
+| ttnn: 2x `dram_sharded_linear` | 2 | 64 | 89.3 | 0.9999 | 0.9999 |
+| **blaze: `GLMQKVAProjection`** | **1** | 8 | **9.5** | 0.9999 | 0.9999 |
+
+**9.43x, and 3.75 ms/token over 47 layers as an upper bound** — the largest single opportunity in
+the table. It also proves blaze is usable for this model *without* waiting on F3/F4/F11: a
+GLM-shaped FusedOp can be assembled from micro-ops that already work on a harvested grid.
+
+**But read where the win comes from.** The two matmuls measured *separately* are 4.9 + 5.0 =
+9.9 µs; fused they are 9.5 µs. **Fusion itself contributes ~0.4 µs, about 4%.** The 9.43x is
+almost entirely `DRAMStreamingMatmul` beating ttnn's matmul, not the fusing. That matters because
+the fusion is the part that was supposed to survive the critical-path problem: keeping an
+intermediate in L1 is worth something only if there was a DRAM round-trip to avoid, and between
+these two projections there is not one — they share an input rather than chaining.
+
+The mechanism-2 case therefore still rests on a *chained* fusion (norm -> proj, or matmul ->
+eltwise -> matmul), where an intermediate genuinely round-trips today. That is the next op to
+build, and it is the honest test of whether fusion beats the ~12% ceiling.
+
 ### rmsnorm — REGRESSION, do not adopt
 
 | config | ttnn µs | blaze µs | speedup | ttnn PCC | blaze PCC | verdict |
