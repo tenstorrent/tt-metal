@@ -272,10 +272,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     uint32_t cb_page_size = input_page_size * pages_per_packet;
     uint32_t cb_depth = 3;
 
-    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
-    // frequency between reader and writer. Note this increases effective CB depth.
-    // Don't do this for row-major layout because of all the careful handling of page sizes.
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between
+    // reader and writer. Note this increases effective CB depth. Applies to row-major too: an
+    // unbounded row-major page is already handled by the clamp below, which bounds
+    // cb_depth * cb_page_size * multiplier by the available L1 (and bottoms out at multiplier 1),
+    // and scaling by an integer keeps cb_page_size a multiple of input_page_size.
+    {
         // Empirically determined heuristic, works well for all tensor sizes
         const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
         // Find the largest multiplier in [1, ideal] that fits in available L1
