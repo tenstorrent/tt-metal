@@ -4,47 +4,38 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_a_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_b_id = tt::CBIndex::c_1;
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
-
-    DataflowBuffer dfb_a(cb_a_id);
-    DataflowBuffer dfb_b(cb_b_id);
-    DataflowBuffer dfb_out(cb_out_id);
-
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            for (uint32_t w = 0; w < Wt; w++) {
-                // For this bcast-h op the reader will wrap the RHS source tile around at Wt
-                // so here we just linearly read 2 parallel arrays and apply bcast op per tile
-                // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
-                dfb_b.wait_front(onetile);
-                dfb_a.wait_front(onetile);
+    constexpr auto cb_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-                tile_regs_acquire();
-                BCAST_OP<BroadcastType::ROW>(cb_a_id, cb_b_id, 0, 0, 0);
-                tile_regs_commit();
+    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
-                dfb_a.pop_front(onetile);
-                dfb_b.pop_front(onetile);
-
-                dfb_out.reserve_back(onetile);
-
-                tile_regs_wait();
-                pack_tile(0, cb_out_id);
-                tile_regs_release();
-
-                dfb_out.push_back(onetile);
-            }
-        }
-    }
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
+        compute_kernel_lib::BinaryFpu<
+            compute_kernel_lib::input(
+                cb_lhs,
+                compute_kernel_lib::WaitPolicy::PerTile,
+                compute_kernel_lib::PopPolicy::PerTile,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
+            compute_kernel_lib::input(
+                cb_rhs,
+                compute_kernel_lib::WaitPolicy::PerTile,
+                compute_kernel_lib::PopPolicy::PerTile,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
+            CHAIN_BCAST_OP,
+            CHAIN_BCAST_DIM>{},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(
+            cb_out,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
 }
