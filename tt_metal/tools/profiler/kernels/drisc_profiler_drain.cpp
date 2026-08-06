@@ -138,6 +138,11 @@ void kernel_main() {
     constexpr uint32_t kMaxCores = get_compile_time_arg_val(8);
     // Fixed inter-sweep gap in cycles. 0 = continuous. The hook a pacing controller would drive.
     constexpr uint32_t kGapCycles = get_compile_time_arg_val(9);
+    // EGRESS AMPLIFIER. 1 = normal. >1 re-sends each staged frame this many times, so egress bandwidth is
+    // decoupled from producer rate: the extra sends skip the read and process phases entirely. Exists to ask
+    // "can PCIe egress alone hang the card?" on a drainer whose own bottleneck is read/process, not egress.
+    // The host receives duplicate frames, so run it with decode OFF -- it is a stress tool, not a capture.
+    constexpr uint32_t kShipRepeat = get_compile_time_arg_val(10);
 
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kRingWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -272,15 +277,9 @@ void kernel_main() {
 
     // Ship `count` adjacent slots as ONE contiguous write. They are already framed in place: nothing is
     // copied, nothing is assembled.
-    auto ship_run = [&](uint32_t start, uint32_t count) {
-        if (count == 0) {
-            return;
-        }
-        if (egress_dead) {
-            *phase = kPhDropped;
-            dropped_frames += count;
-            return;
-        }
+    // Returns false if this send was dropped (credit wait expired), so an amplified run stops repeating
+    // into a consumer that is not acking instead of billing one dropped frame per repeat.
+    auto ship_once = [&](uint32_t start, uint32_t count) -> bool {
         const uint32_t nbytes = count * kSlotBytes;
         const uint32_t npages = count * kPagesPerSlot;
         const uint64_t t0 = get_timestamp();
@@ -295,7 +294,7 @@ void kernel_main() {
             credit_timeouts++;
             dropped_frames += count;
             c_reserve += get_timestamp() - t0;
-            return;
+            return false;
         }
         const uint64_t t1 = get_timestamp();
         c_reserve += t1 - t0;
@@ -326,6 +325,26 @@ void kernel_main() {
         *phase = kPhWrDone;
         pages += npages;
         pushes++;
+        return true;
+    };
+
+    // One logical frame = kShipRepeat sends of the same staged bytes. At kShipRepeat == 1 this is exactly the
+    // old ship_run. The drop/dead checks stay OUT here so a dead consumer costs the whole run's worth of
+    // frames once, not once per repeat.
+    auto ship_run = [&](uint32_t start, uint32_t count) {
+        if (count == 0) {
+            return;
+        }
+        if (egress_dead) {
+            *phase = kPhDropped;
+            dropped_frames += count;
+            return;
+        }
+        for (uint32_t rep = 0; rep < kShipRepeat; rep++) {
+            if (!ship_once(start, count) || egress_dead) {
+                break;
+            }
+        }
     };
 
     const uint64_t t_start = get_timestamp();

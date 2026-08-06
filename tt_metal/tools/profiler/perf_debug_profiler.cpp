@@ -94,6 +94,21 @@ uint32_t drisc_gap_cycles() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_SHIP_REPEAT: EGRESS AMPLIFIER for stress testing. N>1 makes the drainer re-send each
+// staged frame N times, so egress bandwidth stops being bounded by producer rate -- the extra sends skip the
+// read and process phases. Written to answer "can PCIe egress alone hang the card?" on the Tensix drainer,
+// whose own ceiling is read/process (saturated at 511/512 ring occupancy while pushing only 5.2 GB/s).
+// The host then receives N duplicate copies of every frame, so this is NOT a valid capture: pair it with
+// TT_METAL_PERF_DEBUG_NO_DECODE=1 and read the page/byte counters, not the markers.
+uint32_t ship_repeat() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SHIP_REPEAT");
+        const uint32_t n = (s == nullptr || *s == '\0') ? 1u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+        return n == 0 ? 1u : n;
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_NO_STATIC_TLB: skip configuring a static TLB window for the DRISC drainer, leaving the
 // socket's ack write on UMD's dynamic (reconfigure-per-access) path. Exists so static-vs-dynamic can be A/B'd
 // on ONE binary -- rebuilding between arms makes every difference suspect.
@@ -790,7 +805,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 ctx.sockets[d]->get_config_buffer_address(),
                 0xFFFFFFFFu,
                 128,
-                drisc_gap_cycles()};
+                drisc_gap_cycles(),
+                ship_repeat()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(

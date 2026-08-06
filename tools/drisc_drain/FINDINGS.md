@@ -1272,3 +1272,49 @@ path in one day (a freeze at delay 500, a hang at 150) and **none of them requir
 
 **Run the Tensix arm FIRST** in any future comparison — on a known-good card, before a DRISC pass that may take
 the box with it. That ordering is what made this measurement possible at all.
+
+## §N+4 — The egress amplifier: PCIe bandwidth is NOT the hang trigger (bh-05, 2026-08-06)
+
+The Tensix drainer saturates on read/process (511/512 occupancy at only ~5 GB/s), so it can never stress PCIe
+by raising producer pressure. To decouple the two, `TT_METAL_PERF_DEBUG_SHIP_REPEAT=N` makes the drainer
+**re-send each staged frame N times** — the extra sends skip the read and process phases entirely. The host then
+gets N duplicate copies, so it is a stress tool, not a capture: pair it with `TT_METAL_PERF_DEBUG_NO_DECODE=1`
+and read the page/byte counters, never the markers.
+
+| repeat | delay | shipped | egress while busy | max occ | notes |
+|---|---|---|---|---|---|
+| 1 | 500 | 35.9 MB | 12.98 GB/s | 80 | baseline |
+| 2 | 500 | 46.2 MB | 16.63 GB/s | 188 | |
+| 4 | 500 | 47.5 MB | **17.25 GB/s** | 368 | already past the DRISC's safe 15.4 |
+| 8 | 500 | 54.7 MB | 17.17 GB/s | 511 | 7 credit timeouts, 1386 stalls |
+| 16 | 500 | 84.6 MB | 16.40 GB/s | 511 | 23 credit timeouts, 1591 stalls |
+| 4 | 0 | 18.7 MB | 18.30 GB/s | 511 | 1707 stalls |
+| **8** | **0** | 34.6 MB | **19.32 GB/s** | 511 | 6 credit timeouts, 1665 stalls |
+
+Plus **20 consecutive runs at repeat=8 / delay 0**: zero hangs, ack write 166–178 ns throughout, card healthy
+after. The pipeline was genuinely saturated — host sock-read pinned at ~21 GB/s, rings at 511/512, producers
+stalling, credits timing out.
+
+**A Tensix sustaining 19.3 GB/s does not hang the card.** That is 25% above the highest rate the DRISC survived
+(15.4 GB/s at delay 200) and well above the ~13 GB/s it was pushing when it hung at delay 150.
+
+### So egress bandwidth is not the trigger — two independent lines now say so
+
+1. Shipped bytes FALL as delay drops (§N+3 corrected), so the DRISC pushed LESS egress at the delay that hung
+   it than at the delay that did not.
+2. Forcing a Tensix above every DRISC rate ever survived, repeatedly, does nothing.
+
+Both the "knee as a safety limit" rule and the "Tensix cannot reach the DRISC's egress" explanation are now
+dead. Neither delay nor bandwidth is the causal axis.
+
+### What is left, and the experiment that separates it
+
+Whatever differs about the DRISC path itself, not the rate it runs at:
+- the **DRAM-core NIU** issuing posted writes into the PCIe tile, versus a worker NIU;
+- the **fast-dispatch environment** the DRISC runs in (dispatch cores contending on the same NoC), versus slow
+  dispatch, which is the only mode the Tensix drainer can use;
+- the **read side** rather than the write side (the DRISC's fused 10,496 B reads across 110 cores).
+
+**The symmetric test: amplify the DRISC at a safe delay.** If ~19 GB/s from a DRAM core hangs the card where
+the same rate from a Tensix does not, the trigger is the core/NIU path and not the load — the sharpest available
+result. Budget a cold power cycle for it, since a positive result means a hung card.
