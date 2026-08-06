@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -154,7 +156,17 @@ class Transformer(LightweightModule):
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        single_device = list(self.mesh_device.shape) == [1, 1]
+        allow_force_argmax = self.args.model_config.get("SAMPLING_AG_CONFIG", {}).get("allow_force_argmax", False)
+        # Multi-device greedy can argmax the full logit width on-device after the split-logit all-gather
+        # (which already runs for host sampling), bypassing the 64K-per-device topk split. Env-gated
+        # (TT_GEMMA3_ODS=1) so the default path stays unchanged.
+        allow_force_argmax_multidevice = allow_force_argmax and os.getenv("TT_GEMMA3_ODS", "0") == "1"
+        self._supports_on_device_sampling = prefetcher is None and (
+            self.args.vocab_size // sampling_splits <= 64 * 1024
+            or (single_device and allow_force_argmax)
+            or allow_force_argmax_multidevice
+        )
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,

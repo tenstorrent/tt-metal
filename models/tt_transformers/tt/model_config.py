@@ -1123,6 +1123,15 @@ class ModelArgs:
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
                 self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
 
+            # ODS: env-gated on-device force-argmax for multi-device non-galaxy greedy decode.
+            # Argmax the full logits on-device after the split-logit all-gather (which already runs
+            # for host sampling), removing the per-token host round-trip. Default off.
+            if os.getenv("TT_GEMMA3_ODS", "0") == "1" and not self.is_galaxy_cluster:
+                self.model_config["SAMPLING_AG_CONFIG"] = {
+                    **self.model_config["SAMPLING_AG_CONFIG"],
+                    "allow_force_argmax": True,
+                }
+
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {self.mlp1_3_grid(32)}, w2: {self.mlp2_grid(32)}")
