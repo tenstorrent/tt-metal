@@ -48,7 +48,7 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 
 # Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
 # LTX_QUANT=all_bf8_lofi to opt into the bf8 1080p tier (its perf/VBench floors are calibrated against
-# it), or LTX_QUANT to any other QuantConfig preset. _resolve_quant_config resolves this once and
+# it), or LTX_QUANT to any other LtxQuantProfile preset. _resolve_quant_config resolves this once and
 # threads the tag into the transformer cache name, so a quantized cache stays separate from the baseline.
 LTX_QUANT_DEFAULT = ""
 
@@ -313,7 +313,7 @@ class LTXPipeline:
         self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
-            # Resolved before construction so the QuantConfig is baked into the transformer modules
+            # Resolved before construction so the LtxQuantProfile is baked into the transformer modules
             # (Parameter.load typecasts DiT-linear weights to the preset dtype as they load), rather
             # than typecast afterward by a post-load hook.
             self._resolve_quant_config()
@@ -628,17 +628,17 @@ class LTXPipeline:
         """Resolve the DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
 
         LTX_QUANT="" selects the bf16 baseline. Runs before ``_instantiate_modules`` so the resolved
-        ``QuantConfig`` is baked into transformer construction (weights load direct-to-quant)."""
+        ``LtxQuantProfile`` is baked into transformer construction (weights load direct-to-quant)."""
         self._quant_cache_tag = None
         self._quant_config = None
         preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
-        from ...models.transformers.ltx.quant_config import QuantConfig
+        from ...models.transformers.ltx.quant_config import LtxQuantProfile
 
-        factory = getattr(QuantConfig, preset, None)
+        factory = getattr(LtxQuantProfile, preset, None)
         if factory is None or not callable(factory):
-            logger.warning(f"LTX_QUANT='{preset}' is not a QuantConfig preset; running baseline (bf16/HiFi2)")
+            logger.warning(f"LTX_QUANT='{preset}' is not an LtxQuantProfile preset; running baseline (bf16/HiFi2)")
             return
         logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
         # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved

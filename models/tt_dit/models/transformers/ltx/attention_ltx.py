@@ -19,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
+from .quant_config import LtxQuantProfile
 
 # to_gate_logits and to_q/to_qkv are both ColParallelLinear fed the SAME activation, and each fuses
 # its own TP all-gather of it (all_gather_minimal_matmul_async) — the activation crosses the fabric
@@ -82,7 +82,7 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
-        quant_config: QuantConfig | None = None,
+        quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -128,26 +128,11 @@ class LTXAttention(Module):
 
         self.kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
 
-        # Per-linear precision by role. Without a quant_config every role keeps the default
-        # LinearQuantConfig (bf16 weight, no cast, no pin), so construction matches the unquantized
-        # model exactly. Activation casts and output pins ride LTX_QUANT_ACTIVATIONS together, so a
-        # weight-only run keeps activations bf16. to_out follows its config weight dtype, which the
-        # preset pins at bf16 to match the fused-addcmul epilogue's bf16 ternary inputs.
-        quant_active = quant_config is not None and LTX_QUANT_ACTIVATIONS
-        if quant_config is not None:
-            if is_self:
-                qkv_lc, kv_lc, out_lc = quant_config.self_attn_qkv, None, quant_config.self_attn_out
-            else:
-                qkv_lc, kv_lc, out_lc = (
-                    quant_config.cross_attn_q,
-                    quant_config.cross_attn_kv,
-                    quant_config.cross_attn_out,
-                )
-        else:
-            qkv_lc = kv_lc = out_lc = LinearQuantConfig()
-
-        def _act(lc):
-            return lc.activation_dtype if quant_active else None
+        # Per-linear precision comes entirely from the quant profile (None => bf16 everywhere, matching
+        # the unquantized model). The profile owns the to_out carve-out and the LTX_QUANT_ACTIVATIONS
+        # gating; here each role's linear just spreads the kwargs the profile hands it.
+        def qk(role):
+            return quant_config.linear_kwargs(role) if quant_config is not None else {}
 
         # Fuse-mode LoRA lives in weight.data, so the chunked (to_qkv/to_kv) and
         # fused-addcmul (to_out) paths work unchanged; runtime mode is unsupported here. The quant
@@ -155,33 +140,10 @@ class LTXAttention(Module):
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
         if is_self:
-            self.to_qkv = ColCls(
-                dim,
-                3 * dim,
-                chunks=3,
-                dtype=qkv_lc.weight_dtype,
-                activation_dtype=_act(qkv_lc),
-                pin_blockfloat_output=quant_active,
-                **col_parallel_kwargs,
-            )
+            self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs, **qk("qkv"))
         else:
-            self.to_q = ColCls(
-                self.query_input_dim,
-                dim,
-                dtype=qkv_lc.weight_dtype,
-                activation_dtype=_act(qkv_lc),
-                pin_blockfloat_output=quant_active,
-                **col_parallel_kwargs,
-            )
-            self.to_kv = ColCls(
-                self.kv_input_dim,
-                2 * dim,
-                chunks=2,
-                dtype=kv_lc.weight_dtype,
-                activation_dtype=_act(kv_lc),
-                pin_blockfloat_output=quant_active,
-                **col_parallel_kwargs,
-            )
+            self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs, **qk("q"))
+            self.to_kv = ColCls(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs, **qk("kv"))
 
         self.to_out = ColCls(
             dim,
@@ -191,9 +153,7 @@ class LTXAttention(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
-            dtype=out_lc.weight_dtype,
-            activation_dtype=_act(out_lc),
-            pin_blockfloat_output=quant_active,
+            **qk("out"),
         )
 
         # Per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16 matches the
@@ -212,7 +172,7 @@ class LTXAttention(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                pin_blockfloat_output=quant_active,
+                **qk("gate"),
             )
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
@@ -297,22 +257,15 @@ class LTXAttention(Module):
             packer_l1_acc=True,
         )
 
-        # Under a quant preset, override the attention compute configs to the preset's fidelity.
-        # Self-attn additionally swaps in the ring-SDPA compute and narrows its SDPA inputs (bf8 when
-        # LTX_QUANT_ACTIVATIONS); cross-attn leaves SDPA and _sdpa_input_dtype unset, so forward's
-        # getattr(self, "_sdpa_input_dtype", None) keeps cross SDPA at bf16.
+        # Under a quant preset, override the attention compute configs to the profile's fidelity.
+        # Self-attn additionally swaps in the ring-SDPA compute and narrows its SDPA inputs; cross-attn
+        # leaves SDPA and _sdpa_input_dtype unset, so forward's getattr(self, "_sdpa_input_dtype", None)
+        # keeps cross SDPA at bf16.
         if quant_config is not None:
             arch = self.mesh_device.arch()
-            mm_lc = quant_config.self_attn_qkv if self.is_self else quant_config.cross_attn_q
-            self.mm_compute_kernel_config = _make_compute_config(arch, mm_lc.math_fidelity, mm_lc.fp32_dest_acc)
+            self.mm_compute_kernel_config = quant_config.mm_compute_config(arch)
             if self.is_self:
-                self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                    arch,
-                    math_fidelity=quant_config.ring_sdpa.math_fidelity,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=quant_config.ring_sdpa.fp32_dest_acc,
-                )
-                self._sdpa_input_dtype = ttnn.bfloat8_b if LTX_QUANT_ACTIVATIONS else quant_config.ring_sdpa.input_dtype
+                self.sdpa_compute_kernel_config, self._sdpa_input_dtype = quant_config.sdpa_self_config(arch)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")

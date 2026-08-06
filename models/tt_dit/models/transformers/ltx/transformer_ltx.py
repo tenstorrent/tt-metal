@@ -26,7 +26,7 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
-from .quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
+from .quant_config import LtxQuantProfile
 
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
@@ -120,7 +120,7 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
-        quant_config: QuantConfig | None = None,
+        quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -153,18 +153,20 @@ class LTXTransformerBlock(Module):
             "lora_enabled": lora_enabled,
         }
 
-        # FFN precision, shared by the video and audio ParallelFeedForwards. Default configs (no
-        # quant_config) reproduce the bf16 ctor; activation cast + pin ride LTX_QUANT_ACTIVATIONS.
-        quant_active = quant_config is not None and LTX_QUANT_ACTIVATIONS
-        ffn_ff1_lc = quant_config.ffn_ff1 if quant_config is not None else LinearQuantConfig()
-        ffn_ff2_lc = quant_config.ffn_ff2 if quant_config is not None else LinearQuantConfig()
-        ffn_kwargs = {
-            "ff1_dtype": ffn_ff1_lc.weight_dtype,
-            "ff2_dtype": ffn_ff2_lc.weight_dtype,
-            "activation_dtype": ffn_ff1_lc.activation_dtype if quant_active else None,
-            "pin_blockfloat_output": quant_active,
-            "lora_enabled": lora_enabled,
-        }
+        # FFN precision, shared by the video and audio ParallelFeedForwards. No quant_config => the
+        # ParallelFeedForward ctor defaults reproduce the bf16 model; the profile supplies dtypes and
+        # casts when set. lora_enabled always threads through.
+        if quant_config is not None:
+            ff_lk = quant_config.linear_kwargs("ff")
+            ffn_kwargs = {
+                "ff1_dtype": ff_lk["dtype"],
+                "ff2_dtype": ff_lk["dtype"],
+                "activation_dtype": ff_lk["activation_dtype"],
+                "pin_blockfloat_output": ff_lk["pin_blockfloat_output"],
+                "lora_enabled": lora_enabled,
+            }
+        else:
+            ffn_kwargs = {"lora_enabled": lora_enabled}
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
         # without it the FFN is only TP-sharded and replicated across every SP device.
@@ -277,9 +279,7 @@ class LTXTransformerBlock(Module):
             )
 
         if quant_config is not None:
-            self.ff_compute_kernel_config = _make_compute_config(
-                mesh_device.arch(), quant_config.ffn_ff1.math_fidelity, quant_config.ffn_ff1.fp32_dest_acc
-            )
+            self.ff_compute_kernel_config = quant_config.mm_compute_config(mesh_device.arch())
         else:
             self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
@@ -578,7 +578,7 @@ class LTXTransformerModel(Module):
         cross_attention_adaln: bool = True,
         lora_enabled: bool = False,
         image_conditioning: bool = False,
-        quant_config: QuantConfig | None = None,
+        quant_config: LtxQuantProfile | None = None,
     ) -> None:
         super().__init__()
 
@@ -1192,7 +1192,7 @@ class LTXTransformerCheckpoint:
         is_fsdp: bool,
         has_audio: bool,
         image_conditioning: bool,
-        quant_config: QuantConfig | None = None,
+        quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
