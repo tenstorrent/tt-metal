@@ -86,10 +86,22 @@ Traced still matches untraced bit-for-bit (PCC `1.0000000000`), fused matches th
 
 Two things about the op are worth carrying:
 
-**`k_chunk_size` must be the largest power of two dividing the key width, capped at 128.** `32`
-divides every width this model uses, so `mask_shape[3] % k_chunk_size == 0` passes and nothing
-raises — and the result is wrong: PCC `0.016` at width 384, `0.737` at 448, against `0.99998` at the
-right value. A validated configuration that silently corrupts is worth reporting upstream.
+**`k_chunk_size = 32` is accepted and computed wrongly below width 512.** Swept over every value
+the op admits, against a torch golden:
+
+| key width | `32` | `64` | `128` | non-power-of-2 |
+|---|---:|---:|---:|---|
+| 256 | `0.396` ❌ | `0.9999` | `0.9999` | raises |
+| 384 | `0.293` ❌ | `0.9999` | `0.9999` | raises |
+| 448 | `0.700` ❌ | `0.9999` | — | raises |
+| 512 | `0.9999` | `0.9999` | `0.9999` | raises |
+
+Non-powers-of-two `TT_FATAL` correctly, so the op *does* validate this parameter — it validates the
+wrong property. Restricting `max_cores_per_head_batch` to 1 or 2 makes `32` correct at width 384
+(`0.9999`), while 4 gives `0.502` and 8+ gives `0.293`: **the fault is the multi-core split of the
+key axis when chunks are one tile deep**, not the chunk size itself. Anything `>= 64` is correct
+everywhere tested, and that is what the model picks. Worth reporting upstream — a configuration that
+passes validation and silently corrupts is worse than one that refuses.
 
 **The mask must be built per head on the host, not with a device `ttnn.repeat` inside the traced
 body.** The op is correct on its own and traces perfectly — four replays bit-identical to untraced —
