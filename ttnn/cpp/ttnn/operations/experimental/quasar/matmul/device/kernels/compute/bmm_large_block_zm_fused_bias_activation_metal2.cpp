@@ -416,7 +416,7 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
-                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] back to no-op for bisect
+                            MMPRE("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
 
                             if (last_out) {
                                 tile_regs_commit();
@@ -489,7 +489,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    MMPRE("MMC pack blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
+                    DPRINT("MMC pack blk={}\n", block);  // [#48552 DIAG] back to no-op for bisect
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -525,7 +525,7 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
-                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
+                    MMPRE("MMC blk_done blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
                 }
 
 #ifdef FUSE_BIAS
