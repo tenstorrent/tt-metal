@@ -306,7 +306,17 @@ class TtRelPosAttention:
         out, _ = self.forward_cached(x, pos_emb, mask=mask, cache=None)
         return out
 
-    def forward_cached(self, x, pos_emb, mask=None, cache=None, return_cache=False, cache_free=False, bd_offset=None):
+    def forward_cached(
+        self,
+        x,
+        pos_emb,
+        mask=None,
+        cache=None,
+        return_cache=False,
+        cache_free=False,
+        bd_offset=None,
+        cache_write=None,
+    ):
         """The same attention, with an optional `(k, v)` cache prepended.
 
         `cache` is a pair of `[B, h, cache_t, d_k]` tensors, kept unpacked rather
@@ -334,6 +344,19 @@ class TtRelPosAttention:
         appending on the tiled one. The returned k/v are then in the free layout too --
         the caller writes those straight back to its buffers, and nothing else about the
         attention changes: same shapes into the matmuls, same geometry, same trace.
+
+        **`cache_write` goes further and stops moving the cache at all.** It names a row
+        index; `cache` is then a pair of persistent `[B, h, W, d_k]` buffers, this step's
+        k/v are written into row `cache_write` with `ttnn.update_cache`, and the whole
+        buffer -- not a freshly concatenated copy -- goes into the matmuls. Per tensor
+        per layer that replaces a slice, two permutes, a concat and a writeback copy
+        (~95 us together) with one 3.7 us in-place write.
+
+        The price is that the query is no longer at the last key slot, so `rel_shift`'s
+        `T = 1` identity no longer holds and `bd_offset` must be supplied alongside. The
+        two arguments belong together: `cache_write` says where the token went, and
+        `bd_offset` says what that does to the positional geometry. `TracedDecodeStepInPlace`
+        derives both from the same sub-step counter.
         """
         b, t, _ = x.shape
         tp = pos_emb.shape[1]
@@ -346,7 +369,45 @@ class TtRelPosAttention:
         pt = self._pos_proj(pos_emb, b)  # cached, and NOT ours to deallocate
 
         kv_free = None
-        if cache is not None and cache_free:
+        kv_inplace = False
+        if cache is not None and cache_write is not None:
+            # In place: write this token's row, then read the buffer whole. Nothing is
+            # copied, concatenated or permuted, so the buffers the caller passed in are
+            # the buffers the matmuls see -- and are emphatically **not** ours to free.
+            #
+            # `ttnn.update_cache(cache, token, idx)` wants `cache [1, h, W, d_k]` and
+            # `token [1, h, 1, d_k]`, which is exactly what the split hands back. Its
+            # `update_idx` need not be tile-aligned (`fill_cache`'s must be): the program
+            # factory splits it into `update_idx / 32` tiles plus a byte offset of
+            # `update_idx % 32` rows within the tile, so any row is addressable.
+            #
+            # `update_idx` is a **runtime argument**, which a trace bakes at capture --
+            # hence one captured trace per possible row. That is what caps the design at
+            # a 32-row scratch zone rather than an arbitrarily long one.
+            #
+            # This path does not reproduce the moving cache bit-for-bit -- worst PCC
+            # 0.9986 over 72 steps -- and two tempting explanations are both measured
+            # false. It is not the wider buffer: the moving cache run at the same
+            # width matches the narrow one at 1.0000000000 exactly. And it is not
+            # `update_cache`'s default LoFi compute config, which untilizes and
+            # re-tilizes the whole target tile on every write: forcing the model's
+            # high-fidelity config changed nothing, to the digit.
+            #
+            # What is left, unproven but consistent with the evidence, is where the
+            # live keys fall against tile boundaries. The moving cache always ends at
+            # the last row, so its live block keeps one phase; here the query walks
+            # forward through the scratch zone and the phase moves with it, regrouping
+            # the reduction's partial sums. That fits a deviation that is present at
+            # step 0, varies step to step, and does **not** accumulate -- step 71 is
+            # 0.9997, no worse than step 2, with a shift boundary in between.
+            kb, vb = cache
+            ttnn.update_cache(kb, k, cache_write)
+            ttnn.update_cache(vb, v, cache_write)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            k, v = kb, vb
+            kv_inplace = True
+        elif cache is not None and cache_free:
             # Append on the free time axis, then permute once. `k` arrives from the
             # split as [B, h, 1, d_k]; the two small permutes cost a few microseconds
             # between them against the ~187 us the tiled append would cost.
@@ -393,12 +454,18 @@ class TtRelPosAttention:
             # `bd[..., :key_w]`, which is the special case `bd_offset == 0` -- correct
             # only when the query is the last key position.
             #
-            # A cache written in place (F41) puts the query at row `256 + i` at
-            # sub-step `i`, so a key at row `j` is at relative distance `256 + i - j`,
-            # and the column for relative distance `r` is `(N-1) - r`. The needed
-            # window therefore starts at `31 - i`. Passing it explicitly keeps that
-            # arithmetic at the one call site that knows `i`, rather than hiding an
-            # assumption about alignment inside the attention.
+            # The geometry, for a `W`-wide key axis and an `N = 2W - 1` positional
+            # window. ESPnet's encoding puts relative distance `r` at column
+            # `j = (W - 1) - r` -- which `rel_shift` itself confirms: unrolling its
+            # skew gives `out[q, c] = x[q, c + t1 - q - 1]`, and substituting the
+            # right-aligned `r = (W - t1 + q) - c` leaves `j = W - 1 - r` with the
+            # query's position cancelled out.
+            #
+            # A cache written in place puts the query at row `W - 32 + i` at sub-step
+            # `i`, so `r = (W - 32 + i) - c` and `j = (W - 1) - r = c + (31 - i)`:
+            # a plain slice of `bd` starting at column `31 - i`, independent of `W`.
+            # Passing it explicitly keeps that arithmetic at the one call site that
+            # knows `i`, rather than hiding an alignment assumption inside attention.
             key_w = ac.shape[-1]
             sliced = ttnn.slice(bd, [0, 0, 0, bd_offset], [b, self.h, t, bd_offset + key_w])
             ttnn.deallocate(bd)
@@ -442,6 +509,11 @@ class TtRelPosAttention:
             ctx = ttnn.reshape(ctx, (b, t, self.h * self.d_k))
         out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
+
+        if kv_inplace:
+            # `k` and `v` *are* the caller's buffers -- already updated in place, and
+            # freeing them here would pull the cache out from under the next step.
+            return out, None
 
         if kv_free is not None:
             # The permuted [B, h, T, d_k] copies were only needed for the matmuls above;

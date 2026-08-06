@@ -68,7 +68,17 @@ class TtTransformerLayer:
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
 
-    def __call__(self, x, pos_emb, mask=None, cache=None, return_cache=True, cache_free=False, bd_offset=None):
+    def __call__(
+        self,
+        x,
+        pos_emb,
+        mask=None,
+        cache=None,
+        return_cache=True,
+        cache_free=False,
+        bd_offset=None,
+        cache_write=None,
+    ):
         h = ttnn.layer_norm(x, weight=self.g1, bias=self.bt1, epsilon=self.eps)
         a, new_cache = self.attn.forward_cached(
             h,
@@ -78,6 +88,7 @@ class TtTransformerLayer:
             return_cache=return_cache,
             cache_free=cache_free,
             bd_offset=bd_offset,
+            cache_write=cache_write,
         )
         ttnn.deallocate(h)
         x1 = ttnn.add(x, a)
@@ -407,6 +418,235 @@ class TracedDecodeStep:
             self.trace_id = None
         for t in [self.x_buf, self.mask_buf, self.ys, *self.k_buf, *self.v_buf]:
             ttnn.deallocate(t)
+
+
+class TracedDecodeStepInPlace:
+    """The same decode step, with a KV cache that is written rather than rebuilt.
+
+    `TracedDecodeStep` keeps the newest token at the last row of a `max_len` buffer,
+    which means every step must **move the whole cache down by one**. Time-major
+    storage made that move cheap -- a free-axis append is 19.7 us where a tiled one
+    is 207 -- but cheap is not free, and what is left is still the largest block in
+    the step: per tensor per layer, a slice, two permutes, a concat and a writeback
+    copy, ~95 us together, 14 layers and two tensors deep.
+
+    The way out is to stop moving it. Hold a buffer `TILE` rows wider than the
+    window, write token `i` of the current group straight into row `max_len + i`
+    with `ttnn.update_cache` (3.7 us, in place), and let the buffer walk forward
+    through its scratch zone for 32 steps. Only then does anything move, and what
+    moves is a **32-row, tile-aligned** shift -- the one shift `TILE_LAYOUT` can do
+    without re-tiling. Amortised, 95 us a tensor a layer a step becomes about 11.
+
+    **The scratch zone is two tiles, not one, and that is not a tuning choice.** A
+    decode step's cost tracks the *parity* of its key-axis tile count, not its size:
+    swept on Blackhole at a 384-row window, 10/12/14/16 tiles cost 6.32/6.73/7.09/
+    7.99 ms while 11/13/15 cost 7.33/7.92/8.54 -- every odd count about a millisecond
+    dearer than its even neighbours, which is `out_subblock_w` falling back to 1. A
+    one-tile scratch zone turns a 12-tile window into a 13-tile buffer and pays that
+    penalty on every step: measured, +1.21 ms, against the +0.82 ms the in-place write
+    is worth. The mechanism was never the problem; the odd width was. Two tiles keeps
+    the parity, doubles the interval between shifts, and costs two traces per row
+    instead of one.
+
+    Two more things follow, and both are the reason this is a separate class
+    rather than a flag:
+
+    * **The query is no longer the last key position**, so `rel_shift`'s `T = 1`
+      identity is false and the positional window has to be selected explicitly.
+      `bd_offset = scratch - 1 - slot` does it; the derivation is in `forward_cached`.
+    * **Both `update_idx` and that offset are baked at capture**, because a trace
+      records runtime arguments, not just addresses. So there is one trace per scratch
+      row, plus one for the periodic shift. (`paged_update_cache` takes its index as a
+      *device tensor* and would need only one trace -- but it wants a paged block
+      cache, not this layout, and rejects it.)
+
+    Those 65 traces are the practical cost of the design, and the trace region has to
+    be sized for them. How much is not a tidy multiple: offered 64 MB the capture
+    asked for 68.6, offered 128 MB it asked for 134.3, so the allocator fills what it
+    is given before reporting a shortfall and neither number is "the requirement".
+    384 MB is a size this has been observed to capture in. A device opened with the
+    usual 64 MB fails at capture -- which is why this is opt-in rather than default,
+    and why `generate()` catches that failure and falls back rather than dying.
+
+    The mask does the rest of the bookkeeping. Exactly `max_len` rows are live at
+    every sub-step -- `[slot + 1, max_len + slot]` -- so the rows the shift discards
+    are precisely the rows the mask has already been suppressing, and the window
+    slides at the same rate it does in the moving version.
+    """
+
+    TILE = 32  # `TILE_LAYOUT`'s row granularity: the one shift width that is free
+    SCRATCH_TILES = 2  # keeps the buffer's tile count the same parity as the window
+
+    def __init__(self, decoder, max_len: int, scratch_tiles: int = SCRATCH_TILES):
+        self.dec = decoder
+        self.max_len = max_len
+        self.scratch = self.TILE * scratch_tiles
+        self.width = max_len + self.scratch
+        decoder.enable_pos_proj_cache()
+        meta = decoder.meta
+        self.h, self.d_k, self.n_layers = meta["n_head"], meta["d_k"], meta["n_layers"]
+        dev, dt = decoder.device, decoder.dtype
+
+        self.x_buf = ttnn.from_torch(
+            torch.zeros(1, 1, meta["input_size"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        self.mask_buf = ttnn.from_torch(
+            slot_bias(self.width, self.scratch, max_len, 0), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        shape = (1, self.h, self.width, self.d_k)
+        self.k_buf = [
+            ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+            for _ in range(self.n_layers)
+        ]
+        self.v_buf = [
+            ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+            for _ in range(self.n_layers)
+        ]
+        # The scratch zone the shift re-zeroes, allocated once. It is *read* inside a
+        # trace, which is fine; building it with `ttnn.zeros` in there would not be,
+        # since that is a host->device write.
+        self.pad = ttnn.from_torch(
+            torch.zeros(1, self.h, self.scratch, self.d_k), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        self.ys = ttnn.from_torch(torch.zeros(1, 1, meta["d_model"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        self.traces = [None] * self.scratch
+        self.shift_trace = None
+        self.slot = 0
+
+    # ------------------------------------------------------------------
+    def seed(self, caches):
+        """Load a prefill's `[1, h, max_len, d_k]` caches into rows `[0, max_len)`.
+
+        The scratch tail is zeroed rather than left as whatever the warm-up passes
+        wrote. Nothing reads it -- row `max_len + slot` is always written before it
+        is attended to, and the mask covers the rest -- but a masking mistake should
+        surface as a reproducible wrong answer, not as luck with old data.
+        """
+        for i, (k, v) in enumerate(caches):
+            for src, dst in ((k, self.k_buf[i]), (v, self.v_buf[i])):
+                wide = ttnn.concat([src, self.pad], dim=2)
+                ttnn.copy(wide, dst)
+                ttnn.deallocate(wide)
+        self.slot = 0
+
+    def _body(self, slot: int):
+        """The graph traced for one sub-step. `slot` is baked into it."""
+        pos = self.dec.positional(self.width)
+        h = self.dec.embed(self.x_buf)
+        for i, layer in enumerate(self.dec.layers):
+            h, _ = layer(
+                h,
+                pos,
+                mask=self.mask_buf,
+                cache=(self.k_buf[i], self.v_buf[i]),
+                return_cache=False,
+                cache_write=self.max_len + slot,
+                bd_offset=(self.scratch - 1) - slot,
+            )
+        out = ttnn.layer_norm(
+            h, weight=self.dec.g_after, bias=self.dec.bt_after, epsilon=self.dec.meta["layer_norm_eps"]
+        )
+        ttnn.deallocate(h)
+        ttnn.copy(out, self.ys)
+        ttnn.deallocate(out)
+
+    def _shift_body(self):
+        """Slide every buffer down by `TILE` rows and re-zero the tail.
+
+        The slice starts at row 32, so it is tile-aligned and is a genuine copy
+        rather than the alias a full-extent slice would give -- which is what makes
+        writing the result back over its own source safe.
+        """
+        for i in range(self.n_layers):
+            for buf in (self.k_buf[i], self.v_buf[i]):
+                keep = ttnn.slice(buf, [0, 0, self.scratch, 0], [1, self.h, self.width, self.d_k])
+                wide = ttnn.concat([keep, self.pad], dim=2)
+                ttnn.deallocate(keep)
+                ttnn.copy(wide, buf)
+                ttnn.deallocate(wide)
+
+    def capture(self):
+        """Two warm-up passes, then `TILE + 1` traces.
+
+        The warm-up is per slot, not once overall. All 32 sub-steps do hit the same
+        program-cache entries -- `update_cache` hashes its op type and tensors, not
+        its index -- but "should hit" is a poor thing to rely on inside a capture,
+        where a compile is an error rather than a slow path.
+        """
+        for _ in range(2):
+            self._body(0)
+        self._shift_body()
+        ttnn.synchronize_device(self.dec.device)
+
+        for slot in range(self.scratch):
+            self._body(slot)  # warm this slot's runtime-arg variant
+            tid = ttnn.begin_trace_capture(self.dec.device, cq_id=0)
+            try:
+                self._body(slot)
+            finally:
+                ttnn.end_trace_capture(self.dec.device, tid, cq_id=0)
+            self.traces[slot] = tid
+
+        self.shift_trace = ttnn.begin_trace_capture(self.dec.device, cq_id=0)
+        try:
+            self._shift_body()
+        finally:
+            ttnn.end_trace_capture(self.dec.device, self.shift_trace, cq_id=0)
+        return self
+
+    def step(self, x_host: torch.Tensor, valid: int):
+        """One token in, `[1, 1, d]` hidden state out.
+
+        The shift is enqueued behind the step it completes rather than ahead of the
+        next one. It touches only the KV buffers, so the `ys` this returns is already
+        final; the caller's synchronise covers both.
+        """
+        slot = self.slot
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(x_host, dtype=self.dec.dtype, layout=ttnn.TILE_LAYOUT), self.x_buf
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                slot_bias(self.width, self.scratch, valid, slot), dtype=self.dec.dtype, layout=ttnn.TILE_LAYOUT
+            ),
+            self.mask_buf,
+        )
+        ttnn.execute_trace(self.dec.device, self.traces[slot], cq_id=0, blocking=False)
+
+        self.slot = slot + 1
+        if self.slot == self.scratch:
+            ttnn.execute_trace(self.dec.device, self.shift_trace, cq_id=0, blocking=False)
+            self.slot = 0
+        return self.ys
+
+    def release(self):
+        for tid in [*self.traces, self.shift_trace]:
+            if tid is not None:
+                ttnn.release_trace(self.dec.device, tid)
+        self.traces = [None] * self.scratch
+        self.shift_trace = None
+        for t in [self.x_buf, self.mask_buf, self.pad, self.ys, *self.k_buf, *self.v_buf]:
+            ttnn.deallocate(t)
+
+
+def slot_bias(width: int, tile: int, valid: int, slot: int, dtype=torch.float32):
+    """Additive `[1, 1, 1, width]` mask for an in-place cache at sub-step `slot`.
+
+    The token just written sits at row `max_len + slot`, and the window is the
+    `min(valid, max_len)` rows ending there. Everything else is suppressed: rows
+    below have aged out of the window, rows above are scratch not yet written.
+
+    Because the live span always ends at `max_len + slot` and is at most `max_len`
+    long, it starts at row `slot + 1` once the window is full -- so after `tile`
+    sub-steps the rows that have aged out are exactly rows `[0, tile)`, which is
+    what `_shift_body` discards. The mask and the shift are two views of one window.
+    """
+    max_len = width - tile
+    hi = max_len + slot
+    lo = hi - min(valid, max_len) + 1
+    rows = torch.arange(width)
+    live = (rows >= lo) & (rows <= hi)
+    return torch.where(live, 0.0, NEG_INF).reshape(1, 1, 1, width).to(dtype)
 
 
 def right_aligned_bias(max_len: int, valid: int, chunk: int = 1, causal: bool = False, dtype=torch.float32):
