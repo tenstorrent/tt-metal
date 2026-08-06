@@ -631,6 +631,11 @@ class PerfConfig(TestConfig):
         names += list(FLAG_HEADERS)
         values += [unpack_to_dest, dest_acc]
 
+        # Run mode: whether this run compiled everything as speed-of-light. Kept in
+        # the report so SoL and non-SoL measurements are never compared together.
+        names.append("speed_of_light")
+        values.append(TestConfig.SPEED_OF_LIGHT)
+
         for param in passed_templates + passed_runtimes:
             for name, value in PerfConfig._dataclass_name_and_values(param):
                 if value is not None:

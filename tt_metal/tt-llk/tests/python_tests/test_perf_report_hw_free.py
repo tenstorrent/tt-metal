@@ -23,7 +23,7 @@ import pandas as pd
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf import PerfConfig, PerfReport
 from helpers.perf_schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
-from helpers.perf_wide_schema import OUTPUT_SCHEMA
+from helpers.perf_wide_schema import DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
@@ -79,7 +79,7 @@ def test_report_columns_conform_to_output_schema():
     combined = _build(_fake_formats())
 
     # Every produced column must be a known output-schema column.
-    unknown = sorted(set(combined.columns) - _SCHEMA_NAMES)
+    unknown = sorted(set(combined.columns) - _SCHEMA_NAMES - DROPPED_COLUMNS)
     assert not unknown, (
         f"PerfConfig produced columns not in perf_wide_schema.OUTPUT_SCHEMA: "
         f"{unknown}. Either the report changed (add them to OUTPUT_SCHEMA as "
@@ -106,7 +106,7 @@ def test_report_columns_conform_to_output_schema():
 def test_report_without_formats_still_conforms():
     # formats_config=None → no format columns; the rest must still be schema-clean.
     combined = _build(None)
-    unknown = sorted(set(combined.columns) - _SCHEMA_NAMES)
+    unknown = sorted(set(combined.columns) - _SCHEMA_NAMES - DROPPED_COLUMNS)
     assert not unknown, f"columns not in OUTPUT_SCHEMA: {unknown}"
     assert not any(c.startswith("formats.") for c in combined.columns)
 
@@ -209,7 +209,7 @@ def test_run_end_to_end_conforms_to_output_schema(monkeypatch):
         run_count=2,
     )
 
-    unknown = sorted(set(frame.columns) - _SCHEMA_NAMES)
+    unknown = sorted(set(frame.columns) - _SCHEMA_NAMES - DROPPED_COLUMNS)
     assert not unknown, f"run() produced columns not in OUTPUT_SCHEMA: {unknown}"
 
     assert_unique_columns(frame.columns, context="hw-free run()")

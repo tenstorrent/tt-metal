@@ -67,6 +67,7 @@ DB_SCHEMA = [
     Column("formats.sfpu_math", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
+    Column("speed_of_light", "bool", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),
     # key
     Column("loop_factor", "int64", True, "key"),
@@ -122,11 +123,6 @@ DB_SCHEMA = [
     Column("value_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
-    # code_size
-    Column("TEXT_SIZE(L1_TO_L1)", "int64", True, "code_size"),
-    Column("TEXT_SIZE(MATH_ISOLATE)", "int64", True, "code_size"),
-    Column("TEXT_SIZE(PACK_ISOLATE)", "int64", True, "code_size"),
-    Column("TEXT_SIZE(UNPACK_ISOLATE)", "int64", True, "code_size"),
     # ── provenance: stamped by the publish layer, never emitted by a test ──
     Column("test_name", "string", False, "identity", origin="ci"),
     Column("commit_sha", "string", False, "provenance", origin="ci"),
@@ -145,12 +141,19 @@ PROVENANCE = [c for c in DB_SCHEMA if c.origin == "ci"]
 
 MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 
-# Columns a test emits but the published table intentionally drops: each is
-# provably always equal to a column we keep (verified — no perf test ever sets
-# them apart), so it carries no information. The converter removes these instead
-# of failing on an unknown column.
-#   input_num_blocks, output_num_blocks  ==  num_blocks
-REDUNDANT_COLUMNS = {"input_num_blocks", "output_num_blocks"}
+# Columns a test emits but the published table intentionally drops. The converter
+# removes them instead of failing on an unknown column.
+#   input_num_blocks, output_num_blocks  — always == num_blocks (redundant; no
+#                                          perf test ever sets them apart)
+#   TEXT_SIZE(...)                        — ELF code size; not used by the gate
+DROPPED_COLUMNS = {
+    "input_num_blocks",
+    "output_num_blocks",
+    "TEXT_SIZE(L1_TO_L1)",
+    "TEXT_SIZE(MATH_ISOLATE)",
+    "TEXT_SIZE(PACK_ISOLATE)",
+    "TEXT_SIZE(UNPACK_ISOLATE)",
+}
 
 # Row identity: one test config in one run. The sweep-parameter columns (which
 # vary per test) complete the key on top of these fixed columns.
