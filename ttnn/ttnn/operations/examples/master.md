@@ -413,6 +413,11 @@ gate it on a work-per-core threshold rather than applying it globally.
 - **B8. Transaction-ID (trid) double-issue** *(proposition — best practice)* — tag each block, barrier
   only on the *previous* id, so ≥1 request is always in flight. `dataflow_api.h:2366` + the trid
   barrier/with-state family.
+  **→ example: `split_reader`** (the other way to keep reads in flight: two RISCs each issuing half
+  the block, instead of one RISC double-issuing). Both are "more outstanding requests"; audit them
+  together, and note that neither can show a win on a **one-block-per-core** shape — there is no
+  next block to overlap against. If every benched shape is one-block, that is a *bench* gap, not
+  evidence the lever doesn't apply.
 - **B9. Split streams across NoCs — reader NoC0 / writer NoC1** — read and write streams overlap instead
   of contending. `dataflow_api_common.h:62-63`; `preferred_noc_for_dram_read/write` in `kernel_types.hpp`.
   **→ example: `noc_placement`** (NoC-selection lever).
@@ -429,6 +434,10 @@ gate it on a work-per-core threshold rather than applying it globally.
 - **C14. Zero-copy: alias the circular buffer directly onto the shard buffer (L1↔L1)** *(proposition)* —
   the reader "just pushes"; requires input *and* output in L1.
   `untilize_multi_core_program_factory.cpp:103-116`; `tilize/device/tilize_device_operation.cpp:22`.
+  **→ example: `zero_copy_fold`** (kernel-fold vs. separate reader/compute/writer). Aliasing has two
+  degrees: removing the *NoC traffic* (the CB is the shard) and removing the *kernel* (fold the
+  dataflow away entirely, so the program is compute-only). The second is a separate, measurable step
+  — a resident path whose reader still exists to run the CB handshake has taken only the first.
 - **C15. Prefer sharded (L1-resident) over interleaved for DRAM-bound ops** *(proposition)* — each reader
   its own bank, >92% BW vs interleaved congestion. `Saturating_DRAM_bandwidth.md`.
 - **C16. Double-buffer CBs (depth 2) — but only when it pays** — single-block cores skip it to save L1.
