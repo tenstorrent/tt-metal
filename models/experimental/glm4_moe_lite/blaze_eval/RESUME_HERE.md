@@ -18,17 +18,37 @@ Sources live in the tt-blaze tree; copies archived here under `glm_qkv_a_project
 **Upper bound if both landed and fully translated: ~1.9 ms/token of 33.2 ms (~5.7%).** Treat as a
 ceiling, not a forecast — see the two null results below.
 
-## IMPORTANT: device state
+## START HERE ON RESUME — in this order, no shortcuts
 
-The last run **hung** (EXIT=124, and 0 JIT compiles in its log, so it was not merely slow).
-Per F12 a hang degrades the device and `open/close` still succeeds on a degraded one. **Before
-trusting any measurement, run the control:**
+The last run **hung** (EXIT=124, and **0 JIT compiles** in its log, so it was genuinely hung, not
+compilation latency). **Treat it as a real new blocker.** Per F12 a hang degrades the device while
+`open/close` still succeeds, so do not infer health from a device opening.
 
-```bash
-cd /home/ttuser/sdawle/tt-blaze && source env.sh && unset TT_MESH_GRAPH_DESC_PATH
-timeout 300 python -m pytest glm47_all_shapes_check.py -q     # expect 6 passed, ~11 s
-# if it hangs:  tt-metal/python_env/bin/tt-smi -r   then re-run the control
-```
+1. **Reset first, unconditionally** — do not skip this on the assumption the device is fine:
+
+   ```bash
+   /home/ttuser/sdawle/tt-metal/python_env/bin/tt-smi -r
+   ```
+   On Galaxy it warns CPLD FW v1.16+ is wanted for `-r` and suggests `-glx_reset`; `-r` has
+   worked here. Block on completion — never start device work while a reset is in flight.
+
+2. **Then the known-good control**, before believing any new result:
+
+   ```bash
+   cd /home/ttuser/sdawle/tt-blaze && source env.sh && unset TT_MESH_GRAPH_DESC_PATH
+   timeout 300 python -m pytest glm47_all_shapes_check.py -q     # expect 6 passed, ~11 s
+   ```
+
+3. **Then instrument the q_kv_a row-major CB path before retrying it.** Do not just re-run
+   `gate5_shard_shape_attempt.py` and hope. Use the documented triage path:
+   `TT_METAL_INSPECTOR=1`, then
+   `python tt-metal/tools/triage/triage.py --run=dump_callstacks --inspector-log-path <cwd>/generated/inspector`
+   (the logs land in `<cwd>/generated/inspector`, **not** the `/tmp/tt-metal/inspector` the error
+   message claims). The hanging process must still be alive for triage — kill it only afterwards,
+   then reset again before the next attempt. `BLAZE_DEBUG_KERNELS=1` names the stalling phase.
+
+   The suspects are the reshape/reshard chain in `build_act()` and the `(64,32)` shard CB view;
+   triage distinguishes them, guessing does not.
 
 ## The one open blocker: feeding the model's activation to `GLMQKVAProjection`
 
