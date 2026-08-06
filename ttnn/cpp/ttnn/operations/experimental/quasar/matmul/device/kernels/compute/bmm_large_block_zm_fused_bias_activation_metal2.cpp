@@ -295,7 +295,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
+                MMPRE("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] unscoped, enabled for bisect
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -345,8 +345,7 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
-                    UNPACK(DPRINT(
-                        "U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
+                    UNPACK(MMPRE("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] enabled for bisect
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -362,14 +361,12 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            DPRINT(
-                                "MMC sb{} preacq\n",
-                                in0_subblock);  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
+                            MMPRE("MMC sb{} preacq\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
                             tile_regs_acquire();
-                            UNPACK(DPRINT(
+                            UNPACK(MMPRE(
                                 "U acq sb={},{}\n",
                                 (uint32_t)in0_subblock,
-                                (uint32_t)in1_subblock));  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
+                                (uint32_t)in1_subblock));  // [#48552 DIAG] enabled for bisect
                             if (enable_reload) {
                                 UNPACK(DPRINT("U reload sb={}\n", (uint32_t)in0_subblock));  // [#48552 DIAG]
                                 reload_from_cb_to_dst(
@@ -395,7 +392,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                UNPACK(DPRINT(  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
+                                UNPACK(MMPRE(  // [#48552 DIAG] ONLY active marker: matmul-unpack boundary
                                     "U mmpre sb={},{} k={} in0i={} in1i={}\n",
                                     (uint32_t)in0_subblock,
                                     (uint32_t)in1_subblock,
