@@ -22,6 +22,11 @@ import ttnn
 
 from models.experimental.vibevoice.common.weight_cache import WeightCache
 
+# bfloat8_b for the diffusion-head SwiGLU FFN gate/up weights (1536x4608) — DRAM-bound matmuls
+# where bf8b halves the weight read. down_proj (4608x1536) is latency-bound, so it stays bf16.
+# Not bit-exact vs bf16.
+_DIFF_FFN_DTYPE = ttnn.bfloat8_b
+
 _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
@@ -151,13 +156,13 @@ def preprocess_diffusion_head_weights(
 
     wc = weight_cache if weight_cache is not None else WeightCache(None, enabled=False)
 
-    def _w_tile(key: str, ckey: str) -> ttnn.Tensor:
+    def _w_tile(key: str, ckey: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
         # ttnn.linear computes x @ W (no transpose), so store weights transposed [in, out].
         return wc.as_tensor(
             ckey,
             lambda: hf_state[key].to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -201,8 +206,10 @@ def preprocess_diffusion_head_weights(
     for i in range(num_layers):
         layer_adaLN_w.append(_w_tile(f"layers.{i}.adaLN_modulation.1.weight", f"layers.{i}.adaLN"))
         layer_norm_w.append(_norm_tile(f"layers.{i}.norm.weight", f"layers.{i}.norm"))
-        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight", f"layers.{i}.ffn_gate"))
-        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight", f"layers.{i}.ffn_up"))
+        layer_ffn_gate_w.append(
+            _w_tile(f"layers.{i}.ffn.gate_proj.weight", f"layers.{i}.ffn_gate", dtype=_DIFF_FFN_DTYPE)
+        )
+        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight", f"layers.{i}.ffn_up", dtype=_DIFF_FFN_DTYPE))
         layer_ffn_down_w.append(_w_tile(f"layers.{i}.ffn.down_proj.weight", f"layers.{i}.ffn_down"))
 
     final_adaLN_w = _w_tile("final_layer.adaLN_modulation.1.weight", "final_adaLN")
