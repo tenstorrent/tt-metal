@@ -331,7 +331,12 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
     rp = hf_config.rope_parameters
     cfg = copy.deepcopy(hf_config)
     if attention_type == "sliding_attention":
-        cfg.rope_parameters = dict(hf_config.swa_rope_parameters)
+        # Sliding-window RoPE params. Config layout drifted across vLLM/transformers versions: the fork stack
+        # (vLLM 0.16) exposed a top-level `swa_rope_parameters` dict; on stock vLLM 0.24 / transformers 5.11 that
+        # attr is None and the sliding params live under `rope_parameters["sliding_attention"]` (mirroring the
+        # `full_attention` branch below). Tolerate both.
+        swa = getattr(hf_config, "swa_rope_parameters", None) or rp.get("sliding_attention")
+        cfg.rope_parameters = dict(swa)
         cfg.partial_rotary_factor = cfg.rope_parameters.get("partial_rotary_factor")
     else:
         cfg.rope_parameters = dict(rp["full_attention"])
