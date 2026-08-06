@@ -47,14 +47,16 @@ Shape Shape::to_rank(size_t new_rank) const {
 }
 
 uint32_t Shape::get_normalized_index(std::int64_t index) const {
-    std::int64_t rank = static_cast<std::int64_t>(this->rank());
-    std::uint64_t normalized_index = index >= 0 ? index : rank + index;
+    const std::int64_t rank = static_cast<std::int64_t>(this->rank());
+    // Signed type: an unsigned type wraps index < -rank to ~1.8e19, making the `>= 0` check vacuous.
+    const std::int64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
         normalized_index >= 0 and normalized_index < rank,
-        "Index is out of bounds for the rank, should be between 0 and {} however is {}",
-        rank - 1,
-        normalized_index);
-    return normalized_index;
+        "Shape index out of range. {} not in [{}, {})",
+        index,
+        -rank,
+        rank);
+    return static_cast<uint32_t>(normalized_index);
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape) {
