@@ -2388,6 +2388,67 @@ reasoning as §6.24's fusion rule -- fusion pays only when an operand is too nar
 
 Incidental: **`ttnn.repeat` is 1.8x worse than `ttnn.concat`** for the same duplication.
 
+### 6.35 — what the CFG duplication costs (1.8%), and the batching headroom that falls out of it
+
+The question: `x` is duplicated so the velocity net runs twice per Euler step, once with the llm
+conditioning and once with zeros. That looks like paying 2x for guidance. What does it actually cost?
+
+**First, it is semantically required.** The two passes need two independent attention contexts. Merging
+them into one 4-token sequence `[p0, p1, p2_cond, p2_uncond]` is NOT equivalent -- attention is
+bidirectional over the 3 tokens, so `p0` would then see both conditionings at once. And the duplication
+is only redundant at the INPUT projection: after the first attention layer the two copies have attended
+to different p2 and genuinely diverge. That is why §6.34's project-first rewrite was valid but could only
+ever save that one projection.
+
+**Second, it costs 1.8%.** One `_block` call, 3 layers, 300 reps x 4 alternating rounds:
+
+| | rows | tile rows used | us/call | spread |
+|---|---|---|---|---|
+| no guidance (hypothetical) | 3 | 1 of 32 | 828.2 | 0.3 |
+| **with guidance (ships)** | **6** | **1 of 32** | **843.6** | 0.5 |
+
+**+15.3 us per call, +1.8%, i.e. 0.322 ms/frame** over 21 calls, out of Block 2's 20.8 ms. The naive
+"CFG doubles the work" intuition simply does not apply: 3 rows and 6 rows both pad to ONE 32-row tile,
+and the row fold (NOTES [flow-13]) reads each weight once regardless. **So do not chase CFG elimination
+-- the entire prize is 0.322 ms and it would change the audio.**
+
+**Third, the same fact makes a real redundancy free.** `_cfg_input` puts llm_hidden over ZEROS and
+`llm_projection` has no bias, so **p2's unconditional half is exactly zero** (verified: max |value| =
+0.000000). We do run a 3072x3072 matmul to produce a known-zero result. Exploiting it saves nothing:
+
+    weight [3072,3072] BFP8 = 9.6 MB, floor 51.7 us
+    [2,3072] @ W (ships)       65.1 us   spread 0.1
+    [1,3072] @ W (cond only)   65.1 us   spread 0.1     delta +0.0
+
+M=1 and M=2 both pad to one tile row, so the weight is read once either way.
+
+**AND HERE IS THE PART WORTH ACTING ON.** If 6 rows is as cheap as 3, how far does that go? A tile is 32
+rows and the shipped path uses 6:
+
+| utterances | B | rows | tiles | us/`_block` | **us per utterance** | throughput |
+|---|---|---|---|---|---|---|
+| 1 | 2 | 6 | 1 | 844.9 | 844.9 | 1.0x |
+| 2 | 4 | 12 | 1 | 884.8 | **442.4** | **1.9x** |
+| 4 | 8 | 24 | 1 | 995.1 | **248.8** | **3.4x** |
+| 8 | 16 | 48 | 2 | TT_FATAL | -- | -- |
+
+**Four utterances cost 1.18x the time of one -- 3.4x the throughput.** This is the "31 unused tile rows"
+headroom, measured rather than asserted, and it is real.
+
+**The 32-row ceiling is OUR OWN CONSTANT, not the hardware.** `_NORM_SHARD`'s shard shape is hardcoded
+`(32, 96)`, and at 48 rows it raises `!shard_grid_fit_error.has_value()`. `wqkv` at 48 rows is fine and
+returns `(1, 48, 6144)`. So going past one tile needs a row-count-aware norm shard (cache one config per
+batch size, as `_schedule` already does for the timestep tokens) -- not a new kernel.
+
+Note this is THROUGHPUT, not latency: RTF per utterance does not improve, but a server doing 4 streams
+would do them in 1.18x the time of one. Whether that is useful depends on the deployment, which is not
+our call -- but it is now a measured option rather than a guess.
+
+**A probe bug of mine, recorded.** The first version of the p2 comparison left `gen._up(...)` INSIDE the
+benched lambda, so it timed a host->device upload every iteration and reported the SMALLER matmul as
+2.8x slower (185.2 vs 65.1 us). Hoist every operand out of the timed callable; if a "smaller" thing
+measures slower, suspect the harness before the hardware.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
