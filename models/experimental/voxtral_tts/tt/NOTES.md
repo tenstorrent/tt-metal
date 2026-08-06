@@ -842,7 +842,33 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
                 # columns change), which is exactly why the code counts were measured.
 ```
 
-### [flow-10] `_block` — THIS OP HAS A ~97 us FLOOR AND IT IS THE MOST EXPENSIVE...
+### [flow-10] `_block` — HAND-ROLLED HEAD SPLIT, worth 1.233 ms/frame over `nlp_create_qkv_heads`
+
+```text
+        # HAND-ROLLED HEAD SPLIT -- 3 slice + 3 reshape + 3 permute, replacing one
+        # nlp_create_qkv_heads. Worth 1.233 ms/frame (22.375 -> 21.142), BYTE-IDENTICAL codes.
+        #
+        # The block of prose below is the ORIGINAL finding, which rejected exactly this
+        # restructuring at 158 us. It was re-measured (STATUS.md 6.30/6.31) and is WRONG for the
+        # spelling here, though the L1 lesson in it is not:
+        #
+        #   * every output must be forced to _L1. That is the whole difference. Left at the default
+        #     the three tensors land in DRAM, measure the same 122 us as the fused op, and cost the
+        #     downstream consumers the 2.5 ms/frame the original finding correctly identified.
+        #   * with memory_config=_L1 on all three: 112.4 us against 122.0 isolated, 1.086x.
+        #   * ON THE WHOLE BLOCK it is worth SIX TIMES that -- 1.233 ms/frame, 1.0583x, steady to
+        #     +/-0.0004x over three interleaved 200-frame rounds. The fused op needs a 4D
+        #     [B,1,3,QW] input, and that reshape repacks tile padding ([1,32,QW] -> [2,1,32,QW],
+        #     25.9 us); slicing the folded [1,B*3,QW] tensor directly never repacks. That is the
+        #     likely mechanism -- measured, not established.
+        #   * why 158 us before and 112.4 now is UNRECONCILED. Some difference of construction, not
+        #     found. Recorded rather than papered over.
+        #
+        # k is permuted (0,2,3,1) rather than (0,2,1,3), which emits it already transposed for the
+        # scores matmul -- what transpose_k_heads=True used to do, at no extra cost.
+        #
+        # ORIGINAL FINDING FOLLOWS, kept for the L1 measurement and the sibling-op survey.
+```
 
 ```text
         # THIS OP HAS A ~97 us FLOOR AND IT IS THE MOST EXPENSIVE NON-MATMUL LINE IN THE BLOCK --
