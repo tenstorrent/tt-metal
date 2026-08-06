@@ -28,7 +28,7 @@ state stay per-stage (deriving them across the denoise loop is the rest of 10c).
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .ir import PARAM, Graph, Node, Placement, TensorSymbol
 
@@ -42,18 +42,28 @@ def _primary_input(g: Graph, shape) -> Optional[str]:
     return next((s for s in entries if g.symbols[s].shape == shape), entries[0] if entries else None)
 
 
-def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> Graph:
-    """Merge ``(stage_name, graph)`` pairs into one linked multi-stage graph.
+def link_stages(stages: Sequence[Tuple], connect: bool = False) -> Graph:
+    """Merge stage graphs into one linked multi-stage graph.
 
-    ``connect=False`` (default): each stage's outputs stay graph outputs, separated by a
-    decorative readback boundary — per-stage findings, no demand across the boundary.
+    Each entry is ``(name, graph)``, ``(name, graph, in_sym)``, or
+    ``(name, graph, in_sym, source)``:
 
-    ``connect=True`` **data-connects** consecutive stages (phase 10c): stage N's output is
-    read back at the boundary and fed as stage N+1's matching input, and only the *last*
-    stage's outputs seed demand. Backward demand then crosses the boundary, so a collective
-    at the end of one stage is judged by what the next stage actually consumes — e.g. a
-    gather that replicates to every device feeding a boundary that reads back only device 0
-    surfaces as redundant, which neither stage reveals alone.
+    * ``in_sym`` wires the handoff explicitly (needed when the pipeline reshapes between
+      stages — DiT → VAE unpatchify — so the producer output and this input differ in shape);
+    * ``source = (producer_name, output_index)`` names *which* upstream output feeds this
+      stage. It defaults to the previous stage's output 0, which reproduces a linear chain.
+      A non-default source lets one producer **fan out** to several stages — the MiniMax-H3
+      DiT emits ``[video, audio]`` and feeds the video VAE from output 0 and the audio VAE
+      from output 1, a DAG rather than a chain.
+
+    ``connect=False`` (default): stages are separated by a decorative readback boundary —
+    per-stage findings, no demand across it, every stage seeds demand.
+
+    ``connect=True`` **data-connects** each stage to its source across a demand-carrying
+    boundary, and only **terminal** stages (those no other stage draws from) seed demand.
+    Backward demand then crosses the boundaries, so a collective at the end of one stage is
+    judged by what its consumer actually reads — e.g. the DiT audio output is dead only until
+    the audio VAE is wired in as its consumer.
     """
     if not stages:
         raise ValueError("link_stages needs at least one stage")
@@ -61,31 +71,36 @@ def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> G
     first = stages[0][1]
     linked = Graph(name=" -> ".join(s[0] for s in stages), mesh=first.mesh, provenance=first.provenance)
 
-    prev_out: Optional[str] = None
-    prev_mesh: Optional[str] = None
+    out_syms: Dict[str, List[str]] = {}  # stage name -> its namespaced output symbol ids
+    mesh_of: Dict[str, Optional[str]] = {}
+    # a stage that appears as some other stage's source is not a pipeline sink
+    drawn_from = {
+        (entry[3][0] if len(entry) > 3 else (stages[i - 1][0] if i > 0 else None)) for i, entry in enumerate(stages)
+    }
     outputs: List[str] = []
     for i, entry in enumerate(stages):
-        # (name, graph) auto-wires the handoff by shape; (name, graph, in_sym) wires it
-        # explicitly -- needed when the pipeline reshapes between stages (DiT -> VAE
-        # unpatchify), so the previous output and this input have different shapes.
         name, g = entry[0], entry[1]
         in_override = entry[2] if len(entry) > 2 else None
+        source = entry[3] if len(entry) > 3 else ((stages[i - 1][0], 0) if i > 0 else None)
         pfx = name + "/"
         mesh_id = None if i == 0 else name  # first stage is the primary mesh
         if mesh_id is not None:
             linked.meshes[mesh_id] = g.mesh
 
-        def rid(x: str) -> str:
+        def rid(x: str, pfx: str = pfx) -> str:
             return pfx + x
 
-        # a readback boundary separates this stage from the previous one
+        # a readback boundary separates this stage from the source output it consumes
         redirect: Optional[Tuple[str, str]] = None
-        if prev_out is not None:
+        if source is not None:
+            src_name, src_idx = source
+            prev_out = out_syms[src_name][src_idx]
+            prev_mesh = mesh_of[src_name]
             hs = pfx + "__enter"
             src = linked.symbols[prev_out]
             # when connected the handoff lands on this stage's mesh and carries the dist its
             # matching entry expected, so this stage analyses exactly as it did standalone. Its
-            # *shape* is the input's (a reshaping handoff differs from the previous output).
+            # *shape* is the input's (a reshaping handoff differs from the source output).
             wired = (in_override or _primary_input(g, src.shape)) if connect else None
             hshape = g.symbols[wired].shape if wired is not None else src.shape
             hmesh = mesh_id if connect else prev_mesh
@@ -142,14 +157,15 @@ def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> G
                 )
             )
 
+        out_syms[name] = [rid(o) for o in g.outputs]
+        mesh_of[name] = mesh_id
         if not connect:
-            outputs.extend(rid(o) for o in g.outputs)  # disconnected: every stage seeds demand
-        prev_out = rid(g.outputs[0]) if g.outputs else None
-        prev_mesh = mesh_id
+            outputs.extend(out_syms[name])  # disconnected: every stage seeds demand
 
-    if connect:  # only the final stage seeds demand; upstream stages are pulled through the boundaries
-        last_name, last_g = stages[-1][0], stages[-1][1]
-        outputs = [last_name + "/" + o for o in last_g.outputs]
+    if connect:  # only terminal stages seed demand; upstream stages are pulled through the boundaries
+        for name in (s[0] for s in stages):
+            if name not in drawn_from:
+                outputs.extend(out_syms[name])
     linked.outputs = outputs
     linked.meta["stages"] = [s[0] for s in stages]
     linked.meta["connected"] = connect

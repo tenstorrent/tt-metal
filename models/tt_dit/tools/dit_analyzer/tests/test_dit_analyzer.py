@@ -383,6 +383,36 @@ def test_connected_pipeline_reveals_a_cross_boundary_redundant_gather():
     assert "submesh" in repl[0].suggestion and repl[0].severity == "medium"
 
 
+def test_producer_fans_out_to_two_consumers_via_source():
+    """A stage may feed several downstream stages, not just the next one — the MiniMax-H3 DiT
+    emits [video, audio] and feeds the video VAE from output 0 and the audio VAE from output 1.
+    `source=(producer, index)` wires that branch; both consumers are terminal (seed demand), so
+    the second output is consumed rather than reading back as a dead_collective (which is what an
+    *unwired* audio branch looked like).
+    """
+    from dit_analyzer.link import link_stages
+
+    src = GraphBuilder("src", MESH)
+    x = src.input("x", [1, 256, 1024], shard={TP: 2})
+    g0 = src.all_gather(x, dim=2, mesh_axis=TP, label="g0")  # output 0 -> video-like consumer
+    g1 = src.all_gather(x, dim=2, mesh_axis=TP, label="g1")  # output 1 -> audio-like consumer
+    src_g = src.finish([g0, g1])
+    a = GraphBuilder("a", MESH)
+    a_g = a.finish([a.pointwise("ua", [a.input("ya", [1, 256, 1024])])])
+    b = GraphBuilder("b", MESH)
+    b_g = b.finish([b.pointwise("ub", [b.input("yb", [1, 256, 1024])])])
+
+    # Linear chain (b after a): src's second output feeds nothing and reads back dead.
+    linear = analyze_graph(link_stages([("src", src_g), ("a", a_g), ("b", b_g)], connect=True))
+    assert any(f.rule == "dead_collective" for f in linear.findings), [f.rule for f in linear.findings]
+
+    # Branch: a <- src output 0 (default), b <- src output 1. Both outputs are now consumed.
+    linked_branch = link_stages([("src", src_g), ("a", a_g), ("b", b_g, None, ("src", 1))], connect=True)
+    assert linked_branch.meta["stages"] == ["src", "a", "b"]
+    branched = analyze_graph(linked_branch)
+    assert not any(f.rule == "dead_collective" for f in branched.findings), [f.rule for f in branched.findings]
+
+
 def test_boundary_groups_with_different_waste_do_not_merge():
     """Two participant groups may only be reported as one finding when they are redundant
     in the *same way*. On a packed sequence sliced in the middle, the first shard wastes
