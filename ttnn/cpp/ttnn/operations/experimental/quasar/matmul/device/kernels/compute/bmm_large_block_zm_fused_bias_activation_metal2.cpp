@@ -345,7 +345,7 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
-                    UNPACK(DPRINT("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] both input waits done
+                    UNPACK(MMPRE("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] enabled for bisect
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -363,8 +363,10 @@ void kernel_main() {
 
                             DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
-                            UNPACK(DPRINT(
-                                "U acq sb={},{}\n", (uint32_t)in0_subblock, (uint32_t)in1_subblock));  // [#48552 DIAG]
+                            UNPACK(MMPRE(
+                                "U acq sb={},{}\n",
+                                (uint32_t)in0_subblock,
+                                (uint32_t)in1_subblock));  // [#48552 DIAG] enabled for bisect
                             if (enable_reload) {
                                 UNPACK(DPRINT("U reload sb={}\n", (uint32_t)in0_subblock));  // [#48552 DIAG]
                                 reload_from_cb_to_dst(
