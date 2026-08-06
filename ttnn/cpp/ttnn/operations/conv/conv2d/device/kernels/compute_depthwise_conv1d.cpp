@@ -7,6 +7,10 @@
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+// Pulls in whichever SFPU op the ACTIVATION defines select; conv_bmm_tilize.cpp does the same. The
+// defines alone are not enough -- without this the expansion of SFPU_OP_INIT_ACTIVATION does not
+// compile.
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -75,6 +79,13 @@ inline void mul_and_accumulate_block(
             // Restore srcA to in0's format for the next iteration's mul unpack.
             reconfig_data_format_srca(in0_cb_id);
         }
+#ifdef SFPU_OP_INIT_ACTIVATION
+        // See the note in the SFPU variant: last tap only, and `i` must name the DST slot.
+        if (is_last_tap) {
+            const uint32_t i = 0;
+            SFPU_OP_FUNC_ACTIVATION
+        }
+#endif
         tile_regs_commit();
 
         // scratch_dfb and out_dfb share the output data format, so packing to either target needs no
@@ -146,6 +157,16 @@ inline void mul_and_accumulate_block_sfpu(
             add_binary_tile(DST_ACC, DST_A, DST_ACC);
             scratch_dfb.pop_front(1);
         }
+#ifdef SFPU_OP_INIT_ACTIVATION
+        // Fused activation, applied to the finished output while it is still in DST -- only on the
+        // last tap, since earlier ones are partial sums. The macro indexes DST by a variable literally
+        // named `i` (the program factory emits the defines with "i" as the index name), so bind it in
+        // an inner scope; the enclosing loop's `i` is a tile counter, not a DST slot.
+        if (is_last_tap) {
+            const uint32_t i = DST_ACC;
+            SFPU_OP_FUNC_ACTIVATION
+        }
+#endif
         tile_regs_commit();
 
         dst_dfb.reserve_back(1);
@@ -217,6 +238,12 @@ inline void mul_and_accumulate_coalesced_block_sfpu(
                     add_binary_tile(DST_ACC, DST_ACT, DST_ACC);
                 }
             }
+#ifdef SFPU_OP_INIT_ACTIVATION
+            {
+                const uint32_t i = DST_ACC;
+                SFPU_OP_FUNC_ACTIVATION
+            }
+#endif
             tile_regs_commit();
 
             out_dfb.reserve_back(1);
@@ -260,6 +287,12 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
                 mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
+#ifdef SFPU_OP_INIT_ACTIVATION
+            {
+                const uint32_t i = 0;
+                SFPU_OP_FUNC_ACTIVATION
+            }
+#endif
             tile_regs_commit();
 
             out_dfb.reserve_back(1);
@@ -348,6 +381,14 @@ void kernel_main() {
     // The pack target never changes (we only ever pack to out_dfb), so no further pack reconfig is
     // needed for the lifetime of the kernel.
     binary_op_init_common(in0_cb_id, in1_cb_id, out_cb_id);
+#ifdef SFPU_OP_INIT_ACTIVATION
+    // The conv2d program factory already emits these defines from Conv2dConfig::activation
+    // (conv2d_op_sharded_program_factory.cpp:918). conv_bmm_tilize.cpp consumed them; this kernel did
+    // not, so a fused activation was silently dropped on the depthwise path. Now honoured, which lets
+    // an activation ride along on the conv output instead of costing a separate op plus its layout
+    // round trip.
+    SFPU_OP_INIT_ACTIVATION
+#endif
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
