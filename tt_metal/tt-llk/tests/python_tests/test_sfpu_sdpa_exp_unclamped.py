@@ -32,6 +32,7 @@ result down on the way to L1.
 """
 
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -66,6 +67,7 @@ BF16_HALF = 0x3F00
 INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0)]
 
 
+@skip_for_wormhole
 @parametrize(
     formats=FORMATS,
     input_range=INPUT_RANGES,

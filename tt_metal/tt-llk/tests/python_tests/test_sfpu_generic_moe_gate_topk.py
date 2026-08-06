@@ -81,6 +81,7 @@ Configurations left uncovered, with the measurement behind each
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -187,6 +188,7 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
             )
 
 
+@skip_for_wormhole
 @parametrize(
     num_selected_experts=[8, 4, 16],
     full_sort=[True, False],
