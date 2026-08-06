@@ -481,3 +481,32 @@ can be turned on.
 Note also W=2 is *worse* than W=1 on the full op (100.2 vs 118.9 is better, but on the real
 unpadded shapes 100.6 vs 94.0 is worse) because q_a/kv_a pad 768/576 -> 1024. o_proj's N=2048
 divides exactly and pays no such penalty — it remains the better integration target.
+
+### The gather's ~53 µs, broken down (read from the kernel)
+
+`gather_row_to_dram/kernels/op.hpp:80-96`, the receiver's DM0 loop, per output tile:
+
+```
+cb_reserve_back(tile, 1)
+for (i < dst_page_size/4) out[i] = 0;      // zeros a FULL 2 KB tile, scalar loop
+for (i < 8) { out[i] = row[i]; ... }       // fills 16 values
+noc_async_write_page(page, writer, ...)
+noc_async_write_barrier();                 // <-- barrier per page
+```
+
+Two costs, both fixable, and `tile: Internal = Internal(num_pages=1)` (op.py:17) is what forces
+the serialisation — exactly the role `scratch` played in `TileRowReplicate`:
+
+1. **Barrier per page.** 32 output tiles at N=1024 → 32 serialised DRAM round-trips, ~19 µs.
+   Fix: raise the `tile` CB depth to CHUNK, write CHUNK pages, one barrier. `num_pages` is 32 at
+   N=1024 and 24 at N=768, both divisible by 8; guard with a fallback to 1 as
+   `TileRowReplicate._READ_CHUNK` does.
+2. **Zeroing 2 KB per tile with a scalar word loop** to write 16 useful values — ~16K word-writes
+   for 32 tiles, ~12 µs. Only row 0 of each output tile is ever read downstream. Either hoist the
+   zeroing (the destination is reused every token) or zero only the two face lines that are not
+   overwritten.
+
+Together these plausibly account for most of the 53 µs. `D` at W=4 is 86.5 µs against ttnn's
+47.4; the core is 16.1 and the input boundary 17.2, so the gather has to come down to roughly
+14 µs for the drop-in to break even — which is in range if both fixes land, but is not a
+certainty. **Measure, do not assume.**
