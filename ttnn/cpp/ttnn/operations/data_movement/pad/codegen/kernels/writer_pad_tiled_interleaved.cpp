@@ -5,6 +5,9 @@
 // Pad writer: TILE interleaved, batched sequential tile writes.
 // BRISC. Same pipelined pattern as RM writer but with tiles.
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime args
@@ -29,6 +32,9 @@ void kernel_main() {
     const uint32_t write_size = write_size_dst < l1_page_stride ? write_size_dst : l1_page_stride;
     const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
+    Noc noc;
+    CircularBuffer out_cb(cb_out);
+
     uint32_t tile_id = start_id;
 
     if constexpr (BATCH > 1) {
@@ -36,11 +42,12 @@ void kernel_main() {
 
         // Prime: issue first batch
         uint32_t batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-        cb_wait_front(cb_out, batch);
-        uint32_t l1_addr = get_read_ptr(cb_out);
+        out_cb.wait_front(batch);
+        uint32_t l1_offset = 0;
         for (uint32_t t = 0; t < batch; t++) {
-            noc_async_write_page(tile_id++, d, l1_addr, write_size);
-            l1_addr += l1_page_stride;
+            noc.async_write(
+                out_cb, d, write_size, {.offset_bytes = l1_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+            l1_offset += l1_page_stride;
         }
         tiles_left -= batch;
         uint32_t prev_batch = batch;
@@ -48,29 +55,30 @@ void kernel_main() {
         // Steady state
         while (tiles_left > 0) {
             batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-            cb_wait_front(cb_out, prev_batch + batch);
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out, prev_batch);
+            out_cb.wait_front(prev_batch + batch);
+            noc.async_writes_flushed();
+            out_cb.pop_front(prev_batch);
 
-            l1_addr = get_read_ptr(cb_out);
+            l1_offset = 0;
             for (uint32_t t = 0; t < batch; t++) {
-                noc_async_write_page(tile_id++, d, l1_addr, write_size);
-                l1_addr += l1_page_stride;
+                noc.async_write(
+                    out_cb, d, write_size, {.offset_bytes = l1_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+                l1_offset += l1_page_stride;
             }
             tiles_left -= batch;
             prev_batch = batch;
         }
 
         // Drain final batch
-        noc_async_writes_flushed();
-        cb_pop_front(cb_out, prev_batch);
+        noc.async_writes_flushed();
+        out_cb.pop_front(prev_batch);
     } else {
         for (uint32_t i = 0; i < num_tiles; i++) {
-            cb_wait_front(cb_out, 1);
-            noc_async_write_page(tile_id++, d, get_read_ptr(cb_out), write_size);
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out, 1);
+            out_cb.wait_front(1);
+            noc.async_write(out_cb, d, write_size, {.offset_bytes = 0}, {.page_id = tile_id++, .offset_bytes = 0});
+            noc.async_writes_flushed();
+            out_cb.pop_front(1);
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
