@@ -33,8 +33,9 @@ python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current on the **p150**: **long-form RTF 0.71–0.78, ~57 ms/frame, 0 WER errors** (N150 was
-0.57–0.64 / ~48). Beat that without breaking it.
+Current on the **p150**: **long-form RTF 0.57, ~45.4 ms/frame** (N150: 0.57–0.64 / ~48) — the
+fork now beats the Wormhole build it forked from. Long-form WER 1 wrong of 894 over 3 seeds.
+Beat that without breaking it.
 
 ---
 
@@ -44,8 +45,8 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 
 | block | what it does | size | file | cost/frame |
 |---|---|---|---|---|
-| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~23 ms |
-| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~20.8 ms |
+| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~21.2 ms |
+| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~21.9 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
 One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~48, i.e. RTF ~0.6.
@@ -53,8 +54,11 @@ One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~48, 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
 
-**Hardware: one Wormhole N150.** 64 Tensix cores (8×8), 12 DRAM banks, measured DRAM ceiling
-**194–202 GB/s**. That last number is the single most useful fact in this project (§6).
+**Hardware: one Blackhole p150b.** 130 Tensix cores (13×10), 8 GDDR6 banks, measured DRAM ceiling
+**~360 GB/s** (§6.41) and a **~68 µs per-op floor** (§6.45). Those two numbers together are the
+single most useful fact on this fork, and they invert the N150's: bytes are cheap and launches are
+expensive, so **deleting ops wins where the N150 wanted fewer, bigger kernels**. Six N150 decisions
+have already reversed here — §6.39, §6.40, §6.43, §6.44 and two in §6.45.
 
 > **Every tuned constant in `tt/*.py` was measured on this card.** The norm grids (8×4), `_QKV_GRID_X`,
 > `_WO_PRG`'s `in0_block_w=2`, `_SDPA_PRG`'s `k_chunk_size=512`, the core-count minimum at 32 — all of
