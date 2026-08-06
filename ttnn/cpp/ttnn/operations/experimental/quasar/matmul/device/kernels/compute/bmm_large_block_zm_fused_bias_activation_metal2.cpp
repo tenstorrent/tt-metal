@@ -416,7 +416,7 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
-                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // DEBUG #48552 matmul_block loop done
+                            MMPRE("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
 
                             if (last_out) {
                                 tile_regs_commit();
@@ -489,7 +489,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    DPRINT("MMC pack blk={}\n", block);  // DEBUG: all subblock matmul+pack done for this block
+                    MMPRE("MMC pack blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
