@@ -1777,17 +1777,22 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
                 tokens_all
             ), "CPU reference tokens differ from the traced run's tokens"
         per_chunk, pccs, bad_fracs = [], [], []
+        stage_s, readback_s = 0.0, 0.0
         t_run = time.time()
         for chunk_idx in range(n_chunks):
+            t_stage = time.time()
             chunk_start = _stage(chunk_idx)
+            stage_s += time.time() - t_stage
             tid = tid_first if chunk_idx == 0 else tid_ring
             t_c = time.time()
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
             out = out_first if chunk_idx == 0 else out_ring
+            t_rb = time.time()
             hidden = _cp_gather_torch(out, mesh_device, mesh_config)
             assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
+            readback_s += time.time() - t_rb
             if ref_hidden is not None:
                 ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(
                     1, 1, chunk, model_args.hidden_size
@@ -1806,6 +1811,19 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         ttnn.release_trace(mesh_device, tid_ring)
 
     ring_chunks = per_chunk[1:]
+    device_s = sum(per_chunk)
+    # Three different numbers, because conflating them understates the model by ~2x.
+    #   device   — execute_trace + synchronize. What the hardware spends on prefill.
+    #   staging  — token upload, ring metadata, pinned RoPE refresh. Real work a
+    #              deployment also pays, though it should overlap rather than serialize.
+    #   readback — gathering every chunk's hidden states to host so this test can assert
+    #              on them. Test-only: a prefill server keeps the KV cache on device and
+    #              reads back at most the final chunk.
+    logger.info(
+        f"[traced_perf] DEVICE {context_len} tokens in {device_s:.1f}s "
+        f"({context_len / device_s:.0f} tok/s) | staging {stage_s:.1f}s | "
+        f"readback {readback_s:.1f}s (test-only) | wall {total_s:.1f}s"
+    )
     logger.info(
         f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
         f"| chunk0(mask)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
