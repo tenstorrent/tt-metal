@@ -119,6 +119,59 @@ def _bank_worker_grid(device) -> tuple[ttnn.CoreRangeSet, int]:
     return crs, len(cores)
 
 
+def qkv_a(device, x, w, q_lora_rank: int, kvpe_dim: int, batch: int):
+    """Blaze q_a/kv_a for the decode path, or None to fall back to ttnn.
+
+    DEFAULT OFF, and deliberately so: at the model boundary this measures **0.52x** against the
+    ttnn fused q_kv_a it replaces (94.0 us vs 47.5 us), correctness-gated at PCC 0.9999. It is
+    wired up so the integration exists and can be flipped the moment the underlying limit is
+    lifted -- blaze's DRAMStreamingMatmul runs on 8 DRAM-bank workers against ttnn's 80 cores,
+    reaching 56 GB/s of a 512 GB/s device, and that is what makes it slow. Enabling this today
+    costs ~2.2 ms/token; see blaze_eval/RESUME_HERE.md.
+
+    Returns (q_a, kv) with logical widths, or None when disabled/unavailable so callers keep the
+    ttnn path unchanged.
+    """
+    if not blaze_qkv_a_enabled():
+        return None
+    b = _try_import_blaze()
+    state = _PROGRAM_CACHE.get(id(w))
+    if state is None:
+        prepared = prepare_qkv_a_weights(device, w.w_q_a_torch, w.w_kv_a_torch)
+        if prepared is None:
+            return None
+        mk = lambda n: ttnn.from_torch(
+            __import__("torch").zeros(1, 1, batch, n),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        state = {"w": prepared, "q_out": mk(prepared["q_a_n_pad"]), "kv_out": mk(prepared["kv_a_n_pad"])}
+        _PROGRAM_CACHE[id(w)] = state
+
+    p = state["w"]
+    f = b["FusedProgram"](
+        kernel=None,
+        device=device,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        name="glm_qkv_a",
+    )
+    b["GLMQKVAProjection"].emit(
+        f, x, p["q_a"], p["kv_a"], q_a_out=state["q_out"], kv_a_out=state["kv_out"], fp32_dest_acc_en=True
+    )
+    f.run()
+    q_a, kv = state["q_out"], state["kv_out"]
+    # The op pads N to a bank multiple; the model wants logical widths.
+    if p["q_a_n_pad"] != q_lora_rank:
+        q_a = ttnn.slice(q_a, [0, 0, 0, 0], [1, 1, batch, q_lora_rank])
+    if p["kv_a_n_pad"] != kvpe_dim:
+        kv = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, kvpe_dim])
+    return q_a, kv
+
+
 def prepare_qkv_a_weights(device, w_q_a_torch, w_kv_a_torch, weight_dtype=ttnn.bfloat8_b) -> dict | None:
     """One-time weight prep for the blaze q_a/kv_a path.
 

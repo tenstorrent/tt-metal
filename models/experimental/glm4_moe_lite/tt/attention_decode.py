@@ -19,6 +19,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.experimental.glm4_moe_lite.tt import blaze_ops
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     scg_kwargs,
@@ -140,8 +141,14 @@ def kv_cache_update(
     else:
         kv = None
         qkv = None
-        w_q_kv_a = getattr(w, "w_q_kv_a", None)
-        if w_q_kv_a is not None:
+        # Blaze q_a/kv_a, when GLM4_MOE_LITE_BLAZE_QKV_A=1 and tt-blaze imports. Returns None
+        # otherwise, which is the case on this tree, so the ttnn path below is untouched. Off by
+        # default because it currently measures 0.52x -- see tt/blaze_ops.py.
+        _blaze_qkv_a = blaze_ops.qkv_a(device, x, w, int(hparams.q_lora_rank), kvpe_dim, batch)
+        w_q_kv_a = None if _blaze_qkv_a is not None else getattr(w, "w_q_kv_a", None)
+        if _blaze_qkv_a is not None:
+            q_a, kv = _blaze_qkv_a
+        elif w_q_kv_a is not None:
             qkv = attn_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
             q_a = _safe_slice(
                 qkv,
