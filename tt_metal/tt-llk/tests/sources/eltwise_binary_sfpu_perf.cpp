@@ -53,7 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
-        _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
+        _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest, not a dest-format flag */, reuse_dest_type, unpack_to_dest>(
             UNPACK_TRANSPOSE_FACES,
             UNPACK_TRANSPOSE_WITHIN_FACE,
             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
@@ -87,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
                         PERF_ADDRESS(PERF_INPUT_A, /* tile_idx */ i), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
