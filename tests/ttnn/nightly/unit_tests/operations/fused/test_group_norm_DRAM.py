@@ -366,3 +366,32 @@ def test_group_norm_DRAM_row_major_affine_and_mask(
         atol=0.069,
         frobenius_threshold=0.025,
     )
+
+
+# Regression: ROW_MAJOR out + large block_ht on no_mcast used to undersize c_10 and hang.
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.timeout(300)
+def test_group_norm_DRAM_row_major_no_mcast_large_block_ht(device):
+    """c_10 (cb_ex_external) must be sized for num_out_blocks_padded on the no_mcast path.
+
+    N=8 >= num_virtual_rows=8 selects no_mcast; 768/32 = 24 ch/group straddles tiles,
+    so the ROW_MAJOR-output override raises num_out_blocks from 16 to block_ht =
+    8704/32 = 272. The sender reader then reserves ceil(272 * 16B / 2048B) = 3 pages
+    per iteration; the CB must be at least that large.
+    """
+    base.run_group_norm_DRAM(
+        device,
+        8,
+        768,
+        1,
+        8704,
+        32,
+        16,
+        8,
+        8,
+        "legacy",
+        use_input_mask=True,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
