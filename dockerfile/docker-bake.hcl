@@ -81,6 +81,15 @@ variable "UV_IMAGE" {
   default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
 }
 
+variable "TT_LLM_ENGINE_IMAGE" {
+  # Prebuilt tt-llm-engine migration image that the release-models target bakes
+  # _migration_client out of, so release-models doubles as the disaggregated-prefill
+  # worker. Only pulled on the 3.10 (Ubuntu 22.04) build; the Dockerfile's selector
+  # resolves to an empty stage on 3.12. Pin by full SHA, and match the tag tt-blaze's
+  # decode worker uses so the P and D sides speak the same migration protocol.
+  default = "ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74"
+}
+
 # =============================================================================
 # Tool targets (from Dockerfile.tools)
 #
@@ -324,6 +333,11 @@ target "release-models" {
   inherits = ["_main-common"]
   target   = "release-models"
   tags     = ["tt-metalium-release-models:local"]
+  args = {
+    # Baked into release-models on the 3.10 build so it doubles as the
+    # disaggregated-prefill worker (see dockerfile/Dockerfile mig-client stages).
+    TT_LLM_ENGINE_IMAGE = TT_LLM_ENGINE_IMAGE
+  }
 }
 
 group "main" {
