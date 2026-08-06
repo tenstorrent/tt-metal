@@ -1522,7 +1522,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if sampling_module is None:
                 continue
             sm_bs = sampling_module.seed_manager.max_batch_size
-            rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+            # slot_remap holds GLOBAL slot indices: vLLM offsets each DP rank's local
+            # [0, sm_bs) remap by rank*sm_bs. The seed manager indexes its own rank-local
+            # state, so rebase before handing it over -- otherwise rank i>=1 indexes past
+            # the end (e.g. value 32 into a size-32 list).
+            rank_remap = []
+            for new_slot, old_value in enumerate(slot_remap[i * sm_bs : (i + 1) * sm_bs]):
+                old_slot = int(old_value) - i * sm_bs
+                if not 0 <= old_slot < sm_bs:
+                    raise ValueError(
+                        f"slot_remap[{i * sm_bs + new_slot}]={int(old_value)} moves a request across "
+                        f"DP rank {i} (slots [{i * sm_bs}, {(i + 1) * sm_bs}))"
+                    )
+                rank_remap.append(old_slot)
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
 
     def sample_decode_on_device(
