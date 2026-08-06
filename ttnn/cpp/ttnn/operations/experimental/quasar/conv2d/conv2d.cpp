@@ -983,15 +983,30 @@ Result conv2d_L1(
                     }
                     return k_blk;
                 };
+                // The conv parallel config's grid can exceed the emulator's core count for the small
+                // stride-subsampled output (e.g. a 49-row downsample gets a 7-core conv grid), but the halo
+                // output is sharded over the ACTUAL available cores. Derive the matmul grid + per_core_M from
+                // that shard so the matmul doesn't request more cores than exist.
+                const auto& act_ss = input_tensor_post_tm.memory_config().shard_spec().value();
+                const auto act_bb = act_ss.grid.bounding_box();
+                const CoreCoord act_grid = {
+                    act_bb.end_coord.x - act_bb.start_coord.x + 1, act_bb.end_coord.y - act_bb.start_coord.y + 1};
+                const uint32_t per_core_m_act = tt::div_up(act_ss.shape[0], tt::constants::TILE_HEIGHT);
                 if (auto* c1 = std::get_if<
                         ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                         &mm_pc.value())) {
                     c1->in0_block_w = kspill_in0_bw(c1->per_core_N);
+                    c1->compute_with_storage_grid_size = act_grid;
+                    c1->per_core_M = per_core_m_act;
+                    c1->out_block_h = per_core_m_act;
                 } else if (
                     auto* c2 = std::get_if<
                         ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
                         &mm_pc.value())) {
                     c2->in0_block_w = kspill_in0_bw(c2->per_core_N);
+                    c2->compute_with_storage_grid_size = act_grid;
+                    c2->per_core_M = per_core_m_act;
+                    c2->out_block_h = per_core_m_act;
                 }
             }
             ttnn::Tensor mm_out = ttnn::operations::experimental::quasar::matmul::linear(
