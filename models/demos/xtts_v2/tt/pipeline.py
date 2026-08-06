@@ -34,6 +34,7 @@ import hashlib
 import importlib
 import os as _os
 import pathlib as _pathlib
+from types import SimpleNamespace
 
 import torch
 
@@ -366,16 +367,35 @@ class BuiltPipeline:
             _restore_cache()
 
     def forward(
-        self, text="hello world.", language="en", ref_wav_22k=None, N=40, repetition_penalty=5.0, collect=False
+        self,
+        text="hello world.",
+        language="en",
+        ref_wav_22k=None,
+        N=40,
+        repetition_penalty=5.0,
+        collect=False,
+        decode_mode="eager",
     ):
-        """One utterance on the resident weights; same result dict as the one-shot path."""
+        """One utterance on the resident weights; same result dict as the one-shot path.
+
+        decode_mode="eager" (default) is the gated repeat-prefill loop. "trace" runs the
+        same repeat-prefill math as fixed-shape steps at pinned capacity, captured once
+        and replayed N times (one host dispatch for the whole decode); requires the
+        device opened with trace_region_size>0. EXPERIMENTAL: fixed-capacity scheduling
+        shifts bf16 kernel splits vs the eager growing-length path (per-step logits PCC
+        ~0.9996), which flips thin-margin argmaxes mid-decode (measured: first flip at
+        step 18, 19/40 tokens vs the gate, waveform PCC vs HF golden 0.598). It does
+        NOT pass the e2e accuracy gate; the default stays eager. The traced substrate
+        (prefill, stateful buffers, capture/replay protocol) is verified and is the
+        base for the KV-cached decode step, which has constant per-step shapes.
+        """
         _restore_cache = _install_resident_upload_cache()
         try:
-            return self._forward_impl(text, language, ref_wav_22k, N, repetition_penalty, collect)
+            return self._forward_impl(text, language, ref_wav_22k, N, repetition_penalty, collect, decode_mode)
         finally:
             _restore_cache()
 
-    def _forward_impl(self, text, language, ref_wav_22k, N, repetition_penalty, collect):
+    def _forward_impl(self, text, language, ref_wav_22k, N, repetition_penalty, collect, decode_mode="eager"):
         device, model = self.device, self.model
         gpt = model.gpt
         mel_norms = model.mel_stats.detach().cpu().float()
@@ -411,21 +431,24 @@ class BuiltPipeline:
         cond_lat = self.drop_fwd(self.perc_fwd(conds))  # [1,32,1024] (dropout=identity)
 
         # ── Stage C: on-device autoregressive greedy decode -> codes ──────────
-        gen_ids = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)  # [1,1] uint32
-        step_logits = []
-        for _ in range(N):
-            logits = self.infer_fwd(gen_ids_tt=gen_ids)  # [1, seq, V]
-            seq = int(logits.shape[1])
-            V = int(logits.shape[-1])
-            last = ttnn.reshape(ttnn.slice(logits, [0, seq - 1, 0], [1, seq, V]), [1, V])
-            ttnn.deallocate(logits)
-            if collect:
-                step_logits.append(last)
-            nxt = _select_next_on_device(last, gen_ids, self.base_mask, self.eye_v, repetition_penalty)
-            if not collect:
-                ttnn.deallocate(last)
-            gen_ids = ttnn.concat([gen_ids, nxt], dim=1)  # grow on device
-        codes = ttnn.slice(gen_ids, [0, 1], [1, N + 1])  # drop start_audio -> [1,N]
+        if decode_mode == "trace":
+            codes, step_logits = self._decode_traced(start_audio, N, repetition_penalty, prefix_len, collect)
+        else:
+            gen_ids = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)  # [1,1] uint32
+            step_logits = []
+            for _ in range(N):
+                logits = self.infer_fwd(gen_ids_tt=gen_ids)  # [1, seq, V]
+                seq = int(logits.shape[1])
+                V = int(logits.shape[-1])
+                last = ttnn.reshape(ttnn.slice(logits, [0, seq - 1, 0], [1, seq, V]), [1, V])
+                ttnn.deallocate(logits)
+                if collect:
+                    step_logits.append(last)
+                nxt = _select_next_on_device(last, gen_ids, self.base_mask, self.eye_v, repetition_penalty)
+                if not collect:
+                    ttnn.deallocate(last)
+                gen_ids = ttnn.concat([gen_ids, nxt], dim=1)  # grow on device
+            codes = ttnn.slice(gen_ids, [0, 1], [1, N + 1])  # drop start_audio -> [1,N]
 
         # ── Stage D: latents (device codes -> mel ids on device, self-fed) ────
         start_tok = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)
@@ -456,6 +479,218 @@ class BuiltPipeline:
             "exp_len": exp_len,
             "N": N,
         }
+
+    def _ensure_trace_decode(self):
+        """Lazily build the fixed-shape decode machinery: a second handle on the GPT2
+        core (its internal causal-mask cache makes it reusable at a pinned capacity),
+        the LM head, and the token/position embedding tables. Uploaded once."""
+        if getattr(self, "_gpt_core", None) is not None:
+            return
+        device, gpt = self.device, self.model.gpt
+        _restore_cache = _install_resident_upload_cache()
+        try:
+            self._gpt_core = _build("g_p_t2_model")(device, gpt.gpt)
+            m = gpt.gpt_inference
+            self._emb_w = ttnn.as_tensor(
+                m.embeddings.weight.detach().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            norm, linear = m.lm_head[0], m.lm_head[1]
+            self._lnf_w = ttnn.as_tensor(
+                norm.weight.detach().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._lnf_b = ttnn.as_tensor(
+                norm.bias.detach().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._head_w = ttnn.as_tensor(
+                linear.weight.detach().t().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._head_b = ttnn.as_tensor(
+                linear.bias.detach().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._head_cfg = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4)
+            self._pos_weight = m.pos_embedding.emb.weight.detach().contiguous().float()  # host [max_pos, D]
+            self._V = int(linear.weight.shape[0])
+        finally:
+            _restore_cache()
+
+    def _trace_step(self, tr, penalty):
+        """One fixed-shape greedy step on persistent buffers (the traced unit).
+
+        Mirrors the eager loop exactly: read the logit row at `cur_pos` (a masked
+        sum == the eager slice), LM head, repetition penalty (presence counter ==
+        the eager one-hot sum), argmax, then write the winner's embedding at row
+        `cur_pos+1` and advance positions in place. All ops are fixed-shape, so the
+        step is traceable; all state (emb/codes/logits/cnt/cur_*) is updated in
+        place, so a replayed trace stays stateful across tokens.
+        """
+        D = int(self._emb_w.shape[1])
+        V = self._V
+        C = int(tr.emb.shape[1])
+        G = int(tr.codes.shape[1])
+        sel_read = ttnn.typecast(ttnn.eq(tr.ar0_c, tr.cur_pos), ttnn.bfloat16)  # [1,C]
+        hidden = self._gpt_core(tr.emb)  # [1,C,D] — causal mask cached at capacity C
+        row = ttnn.sum(ttnn.multiply(hidden, ttnn.reshape(sel_read, [1, C, 1])), dim=1, keepdim=True)  # [1,1,D]
+        normed = ttnn.layer_norm(row, epsilon=_LN_EPS, weight=self._lnf_w, bias=self._lnf_b)
+        logits = ttnn.linear(normed, self._head_w, bias=self._head_b, compute_kernel_config=self._head_cfg)
+        raw = ttnn.reshape(logits, [1, V])
+        rawf = raw if raw.get_dtype() == ttnn.float32 else ttnn.typecast(raw, ttnn.float32)
+        present = ttnn.typecast(ttnn.gtz(tr.cnt), ttnn.float32)
+        if penalty and penalty != 1.0:
+            pen_val = ttnn.where(ttnn.ltz(rawf), ttnn.multiply(rawf, penalty), ttnn.multiply(rawf, 1.0 / penalty))
+            scored = ttnn.where(present, pen_val, rawf)
+        else:
+            scored = rawf
+        idx = ttnn.argmax(scored, dim=-1)  # [1]
+        nxt = ttnn.reshape(idx, [1, 1])
+        if nxt.get_dtype() != ttnn.uint32:
+            nxt = ttnn.typecast(nxt, ttnn.uint32)
+        nxt = ttnn.to_layout(nxt, ttnn.ROW_MAJOR_LAYOUT)
+        # accumulate raw logits + the token into their per-step rows
+        sel_codes = ttnn.typecast(ttnn.eq(tr.ar0_g, tr.cur_gen), ttnn.float32)  # [1,G]
+        sel_gv = ttnn.reshape(sel_codes, [1, G, 1])
+        ttnn.add(
+            ttnn.multiply(tr.logits_acc, ttnn.subtract(tr.ones_g3, sel_gv)),
+            ttnn.multiply(ttnn.reshape(rawf, [1, 1, V]), sel_gv),
+            output_tensor=tr.logits_acc,
+        )
+        ttnn.add(
+            ttnn.multiply(tr.codes, ttnn.subtract(tr.ones_g2, sel_codes)),
+            ttnn.multiply(ttnn.typecast(idx, ttnn.float32), sel_codes),
+            output_tensor=tr.codes,
+        )
+        # write the winner's embedding (tok + learned gen-position) at row cur_pos+1
+        sel_write = ttnn.reshape(ttnn.typecast(ttnn.eq(tr.arm1_c, tr.cur_pos), ttnn.bfloat16), [1, C, 1])  # [1,C,1]
+        sel_gen = ttnn.reshape(ttnn.typecast(ttnn.eq(tr.arm1_g, tr.cur_gen), ttnn.bfloat16), [1, G, 1])  # [1,G,1]
+        tok_emb = ttnn.embedding(nxt, self._emb_w)  # [1,1,D] bf16
+        pos_t = ttnn.sum(ttnn.multiply(tr.pos_table, sel_gen), dim=1, keepdim=True)  # [1,1,D]
+        new_emb = ttnn.add(tok_emb, pos_t)
+        ttnn.add(
+            ttnn.multiply(tr.emb, ttnn.subtract(tr.ones_c, sel_write)),
+            ttnn.multiply(new_emb, sel_write),
+            output_tensor=tr.emb,
+        )
+        # presence counter += one-hot(winner); advance both positions in place
+        oh = ttnn.reshape(ttnn.embedding(nxt, self.eye_v, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, V])
+        ttnn.add(tr.cnt, ttnn.typecast(oh, ttnn.float32), output_tensor=tr.cnt)
+        ttnn.copy(ttnn.plus_one(tr.cur_pos), tr.cur_pos)
+        ttnn.copy(ttnn.plus_one(tr.cur_gen), tr.cur_gen)
+
+    def _decode_traced(self, start_audio, N, penalty, prefix_len, collect):
+        """Fixed-capacity decode: prefill once, capture one step, replay N times.
+
+        Same repeat-prefill math as the eager loop (no KV cache) with the sequence
+        pinned at capacity C; padded rows are causal-masked and never read. Returns
+        (codes [1,N] uint32 ROW_MAJOR, per-step raw logits) like the eager branch.
+        """
+        device = self.device
+        self._ensure_trace_decode()
+        D = int(self._emb_w.shape[1])
+        V = self._V
+        C = ((prefix_len + N + 1 + 31) // 32) * 32  # capacity >= prefix_len + N + 1, tile-aligned
+        G = C - prefix_len  # >= N + 1
+        if C > int(self._pos_weight.shape[0]):
+            raise RuntimeError(f"decode capacity C={C} exceeds learned-position table {self._pos_weight.shape[0]}")
+
+        def _const(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+            return ttnn.as_tensor(x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        tr = SimpleNamespace()
+        # selector tables: ar0[j]=j matches row cur (read/codes); arm1[j]=j-1 matches row
+        # cur+1 (the embedding/gen-position write row).
+        tr.ar0_c = _const(torch.arange(0, C, dtype=torch.int32).reshape(1, C), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        tr.arm1_c = _const(torch.arange(-1, C - 1, dtype=torch.int32).reshape(1, C), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        tr.ar0_g = _const(torch.arange(0, G, dtype=torch.int32).reshape(1, G), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        tr.arm1_g = _const(torch.arange(-1, G - 1, dtype=torch.int32).reshape(1, G), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        tr.ones_c = _const(torch.ones(1, C, 1, dtype=torch.bfloat16))
+        tr.ones_g3 = _const(torch.ones(1, G, 1, dtype=torch.float32), ttnn.float32)
+        tr.ones_g2 = _const(torch.ones(1, G, dtype=torch.float32), ttnn.float32)
+        # gen-position table rows 0..G-1 == the eager lpe(pos_src) prefix (fp32->bf16, same values)
+        tr.pos_table = _const(self._pos_weight[:G].reshape(1, G, D).to(torch.bfloat16))
+        tr.emb = _const(torch.zeros(1, C, D, dtype=torch.bfloat16))
+        tr.codes = _const(torch.zeros(1, G, dtype=torch.float32), ttnn.float32)
+        tr.logits_acc = _const(torch.zeros(1, G, V, dtype=torch.float32), ttnn.float32)
+        tr.cnt = _const(torch.zeros(1, V, dtype=torch.float32), ttnn.float32)
+        tr.cur_pos = _const(torch.zeros(1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        tr.cur_gen = _const(torch.zeros(1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+        def _prefill():
+            # emb rows: [prefix | start_audio(+pos0) | zeros]; cnt = prefix placeholder + start
+            prefix = ttnn.as_tensor(
+                self.model.gpt.gpt_inference.cached_prefix_emb.detach().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            start_ids = _tt_ids(torch.tensor([[start_audio]], dtype=torch.int32), device)
+            tok0 = ttnn.add(ttnn.embedding(start_ids, self._emb_w), ttnn.slice(tr.pos_table, [0, 0, 0], [1, 1, D]))
+            pad = _const(torch.zeros(1, C - prefix_len - 1, D, dtype=torch.bfloat16))
+            full = ttnn.concat([prefix, tok0, pad], dim=1)  # [1,C,D]
+            ttnn.copy(full, tr.emb)
+            oh0 = ttnn.reshape(
+                ttnn.embedding(start_ids, self.eye_v, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, V]
+            )
+            cnt0 = ttnn.add(ttnn.typecast(self.base_mask, ttnn.float32), ttnn.typecast(oh0, ttnn.float32))
+            ttnn.copy(cnt0, tr.cnt)
+            ttnn.copy(
+                _const(torch.tensor([prefix_len], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), tr.cur_pos
+            )
+            ttnn.copy(_const(torch.tensor([0], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), tr.cur_gen)
+            for t in (prefix, start_ids, tok0, pad, full, oh0, cnt0):
+                ttnn.deallocate(t)
+            ttnn.synchronize_device(device)
+
+        _prefill()
+        state_bufs = [tr.emb, tr.cnt, tr.cur_pos, tr.cur_gen]
+        snap = [ttnn.clone(b) for b in state_bufs]
+
+        def _restore():
+            for buf, sn in zip(state_bufs, snap):
+                ttnn.copy(sn, buf)
+            ttnn.synchronize_device(device)
+
+        self._trace_step(tr, penalty)  # eager warmup: compile every program in the step
+        _restore()
+        try:
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+        except RuntimeError as e:
+            raise RuntimeError("decode_mode='trace' requires the device to be opened with trace_region_size>0") from e
+        self._trace_step(tr, penalty)
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+        _restore()  # capture may or may not execute the step; restoring is correct either way
+        for _ in range(N):
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        ttnn.release_trace(device, tid)
+        for sn in snap:
+            ttnn.deallocate(sn)
+
+        codes = ttnn.to_layout(ttnn.typecast(ttnn.slice(tr.codes, [0, 0], [1, N]), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        step_logits = []
+        if collect:
+            for k in range(N):
+                step_logits.append(ttnn.reshape(ttnn.slice(tr.logits_acc, [0, k, 0], [1, k + 1, V]), [1, V]))
+        return codes, step_logits
 
 
 def build_pipeline(device, model=None):
