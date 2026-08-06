@@ -233,12 +233,15 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
+        # exp15 (single P150): SwiGLU mul runs the SiLU activation at HiFi4 (~24us/layer).
+        # fast_and_approximate_mode uses the approximate SiLU LUT (fewer cycles). Gated by PCC.
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
+            fast_and_approximate_mode=(mode == Mode.DECODE and not TG and self.prefetcher is None),
         )
 
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
