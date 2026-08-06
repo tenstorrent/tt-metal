@@ -610,14 +610,47 @@ def _apply_dest_reuse_op(
     return result.to(torch_format)
 
 
+def _broadcast_src_B(formats, prepared, broadcast_type):
+    """Model the unpacker's SrcB broadcast for the dest-reuse golden.
+
+    BroadcastGolden quantizes BFP/MX inputs from the *original* tile rows and only then
+    extracts the broadcast value, matching the hardware order (unpack from the L1
+    encoding, then broadcast in the FPU). Quantizing after broadcast is a different and
+    non-physical rounding, because every 16-datum block would then hold copies of a
+    single value. The result is already at source-register precision and must NOT be
+    re-quantized downstream.
+    """
+    if broadcast_type == BroadcastType.None_:
+        return prepared["src_B_tilized_flat"]
+
+    # Instantiate directly: get_golden_generator is swapped for DummyGoldenGenerator
+    # under --compile-producer. Matches the EltwiseBinaryGolden precedent below.
+    return BroadcastGolden()(
+        broadcast_type,
+        prepared["src_B_tilized_flat"],
+        formats.input_format,
+        num_faces=prepared["num_faces"],
+        tile_cnt=prepared["tile_cnt_input"],
+        face_r_dim=prepared["face_r_dim"],
+    )
+
+
 def _compute_dest_reuse_golden(
-    math_op, reuse_dest_type, math_fidelity, formats, prepared
+    math_op,
+    reuse_dest_type,
+    math_fidelity,
+    formats,
+    prepared,
+    broadcast_type=BroadcastType.None_,
 ):
     """Simulate seeded dest reuse (seed first tile, then fold via DEST_TO_SRCA/B)."""
     tile_elements = prepared["tile_elements"]
     torch_format = prepared["torch_format"]
     src_A = prepared["src_A_tilized_flat"]
-    src_B = prepared["src_B_tilized_flat"]
+    # BROADCAST_TYPE is a compile-time template on both the seed op
+    # (eltwise_binary_test.cpp:113) and the fold op (:131), so every B tile --
+    # including the i == 0 seed -- is broadcast.
+    src_B = _broadcast_src_B(formats, prepared, broadcast_type)
     golden_tensor = torch.zeros(
         prepared["tile_cnt_output"] * tile_elements, dtype=torch_format
     )
@@ -659,10 +692,25 @@ def _compute_dest_reuse_golden(
 
 
 @parametrize(
-    reuse_dest_type=[
-        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
-        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    # Broadcast applies to the SrcB (CB) operand. With DEST_TO_SRCB the dest face is
+    # injected into SrcB via MOVD2B, so the FPU would broadcast DEST rather than the L1
+    # operand -- and for COL/SCALAR the unpack MOP emits fewer SrcB faces than
+    # move_d2b_fixed_face's STALLWAIT(SRCB_VLD) expects, which hangs rather than
+    # mismatches. Restrict broadcast to DEST_TO_SRCA.
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
     ],
+    reuse_dest_type=lambda broadcast_type: (
+        [
+            EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+            EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+        ]
+        if broadcast_type == BroadcastType.None_
+        else [EltwiseBinaryReuseDestType.DEST_TO_SRCA]
+    ),
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     # Bfp8_b dest-reuse ELWMUL mismatches golden (block shared-exp + dest-reuse
     # precision); keep Bfp8 for add/sub only.
@@ -677,6 +725,7 @@ def _compute_dest_reuse_golden(
     output_dimensions=[[128, 32]],
 )
 def test_eltwise_binary_dest_reuse(
+    broadcast_type,
     reuse_dest_type,
     math_op,
     formats,
@@ -689,7 +738,7 @@ def test_eltwise_binary_dest_reuse(
         formats, input_dimensions, output_dimensions, tile_dimensions
     )
     golden_tensor = _compute_dest_reuse_golden(
-        math_op, reuse_dest_type, math_fidelity, formats, prepared
+        math_op, reuse_dest_type, math_fidelity, formats, prepared, broadcast_type
     )
 
     configuration = TestConfig(
@@ -697,7 +746,7 @@ def test_eltwise_binary_dest_reuse(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            BROADCAST_TYPE(BroadcastType.None_),
+            BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
             DEST_SYNC(),
             EN_DEST_REUSE(),
