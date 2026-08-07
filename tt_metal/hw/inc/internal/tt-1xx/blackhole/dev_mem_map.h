@@ -272,7 +272,7 @@
 // NOTE: words 16/17 exist because at end-of-run the ONLY thing left to transmit is the sync
 // packet, so whatever blocks the send gate then is what wedges the barrier. They record WHY
 // the router did or did not transmit, per channel, every sender step.
-#define MEM_AERISC_RESUME_PHASE_SIZE 88
+#define MEM_AERISC_RESUME_PHASE_SIZE 96
 #define MEM_AERISC_RESUME_PHASE_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE - MEM_AERISC_RESUME_PHASE_SIZE)
 
 // ERISC retrain counter (PRODUCTION -- not gated on watcher/testing, unlike the debug slot above). One

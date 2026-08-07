@@ -651,6 +651,8 @@ constexpr uint32_t MEM_AERISC_SYNC_RX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE 
 // word[20] records the slot address that was read, so the value can be tied to a concrete location.
 constexpr uint32_t MEM_AERISC_SLOT_ADDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 80;  // word[20]
 constexpr uint32_t MEM_AERISC_SLOT_HDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 84;   // word[21]
+constexpr uint32_t MEM_AERISC_SYNC_SEEN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 88;  // word[22]
+constexpr uint32_t MEM_AERISC_SYNC_MIN_FREE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 92;  // word[23]
 
 // Offset of PacketHeaderBase::payload_size_bytes within the packet header (see comment above).
 constexpr uint32_t FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET = 40;
@@ -673,10 +675,60 @@ constexpr uint32_t FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET = 40;
 inline void fabric_dbg_set_next_slot_content(
     [[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] uint32_t free_slots_stream_id) {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_ADDR_ADDR) =
-        ((free_slots_stream_id & 0xFFFF) << 16) | (slot_addr & 0xFFFF);
+    // Store the FULL 32-bit router read address (was: polled_id<<16 | low16). We are testing whether the
+    // router's read slot differs from the worker's write address (WRADDR=0x16ad0) in the HIGH bits -- the
+    // low 16 match (0x6ad0) but SLOT_HDR here reads DATA while the sync is in L1 at 0x16ad0. polled_id is a
+    // confirmed constant (22), so dropping it costs nothing.
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_ADDR_ADDR) = slot_addr;
     *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_HDR_ADDR) =
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
+#endif
+}
+
+// [HOP-1 vs HOP-2 PROBE] Direct, contamination-proof answer to "did the sync packet ever land at the
+// local sender ERISC?". Sticky monotonic count of sender steps where an actual SYNC packet header
+// (0x00020000, size=0/NOC_UNICAST_ATOMIC_INC) is sitting in the ERISC's next-transmit slot AND the
+// channel reports an unsent packet (free_slots != num_buffers). Keyed on the SYNC header, so the data
+// traffic (header 0x00001000) never trips it. It lives in the resume-phase debug region and is only ever
+// incremented here -- neither credit-resync (touches only the receiver->sender completion block) nor
+// connection reinit (init_ptr_val on stream 22) ever writes it. Interpretation at the barrier hang:
+//   count huge  => the sync packet DID land in the ERISC's sender slot and it never forwarded it (Hop 2:
+//                  arrived-not-sent). The transmit-slot memory literally holds the sync header, unsent.
+//   count ~0    => the ERISC never saw a ready-to-send sync packet (Hop 1: the worker's write/doorbell
+//                  never registered here). A tiny count can only come from round-0's brief normal window.
+inline void fabric_dbg_latch_sync_ready([[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] bool has_unsent) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    if (!has_unsent) {
+        return;
+    }
+    uint32_t hdr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
+    if (hdr == 0x00020000u) {
+        volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_SEEN_ADDR);
+        *p = *p + 1;
+    }
+#endif
+}
+
+// [DECREMENT-LOST vs DECREMENT-RESET PROBE] The round-1 sync PAYLOAD demonstrably lands in the ERISC slot
+// (L1 scan), but free_slots (stream 22) reads 32 so the router thinks the slot is empty. Two mechanisms:
+//   (1) the worker's stream-22 decrement never landed, or
+//   (2) it landed (32->31) then connection reinit `init_ptr_val(stream22, num_buffers)` reset it to 32.
+// This tracks the MINIMUM free_slots seen while a SYNC packet occupies the slot, resetting to a sentinel
+// whenever the slot is NOT a sync packet -- so between sync windows it clears, and the final value
+// reflects only the current (round-1, stuck) sync window, not round 0's brief forwarded window.
+//   final == 32  -> free_slots never dipped while round-1's sync sat in the slot -> decrement NEVER landed.
+//   final <  32  -> free_slots was seen below num_buffers -> decrement DID land, then got reset.
+inline void fabric_dbg_track_sync_min_free([[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] uint32_t free_slots) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    uint32_t hdr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR);
+    if (hdr == 0x00020000u) {
+        if (free_slots < *p) {
+            *p = free_slots;
+        }
+    } else {
+        *p = 0xFFFFFFFFu;  // sentinel: reset between sync-in-slot windows so we isolate the stuck one
+    }
 #endif
 }
 
