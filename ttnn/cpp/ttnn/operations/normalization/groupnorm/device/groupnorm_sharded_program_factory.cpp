@@ -318,7 +318,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
+    // cb_xmm (c_2) double buffer. After the Welford mask-multiply reorder
+    // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at a
+    // time, so the Welford allocation drops from 3 to 2.
+    uint32_t in2_CB_size = single_tile_size * (use_welford ? 2 : 1);
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
@@ -574,11 +577,35 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // writer defines
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
-    if (negative_mask.has_value()) {
+    // FUSE_NEGATIVE_MASK enables the compute-side second multiply against a
+    // negative mask. Fires whenever the caller either passed a negative_mask
+    // OR opted into synthesizing one via synthesize_negative_mask=True.
+    const bool synth_neg_mask = operation_attributes.synthesize_negative_mask && !negative_mask.has_value();
+    if (negative_mask.has_value() || synth_neg_mask) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
     }
     if (pad.active) {
         writer_defines["PAD_CORRECTION"] = "1";
+    }
+    // Mask data path selection. Two paths:
+    //   1. MASK_SYNTHESIZE: writer kernel writes row 0 of face 0 + face 1
+    //      directly into L1 from `num_cols_per_group` and the per-group
+    //      start_stride recurrence — no DRAM mask read at all. Fires only
+    //      when the caller did NOT pass an input_mask (the auto-built format
+    //      is always bf16 and always synth-safe).
+    //   2. fallthrough: writer NOC-reads the entire mask tile from DRAM.
+    // A user-supplied mask is always used (bytes NOC-read, not synthesized) —
+    // synthesis only substitutes for the DRAM-mask allocation the host used
+    // to build. The negative-mask synthesis path fires when the caller opts
+    // in via synthesize_negative_mask=True (and did not pass a tensor); the
+    // interleaved factories don't support negative masks so this gate is
+    // sharded-only.
+    const bool synth_mask = !input_mask.has_value();
+    if (synth_mask) {
+        writer_defines["MASK_SYNTHESIZE"] = "1";
+    }
+    if (synth_neg_mask) {
+        writer_defines["NEGATIVE_MASK_SYNTHESIZE"] = "1";
     }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
@@ -633,6 +660,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args;
+    // Read under MASK_SYNTHESIZE / NEGATIVE_MASK_SYNTHESIZE to drive the per-group
+    // start_stride recurrence. Passed unconditionally, as the interleaved factories do.
+    writer_desc.named_compile_time_args = {{"num_channels_per_group", num_datum_row_per_group}};
     writer_desc.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
@@ -650,7 +680,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (untilize_out) {
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
-    if (negative_mask.has_value()) {
+    if (negative_mask.has_value() || synth_neg_mask) {
         eltwise_binary_defines["FUSE_NEGATIVE_MASK"] = "1";
     }
     // compute kernel compile time args
@@ -917,7 +947,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }
         return in_desc;
     };
-    if (!negative_mask.has_value()) {
+    if (!(negative_mask.has_value() || synth_neg_mask)) {
         // in - stores tilized input
         desc.cbs.push_back(make_in_cb_desc(in_CB_size));
         if (untilize_out) {
@@ -998,8 +1028,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             }}},
         });
     }
-    // input mask
-    if (input_mask.has_value()) {
+    // input mask: CB is needed whenever the writer kernel will populate it,
+    // either by reading from DRAM (has_value) or by synthesizing in-L1.
+    if (input_mask.has_value() || synth_mask) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_7;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_mask_CB_size,
@@ -1011,8 +1042,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             }}},
         });
     }
-    // negative mask
-    if (negative_mask.has_value()) {
+    // negative mask: CB is needed whenever the writer will populate it,
+    // either by reading from DRAM (has_value) or by synthesizing in-L1.
+    if (negative_mask.has_value() || synth_neg_mask) {
         constexpr uint32_t in_negative_mask_cb_index = tt::CBIndex::c_14;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_negative_mask_CB_size,
