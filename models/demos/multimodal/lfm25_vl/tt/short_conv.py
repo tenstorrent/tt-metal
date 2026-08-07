@@ -202,11 +202,17 @@ class TtLfm2ShortConv(LightweightModule):
             conv_out = ttnn.add(conv_out, self.conv_bias_t)
         return conv_out
 
+    @staticmethod
+    def _replicated_to_torch(t: ttnn.Tensor) -> torch.Tensor:
+        """Bring a mesh-replicated tensor to host. All shards are identical (inputs and weights are
+        replicated across the mesh), so reading shard 0 avoids needing a mesh composer."""
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+
     def _update_state_from_prefill(self, Bx: ttnn.Tensor, user_id: int) -> None:
         K = self.L_cache
         if K <= 1:
             return
-        Bx_host = ttnn.to_torch(Bx).float()
+        Bx_host = self._replicated_to_torch(Bx).float()
         # Collapse any leading batch/head dims: keep only the trailing [S, H] and treat the whole
         # prefill call as belonging to a single logical sequence (batch=1 prefill, the common case
         # for this bring-up demo/tests).
@@ -222,7 +228,7 @@ class TtLfm2ShortConv(LightweightModule):
     def _conv_decode(self, Bx: ttnn.Tensor) -> ttnn.Tensor:
         K = self.L_cache
         B = Bx.shape[0]
-        Bx_host = ttnn.to_torch(Bx).float().reshape(B, self.hidden_size)  # [B, H] (S == 1)
+        Bx_host = self._replicated_to_torch(Bx).float().reshape(B, self.hidden_size)  # [B, H] (S == 1)
 
         if K > 1:
             state = self._conv_state_host[:B]  # [B, K-1, H]

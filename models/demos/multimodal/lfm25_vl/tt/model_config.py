@@ -315,11 +315,10 @@ class ModelArgs(TTModelArgs):
         return model.model.multi_modal_projector
 
     def reference_mlp(self):
+        # HF Lfm2MLP already uses llama-style parameter names (w1/w2/w3), which match the
+        # meta-converted state dict directly -- no meta->HF key conversion needed.
         model = self.reference_transformer(wrap=False)
-        layer = self._lfm_language_model(model).layers[0].feed_forward
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
+        return self._lfm_language_model(model).layers[0].feed_forward
 
     def _first_layer_of_type(self, layer_type):
         for i, lt in enumerate(self.layer_types):

@@ -123,7 +123,8 @@ class TtLfm2VlMultiModalProjector(LightweightModule):
         Returns:
             ttnn tensor [B, (H/f)*(W/f), text_dim]
         """
-        torch_features = ttnn.to_torch(vision_features).float()
+        # Shards are identical (replicated mesh tensor), so read shard 0 instead of composing.
+        torch_features = ttnn.to_torch(ttnn.get_device_tensors(vision_features)[0]).float()
         batch, num_patches, vision_dim = torch_features.shape
         if height is None or width is None:
             side = int(round(num_patches**0.5))
