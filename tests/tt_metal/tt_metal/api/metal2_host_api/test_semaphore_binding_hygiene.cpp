@@ -127,7 +127,7 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
         // Only a construction over a sem:: token matters; `Semaphore<> s(raw_id)` uses the unaffected
         // uint32_t ctor, and a `Semaphore<...>&` parameter is fine as long as it is scope-generic.
         const size_t stmt_end = code.find(';', close);
-        if (stmt_end != std::string::npos && code.compare(close, stmt_end - close, code.substr(close, stmt_end - close)) == 0) {
+        if (stmt_end != std::string::npos) {
             const std::string stmt = code.substr(close, stmt_end - close);
             if (stmt.find("sem::") != std::string::npos) {
                 found.emplace_back("Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
