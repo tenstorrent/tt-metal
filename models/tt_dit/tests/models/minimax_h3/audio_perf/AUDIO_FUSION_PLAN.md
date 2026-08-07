@@ -109,9 +109,33 @@ reads but doubles the convolution count and still concats to interleave the phas
 by dispatch and rows, those cancel. `_zero_pad_t` concat -> `ttnn.pad` is the same story: 2.2x on the op
 (`tpad_bench.py`), exactly 0 % end to end.
 
+*And the floor explains all of it* (`op_floor.py`). fp32 elementwise add, swept over four decades:
+
+    rows        32      256     2048    16384   131072   331212
+    ms       0.198    0.193    0.200    0.292    1.188    2.802
+
+A 32-row tensor costs what a 2048-row one costs. Fitting `ms = fixed + bytes/bandwidth`:
+
+    fp32   fixed 180.3 us/op  ->  6955 ops x 180.3 us = 1254 ms,  60 ms allows ~332 ops
+    bf16   fixed 127.6 us/op  ->  888 ms,                         60 ms allows ~470 ops
+
+**1254 ms against a decode measuring ~1.1 s: the stage is essentially pure per-op overhead.** Work is
+not the binding term anywhere. That is why making an op 2.2x faster changed nothing (it was already at
+the floor), why merging 2.8-4.2 ms convs changed nothing (they are 15-23x above it, work-bound), and
+why swapping one concat for another changed nothing (no ops removed). Fusion pays exactly when it
+deletes ops sitting *at* the floor -- PaddedSlice averages 172 us a call, UntilizeWithUnpadding 225 us.
+
 **So the kernel must be a real device op** that runs up2 -> snake -> down2 without materialising
 intermediates, so the Halo/Slice/Concat/Untilize scaffolding is never issued. Rearranging which ttnn
-ops are called, in any combination, has now been measured four ways and moves nothing.
+ops are called, in any combination, has now been measured four ways and moves nothing, and the path to
+60 ms is arithmetically forced: from ~6955 ops to a few hundred.
+
+*Pricing Step 2a is still open.* `fuse_saving.py` tries to price folding the activation into the conv
+(what 2a buys) using the scalar activation seam that already works, so no plumbing is needed to get the
+number. Its current output is **not trustworthy**: the fused conv measures *faster than the plain conv*
+(9.645 vs 13.707 ms at s5 C16), which is not physical and means setting `activation` also changes the
+program or sharding path chosen, so the two arms are not comparable. Fix that before believing the
+147 ms it reports -- hold the conv config identical between arms and vary only the activation.
 
 
 One op per `Activation1d` band, implementing the decomposition already proven exact in
