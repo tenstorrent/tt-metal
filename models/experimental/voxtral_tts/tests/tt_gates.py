@@ -292,7 +292,8 @@ def gate_codes():
         print("  BLOCK 1, not Block 2 or FSQ: off-manifold, PCC(h_dev,h_ref) is 0.9865 against")
         print("  0.9999 on real prompts (15.6% vs 0.7% relative), and that error reaches the")
         print("  codes through Block 2. The fp32 reference flips NOTHING on either input.")
-        print("  Judge accuracy on the real-prompt block below.")
+        print("  It is also NON-MONOTONIC in precision (6.55): bf16 FF weights make this number")
+        print("  WORSE. Never rank a config on it. Judge accuracy on the real-prompt block below.")
         compare_codes(pipe, embeds, n_frames=8)
 
         print()
