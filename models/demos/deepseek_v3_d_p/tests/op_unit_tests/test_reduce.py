@@ -228,10 +228,23 @@ def run_reduce(
 # Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
 # tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
-@pytest.mark.parametrize("seq_len, emb_dim, topk", [(32, 2048, 8)], ids=["generic"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(32, 2048, 8)],
+    ids=["generic"],
+)
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
 def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
+)
+def test_ttnn_reduce_single_expert(mesh_device, use_weights):
+    """Top-k=1 cannot be sharded across the second axis of the 4x2 mapper."""
+    run_reduce(mesh_device, seq_len=32, emb_dim=1024, topk=1, use_weights=use_weights)
 
 
 # Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and
