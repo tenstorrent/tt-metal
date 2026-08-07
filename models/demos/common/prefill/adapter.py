@@ -87,7 +87,8 @@ class PrefillRunParams:
     # FP8 MoE dispatch: compress x to fp8_e4m3 before dispatch (per-token scales ride in the
     # dispatch metadata tail) and decompress the dispatched buffer back to bf16 after. Blackhole
     # only. Resolved via PrefillModelAdapter.resolve_compressed_fp8_dispatch() (default-on for validated
-    # models, PREFILL_COMPRESSED_FP8_DISPATCH overrides); never set this True directly for an unsupported model.
+    # models; PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch — the env var can only disable,
+    # never enable); never set this True directly for an unsupported model.
     compressed_fp8_dispatch: bool = False
 
     @property
@@ -138,9 +139,10 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model is validated for FP8 MoE dispatch (per_token_cast_to_fp8 compression of x
     # around dispatch, scales in the metadata tail). Validated models run it BY DEFAULT on Blackhole;
-    # PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch (=1 re-requests it, still gated). A model
-    # that leaves this False never runs fp8 dispatch even with the env var set. Resolve the effective
-    # value with resolve_compressed_fp8_dispatch().
+    # PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch (local debugging). The env var can only
+    # DISABLE — it never enables fp8 for a model that leaves this False. Subclasses inherit the
+    # claim; restate it in per-checkpoint subclasses so the validated set stays auditable. Resolve
+    # the effective value with resolve_compressed_fp8_dispatch().
     supports_compressed_fp8_dispatch: bool = False
 
     # =====================================================================
@@ -171,17 +173,16 @@ class PrefillModelAdapter(ABC):
     def resolve_compressed_fp8_dispatch(self) -> bool:
         """Effective FP8 MoE dispatch setting for this model on this machine.
 
-        Default-on for validated models: with PREFILL_COMPRESSED_FP8_DISPATCH unset, models that
-        declare ``supports_compressed_fp8_dispatch = True`` (DS/Kimi) request it automatically.
-        The env var accepts exactly ``0`` and ``1`` and overrides in both directions — ``0`` is
-        the kill switch (e.g. for debugging), ``1`` requests it explicitly; any other value logs
-        a warning and falls back to the default. Either way the request is gated by two hard
-        constraints: the model must be validated for it and the hardware must be Blackhole (the
-        per_token_cast fp8 ops are BH-only). A gated-off EXPLICIT request logs a warning and
-        returns False instead of failing deep in TtMoe (a defaulted request degrades silently —
-        e.g. DS on Wormhole), so a shared launch script/manifest stays safe across a mixed
-        model/hardware matrix. Shared by the prefill runner and the direct pytest entry points
-        (bh e2e / demo tests), which build the model without the runner.
+        Default TRUE for validated models on Blackhole: models that declare
+        ``supports_compressed_fp8_dispatch = True`` (DS/Kimi) run fp8 dispatch unless it is
+        explicitly killed. The env var is a KILL SWITCH ONLY — ``PREFILL_COMPRESSED_FP8_DISPATCH=0``
+        disables it (local debugging / bf16 comparison runs); it can never ENABLE fp8: an
+        unvalidated model (GLM) or non-Blackhole hardware always resolves False (the
+        per_token_cast fp8 ops are BH-only), and ``=1`` is a documented no-op kept only so a
+        stray export can't kill the feature (it logs a warning where it cannot enable anything).
+        Any other value logs a warning and is ignored. Shared by the prefill runner and the
+        direct pytest entry points (bh e2e / demo tests), which build the model without the
+        runner — so CI always exercises the fp8 path for validated models on Blackhole.
 
         Under ``tt-run`` note that shell-exported ``PREFILL_*`` vars are NOT propagated to ranks —
         set the kill switch via the manifest's ``env`` map or the binding's ``global_env`` instead
@@ -189,31 +190,28 @@ class PrefillModelAdapter(ABC):
         """
         env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
         if env is not None and env not in ("0", "1"):
-            logger.warning(
-                f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} not recognized (expected '0' or '1'); "
-                "falling back to the model default"
-            )
+            logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} not recognized (expected '0' to disable); ignored")
             env = None
-        explicit = env is not None
-        requested = (env == "1") if explicit else self.supports_compressed_fp8_dispatch
-        if not requested:
+
+        if env == "0":
             return False
 
         if not self.supports_compressed_fp8_dispatch:
-            # Only reachable on an explicit "1" — a defaulted request implies support.
-            logger.warning(
-                f"PREFILL_COMPRESSED_FP8_DISPATCH=1 ignored: {self.name} is not validated for FP8 MoE dispatch "
-                "(supports_compressed_fp8_dispatch=False)"
-            )
+            if env == "1":
+                logger.warning(
+                    f"PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: {self.name} is not validated for "
+                    "FP8 MoE dispatch (supports_compressed_fp8_dispatch=False); the env var can only disable"
+                )
             return False
 
         # Lazy: pulls in ttnn/torch — this module must stay import-light (see module docstring).
         from models.common.utility_functions import is_blackhole
 
         if not is_blackhole():
-            if explicit:
+            if env == "1":
                 logger.warning(
-                    "PREFILL_COMPRESSED_FP8_DISPATCH=1 ignored: FP8 MoE dispatch requires Blackhole hardware"
+                    "PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: FP8 MoE dispatch requires Blackhole "
+                    "hardware; the env var can only disable"
                 )
             return False
         return True

@@ -50,9 +50,11 @@ def patch_arch(monkeypatch):
     return _set
 
 
-# Truth table: (env value or None, supports, is_blackhole) -> expected
+# Truth table: (env value or None, supports, is_blackhole) -> expected.
+# The env var is a kill switch only: default TRUE for validated models on Blackhole,
+# "0" disables, and no value can ENABLE fp8 for an unvalidated model or non-BH hardware.
 TRUTH_TABLE = [
-    # env unset: default-on for validated models on Blackhole only
+    # env unset: the default — on for validated models on Blackhole only
     (None, True, True, True),
     (None, True, False, False),
     (None, False, True, False),
@@ -62,12 +64,12 @@ TRUTH_TABLE = [
     ("0", True, False, False),
     ("0", False, True, False),
     ("0", False, False, False),
-    # "1": explicit request, still gated by model validation + Blackhole
+    # "1": documented no-op (same as unset) — it can never enable, only warn where it can't
     ("1", True, True, True),
     ("1", True, False, False),
     ("1", False, True, False),
     ("1", False, False, False),
-    # unrecognized value: warns and falls back to the default (same as unset)
+    # unrecognized value: warns and is ignored (same as unset)
     ("true", True, True, True),
     ("yes", True, False, False),
     ("ON", False, True, False),
