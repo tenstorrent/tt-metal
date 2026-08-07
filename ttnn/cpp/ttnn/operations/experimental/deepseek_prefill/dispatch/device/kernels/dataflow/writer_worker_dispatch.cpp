@@ -402,4 +402,9 @@ void kernel_main() {
 
     // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
     noc_async_full_barrier();
+
+    // NOC_PACKET_TAG is a sticky config register: the barriers above drain in-flight transactions
+    // but leave TRID_NON_LOCAL_WRITE latched in the write cmd buf. The firmware epilogue requires it
+    // to be zero so the next kernel's implicit-trid writes start at transaction ID 0.
+    noc_clear_packet_tag(noc_index, write_cmd_buf);
 }
