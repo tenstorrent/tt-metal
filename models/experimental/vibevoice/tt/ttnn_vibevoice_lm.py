@@ -135,13 +135,16 @@ _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-# B=2 down-proj: the 8x3=24-core / ib4 / per_core_N=2 config measured 99.1 us in the deployed
-# frame = 277 GB/s.  Spreading N over 6x8=48 cores (per_core_N=1, 48*1 == Nt=48) and widening the
-# K-streaming to in0_block_w=8 reaches 78.7 us = 350 GB/s (1.26x, 28 calls/frame => -0.57 ms).
-# maxabsdiff==0 vs both auto and the 24-core ib4 config, same in0_block_w argument as above.
+# B=2 down-proj (K=8960 latency-bound on K-streaming, not weight-read).  Spread N over 6x8=48 cores
+# (per_core_N=1, 48*1 == Nt=48) and widen the K-streaming: sweeping in0_block_w, 14 (280/14 == 20
+# K-blocks) is the optimum — the deployed frame drops from 62 us (ib8) to 54 us (BW 44% -> 50%,
+# 28 calls/frame => -0.22 ms).  ib8 was the prior value; {8,10,14,20,28,40} isolation-swept, 14 won.
+# maxabsdiff==0 vs auto and every other in0_block_w — it only sets the K-tile streaming granularity
+# and each core reduces the full K into an fp32 dest, so the accumulation order (and bf16 out) is
+# unchanged (byte-identical).
 _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
-    in0_block_w=8,
+    in0_block_w=14,
     out_subblock_h=1,
     out_subblock_w=1,
     per_core_M=2,
@@ -151,10 +154,12 @@ _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 # gate/up (1536x8960): N=8960=280 tiles, so per_core_N=4 over an 11x8=88 grid (352>=280).  Only the
-# B=2 batched case beats auto (B=1 gate/up candidates were slower than auto).
+# B=2 batched case beats auto (B=1 gate/up candidates were slower than auto).  in0_block_w=4 (12 K-blocks)
+# is the sweep optimum: 51 us (ib2) -> 44 us (BW 53% -> 60%, 56 calls/frame => -0.30 ms).  ib8 is slower.
+# maxabsdiff==0 vs auto and every other in0_block_w (K-stream granularity only, fp32 dest -> byte-identical).
 _FFN_GATEUP_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
-    in0_block_w=2,
+    in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=2,
     per_core_M=2,
