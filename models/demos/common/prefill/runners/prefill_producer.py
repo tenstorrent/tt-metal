@@ -1074,7 +1074,11 @@ def _run_validator(rank: int, world_size: int) -> None:
         ok = False
     else:
         try:
-            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+            # Rebuild the SAME config-derived slot->trace map the master builds (both ranks see identical
+            # env + the shared trace dir), so the validator PCCs its host's layers against the same goldens.
+            # Purely config-derived (no push/device state), so it's safe to resolve here on the read-back path.
+            slot_traces, _slot_lengths, _pools = _resolve_slot_prompts(cfg)
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
         except Exception as e:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
