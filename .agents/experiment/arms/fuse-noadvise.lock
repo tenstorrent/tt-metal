@@ -1,0 +1,12 @@
+# skillexp arm lock -- asserted pre-stage, post-stage and at publish (PIPELINE-HARDENING §5)
+arm=fuse-noadvise
+shard_advise=off
+graph_fusing=on
+# paths that must NOT exist anywhere under models/autoports for ANY model.
+# Note: base ships models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise
+# as a worked example. On a noadvise arm that is a reference leak, so it is listed here
+# and must_be_absent is enforced repo-wide, not just for the model under test.
+must_be_absent=models/autoports/*/doc/optimized_decoder/shard_advise
+must_exist_after=models/autoports/MODEL_DIR/doc/fused_decoder
+must_exist_after2=models/autoports/MODEL_DIR/doc/optimized_decoder
+writable=models/autoports/MODEL_DIR/
