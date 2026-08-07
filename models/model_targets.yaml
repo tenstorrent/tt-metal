@@ -159,7 +159,7 @@ targets:
               decode_t/s/u: 17.16
               decode_t/s: 549.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 1024
@@ -169,7 +169,7 @@ targets:
               decode_t/s/u: 15.24
               decode_t/s: 487.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -179,7 +179,7 @@ targets:
               decode_t/s/u: 13.91
               decode_t/s: 445.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_llmbox_perf:
         entries:
@@ -191,7 +191,7 @@ targets:
               decode_t/s/u: 14.6
               decode_t/s: 3737.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 1024
@@ -201,7 +201,7 @@ targets:
               decode_t/s/u: 13.2
               decode_t/s: 3379.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 2048
@@ -211,7 +211,7 @@ targets:
               decode_t/s/u: 12.4
               decode_t/s: 3174.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_galaxy_perf:
         entries:
@@ -223,7 +223,7 @@ targets:
               decode_t/s/u: 6.9
               decode_t/s: 7065.6
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 1024
@@ -233,7 +233,7 @@ targets:
               decode_t/s/u: 6.3
               decode_t/s: 6451.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 2048
@@ -243,7 +243,7 @@ targets:
               decode_t/s/u: 6.6
               decode_t/s: 6758.4
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
@@ -525,8 +525,11 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 8.8
-              prefill_time_to_first_token: 195
+              # Greedy decode now takes the on-device argmax fast-path on single-chip
+              # (allow_force_argmax gated on num_devices == 1). Measured 23.50-23.60 t/s/u
+              # over 3 CI runs, was 8.8; TTFT 113.2-113.5 ms, was 195.
+              decode_t/s/u: 23.5
+              prefill_time_to_first_token: 113
             accuracy: {}
       wh_n300:
         entries:
@@ -559,8 +562,10 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 20.3
-              prefill_time_to_first_token: 75
+              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
+              # was 20.3; TTFT 53.31-53.35 ms, was 75.
+              decode_t/s/u: 33.0
+              prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:
         entries:
@@ -1050,7 +1055,7 @@ targets:
               decode_t/s: 12.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1073,7 +1078,7 @@ targets:
               decode_t/s: 347.6
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1082,7 +1087,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen2.5-7b:
     aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
@@ -1149,7 +1154,7 @@ targets:
               decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1159,7 +1164,7 @@ targets:
               decode_t/s/u: 17.76
               decode_t/s: 568.19
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1168,7 +1173,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen3-32b:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
@@ -1230,6 +1235,31 @@ targets:
               prefill_time_to_first_token: 700.0
               decode_t/s/u: 60.0
               decode_t/s: 1920.0
+            accuracy: {}
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89
+              top5: 97
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+      # Blackhole Galaxy runs the same Qwen3-32B model on the no-prefetcher path.
+      # Perf seeded from measured batch-32 (seq_len=507) e2e demo runs on BH Galaxy
+      # (TTFT ~1226 ms, ~33.9 tok/s/user); accuracy floor mirrors the WH Galaxy entry
+      # (measured token accuracy 95.6% top-1 / 99.8% top-5 clears it with margin).
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 32
+            seq_len: 507
+            status: active
+            perf:
+              prefill_time_to_first_token: 1225.0
+              decode_t/s/u: 34.0
+              decode_t/s: 1088.0
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models

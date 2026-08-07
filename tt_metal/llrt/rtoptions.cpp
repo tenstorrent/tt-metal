@@ -2019,7 +2019,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
     }
 
     // Set the core range
-    feature_targets[feature].cores[core_type] = cores;
+    feature_targets[feature].cores[core_type] = std::move(cores);
 }
 
 bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
@@ -2045,7 +2045,7 @@ bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    feature_targets[feature].chip_ids = chips;
+    feature_targets[feature].chip_ids = std::move(chips);
 
     return specified;
 }

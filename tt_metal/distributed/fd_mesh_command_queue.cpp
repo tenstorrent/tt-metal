@@ -1370,7 +1370,9 @@ void FDMeshCommandQueue::record_end() {
         // safe because allocate_trace_programs() reinitializes dispatch_metadata at the start of
         // each range's processing, overwriting any stale mutations from a previous range.
         std::vector<TraceNode*> trace_nodes;
+        trace_nodes.reserve(trace_nodes_.size());
         std::vector<MeshTraceNode*> mesh_trace_nodes;
+        mesh_trace_nodes.reserve(trace_nodes_.size());
         // Records the number of MeshTraceNodes that had no relevant program.
         struct UnusedNodeData {
             uint32_t unused_nodes_both_multicast_and_unicast = 0;
