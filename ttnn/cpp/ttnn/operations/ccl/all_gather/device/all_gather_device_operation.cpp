@@ -223,7 +223,7 @@ AllGatherDeviceOperation::create_op_performance_model(
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
-    // Multicast supports all Fabric topologies, unicast only supports (effectively) 1D topologies.
+    // Multicast supports all Fabric topologies, unicast only supports effectively-1D topologies.
     // Unicast is empirically found to be faster for large tensors.
     bool use_unicast = false;
     if (args.is_true_2d()) {
@@ -236,34 +236,35 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
+        const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
+        const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
+        const uint64_t out_page = args.output_spec.compute_page_size_bytes();
+        const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
+        // Bytes crossing one link of the gathered axis (the same axis and links the unicast factory uses).
+        // Both rules below are in bytes per link, so they carry to link counts other than the ones they
+        // were tuned on. Both were also fitted to tile, the common layout, whose crossover sits a little
+        // above row-major's.
+        const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
+        const uint64_t per_link_bytes =
+            input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
+
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
-                if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
-                }
+                // Sweep result. Multicast is never beaten on a line, so only a ring ever switches. There the
+                // ceiling grows with page size, since a bigger page fills a fabric packet and that is what
+                // unicast needs to pay off. The boundary errs toward unicast: multicast's edge before it is
+                // much smaller than unicast's after it.
+                use_unicast = is_ring && per_link_bytes >= std::min<uint64_t>(1'200'000, 600 * txn);
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
                 // Coefficients below are from a factory-vs-factory sweep, not first principles. Multicast
                 // wins only at small volumes and its edge there is much smaller than unicast's at scale, so
-                // the boundary errs toward unicast. The ceiling grows with page size, since a bigger page
-                // fills a fabric packet and that is what unicast needs to pay off, and sits higher on a
-                // line, whose unicast relay moves more data per link than a ring's. Tuned on a 2-link mesh;
-                // the rule is in bytes per link, so it carries over.
-                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
-                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-
-                // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
-                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-                const uint64_t per_link_bytes =
-                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
-
-                // The coefficients lean toward tile, whose crossover sits slightly above row-major's.
+                // the boundary errs toward unicast. The ceiling grows with page size for the same reason as
+                // on Wormhole, and sits higher on a line, whose unicast relay moves more data per link than
+                // a ring's.
                 uint64_t mcast_ceiling;
-                if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
+                if (is_ring) {
                     mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
                 } else {
                     const double sqrt_page = std::sqrt(static_cast<double>(txn));
