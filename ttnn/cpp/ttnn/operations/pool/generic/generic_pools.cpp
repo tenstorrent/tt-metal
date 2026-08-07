@@ -1124,10 +1124,18 @@ static std::vector<Tensor> pool2d(
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
         //
-        // Ask the reduce for the caller's layout so the to_layout below is a no-op. Two cases can't:
-        // batch>1, whose reshape moves batch into H (a 1-tile-row TILE output can't express it), and
-        // block-float ROW_MAJOR, which the reduce rejects since untilizing would widen the dtype.
-        // Both keep the native result and convert below.
+        // Forwarding output_layout into pool_sum makes the to_layout below a no-op, but is only
+        // safe in some cases; nullopt keeps the native reduce layout and defers the conversion.
+        //
+        // batch==1: reduce returns (1, 1, 1, C) and the following view does not fold axes, so the
+        // requested layout survives unchanged — safe to forward.
+        //
+        // batch>1: the post-reduce reshape folds N into H, (N, 1, 1, C) -> (1, 1, N, C). A TILE
+        // H-reduce is a 1-tile-row result (H padded to 32) that cannot express that reshape, so
+        // TILE must not be forwarded. The native layout may still be TILE on the tilized path.
+        //
+        // block-float + ROW_MAJOR: reduce rejects it (block-float exists only as TILE). The native
+        // TILE result reaches the to_layout below, which untilizes it and widens to BFLOAT16.
         const bool reduce_can_emit_layout =
             output_layout == Layout::TILE || !tt::tt_metal::is_block_float(input.dtype());
         const std::optional<Layout> reduce_output_layout =
