@@ -1123,6 +1123,30 @@ def _parse_signpost_payload(raw: str):
     return None
 
 
+def _stack_ids_from_seq(seq) -> list:
+    """Return the ordered list of distinct stack IDs seen in signpost tokens.
+
+    Scans the op sequence for PERF_BLOCK_SIGNPOST tokens and parses their stack
+    prefixes.  The list preserves first-appearance order and always contains at
+    least "stack0" (the single-stack default) even when no signposts are present,
+    so callers can always build a per-stack dict without a separate None-check.
+
+    Used by the unverified-floor and measured-ladder paths to build a full-coverage
+    dict that addresses every known stack rather than just "stack0".
+    """
+    seen: list = []
+    for tok in seq or []:
+        if not isinstance(tok, str) or not tok.startswith(_SIGNPOST_TOKEN):
+            continue
+        raw = tok[len(_SIGNPOST_TOKEN) :]
+        parsed = _parse_signpost_payload(raw)
+        if parsed is not None:
+            sid = parsed[0]
+            if sid not in seen:
+                seen.append(sid)
+    return seen if seen else ["stack0"]
+
+
 def _first_block_map(seq):
     """Per-stack map of {stack_id: {op: the block it FIRST appears in}}, plus source.
 
@@ -1664,13 +1688,17 @@ def _coverage_layers(
                 base_knob=depth_knob,
                 full_signal=facts["full_signal"],
             )
+            # Discover all stack IDs present in the k=0 probe sequence so that every
+            # stack receives a depth cap -- not just stack0. For single-stack models
+            # this returns ["stack0"] and the behaviour is identical to before.
+            _all_stacks = _stack_ids_from_seq(seq)
             if measured is not None:
                 _cov_scalar, deep, blk_source = measured
             else:
                 deep = []
                 _cov_scalar = 2
                 blk_source = "unverified-floor"
-            _cov_dict = {"stack0": _cov_scalar}
+            _cov_dict = {sid: _cov_scalar for sid in _all_stacks}
         facts["deep_ops"] = deep
         tail = f"; {len(deep)} op-type(s) still absent at max depth (present in full model, un-timed)" if deep else ""
         _cov_repr = _cov_dict if len(_cov_dict) > 1 else next(iter(_cov_dict.values()))

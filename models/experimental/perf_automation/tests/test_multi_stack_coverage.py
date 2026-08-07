@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for per-stack coverage computation in run.py (Task 3).
+"""Tests for per-stack coverage computation in run.py (Tasks 3 and 8).
 
 WHY THIS EXISTS
     Task 3 extends _first_block_map() to return per-stack depth maps and updates
     _coverage_layers() to return {stack_id: depth} dicts instead of a single int.
     This enables independent coverage windows for each block stack (e.g. Voxtral-Mini:
     32-layer encoder + 30-layer decoder can have different optimal depths).
+
+    Task 8 adds _stack_ids_from_seq() and updates the unverified-floor path so
+    ALL discovered stacks receive a depth-2 cap, not just stack0.
 
     All tests use synthetic op sequences (lists of strings) — no model weights needed.
 """
@@ -21,6 +24,7 @@ from models.experimental.perf_automation.cc_optimize.run import (  # noqa: E402
     _first_block_map,
     _parse_signpost_payload,
     _signposts_usable,
+    _stack_ids_from_seq,
 )
 
 # Signpost format constants
@@ -290,3 +294,121 @@ def test_two_stack_dict_has_exactly_two_entries():
     assert source == "signposts"
     assert len(per_stack) == 2
     assert set(per_stack.keys()) == {"stack0", "stack1"}
+
+
+# ---------------------------------------------------------------------------
+# Test 8: _stack_ids_from_seq — Task 8 helper
+# ---------------------------------------------------------------------------
+
+
+def test_stack_ids_from_seq_single_stack_old_format():
+    """Old-format single-stack sequence -> ['stack0']."""
+    seq = _make_single_stack_seq(4)
+    assert _stack_ids_from_seq(seq) == ["stack0"]
+
+
+def test_stack_ids_from_seq_two_stacks():
+    """Two-stack sequence -> ['stack0', 'stack1'] in first-appearance order."""
+    seq = _make_two_stack_seq(4, 3)
+    ids = _stack_ids_from_seq(seq)
+    assert ids == ["stack0", "stack1"]
+
+
+def test_stack_ids_from_seq_empty_returns_default():
+    """Empty sequence -> ['stack0'] (single-stack default, never empty)."""
+    assert _stack_ids_from_seq([]) == ["stack0"]
+    assert _stack_ids_from_seq(None) == ["stack0"]
+
+
+def test_stack_ids_from_seq_no_signposts_returns_default():
+    """Sequence with no signpost tokens -> ['stack0']."""
+    seq = ["Matmul", "SoftMax", "LayerNorm"]
+    assert _stack_ids_from_seq(seq) == ["stack0"]
+
+
+def test_stack_ids_from_seq_order_preserved():
+    """Stack IDs appear in first-signpost-occurrence order, not sorted order."""
+    # stack1 appears first in this synthetic sequence
+    seq = [
+        SP_NEW % (1, 0),
+        "OpA",
+        SP_NEW % (0, 0),
+        "OpB",
+    ]
+    ids = _stack_ids_from_seq(seq)
+    assert ids == ["stack1", "stack0"]
+
+
+def test_stack_ids_from_seq_three_stacks():
+    """Three distinct stacks are all returned."""
+    seq = [
+        SP_NEW % (0, 0),
+        "OpA",
+        SP_NEW % (1, 0),
+        "OpB",
+        "PERF_BLOCK_SIGNPOST:stack2:0",
+        "OpC",
+    ]
+    ids = _stack_ids_from_seq(seq)
+    assert ids == ["stack0", "stack1", "stack2"]
+
+
+def test_stack_ids_from_seq_deduplicates():
+    """Repeated signposts for the same stack id are deduplicated."""
+    seq = _make_two_stack_seq(8, 6)  # many stack0/stack1 signposts
+    ids = _stack_ids_from_seq(seq)
+    assert len(ids) == len(set(ids)), "duplicate stack IDs returned"
+    assert set(ids) == {"stack0", "stack1"}
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Unverified-floor dict shape — Task 8 (single-stack backward compat)
+# ---------------------------------------------------------------------------
+
+
+def test_unverified_floor_single_stack_shape():
+    """For a single-stack seq, the unverified-floor dict has exactly one entry keyed 'stack0'.
+
+    This mirrors what _coverage_layers() would return when the ladder is inert
+    and the probe seq carries no multi-stack signposts.
+    """
+    seq = _make_single_stack_seq(8)
+    stacks = _stack_ids_from_seq(seq)
+    floor_dict = {sid: 2 for sid in stacks}
+    assert floor_dict == {"stack0": 2}
+
+
+def test_unverified_floor_multi_stack_all_get_depth_two():
+    """For a two-stack seq, the unverified-floor dict has entries for BOTH stacks."""
+    seq = _make_two_stack_seq(32, 30)
+    stacks = _stack_ids_from_seq(seq)
+    floor_dict = {sid: 2 for sid in stacks}
+    assert set(floor_dict.keys()) == {"stack0", "stack1"}
+    assert all(v == 2 for v in floor_dict.values()), "all stacks must get depth 2"
+
+
+def test_unverified_floor_empty_seq_is_single_stack():
+    """With an empty probe seq (k=0 returned nothing) the floor is still {'stack0': 2}."""
+    stacks = _stack_ids_from_seq([])
+    floor_dict = {sid: 2 for sid in stacks}
+    assert floor_dict == {"stack0": 2}
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Measured-ladder dict shape covers all stacks — Task 8
+# ---------------------------------------------------------------------------
+
+
+def test_measured_ladder_two_stacks_both_get_same_scalar():
+    """When the ladder returns a scalar, the resulting dict addresses every discovered stack.
+
+    The ladder currently measures a single scalar (single-knob probe). Task 8
+    ensures that scalar is applied to all stacks, not just stack0.
+    """
+    seq = _make_two_stack_seq(32, 30)
+    stacks = _stack_ids_from_seq(seq)
+    # Simulate a measured result of depth 4
+    measured_scalar = 4
+    cov_dict = {sid: measured_scalar for sid in stacks}
+    assert set(cov_dict.keys()) == {"stack0", "stack1"}
+    assert all(v == measured_scalar for v in cov_dict.values())
