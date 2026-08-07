@@ -19,6 +19,10 @@ constexpr std::uint32_t dst_tile_size_sfpi = 32;
 // The "first column" helpers walk 4 SFPU slots at stride 2, covering DEST rows 0-15 of face 0.
 constexpr int ITERATIONS_FIRST_COLUMN = 4;
 
+// Slot advance per iteration: +1 would land on the odd-column slot of the same rows, which the
+// column-0 callers never read, so the walk steps over it.
+constexpr int FIRST_COLUMN_SLOT_STRIDE = 2;
+
 // SfpuType has no generic float add/sub/mul (only the *_int32/*_uint32 variants), so the column-0
 // binary helpers dispatch on this local tag instead.
 enum class SamplingBinaryOp { add, sub, mul };
@@ -74,6 +78,19 @@ inline void sampling_recip_init() {
     }
 }
 
+/**
+ * @brief Replace one SFPU slot (DEST rows 0-3 of face 0) with its reciprocal, in place.
+ *
+ * The public entry point for the sampling reciprocal; @ref sampling_recip_value is the leaf that
+ * picks the variant. On a 16-bit DEST outside APPROX it converts to bf16 with round-to-nearest
+ * first, so the store does not truncate.
+ *
+ * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
+ * @note Callers must pass values > 0: with legacy_compat = true the result is the magnitude
+ *       |1/in| rather than 1/in -- see @ref sampling_recip_value for why that divergence stands.
+ * @note Call @ref sampling_recip_init with the same legacy_compat before this function; the
+ *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
+ */
 template <bool legacy_compat = true>
 inline void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
@@ -84,6 +101,14 @@ inline void calculate_sampling_recip_scalar() {
     sfpi::dst_reg[0] = out;
 }
 
+/**
+ * @brief Clamp one SFPU slot (DEST rows 0-3 of face 0) to an upper bound, in place.
+ *
+ * Lanes at or below the bound are left untouched, so a value that is already in range keeps its
+ * exact bits.
+ *
+ * @param param: Upper bound as a raw fp32 bit pattern (decoded by Converter::as_float).
+ */
 inline void calculate_sampling_clamp_max_scalar(const std::uint32_t param) {
     const sfpi::vFloat max_val = ckernel::sfpu::Converter::as_float(param);
     sfpi::vFloat in = sfpi::dst_reg[0];
@@ -91,6 +116,17 @@ inline void calculate_sampling_clamp_max_scalar(const std::uint32_t param) {
     v_endif;
 }
 
+/**
+ * @brief Apply a column-0 elementwise float comparison across DEST rows 0-15 of face 0.
+ *
+ * Writes 1.0f where the comparison holds and 0.0f where it does not, so the result is a keep-mask
+ * the binary helpers can multiply through. Used by the top-P mask (exclusive_CDF < top_p).
+ *
+ * @tparam OP: Comparison to apply, values = <le/lt/ge>
+ * @param dst_index_in0: DEST tile index of the left operand.
+ * @param dst_index_in1: DEST tile index of the right operand.
+ * @param dst_index_out: DEST tile index the mask is written to.
+ */
 template <SfpuType OP>
 inline void calculate_sampling_binary_comp_first_column(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -115,17 +151,22 @@ inline void calculate_sampling_binary_comp_first_column(
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg += FIRST_COLUMN_SLOT_STRIDE;
     }
 }
 
+/**
+ * @brief Scale column 0 of DEST rows 0-15 of face 0 by a scalar, in place.
+ *
+ * @param param: Multiplier as a raw fp32 bit pattern (decoded by Converter::as_float).
+ */
 inline void calculate_sampling_mul_unary_scalar_first_column(const std::uint32_t param) {
     const sfpi::vFloat parameter = ckernel::sfpu::Converter::as_float(param);
 
     for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::dst_reg[0] = val * parameter;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg += FIRST_COLUMN_SLOT_STRIDE;
     }
 }
 
@@ -154,7 +195,7 @@ inline void calculate_sampling_binary_first_column(
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in0 * in1;
         }
 
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg += FIRST_COLUMN_SLOT_STRIDE;
     }
 }
 

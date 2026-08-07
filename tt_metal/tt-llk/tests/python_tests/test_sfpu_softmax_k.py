@@ -45,6 +45,12 @@ even-column value and covers the even/odd column PAIR, which only holds while tw
 bf16 datums share one 32-bit DEST word. With a 32-bit DEST each datum owns a word,
 the pair relationship is gone, and the lanes meant to be masked stay enabled.
 Float32 input is skipped with dest_acc=No, as elsewhere in the SFPU suites.
+
+dest_acc also selects the exp implementation -- `_sfpu_exp_21f_bf16_tti_` for No,
+the `_ckernel_sfpu_exp_accurate_` sfpi loop for Yes -- and the DEST width the
+kernel's three store/reload round-trips quantize to, which the golden models. Both
+implementations are well inside the suite's 5% tolerance, so treat that axis as a
+compile-and-structure check on two different kernels rather than as a numeric one.
 """
 
 import pytest
@@ -121,7 +127,9 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     input_tile, logits = _build_input_tile(k, torch_format)
 
     golden_generator = get_golden_generator(SoftmaxKGolden)
-    golden_tile = golden_generator(input_tile, logits, k, SOFTMAX_ROWS, FACE_DIM)
+    golden_tile = golden_generator(
+        input_tile, logits, k, dest_acc, SOFTMAX_ROWS, FACE_DIM
+    )
 
     src_A = tilize_block(
         input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
@@ -167,12 +175,35 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
         print_errors=True,
     ), f"softmax over k={k} columns does not match golden"
 
+    # The padding columns, checked exactly rather than through the 5% tolerance above.
+    # The whole point of odd k is `_zero_paired_odd_tail_lane_`, and a leaked
+    # exp(-m) / sum term is at most ~0.05 whenever the row max is >= ~2.95 -- i.e. the
+    # common case for these stimuli -- so the tolerance check above turns detection of
+    # a wrong `1u << (k - 1)` mask into a fixed-seed coin flip.
+    if k < FACE_DIM:
+        padding = res_tile[:SOFTMAX_ROWS, k:FACE_DIM]
+        assert bool((padding.to(torch.float32) == 0.0).all()), (
+            f"columns {k}-{FACE_DIM - 1} are padding and must come back exactly 0.0 "
+            f"(k={k}):\n{padding}"
+        )
+
     # Each processed row must still sum to 1 over its k valid columns.
     for row in range(SOFTMAX_ROWS):
         row_sum = res_tile[row, :k].to(torch.float32).sum().item()
         assert (
             abs(row_sum - 1.0) < 5e-2
         ), f"row {row} softmax sums to {row_sum}, expected 1.0 (k={k})"
+
+    # Face 1 of the processed rows -- DEST rows 16-19, which the kernel must not touch.
+    # This is where an extra vector-mode pass would land: with VectorMode::RC instead of
+    # RC_custom the SFPU dispatch re-bases DEST by +16 rows and runs the kernel a second
+    # time over this region. Choosing RC_custom is the one non-boilerplate decision in
+    # the driver, so it gets its own assertion.
+    assert passed_test(
+        golden_tile[:SOFTMAX_ROWS, FACE_DIM:].flatten(),
+        res_tile[:SOFTMAX_ROWS, FACE_DIM:].flatten(),
+        formats.output_format,
+    ), "softmax_k modified face 1 (columns 16-31) of its own row band"
 
     # And the rest of the tile must be untouched -- in particular the maxima the
     # caller staged at rows 8-11, which the kernel only reads.

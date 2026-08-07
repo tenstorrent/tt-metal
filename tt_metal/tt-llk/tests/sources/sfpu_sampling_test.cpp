@@ -16,7 +16,7 @@
 //   clamp_max_scalar(max)                  one SFPU slot  -> rows 0-3
 //   mul_unary_scalar_first_column(k)       4 slots, +4     -> rows 0-15
 //   binary_comp_first_column<le|lt|ge>()   4 slots, +4     -> rows 0-15
-//   {add,sub,mul}_binary_first_column()    4 slots, +4     -> rows 0-15
+//   binary_first_column<add|sub|mul>()     4 slots, +4     -> rows 0-15
 //
 // An SFPU slot is 4 DEST rows x 8 of the face's 16 columns, so each of these
 // covers half the columns of the rows it walks -- the callers only care about
@@ -33,8 +33,12 @@
 // buffer is needed):
 //   tile 0 -> DEST tile 0 : in0
 //   tile 1 -> DEST tile 1 : in1
-//   tile 2 -> DEST tile 2 : zeros (deterministic background for the binary ops,
-//                                  which only write a sub-region of their output)
+//   tile 2 -> DEST tile 2 : a sentinel value (deterministic background for the binary
+//                           ops, which only write a sub-region of their output; the
+//                           sentinel is not zero so that a legitimately-zero result --
+//                           lt or sub on a tie row -- is still distinguishable from a
+//                           lane the kernel never wrote. See OUT_BACKGROUND in the
+//                           python test.)
 // All three DEST tiles are packed back out, so the golden can also assert that
 // the untouched tiles are unchanged.
 

@@ -63,8 +63,6 @@ static constexpr std::uint32_t MOE_GATE_BIAS_DST_TILE    = 2;
 
 // Input tiles in buffer_A: raw scores, then the biased sort key.
 static constexpr std::uint32_t MOE_GATE_NUM_INPUT_TILES = 2;
-// Output tiles in buffer_Res: winner scores (bf16), then winner indices (UInt16).
-static constexpr std::uint32_t MOE_GATE_NUM_RESULT_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
 

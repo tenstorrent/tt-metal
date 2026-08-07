@@ -10,7 +10,7 @@ hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sampling.
   clamp_max_scalar(max)                min(x, max)            rows 0-3
   mul_unary_scalar_first_column(k)     x * k                  rows 0-15
   binary_comp_first_column<le|lt|ge>   (in0 OP in1) ? 1 : 0   rows 0-15
-  add/sub/mul_binary_first_column      in0 +|-|* in1          rows 0-15
+  binary_first_column<add|sub|mul>     in0 +|-|* in1          rows 0-15
 
 The row ranges above are per invocation, at the current face base. vector_mode
 selects how many invocations the SFPU dispatch makes: VectorMode.None_ one (face 0),
@@ -67,7 +67,7 @@ from helpers.utils import passed_test
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
 FACE_DIM = 16
-NUM_TILES = 3  # in0, in1, zero-initialised output
+NUM_TILES = 3  # in0, in1, output pre-filled with OUT_BACKGROUND
 
 # Columns of face 0 the helpers write.
 TOUCHED_COLUMNS = list(range(0, FACE_DIM, 2))
@@ -84,6 +84,13 @@ FACE_ROW_BASES = {VectorMode.None_: (0,), VectorMode.C: (0, 16)}
 
 CLAMP_MAX = 0.75
 MUL_SCALAR = 3.0
+
+# Background the binary ops' output tile is pre-filled with, instead of zeros. The tie
+# rows below make `lt` return 0.0 and `sub` return exactly 0.0, which against a zero
+# background is indistinguishable from the kernel not writing at all. No op can produce
+# this value from the swept inputs (add is in [0.5, 4], sub in [-1.75, 1.75], mul in
+# [0.0625, 4], the comparisons are 0.0/1.0), and it is exact in bf16 and fp32 alike.
+OUT_BACKGROUND = -7.5
 
 # op name -> (is_binary, rows walked)
 SAMPLING_OPS = {
@@ -233,19 +240,24 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
 
     in0_rows = _bf16_row_values()
     in1_rows = _bf16_row_values()
-    # Force a few exact ties so le/lt/ge are distinguished from each other.
+    # Force a few exact ties so le/lt/ge are distinguished from each other. On those rows
+    # lt and sub produce exactly 0.0, which is why the output background is OUT_BACKGROUND
+    # rather than zero -- otherwise those lanes would compare 0 against 0 and pass whether
+    # the kernel wrote them or not.
     in1_rows[0:4] = in0_rows[0:4]
 
     in0_tile = _column_uniform_tile(in0_rows, torch_format)
     in1_tile = _column_uniform_tile(in1_rows, torch_format)
-    zero_tile = torch.zeros((TILE_DIM, TILE_DIM), dtype=torch_format)
+    background_tile = torch.full(
+        (TILE_DIM, TILE_DIM), OUT_BACKGROUND, dtype=torch_format
+    )
 
     src_A = torch.cat(
         [
             tilize_block(
                 t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
             ).flatten()
-            for t in (in0_tile, in1_tile, zero_tile)
+            for t in (in0_tile, in1_tile, background_tile)
         ]
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
@@ -301,7 +313,7 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
     in1_dest_tile = round_to_dest_width(in1_tile, dest_acc)
 
     if is_binary:
-        # The op only writes tile 2, whose other lanes keep the zero background.
+        # The op only writes tile 2, whose other lanes keep the OUT_BACKGROUND background.
         assert passed_test(
             in0_dest_tile.flatten(), result_tiles[0].flatten(), formats.output_format
         ), f"{op}: DEST tile 0 (in0) was modified"
@@ -309,14 +321,14 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
             in1_dest_tile.flatten(), result_tiles[1].flatten(), formats.output_format
         ), f"{op}: DEST tile 1 (in1) was modified"
         out_face = result_tiles[2]
-        untouched = torch.zeros(TILE_DIM, dtype=torch.float32)
+        untouched = torch.full((TILE_DIM,), OUT_BACKGROUND, dtype=torch.float32)
     else:
         # In-place on tile 0; tiles 1 and 2 must be untouched.
         assert passed_test(
             in1_dest_tile.flatten(), result_tiles[1].flatten(), formats.output_format
         ), f"{op}: DEST tile 1 was modified by an in-place unary op"
         assert passed_test(
-            zero_tile.flatten(), result_tiles[2].flatten(), formats.output_format
+            background_tile.flatten(), result_tiles[2].flatten(), formats.output_format
         ), f"{op}: DEST tile 2 was modified by an in-place unary op"
         out_face = result_tiles[0]
         untouched = in0_ref

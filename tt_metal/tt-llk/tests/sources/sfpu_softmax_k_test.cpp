@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DST_SYNC>();
 
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            0 /* dst_tile_index */, formats.math, formats.math);
+            0 /* dst_index */, formats.math, formats.math);
 
         // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_softmax_k_<SOFTMAX_K>, 0 /* dst_index */, VectorMode::RC_custom);
@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
 }
