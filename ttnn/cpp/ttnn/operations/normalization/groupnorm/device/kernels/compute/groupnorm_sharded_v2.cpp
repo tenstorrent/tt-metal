@@ -55,6 +55,13 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
+    // Non-tile-aligned H*W (#50682); derivation and precision caveat in compute/groupnorm.cpp.
+    // Unlike the interleaved kernel this one consumes the mean during centering, so K*E[x]^2 is
+    // computed before centering and stashed in dfb_kmsq until the rsqrt step.
+    constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
+    constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
+    constexpr bool has_pad_correction = padded_hw != logical_hw;
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
@@ -84,6 +91,12 @@ void kernel_main() {
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 
+    // #50682 pad-correction CBs. dfb_k holds K from the writer; dfb_msq is transient scratch;
+    // dfb_kmsq carries K*E[x]^2 across the centering loop.
+    constexpr uint32_t dfb_k_id = tt::CBIndex::c_18;
+    constexpr uint32_t dfb_msq_id = tt::CBIndex::c_19;
+    constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_20;
+
     // output cb
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
@@ -105,11 +118,9 @@ void kernel_main() {
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
     bool copy_or_add = true;
-    bool reset_index = false;
     uint32_t group_reset_index = 0;
     uint32_t index_block_w = 0;
     uint32_t row_offset = num_cols_per_group;
-    uint32_t output_tile_index = 0;
 
 #ifdef UNTILIZE_OUT
 #ifndef FUSE_NEGATIVE_MASK
@@ -171,10 +182,13 @@ void kernel_main() {
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
+    DataflowBuffer dfb_k(dfb_k_id);
+    DataflowBuffer dfb_msq(dfb_msq_id);
+    DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(dfb_in0_id, dfb_in0_id, dfb_in_id);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
@@ -197,7 +211,7 @@ void kernel_main() {
 #endif
     dfb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
 #endif
 
     index_b_offset = 0;
@@ -207,7 +221,7 @@ void kernel_main() {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
-            mul_tiles_init(dfb_in0_id, dfb_input_mask_id);
+            mul_init(dfb_in0_id, dfb_input_mask_id);
             dfb_x.reserve_back(block_hw);
             dfb_input_mask.wait_front(block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
@@ -244,7 +258,7 @@ void kernel_main() {
 
             // Partial-E[x]
             index_h_offset = 0;
-            mul_tiles_init(dfb_x_id, dfb_ones_id);
+            mul_init(dfb_x_id, dfb_ones_id);
             dfb_ex2pe.reserve_back(1);
             tile_regs_acquire();
             dfb_x.wait_front(block_hw);
@@ -296,10 +310,37 @@ void kernel_main() {
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
             }
-            // x - E[x]
-            sub_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex_global_id);
-
             dfb_ex_global.wait_front(1);
+
+            // Stash K*E[x]^2 while cb_ex_global still holds E[x]; centering below consumes it.
+            if constexpr (has_pad_correction) {
+                dfb_k.wait_front(1);
+                // dfb_msq = E[x]^2
+                dfb_msq.reserve_back(1);
+                tile_regs_acquire();
+                mul_init(dfb_ex_global_id, dfb_ex_global_id);
+                mul_tiles(dfb_ex_global_id, dfb_ex_global_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, dfb_msq_id);
+                tile_regs_release();
+                dfb_msq.push_back(1);
+                // dfb_kmsq = K * E[x]^2 (persists until the rsqrt step)
+                dfb_msq.wait_front(1);
+                dfb_kmsq.reserve_back(1);
+                tile_regs_acquire();
+                mul_init(dfb_msq_id, dfb_k_id);
+                mul_tiles(dfb_msq_id, dfb_k_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, dfb_kmsq_id);
+                tile_regs_release();
+                dfb_msq.pop_front(1);
+                dfb_kmsq.push_back(1);
+            }
+
+            // x - E[x]
+            sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -323,7 +364,7 @@ void kernel_main() {
             dfb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
-            mul_tiles_init(dfb_x_id, dfb_input_mask_id);
+            mul_init(dfb_x_id, dfb_input_mask_id);
             dfb_x.wait_front(block_hw);
 
             for (uint32_t i = 0; i < block_h; i++) {
@@ -353,7 +394,7 @@ void kernel_main() {
 
             // (x - E[x])^2
             index_h_offset = 0;
-            mul_tiles_init(dfb_x_id, dfb_x_id);
+            mul_init(dfb_x_id, dfb_x_id);
             dfb_x.wait_front(block_hw);
 
             tile_regs_acquire();
@@ -407,10 +448,27 @@ void kernel_main() {
             dfb_ex_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
+            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) is unchanged when aligned.
+            constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex_global_id;
+            if constexpr (has_pad_correction) {
+                dfb_kmsq.wait_front(1);
+                dfb_msq.reserve_back(1);
+                tile_regs_acquire();
+                sub_init(dfb_ex_global_id, dfb_kmsq_id);
+                sub_tiles(dfb_ex_global_id, dfb_kmsq_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, dfb_msq_id);
+                tile_regs_release();
+                dfb_kmsq.pop_front(1);
+                dfb_msq.push_back(1);
+                dfb_msq.wait_front(1);
+            }
+
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(dfb_ex_global_id, dfb_eps_id);
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 0, 0, dst0);
+            add_init(dfb_var_src_id, dfb_eps_id);
+            add_tiles(dfb_var_src_id, dfb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
@@ -420,9 +478,12 @@ void kernel_main() {
             tile_regs_release();
             dfb_ex2pe.push_back(1);
             dfb_ex_global.pop_front(1);
+            if constexpr (has_pad_correction) {
+                dfb_msq.pop_front(1);
+            }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
-            mul_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex2pe_id);
+            mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
 
             dfb_ex2pe.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -459,7 +520,7 @@ void kernel_main() {
                     if (copy_or_add == true) {
                         copy_tile_init(dfb_x_id);
                     } else {
-                        add_tiles_init(dfb_out_id, dfb_x_id);
+                        add_init(dfb_out_id, dfb_x_id);
                     }
 
                     for (uint32_t i = 0; i < block_h; ++i) {
@@ -503,7 +564,7 @@ void kernel_main() {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 dfb_in_negative_mask.wait_front(block_w);
                 reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
-                mul_tiles_init(dfb_in_id, dfb_in_negative_mask_id);
+                mul_init(dfb_in_id, dfb_in_negative_mask_id);
 
                 for (uint32_t w = 0; w < block_w_curr; w++) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -526,7 +587,7 @@ void kernel_main() {
                 }
 
                 reconfig_data_format_srcb(dfb_in_negative_mask_id, dfb_x_id);
-                add_tiles_init(dfb_in_id, dfb_x_id);
+                add_init(dfb_in_id, dfb_x_id);
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
                 // just add them together
@@ -600,7 +661,7 @@ void kernel_main() {
     if constexpr (do_gamma) {
         index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init_short(dfb_out_id, dfb_gamma_id);
+            mul_bcast_rows_init(dfb_out_id, dfb_gamma_id);
             dfb_outgamma.reserve_back(per_core_MN);
             dfb_gamma.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -621,7 +682,7 @@ void kernel_main() {
             dfb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init_short(dfb_in_id, dfb_gamma_id);
+            mul_bcast_rows_init(dfb_in_id, dfb_gamma_id);
             dfb_gamma.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
@@ -643,7 +704,7 @@ void kernel_main() {
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
-            add_bcast_rows_init_short(dfb_inbeta_id, dfb_beta_id);
+            add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
             dfb_outbeta.reserve_back(per_core_MN);
             dfb_beta.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -663,7 +724,7 @@ void kernel_main() {
             dfb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in_id has data required for beta, so we do it inplace
-            add_bcast_rows_init_short(dfb_in_id, dfb_beta_id);
+            add_bcast_rows_init(dfb_in_id, dfb_beta_id);
             dfb_beta.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {

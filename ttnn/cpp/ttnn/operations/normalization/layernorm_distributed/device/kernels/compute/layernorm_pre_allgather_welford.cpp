@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(dfb::in0, dfb::res, dfb_inp_id);
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
 #else
     compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb::scratch);
 #endif
@@ -131,7 +131,7 @@ void kernel_main() {
                     copy_tile_to_dst_init_short_with_dt(dfb::res, dfb::in0);
                 }
             } else {
-                add_tiles_init(dfb::in0, dfb::res);
+                add_init(dfb::in0, dfb::res);
                 tile_regs_acquire();
                 for (auto i : block.local()) {
                     add_tiles(dfb::in0, dfb::res, i, i, i);

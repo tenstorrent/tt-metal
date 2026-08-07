@@ -380,16 +380,18 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                     Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
                 tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
                 tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set. If provided, validates that the
-                    sharded tensor's shard spec cores lie entirely within this core range set. Raises an error if any
-                    shard spec core is outside the provided range.
+                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set restricting the cores this
+                    descriptor may use. If provided, validates that every core the program touches lies within it.
+                    Because the reduction multicasts over the bounding box of the shard grid, that footprint is the
+                    whole bounding box: for a non-rectangular shard grid the holes inside the box also get kernels,
+                    circular buffers and semaphores, so they must be included too.
 
             Returns:
                 ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
 
             Raises:
-                RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
-                    entirely contained within it.
+                RuntimeError: If core_range_set is provided and the bounding box of the sharded tensor's shard grid
+                    is not entirely contained within it.
             )doc");
 }
 

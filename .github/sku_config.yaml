@@ -210,12 +210,7 @@ skus:
 
   bh_sc4-blitz:
     runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: MGD
-      topologyKeys:
-        - exabox.tenstorrent.com/quad
-      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+      - exabox-multihost-ci-sc4
 
   bh_sc4-mgd:
     runs_on:
@@ -228,12 +223,7 @@ skus:
 
   bh_sc16:
     runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: Count
-      count: 16
-      topologyKeys:
-        - exabox.tenstorrent.com/SC16
+      - exabox-multihost-ci-sc16
 
   cpu_medium:
     runs_on:

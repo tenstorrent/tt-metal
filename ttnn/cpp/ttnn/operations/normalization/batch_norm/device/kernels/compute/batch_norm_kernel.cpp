@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void batchnorm_bcast_tiles(
     uint32_t dfb_bcast,
@@ -31,13 +32,14 @@ ALWI void batchnorm_bcast_tiles(
     auto dfb_affine_or_out = (weight_has_value || bias_has_value) ? dfb_tmp_1 : dfb_output_0;
     auto dfb_scaled_output = (bias_has_value) ? dfb_tmp_1 : dfb_output_0;
 
-    DataflowBuffer dfb_bcast_obj(dfb_bcast);
-    DataflowBuffer dfb_other_obj(dfb_other);
-    DataflowBuffer dfb_batch_var_obj(dfb_batch_var);
-    DataflowBuffer dfb_den_obj(dfb_den);
-    DataflowBuffer dfb_weight_obj(dfb_weight);
-    DataflowBuffer dfb_bias_obj(dfb_bias);
-    DataflowBuffer dfb_tmp_1_obj(dfb_tmp_1);
+    DataflowBuffer dfb_bcast_obj(dfb_bcast);          // batch_mean, broadcast against the input
+    DataflowBuffer dfb_other_obj(dfb_other);          // input tiles
+    DataflowBuffer dfb_batch_var_obj(dfb_batch_var);  // batch_var
+    DataflowBuffer dfb_den_obj(dfb_den);              // 1/(sqrt(batch_var + eps))
+    DataflowBuffer dfb_weight_obj(dfb_weight);        // weight tensor
+    DataflowBuffer dfb_bias_obj(dfb_bias);            // bias tensor
+    DataflowBuffer dfb_tmp_1_obj(dfb_tmp_1);          // (input - batch_mean)/(sqrt(batch_var + eps))
+    // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
     DataflowBuffer dfb_output_0_obj(dfb_output_0);
     DataflowBuffer dfb_affine_or_out_obj(dfb_affine_or_out);
     DataflowBuffer dfb_scaled_output_obj(dfb_scaled_output);
@@ -74,12 +76,12 @@ ALWI void batchnorm_bcast_tiles(
         dfb_affine_or_out_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        sub_tiles_init(dfb_other, dfb_bcast);
+        sub_init(dfb_other, dfb_bcast);
         sub_tiles(dfb_other, dfb_bcast, 0, 0, 0);
 
         // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_den);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_den, 0, 0);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_den);
+        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_den, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -136,37 +138,27 @@ ALWI void batchnorm_bcast_tiles(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-    constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
+    constexpr uint32_t weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr uint32_t bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto dfb_input = get_compile_time_arg_val(2);       // input
-    constexpr auto dfb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto dfb_output_0 =
-        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto dfb_batch_var = get_compile_time_arg_val(5);  // batch_var
-    constexpr auto dfb_eps = get_compile_time_arg_val(6);        // eps
-    constexpr auto dfb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto dfb_weight = get_compile_time_arg_val(8);     // weight tensor
-    constexpr auto dfb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto dfb_bias = get_compile_time_arg_val(10);      // bias tensor
+    // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
+    constexpr auto dfb_bcast = dfb::batch_mean;
+    constexpr auto dfb_other = dfb::input;
 
-    auto dfb_bcast = dfb_batch_mean;
-    auto dfb_other = dfb_input;
-
-    binary_op_init_common(dfb_other, dfb_bcast, dfb_output_0);
+    compute_kernel_hw_startup(dfb_other, dfb_bcast, dfb::out);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
-    DataflowBuffer dfb_eps_obj(dfb_eps);
+    DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader
     dfb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
@@ -175,13 +167,13 @@ void kernel_main() {
             dfb_other,
             tile_freq,
             tile_start,
-            dfb_batch_var,
-            dfb_eps,
-            dfb_den,
-            dfb_weight,
-            dfb_bias,
-            dfb_tmp_1,
-            dfb_output_0,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::temp_1,
+            dfb::out,
             weight_has_value,
             bias_has_value);
     }
@@ -191,13 +183,13 @@ void kernel_main() {
             dfb_other,
             remaining_iterations,
             tile_start,
-            dfb_batch_var,
-            dfb_eps,
-            dfb_den,
-            dfb_weight,
-            dfb_bias,
-            dfb_tmp_1,
-            dfb_output_0,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::temp_1,
+            dfb::out,
             weight_has_value,
             bias_has_value);
     }
