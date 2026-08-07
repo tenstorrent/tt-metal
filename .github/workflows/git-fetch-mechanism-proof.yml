@@ -1,7 +1,8 @@
 name: "[repro] git fetch mechanism proof for #52290"
 
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [opened]
 
 jobs:
   compare-fetch-mechanisms:
