@@ -744,24 +744,14 @@ void kernel_main() {
             metadata_ready_sem.set(1);
 
             // Multicast the value 1 to all non-drain tilize cores
-            // NOC1 needs the multicast rectangle corners swapped; see get_safe_multicast_noc_addr
-            if constexpr (noc_index == 0) {
-                metadata_ready_sem.set_multicast(
-                    noc_obj,
-                    tilize_mcast_start_x,
-                    tilize_mcast_start_y,
-                    tilize_mcast_end_x,
-                    tilize_mcast_end_y,
-                    tilize_bounding_box_num_cores - 1);
-            } else {
-                metadata_ready_sem.set_multicast(
-                    noc_obj,
-                    tilize_mcast_end_x,
-                    tilize_mcast_end_y,
-                    tilize_mcast_start_x,
-                    tilize_mcast_start_y,
-                    tilize_bounding_box_num_cores - 1);
-            }
+            set_multicast_safe(
+                metadata_ready_sem,
+                noc_obj,
+                tilize_mcast_start_x,
+                tilize_mcast_start_y,
+                tilize_mcast_end_x,
+                tilize_mcast_end_y,
+                tilize_bounding_box_num_cores - 1);
 
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
@@ -811,24 +801,15 @@ void kernel_main() {
 
         metadata_ready_sem.set(1);
 
-        // multicast semaphore (NOC1 needs corners swapped; see get_safe_multicast_noc_addr)
-        if constexpr (noc_index == 0) {
-            metadata_ready_sem.set_multicast(
-                noc_obj,
-                matmul_mcast_start_x,
-                matmul_mcast_start_y,
-                matmul_mcast_end_x,
-                matmul_mcast_end_y,
-                matmul_bounding_box_num_cores);
-        } else {
-            metadata_ready_sem.set_multicast(
-                noc_obj,
-                matmul_mcast_end_x,
-                matmul_mcast_end_y,
-                matmul_mcast_start_x,
-                matmul_mcast_start_y,
-                matmul_bounding_box_num_cores);
-        }
+        // multicast semaphore
+        set_multicast_safe(
+            metadata_ready_sem,
+            noc_obj,
+            matmul_mcast_start_x,
+            matmul_mcast_start_y,
+            matmul_mcast_end_x,
+            matmul_mcast_end_y,
+            matmul_bounding_box_num_cores);
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========

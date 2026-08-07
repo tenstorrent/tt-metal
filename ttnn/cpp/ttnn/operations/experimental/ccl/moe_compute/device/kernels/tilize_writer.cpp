@@ -528,27 +528,14 @@ void kernel_main() {
                 if (is_drain_tilize_core && num_tilize_cores > 1) {
                     // use the local value of the semaphore, which is the value we just waited on (no need to set local
                     // value)
-                    // NOC1 needs the multicast rectangle corners swapped (start<->end); see
-                    // get_safe_multicast_noc_addr. noc_index is a compile-time constant.
-                    if constexpr (noc_index == 0) {
-                        matmul_chunk_available_sem.set_multicast(
-                            noc_obj,
-                            tilize_mcast_start_x,
-                            tilize_mcast_start_y,
-                            tilize_mcast_end_x,
-                            tilize_mcast_end_y,
-                            tilize_bounding_box_num_cores - 1,
-                            /*linked=*/false);
-                    } else {
-                        matmul_chunk_available_sem.set_multicast(
-                            noc_obj,
-                            tilize_mcast_end_x,
-                            tilize_mcast_end_y,
-                            tilize_mcast_start_x,
-                            tilize_mcast_start_y,
-                            tilize_bounding_box_num_cores - 1,
-                            /*linked=*/false);
-                    }
+                    set_multicast_safe(
+                        matmul_chunk_available_sem,
+                        noc_obj,
+                        tilize_mcast_start_x,
+                        tilize_mcast_start_y,
+                        tilize_mcast_end_x,
+                        tilize_mcast_end_y,
+                        tilize_bounding_box_num_cores - 1);
                 }
             }
 
@@ -708,52 +695,29 @@ void kernel_main() {
                 matmul_chunk_ready_sem.set(matmul_chunk_ready_semaphore_set_value);
                 matmul_chunk_ready_semaphore_set_value++;
 
-                // mcast sem set (NOC1 needs corners swapped; see get_safe_multicast_noc_addr)
-                if constexpr (noc_index == 0) {
-                    matmul_chunk_ready_sem.set_multicast(
-                        noc_obj,
-                        matmul_mcast_start_x,
-                        matmul_mcast_start_y,
-                        matmul_mcast_end_x,
-                        matmul_mcast_end_y,
-                        matmul_bounding_box_num_cores,
-                        /*linked=*/false);
-                } else {
-                    matmul_chunk_ready_sem.set_multicast(
-                        noc_obj,
-                        matmul_mcast_end_x,
-                        matmul_mcast_end_y,
-                        matmul_mcast_start_x,
-                        matmul_mcast_start_y,
-                        matmul_bounding_box_num_cores,
-                        /*linked=*/false);
-                }
+                // mcast sem set
+                set_multicast_safe(
+                    matmul_chunk_ready_sem,
+                    noc_obj,
+                    matmul_mcast_start_x,
+                    matmul_mcast_start_y,
+                    matmul_mcast_end_x,
+                    matmul_mcast_end_y,
+                    matmul_bounding_box_num_cores);
 
                 // == 10 ==
                 if (num_tilize_cores > 1) {
                     // Signal to non-drain-sync cores that they can start sending the next chunk
                     // Use local semaphore value (no need to explicitly set it)
                     // Local value is from when drain-sync waits until gather process is done (8a and 5b)
-                    // NOC1 needs corners swapped; see get_safe_multicast_noc_addr
-                    if constexpr (noc_index == 0) {
-                        tilize_chunk_ready_sem.set_multicast(
-                            noc_obj,
-                            tilize_mcast_start_x,
-                            tilize_mcast_start_y,
-                            tilize_mcast_end_x,
-                            tilize_mcast_end_y,
-                            tilize_bounding_box_num_cores - 1,
-                            /*linked=*/false);
-                    } else {
-                        tilize_chunk_ready_sem.set_multicast(
-                            noc_obj,
-                            tilize_mcast_end_x,
-                            tilize_mcast_end_y,
-                            tilize_mcast_start_x,
-                            tilize_mcast_start_y,
-                            tilize_bounding_box_num_cores - 1,
-                            /*linked=*/false);
-                    }
+                    set_multicast_safe(
+                        tilize_chunk_ready_sem,
+                        noc_obj,
+                        tilize_mcast_start_x,
+                        tilize_mcast_start_y,
+                        tilize_mcast_end_x,
+                        tilize_mcast_end_y,
+                        tilize_bounding_box_num_cores - 1);
                 }
             } else {
                 // == 11 ==
