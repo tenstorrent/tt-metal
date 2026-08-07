@@ -349,6 +349,31 @@ def test_gather_tile_interleaved_to_sharded_no_spec(memory_layout, dtype, device
     )
 
 
+def test_gather_specless_sharded_output_grid_shrinks_height(device):
+    """Specless HEIGHT_SHARDED out via generate_transpose_shard_spec: tensor_h=128, shard_h=32 → 4 populated cores."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= 4:
+        pytest.skip("Device grid too small to observe shrink (need > 4 cores)")
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.randn((1, 1, 128, 128), dtype=torch.bfloat16)
+    idx = torch.randint(0, 128, (1, 1, 128, 64), dtype=torch.int64)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    ttnn_idx = ttnn.from_torch(
+        idx, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.gather(ttnn_in, -1, index=ttnn_idx, memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 4, f"Expected 4 populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(4, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+    ref = torch.gather(x, -1, idx)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(ref, got)
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Group C: RM — interleaved single-core + multi-core + sharded in/out, bf16 + f32.
 # ────────────────────────────────────────────────────────────────────────────────

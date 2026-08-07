@@ -267,7 +267,7 @@ class MotifPipeline(PipelineAPIMixin):
             linear_quadratic_emulating_steps=linear_quadratic_emulating_steps,
         )
         for solver in self._solvers:
-            solver.set_schedule(sigmas)
+            solver.set_schedule(sigmas=sigmas)
 
         logger.info("preparing inputs...")
         latents = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed)
