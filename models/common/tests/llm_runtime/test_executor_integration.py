@@ -28,6 +28,8 @@ from models.common.models.phi4 import executor as phi4_executor
 from models.common.models.phi4 import generator as phi4_generator
 from models.common.models.qwen2_7b import executor as qwen2_executor
 from models.common.models.qwen2_7b import generator as qwen2_generator
+from models.common.models.qwen3_32b import executor as qwen3_32b_executor
+from models.common.models.qwen3_32b import generator as qwen3_32b_generator
 from models.common.models.qwen25_7b import executor as qwen25_executor
 from models.common.models.qwen25_7b import generator as qwen25_generator
 from models.common.models.qwen25_72b import executor as qwen25_72b_executor
@@ -156,6 +158,23 @@ EXECUTOR_BINDINGS = {
         make_product=lambda mesh_device, max_batch_size: _make_qwen25_coder_32b_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="Qwen/Qwen2.5-Coder-32B-Instruct",
+    ),
+    "qwen3_32b": SimpleNamespace(
+        executor_module=qwen3_32b_executor,
+        executor_class=qwen3_32b_executor.Qwen3_32BExecutor,
+        executor_config_class=qwen3_32b_executor.Qwen3_32BExecutorConfig,
+        generator_module=qwen3_32b_generator,
+        generator_class=qwen3_32b_generator.Qwen3_32BGenerator,
+        generator_config_class=qwen3_32b_generator.Qwen3_32BGeneratorConfig,
+        build_generator_name="build_qwen3_32b_generator",
+        build_executor_name="build_qwen3_32b_executor",
+        make_model=lambda **kwargs: _make_qwen3_32b_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen3_32b_runtime_config(),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=qwen3_32b_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen3_32b_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen3_32b_product(mesh_device, max_batch_size),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="Qwen/Qwen3-32B",
     ),
     "deepseek_r1_distill_qwen_14b": SimpleNamespace(
         executor_module=deepseek_executor,
@@ -346,6 +365,7 @@ def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
         or getattr(module, "Qwen25ExecutorConfig", None)
         or getattr(module, "Qwen25_72BExecutorConfig", None)
         or getattr(module, "Qwen25Coder32BExecutorConfig", None)
+        or getattr(module, "Qwen3_32BExecutorConfig", None)
         or getattr(module, "DeepSeekR1Qwen14BExecutorConfig", None)
         or getattr(module, "Mistral7BExecutorConfig", None)
         or module.Phi4ExecutorConfig
@@ -410,6 +430,29 @@ def _make_qwen25_coder_32b_product(mesh_device, max_batch_size):
     return SimpleNamespace(model=model, runtime_config=_make_qwen25_coder_32b_runtime_config())
 
 
+def _make_qwen3_32b_model(max_batch_size=4):
+    model = _make_qwen25_72b_model(max_batch_size=max_batch_size)
+    model.config.dim = 5120
+    model.config.n_heads = 64
+    model.config.hidden_dim = 27648
+    model.config.vocab_size = 151936
+    model.config.hf_model_id = "Qwen/Qwen3-32B"
+    model.padded_vocab_size = 152064
+    return model
+
+
+def _make_qwen3_32b_runtime_config():
+    runtime = _make_qwen25_coder_32b_runtime_config()
+    runtime.max_prefill_chunk_size = 4096
+    return runtime
+
+
+def _make_qwen3_32b_product(mesh_device, max_batch_size):
+    model = _make_qwen3_32b_model(max_batch_size=max_batch_size)
+    model.config.mesh_device = mesh_device
+    return SimpleNamespace(model=model, runtime_config=_make_qwen3_32b_runtime_config())
+
+
 def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():
     model = _make_qwen2_model()
     _, num_layers, kv_heads_per_device, head_dim = qwen2_generator._model_kv_metadata(model)
@@ -470,6 +513,29 @@ def test_qwen25_coder_32b_binding_preserves_tp8_runtime_and_sampling_defaults():
     assert runtime.can_enable_trace(128, 1) is False
     assert runtime.max_prefill_batch_size == 32
     assert config.hf_revision == qwen25_coder_32b_generator.DEFAULT_HF_REVISION
+    assert config.device_sampling_enabled is False
+
+
+def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
+    model = _make_qwen3_32b_model()
+    _, num_layers, kv_heads_per_device, head_dim = qwen3_32b_generator._model_kv_metadata(model)
+    runtime = _make_qwen3_32b_runtime_config()
+    config = qwen3_32b_generator.Qwen3_32BGeneratorConfig(
+        hf_model="Qwen/Qwen3-32B",
+        mesh_device=model.config.mesh_device,
+        max_batch_size=32,
+        max_seq_len=4096,
+    )
+
+    assert model.config.mesh_device.shape == (1, 8)
+    assert (num_layers, kv_heads_per_device, head_dim) == (1, 1, 128)
+    assert model.config.vocab_size == 151936
+    assert model.padded_vocab_size == 152064
+    assert runtime.trace_prefill_supported_seq_lens == (128, 1024)
+    assert runtime.max_prefill_chunk_size == 4096
+    assert runtime.can_enable_trace(128, 0) is True
+    assert runtime.can_enable_trace(128, 1) is False
+    assert config.hf_revision == qwen3_32b_generator.DEFAULT_HF_REVISION
     assert config.device_sampling_enabled is False
 
 

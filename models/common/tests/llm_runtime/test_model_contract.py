@@ -17,6 +17,7 @@ from models.common.models.llama33_70b import model as llama33_70b_model
 from models.common.models.mistral_7b import model as mistral_model
 from models.common.models.phi4 import model as phi4_model
 from models.common.models.qwen2_7b import model as qwen2_model
+from models.common.models.qwen3_32b import model as qwen3_32b_model
 from models.common.models.qwen25_7b import model as qwen25_model
 from models.common.models.qwen25_72b import model as qwen25_72b_model
 from models.common.models.qwen25_coder_32b import model as qwen25_coder_32b_model
@@ -163,6 +164,28 @@ MODEL_CONTRACTS = {
         make_config=lambda **kwargs: _make_qwen25_coder_32b_config(**kwargs),
         make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
         construct_model=lambda monkeypatch: _construct_qwen25_coder_32b_model(monkeypatch),
+        expected_module_names=(
+            "layer[0].attn_norm",
+            "layer[0].attention",
+            "layer[0].ff_norm",
+            "layer[0].mlp",
+            "layer[1].attn_norm",
+            "layer[1].attention",
+            "layer[1].ff_norm",
+            "layer[1].mlp",
+            "final_norm",
+            "lm_head",
+        ),
+    ),
+    "qwen3_32b": SimpleNamespace(
+        module=qwen3_32b_model,
+        model_class=qwen3_32b_model.Qwen3_32B,
+        config_class=qwen3_32b_model.Qwen3_32BConfig,
+        attention_config_class=qwen3_32b_model.Attention1DConfig,
+        make_attention_config=lambda **kwargs: _make_llama32_attention_config(**kwargs),
+        make_config=lambda **kwargs: _make_qwen3_32b_config(**kwargs),
+        make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
+        construct_model=lambda monkeypatch: _construct_qwen3_32b_model(monkeypatch),
         expected_module_names=(
             "layer[0].attn_norm",
             "layer[0].attention",
@@ -492,6 +515,59 @@ def _construct_qwen25_coder_32b_model(monkeypatch):
     config = _make_qwen25_coder_32b_config()
     return (
         qwen25_coder_32b_model.Qwen25Coder32B(
+            config,
+            sentinels["embedding"],
+            sentinels["rope_setup"],
+            [sentinels["layer"]],
+            sentinels["norm"],
+            sentinels["lm_head"],
+            config.mesh_device,
+        ),
+        config,
+        sentinels,
+    )
+
+
+def _make_qwen3_32b_config(*, n_layers=1, num_devices=8, n_kv_heads=8, sampling_config=None):
+    del sampling_config
+    block_configs = [
+        SimpleNamespace(attention_config=_make_llama32_attention_config(n_kv_heads=n_kv_heads)) for _ in range(n_layers)
+    ]
+    return qwen3_32b_model.Qwen3_32BConfig(
+        hf_model_id="Qwen/Qwen3-32B",
+        dim=5120,
+        n_heads=64,
+        n_kv_heads=n_kv_heads,
+        head_dim=128,
+        hidden_dim=27648,
+        vocab_size=151936,
+        rms_norm_eps=1e-6,
+        rope_theta=1_000_000.0,
+        num_hidden_layers=n_layers,
+        max_batch_size=4,
+        max_seq_len=4096,
+        rope_table_len=8192,
+        num_devices=num_devices,
+        mesh_device=SimpleNamespace(get_num_devices=lambda: num_devices),
+        block_configs=block_configs,
+    )
+
+
+def _construct_qwen3_32b_model(monkeypatch):
+    sentinels = {
+        "embedding": object(),
+        "rope_setup": object(),
+        "layer": _make_llama32_layer(),
+        "norm": object(),
+        "lm_head": object(),
+        "sampling": object(),
+    }
+    monkeypatch.setattr(qwen3_32b_model, "get_tt_ccl", MagicMock(return_value=object()))
+    monkeypatch.setattr(qwen3_32b_model, "Sampling1D", MagicMock(return_value=sentinels["sampling"]))
+    monkeypatch.setattr(qwen3_32b_model.weight_utils, "lm_head_padded_vocab_size", MagicMock(return_value=152064))
+    config = _make_qwen3_32b_config()
+    return (
+        qwen3_32b_model.Qwen3_32B(
             config,
             sentinels["embedding"],
             sentinels["rope_setup"],
