@@ -24,9 +24,8 @@ Two topologies, selected by whether the destination endpoint id differs from our
   * LOOPBACK (dest == src, the default): src and dst slots live in ONE table, routed to the endpoint's
     internal B worker. Because both slots are in our own table, THIS module verifies the migrated KV
     after the copy — see ``--verify-migration`` (dst == src byte compare, and/or dst vs the src's golden)
-    over the same device-less UMD path ``check_pcc`` uses for sources. That makes the runner's on-device
-    ``validate_after_prefill`` (PREFILL_VALIDATE_MIGRATION=1) redundant, though it still works as an
-    alternative that reads the runner's own in-memory cache rather than DRAM over UMD.
+    over the same device-less UMD path ``check_pcc`` uses for sources. The runner holds no validation of
+    its own: it publishes the table and the device map, and every read-back happens out here.
   * CROSS-ENDPOINT P->D (dest != src): dst lives in the remote DECODE galaxy's table, an independent
     address space. Requires the pairing/connect handshake below, and the decode side has no way to know
     each slot's prompt length / last token, so we write a JSON handoff sidecar for it.
@@ -543,11 +542,9 @@ def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, 
     """Golden-free DESTINATION check: assert every migrated dst slot holds byte-identical KV to its src
     slot, over every config / layer / position the migrate covered. Returns True on full agreement.
 
-    This is the device-less counterpart of the runner's ``validation.validate_migrations_pairwise``: same
-    dst==src question, asked over the UMD path instead of the runner's in-memory cache, so it runs in the
-    driver process and needs no ``read_slot_kv`` hook. That runner-side check still exists and still works
-    (PREFILL_VALIDATE_MIGRATION=1 + PREFILL_MIGRATE_PAIRWISE=1); this one is the default for a loopback run
-    because it costs the runner nothing and is model-agnostic.
+    This asks the dst==src question the runner's retired ``validate_migrations_pairwise`` used to ask, but
+    over the device-less UMD path instead of the runner's in-memory cache — so it runs in the driver
+    process, needs no per-model adapter hook, and leaves the runner a pure serving loop.
 
     Byte equality rather than PCC: migration is a byte copy, so the correct dst is bit-identical. That
     removes the whole reason the old runner-side version needed a 0.99 threshold and an all-zero
@@ -663,9 +660,9 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
     """Golden-anchored DESTINATION check: PCC each migrated dst slot against the SRC slot's golden trace.
     Returns True when every pair meets ``threshold``.
 
-    This is the device-less counterpart of the "AFTER" half of the runner's
-    ``validation.validate_migration_kv`` (which still exists, under PREFILL_VALIDATE_MIGRATION=1). It reuses
-    ``prefill_producer._read_slot_kv_and_check_pcc`` unchanged — that reader is already parameterised by
+    This is the device-less counterpart of the "AFTER" half of the runner's retired
+    ``validate_migration_kv``. It reuses ``prefill_producer._read_slot_kv_and_check_pcc``
+    unchanged — that reader is already parameterised by
     slot id, so passing ``dst`` reads the destination, and passing ``slot_traces[src]`` compares it to
     what the source was supposed to contain. A correct migration makes dst PCC to golden exactly as src
     does, which is the pair of numbers the old ``[kv-migrate-validate] BEFORE/AFTER`` lines reported
@@ -845,6 +842,10 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
+    # Unconditional, unlike prefill_producer.main() which skips the table read when check_pcc is off: here
+    # the table has a SECOND consumer, --verify-migration's destination read-back, which is on by default
+    # and independent of check_pcc. Gating this on cfg.verify would make the default verify silently
+    # unavailable ("needs the KV chunk table, which never appeared") on any check_pcc: false manifest.
     kv_table = producer._read_kv_chunk_table(timeout_s)
     ack_channel = producer._connect_layer_ack_channel(timeout_s)
 
