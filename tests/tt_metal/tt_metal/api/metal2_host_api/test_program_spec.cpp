@@ -32,10 +32,12 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <filesystem>
+#include <numeric>
 #include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -4147,19 +4149,120 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     NodeCoord node{0, 0};
-    constexpr uint32_t kExpected = 0xCAFEBABEu;
+    const std::vector<uint32_t> cta_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+// std::array::operator== is not constexpr until C++20; walk elements instead.
+constexpr bool compile_time_varargs_match_expected() {
+    constexpr auto& varargs = get_compile_time_varargs();
+    constexpr std::array<uint32_t, 3> expected = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+    if (varargs.size() != expected.size()) {
+        return false;
+    }
+    for (uint32_t i = 0; i < varargs.size(); ++i) {
+        if (varargs[i] != expected[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+void kernel_main() {
+    static_assert(compile_time_varargs_match_expected());
+    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
+    static_assert(get_compile_time_vararg<2>() == 0x11112222u);
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg(1) == 0xDEADBEEFu);
+    static_assert(get_compile_time_vararg(2) == 0x11112222u);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_readable";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, EmptyCompileTimeVarargsReadableFromKernel) {
+    NodeCoord node{0, 0};
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
-    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_varargs().size() == 0u);
 }
 )"};
-    dm_kernel.advanced_options.compile_time_varargs = {kExpected};
+    // Default / empty compile_time_varargs — accessors must still be emitted and compile.
 
     ProgramSpec spec;
-    spec.name = "cta_varargs_readable";
+    spec.name = "cta_varargs_empty";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Template accessor bounds-checks at compile time: size==1 but get_compile_time_vararg<1>()
+// must fail JIT (static_assert in the generated helper).
+TEST_F(ProgramSpecTestGen1, OutOfRangeCompileTimeVarargTemplateFailsToCompile) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Should not compile
+    (void)get_compile_time_vararg<1>();
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_oob_template";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec compiles; OOB template index must fail that build.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// Stress: bake 1024 iota words and constexpr-walk them on the kernel side.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromKernel) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumVarargs = 1024u;
+    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+constexpr bool compile_time_varargs_are_iota() {
+    constexpr auto& varargs = get_compile_time_varargs();
+    if (varargs.size() != 1024u) {
+        return false;
+    }
+    for (uint32_t i = 0; i < varargs.size(); ++i) {
+        if (varargs[i] != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(compile_time_varargs_are_iota());
+
+void kernel_main() {}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_iota_1024";
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
