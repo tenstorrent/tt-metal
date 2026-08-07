@@ -5,8 +5,9 @@
 is the audio tail.
 
 `test_decode` would not have caught it despite scoring against the CPU reference: at ~1e-03 the error
-sits far under a whole-model tolerance that passes at 42.9 dB against a 28 dB gate. So this checks the
-one op on its own, at the widths the model actually presents.
+sits far under a whole-model tolerance that measures 41.4 dB against a 28 dB gate. (Confirmed after
+the fact -- reverting the fix moves it 41.41 -> 41.40 dB, i.e. not at all.) So this checks the one op
+on its own, at the widths the model actually presents.
 
 It also carries the minimal repro for the underlying bug -- a bare two-tensor concat with no audio
 machinery involved -- so an upstream issue can be filed from it directly.

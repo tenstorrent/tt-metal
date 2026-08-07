@@ -210,6 +210,10 @@ def test_decode(mesh_device, num_latent_frames):
 
     psnr = _psnr(expected, actual)
     mel_distance = _log_mel_distance(expected, actual)
+    # Log it: this is the only PSNR measured against the *CPU* reference. The figure quoted in
+    # AUDIO_RESULTS.md is scored against `MINIMAX_H3_AUDIO_ACCURATE=1`, i.e. device against device,
+    # which cannot see an error that both device paths share. Keep the two distinguishable.
+    logger.info(f"decode {num_latent_frames} latents: PSNR {psnr:.2f} dB vs CPU reference, log-mel {mel_distance:.3f}")
     assert psnr >= 28.0, f"decode PSNR {psnr:.2f} dB < 28 dB"
     assert mel_distance <= 5.0, f"log-spectrogram distance {mel_distance:.3f} > 5.0"
 
@@ -351,9 +355,10 @@ def test_channel_padding_is_bit_exact(mesh_device, channels):
     the implementation changes again.
 
     Note why `test_decode` never caught this despite scoring against the CPU reference: at ~1e-03 the
-    truncation sits far below the end-to-end error, which passes at 42.9 dB against a 28 dB gate. A
-    tolerance wide enough for the whole decode cannot see a single lossy data-movement op, so ops
-    whose contract is exactness need their own bit-exact gates.
+    truncation sits far below the end-to-end error, which measures 41.4 dB against a 28 dB gate.
+    Reverting the fix and re-measuring gives 41.40 dB against 41.41 dB -- the corruption is invisible
+    at the model level. A tolerance wide enough for a whole decode cannot see one lossy data-movement
+    op, so ops whose contract is exactness need their own bit-exact gates. Hence this one.
     """
     from ....layers.audio_ops import _pad_channels_to_aligned, aligned_channels
 

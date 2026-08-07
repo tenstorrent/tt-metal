@@ -13,6 +13,7 @@ single-run differences below ~8 % are not signal.
 | decode 10 s / 15 s (fp32) | 2.482 / 3.929 s | **2.256 / 3.583 s** |
 | decode 5 s (bf16, opt-in) | did not run | **0.959 s** |
 | PSNR vs `MINIMAX_H3_AUDIO_ACCURATE=1` | 39.46 dB | **42.86 dB** |
+| PSNR vs the **CPU** reference, 5 s | — | **41.41 dB** (gate: 28 dB) |
 | PSNR, bf16 | — | 34.93 dB (gate: 28 dB) |
 | accurate mode | 5.863 s | **2.407 s**, `rel_rmse 0.000e+00` (bit-identical) |
 | depthwise conv1d fp32 error | 1.563e-03 | **7.06e-08** (= the exact elementwise form) |
@@ -59,6 +60,26 @@ of the stage; see `AUDIO_FUSION_PLAN.md` for why that closes the cheap row-widen
 
 The target was 5-100x. This is ~1.3x. The remaining work is documented in `AUDIO_FUSION_PLAN.md`,
 with the measurements that size it.
+
+## Two different PSNRs, and why the padding fix did not move either
+
+They were conflated once (in `825cc1ffda3`) and are worth keeping apart:
+
+* **42.86 dB** — default path vs `MINIMAX_H3_AUDIO_ACCURATE=1`. Device against device, so it is blind
+  to any error both paths share.
+* **41.41 dB** — `test_decode` vs the torch/diffusers CPU reference, the only figure that can see a
+  defect present in every device path. Now logged by the test rather than discarded.
+
+The fp32 channel-padding corruption fixed in `825cc1ffda3` was real and provable at the bit level, but
+measured A/B on the same seed and shape it is **worth nothing end to end**:
+
+    pre-fix  (audio_ops.py @ 1a4ffb00df4)   41.40 dB, log-mel 0.054
+    post-fix                                41.41 dB, log-mel 0.054
+
+0.01 dB is noise. That is the honest result: the fix is a **correctness and speed** change -- it makes
+the padding op exact and 4-30x faster -- not an accuracy win. A ~1e-03 perturbation on the narrow-C
+padding sits far below whatever dominates the residual 41 dB, so removing it is invisible at the model
+level. Worth having, and worth not overselling.
 
 ## Defaults
 
