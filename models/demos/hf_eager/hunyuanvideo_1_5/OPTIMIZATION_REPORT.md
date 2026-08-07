@@ -382,7 +382,7 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
-### DiT prepared-weight cache (measured; blocked on mesh replication)
+### DiT prepared-weight cache (IMPLEMENTED: -49.6s, bit-identical)
 
 - Motivation: after the heads-major change, denoise is no longer the e2e
   bottleneck. A 480p i2v 121f/50-step run spends ~72% of its wall clock outside
@@ -400,29 +400,39 @@ section is measured unless explicitly marked otherwise.
   | adaLN proj | 50.3 | 144.6 ms | 15.6 ms | 9.3x |
   | **per block** | **235** | **653 ms** | **73 ms** | |
 
-- **But the obvious implementation is wrong, and the correct one does not fit.**
-  Three findings from testing on the actual 8x4 mesh:
-  1. `dump_tensor(from_device(t))` serialises only ONE device shard and
-     `load_tensor` restores it **replicated** across all 32 devices. A
-     (2048, 8192) TP4-sharded weight came back as (2048, 2048) on 32 devices --
-     silently wrong weights on 31 of them. This fails without raising.
-  2. A correct per-shard cache is 8x disk-bloated: the weight is replicated
-     across the 8 SP ranks, so 32 shards of a 33.6 MB weight wrote **268.5 MB**.
-     Extrapolated, the DiT's ~16.5 GB of bf16 weights need ~130 GB of cache,
-     against 59 GB free on this host.
-  3. `ttnn.aggregate_as_tensor` is not present in this build, so restoring a
-     per-shard cache to its original placement needs another API.
+- **Implemented and measured: 231.5s -> 181.9s wall (-49.6s), output
+  bit-identical (frame PCC 1.00000000, max abs pixel difference 0.0 across 121
+  frames).** Opt-in via `HY_DIT_WEIGHT_CACHE=1`. Because the saving is setup
+  cost it is constant in step count: a 50-step production run goes from ~290s to
+  ~240s (-17% e2e). The cache is 16 GB / 1350 files per configuration.
+- The key is `ttnn.DumpTensorMode.LOCAL`, the mode tt_dit's `Parameter.save`
+  uses. It persists each device's own shard and restores the same placement, so
+  the round trip is bit-exact and the cache is 1.00x the logical size. An
+  earlier investigation reported this approach blocked on three counts -- all
+  three were an artefact of calling `dump_tensor` WITHOUT that mode:
+  1. `dump_tensor(from_device(t))` -- no mode -- serialises only ONE device
+     shard and `load_tensor` restores it **replicated** across all 32 devices,
+     silently wrong on 31 of them. With `mode=DumpTensorMode.LOCAL` the round
+     trip is bit-exact. **This is the trap to avoid, not a blocker.**
+  2. Hand-rolling a per-shard cache is 8x disk-bloated (32 shards of a 33.6 MB
+     weight wrote 268.5 MB, because weights replicate across the 8 SP ranks).
+     `LOCAL` mode dedups this: measured 1.00x, i.e. 16 GB for the DiT.
+  3. `ttnn.aggregate_as_tensor` is absent in this build -- not needed, since
+     `load_tensor(path, device=mesh)` restores placement directly.
 - Scale correction: `from_torch` mesh-sharded costs ~84 ms warm, not the 535 ms
   a first (cold) call suggests. Weight preparation is therefore roughly 32s of
   the ~99s window, not all of it; the remainder is mesh setup and program-cache
   population.
-- Conclusion: the win is real but requires tt_dit's Module-level
-  `cache.load_model`, which dedups replicated shards and reconstructs
-  placement. That needs the DiT restructured from its closure-based
-  `_stubs.build()` into a Module exposing `is_loaded`/`load`/`save`/
-  `load_torch_state_dict`. Prefetching is not a substitute: the weights already
-  land in device DRAM and the cost is host-side preparation, so overlap could
-  hide at most the ~32s of concurrent setup.
+- Implementation is contained rather than the Module refactor first scoped:
+  `f32()` is the single choke point every block weight flows through, and
+  weights are built in deterministic order, so a per-block prefix plus a
+  sequential index is a sufficient key. Everything that changes dtype, shape or
+  shard placement (mesh shape, tp/sp, axes, dtype, `HY_DIT_RS_DOMAIN_BIAS`) goes
+  in the cache directory tag, so an entry can only be reused by an identical
+  configuration.
+- Prefetching remains a non-substitute: weights already land in device DRAM and
+  the cost is host-side preparation, so overlap could hide at most the ~32s of
+  concurrent setup -- less than the cache delivers, for more complexity.
 
 ### Trace replay defect: stale-timestep hypothesis ruled out
 

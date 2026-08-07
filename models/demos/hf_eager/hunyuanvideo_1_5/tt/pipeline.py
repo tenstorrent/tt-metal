@@ -233,8 +233,11 @@ class HunyuanVideo15Pipeline:
                 sp=self.sp,
                 tp_axis=self.tp_axis,
                 sp_axis=self.sp_axis,
+                # Per-block key for the opt-in prepared-weight cache
+                # (HY_DIT_WEIGHT_CACHE=1); ignored when the cache is off.
+                weight_cache_prefix=f"block{i}",
             )
-            for blk in m.transformer_blocks
+            for i, blk in enumerate(m.transformer_blocks)
         ]
         self.s_norm_out = build("ada_layer_norm_continuous", m.norm_out)
 

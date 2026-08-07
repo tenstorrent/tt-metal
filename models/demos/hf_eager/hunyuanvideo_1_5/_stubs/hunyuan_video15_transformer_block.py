@@ -179,7 +179,9 @@ def _run_dual_stream_projection_schedule(overlap, hidden_start, context_complete
     return hidden, context
 
 
-def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis=0):
+def build(
+    device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis=0, weight_cache_prefix=None
+):
     """Extract all sub-weights of the dual-stream block; return a native forward.
 
     Parallelism (all optional, default = single-device):
@@ -251,6 +253,27 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     )
     _rs_domain_bias = _select_rs_domain_bias(sharded=sharded, tp=tp, environ=os.environ)
 
+    # Prepared-weight cache directory. Everything that changes a weight's dtype,
+    # shape or shard placement goes in the tag, so a cache entry can only be
+    # reused by an identical configuration. Sequential per-block indices are then
+    # a safe key even though the number of f32() calls varies with the flags.
+    _wcache_dir = None
+    _wcount = [0]
+    if _enabled(os.environ.get("HY_DIT_WEIGHT_CACHE", "0")):
+        _root = (
+            os.environ.get("HY_DIT_WEIGHT_CACHE_DIR")
+            or os.environ.get("TT_DIT_CACHE_DIR")
+            or "~/.cache/tt-dit"
+        )
+        _mesh_tag = "x".join(str(d) for d in tuple(device.shape)) if seq_parallel or sharded else "1"
+        _wcache_dir = os.path.join(
+            os.path.expanduser(_root),
+            "hunyuanvideo15_dit",
+            f"mesh{_mesh_tag}_tp{tp}_sp{sp}_ax{tp_axis}{sp_axis}"
+            f"_{'bf16' if _bf16 else 'fp32'}_rsb{int(_rs_domain_bias)}",
+        )
+        os.makedirs(_wcache_dir, exist_ok=True)
+
     def _mapper(shard_dim):
         """Weight mesh-mapper. 2D (seq-parallel): shard `shard_dim` on tp_axis,
         replicate on sp_axis. 1D (head-TP only): plain shard on tp mesh. None:
@@ -321,13 +344,36 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     def f32(t, mesh_mapper=None):
         if mesh_mapper is None and (sharded or seq_parallel):
             mesh_mapper = _mapper(None)  # fully replicated (2D-aware)
-        return ttnn.from_torch(
+
+        # Prepared-weight cache. `ttnn.from_torch` with a mesh mapper costs far
+        # more than reloading an already-prepared tensor -- measured 5-10x on
+        # the real 8x4 mesh (289 ms -> 34 ms for 143 MB of block weights), and
+        # the cost is host-side dtype conversion plus tilisation, not transfer.
+        # `DumpTensorMode.LOCAL` is what makes this correct AND compact: it
+        # persists each device's own shard and restores the same placement, so
+        # the round trip is bit-exact and the cache is 1.00x the logical size
+        # (a plain dump of `from_device(t)` silently serialises ONE shard and
+        # reloads it replicated -- wrong weights on 31 of 32 devices).
+        # Weights are created in deterministic order per block, so a sequential
+        # index is a sufficient key; everything that changes weight layout is in
+        # the directory tag instead.
+        path = None
+        if _wcache_dir is not None and weight_cache_prefix is not None:
+            path = os.path.join(_wcache_dir, f"{weight_cache_prefix}.w{_wcount[0]}.tensorbin")
+            _wcount[0] += 1
+            if os.path.exists(path):
+                return ttnn.load_tensor(path, device=device)
+
+        out = ttnn.from_torch(
             t.contiguous().float(),
             dtype=wdt,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             mesh_mapper=mesh_mapper,
         )
+        if path is not None:
+            ttnn.dump_tensor(path, out, mode=ttnn.DumpTensorMode.LOCAL)
+        return out
 
     def lin(linear):
         """Replicated (unsharded) linear -- for weights not on the TP path."""
