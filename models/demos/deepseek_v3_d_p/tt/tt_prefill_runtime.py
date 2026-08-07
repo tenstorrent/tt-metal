@@ -219,9 +219,10 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
-        # The drafter is single-shot: its context cache and rope table are SP-sharded over ONE chunk, so
-        # size them to chunk_size, not the verifier's max_seq_len. Multi-chunk is issue #50725 (out of scope).
-        dflash_seq = self.config.chunk_size
+        # The drafter's context cache and rope table span the FULL per-user sequence, like the verifier's
+        # kvpe cache: chunked prefill writes chunk c at global offset actual_start, and multi-turn resumes a
+        # slot mid-sequence, so neither can be expressed by a chunk_size-deep cache (issue #50725).
+        dflash_seq = self.config.max_seq_len
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
             dcfg,
@@ -251,9 +252,10 @@ class TtPrefillRuntime:
             self._dflash_k_cache, self._dflash_v_cache = allocate_dflash_kv_cache(
                 self.mesh_device,
                 dcfg,
-                dflash_seq,  # chunk_size — MUST match the drafter's cache_seq/rope (see note above)
+                dflash_seq,  # max_seq_len — MUST match the drafter's cache_seq/rope (see note above)
                 sp_axis=self.config.sp_axis,
                 tp_axis=self.config.tp_axis,
+                num_users=self.config.num_users,  # user-major slots, like the verifier's kvpe cache
             )
 
     def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
@@ -422,8 +424,15 @@ class TtPrefillRuntime:
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
-                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC / migration).
-                self.drafter.write_kv_cache(self._dflash_k_cache, self._dflash_v_cache)
+                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC /
+                # migration). Same (offset, slot) the verifier's kvpe write uses, so the drafter cache stays
+                # positionally aligned with it across chunks and users.
+                self.drafter.write_kv_cache(
+                    self._dflash_k_cache,
+                    self._dflash_v_cache,
+                    actual_start,
+                    slot_idx=slot_id,
+                )
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
