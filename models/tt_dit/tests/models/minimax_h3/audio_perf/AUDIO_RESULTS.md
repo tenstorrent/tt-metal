@@ -117,8 +117,38 @@ by the autoencoder, not by us.
 
 Worth keeping straight, because "+3.5 dB" invites the wrong conclusion. The precision work earns its
 place through what it unlocked -- exact conv1d, zero MAC fallbacks, bf16 becoming runnable, and the
-1.14x speed -- not through audible fidelity. And the device scoring marginally *above* CPU is not the
-device beating its own reference; it is small uncorrelated error, all within +-0.26 dB.
+1.14x speed. And the device scoring marginally *above* CPU is not the device beating its own
+reference; it is small uncorrelated error, all within +-0.26 dB.
+
+### Why 28.6 dB, and where the "indistinguishable" claim needs qualifying
+
+`source_fidelity.py` checks whether the low source-referenced PSNR is an artefact. It is not:
+**best lag is 0** for every clip and variant, and a scalar gain correction buys only 0.1-0.4 dB. So
+there is no misalignment and no level mismatch -- the waveform loss is real.
+
+It is, however, concentrated where waveform metrics mislead. Per-band SNR, CPU decode vs source:
+
+| clip | 0-0.5k | 0.5-2k | 2-6k | 6-16k |
+|---|---|---|---|---|
+| voice_libri1 | 17.35 | 7.05 | 0.27 | **-2.15** |
+| voice_libri2 | 19.99 | 12.66 | 3.70 | **-2.56** |
+| music_trumpet | 16.12 | 12.15 | 7.76 | **-4.31** |
+| music_brahms | 11.35 | 6.67 | -0.87 | **-2.70** |
+
+Above 6 kHz the SNR is **negative** -- error exceeds signal. BigVGAN is GAN-trained, so it synthesises
+plausible high frequencies rather than reconstructing them sample-for-sample. Hence ~28 dB waveform
+PSNR on audio that sounds fine, and hence waveform PSNR is a weak proxy for quality here.
+
+**This qualifies the "indistinguishable" claim above.** Log-spectral distance against the source is
+CPU 1.04-1.52 vs device 1.82-2.13 -- roughly double -- and it is near-additive (voice_libri1: 1.06
+codec + 1.16 hardware ~= 2.13 total). So by a log-spectral measure the hardware error is *comparable
+to the entire codec error*, not negligible.
+
+Both statements are true of different metrics. PSNR is energy-weighted and dominated by loud content,
+so it hides a broadband low-level error; log-spectral distance weights quiet bins equally, so it
+exposes one. Perceptual masking sits between the two, so neither settles audibility on its own. The
+honest form is: **indistinguishable by waveform PSNR, measurably different by log-spectral distance,
+and a listening test is what decides.** The WAVs are provided for exactly that.
 
 ## Two different PSNRs, and why the padding fix did not move either
 
