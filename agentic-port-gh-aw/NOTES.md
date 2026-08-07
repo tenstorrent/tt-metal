@@ -714,3 +714,61 @@ entries and every build here is cold at roughly 70 minutes.
 image, measure in the `dev` image, both mounting the same checkout. That should recover the
 2.6-minute build while keeping a working runtime, and it costs only a second `docker run`. Worth
 doing before this is used in anger — a 70-minute pre-step dominates the run and burns card time.
+
+---
+
+## 13. HANDOFF — pick up here (2026-08-07, end of day)
+
+### State
+
+V1 is written, compiles under strict mode, and is validated on real hardware locally. In CI, every
+deterministic pre-step passes on an N150 card runner **except** the Python dependency step, which
+is the single thing standing between here and the agent's first real attempt.
+
+Branches, both in `tenstorrent/tt-metal`:
+
+- **`ebanerjee/agentic_port_with_workflow_notes`** — the work. Notes plus
+  `.github/workflows/port-op.md` and `.github/scripts/port/{scaffold,ledger,measure,gate}.py`.
+- **`ebanerjee/port-op-dryrun`** — same content, carries the temporary `push` trigger that lets the
+  workflow run before it is on main. Pushing to it starts a run.
+
+### The one open blocker
+
+`Prepare the Python environment` fails with `/opt/venv/bin/python3: No module named pip`. The dev
+image provisions with **uv**, not pip. The last commit switches the step to
+`uv pip install --python "$(command -v python3)" graphviz pyyaml`. **That fix is committed but has
+not yet been observed passing in CI** — verifying it is step one tomorrow.
+
+### How to run it
+
+```
+git push origin <sha>:ebanerjee/port-op-dryrun     # any new commit triggers a run
+gh api "repos/tenstorrent/tt-metal/actions/runs?branch=ebanerjee%2Fport-op-dryrun&per_page=1" \
+  --jq '.workflow_runs[0].id'
+```
+
+Expect roughly 70 minutes of cold build before the agent starts (see 12.9 — worth fixing first).
+
+### Suggested order tomorrow
+
+1. **Confirm the uv fix**, and that `Native baseline` then produces real numbers rather than
+   `blocked`. That is the last gate before the agent runs at all.
+2. **Fix the ccache image mismatch** (12.9): build in `ci-build`, measure in `dev`, one workspace,
+   two containers. Turns a 70-minute pre-step into ~3 minutes and makes iteration cheap. Do this
+   before any long agent runs.
+3. **Watch the agent's first real attempt.** The specific things to check: does it call `build` and
+   `verify` rather than trying to run things in its own bash; does the `blocked` verdict fire if it
+   edits outside the allowlist; does it correctly decline to open a PR on `not-a-candidate`.
+4. Then the v2 backlog in 12.6.
+
+### What is already proven, so do not re-litigate it
+
+- `mcp-scripts` tools reach the card; the agent's own bash cannot (section 9).
+- An N150 card runner reaches the Garage ccache endpoint, and a cache-compatible build compiles in
+  2.6 minutes (12.1).
+- `CODEGEN_REPO_TOKEN` checks out tt-dm-codegen from within the workflow.
+- The container starts with the card visible, and `scaffold.py` produces byte-identical CMake
+  registration to the hand-written port.
+- `build_metal.sh` completes inside that container on a card runner.
+- The whole harness — ledger, correctness, wall, device, gate arithmetic, profiler attribution —
+  is validated end-to-end on real silicon against the hand-written pad port (12.3).
