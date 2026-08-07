@@ -17,15 +17,15 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_custom_routing_tables.cpp
     fabric_router/test_multi_host.cpp
     fabric_router/test_connection_registry.cpp
-    fabric_router/test_router_channel_mapping.cpp
-    fabric_router/test_router_connections.cpp
-    fabric_router/test_router_connection_mapping.cpp
-    fabric_router/test_router_archetypes.cpp
-    fabric_router/test_builder_connection_mapping.cpp
-    fabric_router/test_connection_mapping_logic.cpp
-    fabric_router/test_fabric_builder_local_connections.cpp
-    fabric_router/test_z_router_integration.cpp
-    fabric_router/test_z_router_device_detection.cpp
+    fabric_router/test_connection_establishment.cpp
+    fabric_router/test_express_connection_wiring.cpp
+    fabric_router/test_protected_domain_effects.cpp
+    fabric_router/test_fabric_edge_capability.cpp
+    fabric_router/test_direction_slot_bijection.cpp
+    fabric_router/test_router_wiring_rules.cpp
+    fabric_router/test_router_turn_set.cpp
+    fabric_router/test_injection_policies.cpp
+    fabric_router/test_stream_assignment.cpp
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp

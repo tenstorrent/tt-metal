@@ -10,6 +10,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
@@ -294,7 +296,18 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         }
     }
 
-    if (this->sender_txq_id != this->receiver_txq_id) {
+    {
+        // Reserved unconditionally rather than only for multi-TXQ. Credits can now travel through
+        // these counters for a second reason -- an express router needs stream registers this form
+        // does not consume -- and that reason is not known here: this constructor takes only a
+        // topology, and deliberately so, since it aims for one L1 layout across every config. Always
+        // reserving keeps the layout stable and makes the counter form selectable by compile-time
+        // argument alone, with no way for the address map and that choice to disagree.
+        //
+        // The cost is roughly 192 bytes taken from channel buffering, well under a percent of it, and
+        // the slot options are coarse enough (4/2/1) that crossing a threshold is unlikely. If it ever
+        // does, the protected-receiver slot check reports it rather than letting it pass silently.
+        //
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
@@ -597,9 +610,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
     // This non-device-init path is the local worker-style VC0 contract, so preserve
-    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
-    connection_info.worker_free_slots_stream_id =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
+    // the sender-channel-0 free-slots stream id when rewriting the entry. The constant in
+    // connection_interface is the single authority every side reads: the router's stream
+    // assignment pins the VC0 free-slots base to it, so the contracts agree by construction.
+    connection_info.worker_free_slots_stream_id = connection_interface::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls
@@ -1076,10 +1090,40 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    const bool base_enable_deadlock_avoidance =
+        fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+
+    // Bubble flow control requires the immediate downstream receiver to hold at least two slots: an
+    // injection channel only sends when it sees that many free, so with a single-slot receiver the
+    // condition can never hold and that sender stalls forever.
+    //
+    // Nothing tied slot selection to this. The allocator walks an ordered table and takes the first
+    // option that fits the available channel buffering, and its smallest option gives one receiver
+    // slot -- so the requirement has been satisfied only incidentally, by the larger options fitting.
+    // A tight L1 budget could select that last option under bubble flow control and hang instead.
+    //
+    // Checked per VC and only where bubble flow control is actually enabled, so a configuration that
+    // gives VC1 a single slot still passes as long as the VCs that need the guard have two.
+    if (final_enable_deadlock_avoidance) {
+        constexpr uint32_t k_bfc_protected_receiver_min_slots =
+            builder_config::bubble_flow_control_protected_receiver_min_slots;
+        constexpr size_t k_bfc_vc = 0;  // v1 enables bubble flow control on VC0 only
+        constexpr size_t k_receiver_channel = 0;
+        const size_t remote_slots =
+            static_channel_allocator->get_remote_receiver_channel_number_of_slots(k_bfc_vc, k_receiver_channel);
+        TT_FATAL(
+            remote_slots >= k_bfc_protected_receiver_min_slots,
+            "Bubble flow control is enabled on VC{} but its downstream receiver has only {} buffer slot(s); at least "
+            "{} are required or injection channels can never send. The channel allocator selected a buffer-slot "
+            "option too small for this configuration, so either the available channel buffering must grow or bubble "
+            "flow control must not be enabled here.",
+            k_bfc_vc,
+            remote_slots,
+            k_bfc_protected_receiver_min_slots);
+    }
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
     // shape, and optionally enable a terminal-only speedy receiver when the
@@ -1094,130 +1138,36 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     std::unordered_map<std::string, uint32_t> named_args;
 
     // --- Stream IDs (increment-on-write registers) ---
-    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_0_pkts_sent_id;
-    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_1_pkts_sent_id;
-    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_acked_id;
-    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_acked_id;
-    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_acked_id;
-    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_acked_id;
-    // The 5th VC0 sender channel (intra-mesh Z skip-link forwarding) needs its own first-level-ack stream.
-    // VC0's ack namespace only has 4 dedicated registers (streams 2-5), so reuse vc_1_free_slots edge 4
-    // (stream 21) — the register that would otherwise hold VC1 free-slots for a downstream inter-mesh Z
-    // router. On a fabric with skip links (intra-mesh Z) but no inter-mesh Z router, that register is idle,
-    // so this is a genuinely-free stream rather than a live borrow.
     //
-    // CRITICAL — this MUST match on both ends of every eth link that can carry channel-4 traffic, so it is
-    // gated on the FABRIC-WIDE intra-mesh-Z presence, NOT the per-node has_intra_mesh_z_router(). Reasons:
-    //   1. A single intra-mesh Z edge widens VC0 to 5 for the whole fabric instance (has_any_intra_mesh_z_router,
-    //      used when sizing max channel counts), so EVERY router is 5-wide, not just skip endpoints.
-    //   2. First-level acks are keyed by src_ch_id and the RECEIVER credits the SENDER using its OWN
-    //      to_sender_packets_acked_streams[src_ch_id] (see fabric_router_flow_control.hpp send_ack_credit()).
-    //      A Z router forwards onward onto a downstream cardinal's channel 4 (get_downstream_sender_channel
-    //      maps the Z direction to the highest sender channel), and that cardinal's eth-link peer is an
-    //      ordinary, non-skip-endpoint mesh router. If we gated per-node, that peer would have index-4 == 0
-    //      and, on receiving from-Z traffic (src_ch_id == 4), would mis-credit stream 0 (the VC0 receiver
-    //      pkts_sent counter) instead of stream 21 — corrupting the receiver counter and starving the
-    //      channel-4 sender (stall after one buffer depth). Gating fabric-wide keeps sender and receiver in
-    //      agreement on stream 21 for index 4 everywhere.
-    // Completions are unaffected: to_sender_4_pkts_completed is a fixed stream (10) assigned unconditionally.
-    //
-    // NOTE — do NOT additionally gate on this router being 5-wide (actual_sender_channels_vc0 == 5). Router
-    // width is per-node: only skip-endpoint chips push Z into their VC0 outbound set and become 5-wide;
-    // ordinary chips stay 4-wide. But a 4-wide chip is still the eth-link RECEIVER of channel-4 "from-Z"
-    // traffic emitted by a neighboring 5-wide endpoint's cardinal router (that cardinal forwards Z-router
-    // output onto the peer's channel 4). On receiving src_ch_id == 4 it must credit stream 21 on the sender,
-    // so index 4 must resolve to stream 21 on the 4-wide receiver too. Gating on width would leave those
-    // receivers at index-4 == 0 (the previous behavior), which is exactly the bug: they mis-credit stream 0
-    // and the endpoint's channel-4 sender starves. Assigning stream 21 on a 4-wide chip is harmless: it has
-    // no channel-4 sender, and stream 21 (vc_1_free_slots edge 4) is idle whenever there is no inter-mesh Z.
-    uint32_t to_sender_4_pkts_acked_id = 0;
-    const bool has_intra_mesh_z = fabric_context.has_any_intra_mesh_z_router(control_plane);
-    const bool has_inter_mesh_z = fabric_context.has_inter_mesh_z_router(control_plane, local_fabric_node_id);
-    if (has_intra_mesh_z) {
-        // If this device also has an inter-mesh Z router, its X/Y routers forward VC1 to that Z router over
-        // vc_1_free_slots edge 4 (stream 21), so it is no longer free and the 5th VC0 sender has no spare
-        // first-level-ack register on this 32-stream eth core. That configuration is unsupported here: the
-        // intra-mesh-Z forwarding channel would need to run without first-level acks instead.
-        TT_FATAL(
-            !has_inter_mesh_z,
-            "Intra-mesh Z (5-wide VC0) on a device that also has an inter-mesh Z router: stream {} "
-            "(vc_1_free_slots edge 4) is already used for VC1->Z forwarding, leaving no free first-level-ack "
-            "stream for the 5th VC0 sender channel. This combined-Z device configuration is unsupported.",
-            StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4);
-        to_sender_4_pkts_acked_id = StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
+    // The assignment is computed once upstream (in the router build, from the family's shape) and
+    // shared with every builder that must agree on a register across a link; the credit plan it
+    // carries is the same derivation the two flags below read, from the same edm_config. The plan
+    // itself is unchanged: Multi-TXQ puts every VC on counters; express puts VC1 on counters
+    // because widening VC0 to five senders needs one more ack register than an ethernet core has,
+    // and VC1's completion registers are what covers it -- VC0 deliberately untouched.
+    // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
+    // FabricBuilderContext; every router in the mesh reads the same one, so the flat-channel ->
+    // register-id map agrees by construction -- the kernel resolves a downstream router's register
+    // through its own table, and that lookup is only correct if the maps agree.
+    const StreamAssignment& stream_assignment =
+        control_plane.get_fabric_context().get_builder_context().get_stream_assignment(local_fabric_node_id.mesh_id);
+    const CreditTransportPlan& credit_plan = stream_assignment.plan();
+
+    named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
+    named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
+
+    // The fabric-scoped flat bases: the shared free-slots table's positions follow the fabric's
+    // family maxima, so a VC's boundary is the same on every router in the mesh.
+    named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
+    named_args["VC2_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(2);
+
+    // The full declared stream-register name set, filled from the assignment or the sentinel (the
+    // sentinel marks an inactive consumer, which the device skips initialising). Each entry is
+    // emplaced with a duplicate check rather than blind-inserted, so a collision fails here
+    // instead of being absorbed.
+    for (const auto& [name, value] : stream_assignment.named_args()) {
+        TT_FATAL(named_args.emplace(name, value).second, "Duplicate compile-time arg {}", name);
     }
-    named_args["TO_SENDER_4_PKTS_ACKED_ID"] = to_sender_4_pkts_acked_id;
-    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_completed_id;
-    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_completed_id;
-    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_completed_id;
-    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_completed_id;
-    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_4_pkts_completed_id;
-    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_5_pkts_completed_id;
-    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_6_pkts_completed_id;
-    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_7_pkts_completed_id;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_1;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_2;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_3;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_4;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_1;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_2;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_3;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
-    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_4_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_5_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_6_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_7_free_slots_stream_id;
-    // Channels 8 and 9 are 0 by default (padding). The firmware array
-    // sender_channel_free_slots_stream_ids[] is sized to MAX_NUM_SENDER_CHANNELS (10) but only
-    // indices 0..NUM_SENDER_CHANNELS-1 are accessed at runtime (via is_sender_channel_serviced[] guard).
-    //
-    // Channel layout by router type:
-    //   Non-Z mesh (no VC1):  indices 0-3 = VC0 (IDs 22-25),  index 4 = VC2 (ID 30 when enabled)
-    //   Non-Z mesh (with VC1): indices 0-3 = VC0, 4-6/7 = VC1, last = VC2 (ID 30 when enabled)
-    //   Z-router:              indices 0-4 = VC0, 5-8 = VC1 (mapped but NOT serviced by firmware —
-    //                          Z-routers don't step through VC1 sender channels), index 9 = VC2
-    //
-    // For Z-routers, VC1 sender channels (5-8) exist in the flat index space for layout compatibility
-    // but is_sender_channel_serviced[5..8] is false, so their stream IDs are never read by firmware.
-    // This is why indices 8 and 9 can safely be 0 — they are only accessed when VC2 is enabled,
-    // at which point the override below sets the correct one to stream ID 30.
-    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] = 0;
-    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] = 0;
-    // VC2 sender is always the last used channel. Override its stream ID to 30 (VC2 flow control).
-    // The flat index varies by config: non-Z without VC1 = index 4, non-Z with VC1 = index 7/8,
-    // Z-router = index 9.
-    if (actual_sender_channels_vc2 > 0 && num_sender_channels > 0) {
-        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", num_sender_channels - 1)] =
-            StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
-    }
-    named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
-    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id;
-    // --- Stream IDs (scratch registers) ---
-    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] =
-        StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
-    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
 
     // --- Max channel counts (always global max — instance counts use NUM_SENDER/RECEIVER_CHANNELS) ---
     named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_sender_channels);
@@ -1313,10 +1263,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
     // --- Skip-link ABI args (only when this router's mesh selected the indexed 2D ABI) ---
-    // Must stay in agreement with the FABRIC_SKIP_LINKS_ENABLED define emission in
-    // ComputeMeshRouterBuilder::create_kernel: the kernel reads these named args only under that
-    // define, and a missing arg fails the compile.
-    if (fabric_context.has_intra_mesh_z_in_mesh(control_plane, this->local_fabric_node_id.mesh_id)) {
+    // Agreement with the FABRIC_SKIP_LINKS_ENABLED define emission in
+    // ComputeMeshRouterBuilder::create_kernel is by construction: both key on
+    // express_routing_enabled. The kernel reads these named args only under that define, and a
+    // missing arg fails the compile.
+    if (control_plane.express_routing_enabled(this->local_fabric_node_id.mesh_id)) {
         const auto mesh_shape = control_plane.get_mesh_graph().get_mesh_shape(this->local_fabric_node_id.mesh_id);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
@@ -1391,16 +1342,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);
 
-    // --- Multi-TXQ credit counters (always emitted; 0 when inactive) ---
-    bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
+    // Addresses are emitted unconditionally because the regions are now always reserved, so the
+    // compile-time selection above cannot disagree with the L1 map.
     named_args["TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.to_sender_channel_remote_ack_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.to_sender_channel_remote_ack_counters_base_addr);
     named_args["TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.to_sender_channel_remote_completion_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.to_sender_channel_remote_completion_counters_base_addr);
     named_args["LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr);
     named_args["LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr);
 
     // --- Host signal args (defaults; compute_mesh_router_builder overrides when wait_for_host_signal) ---
     named_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;

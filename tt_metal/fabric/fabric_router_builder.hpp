@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
 
 namespace tt::tt_metal {
 class IDevice;
@@ -78,13 +79,15 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location);
+        const RouterLocation& location,
+        const ChipRoutingFacts& chip_facts);
 
     // ============ Connection Methods ============
 
@@ -100,14 +103,6 @@ public:
      */
     virtual void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) = 0;
-
-    /**
-     * Configure local connections between routers on the same device (e.g., mesh↔Z)
-     *
-     * @param local_routers Map of direction → router builder for all routers on this device
-     */
-     virtual void configure_local_connections(
-        const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) = 0;
 
     /**
      * Configure this router for dispatch link operation.

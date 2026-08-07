@@ -214,6 +214,10 @@ public:
 
     // Whether a protected ring family covers this node along the given dimension. Ring state is only
     // derived for meshes with express links, so check express_routing_enabled before relying on this.
+    // Per-node by design: answers false for a leaf. Never wire this into
+    // need_deadlock_avoidance_support -- that flag also gates first-level ACK and the credit path, so
+    // a per-node answer would elide the guard on leaf chips. The per-mesh axis query below is the one
+    // that feeds it.
     bool has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const;
 
     // Whether the edge leaving `local` in `egress` belongs to a protected ring.
@@ -226,6 +230,15 @@ public:
     // For that same turn, whether a non-transit ring acquisition is permitted. A crossing into the
     // family that may continue is terminal and returns false.
     bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // Does the axis that `axis_direction` belongs to (N/S/Z select Y, E/W select X) carry any
+    // protected ring anywhere in this mesh?
+    //
+    // Used to decide whether a router compiles in protected flow control at all, which is a property
+    // of the axis rather than of one chip. Asking the per-node question instead would disable the
+    // guard on leaf chips, and that flag also gates first-level ACK and the credit path, so the
+    // effect would reach beyond flow control.
+    bool mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const;
 
     // Return eth channels that can forward the data from src to dest.
     // This will be a subset of the active routers in a given direction since some channels could be

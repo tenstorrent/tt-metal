@@ -387,11 +387,13 @@ void inject_fabric_kernel_defines(
     }
     if (fabric_context.is_2D_routing_enabled()) {
         add_kernel_defines({{"FABRIC_2D", "1"}});
-        // Workers in a skip-link mesh produce indexed action maps instead of hop programs. The
-        // shape values match the GLOBAL physical shape the L1 vectors were packed with, and the
-        // gate matches the CP embed and the router define, so encode, L1 layout, and decode always
-        // agree for the mesh.
-        if (fabric_context.has_intra_mesh_z_in_mesh(control_plane, src_fabric_node_id.mesh_id)) {
+        // Workers in an express mesh produce indexed action maps instead of hop programs. The
+        // shape values match the GLOBAL physical shape the L1 vectors were packed with. All four
+        // ABI gates (this encode define, the CP table embed, the router decode define and its CT
+        // args) key on express_routing_enabled: the express_links expansion in mesh_graph.cpp is
+        // the only writer of intramesh Z edges, and express_routing_enabled is its validated
+        // echo -- so encode, L1 layout, and decode agree with route generation by construction.
+        if (control_plane.express_routing_enabled(src_fabric_node_id.mesh_id)) {
             const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
             add_kernel_defines({
                 {"FABRIC_SKIP_LINKS_ENABLED", "1"},
