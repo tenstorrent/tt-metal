@@ -10,6 +10,11 @@
 
 namespace ttnn::prim {
 
+// ops/tilize/builder.py _BLOCK_THRESHOLD. Also the widest Wt the port claims: no sweep case
+// exercises Wt > 8, so the block regime this threshold gates is outside the measured envelope and
+// unsupported_by it (tilize_codegen_supported.cpp rejects above this).
+constexpr uint32_t kBlockThreshold = 32;
+
 struct TilizeCodegenProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const TilizeCodegenParams& operation_attributes,

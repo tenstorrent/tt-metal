@@ -84,6 +84,14 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
         return false;
     }
 
+    // The block regime (Wt > 32) is outside the measured envelope — no sweep case exceeds Wt == 8
+    // — and the block builder's CB-fit plan is not sufficient evidence for it: a Wt > 100k input
+    // ([160, 5210112]) passes the plan check and then wedges physical cores at run time, where
+    // native's block path handles it. Only the row / column-split regime is claimed.
+    if ((w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH > kBlockThreshold) {
+        return false;
+    }
+
     // Device-resource feasibility. Every builder's CB footprint scales with the per-core tile
     // count (page = one tile, depth = the core's column chunk / block width), and the reference
     // raises rather than shrinking below the compute-chunk / batched-writer contract
@@ -119,9 +127,9 @@ struct DemotedCase {
 // preferred form. A row leaves this table only when a measurement on the ported kernel clears it —
 // a demoted case still runs under implementation=codegen, so verify keeps measuring every row here.
 //
-// Wt == 1 (row_path_wt1_no_pipeline) and Wt == 3 (row_path_wt3_no_column_split /
-// row_path_wt3_column_split_unavailable) are both covered by general predicates in is_demoted()
-// below rather than enumerated here, which is why no row in this table has Wt == 1 or Wt == 3.
+// Wt == 1 (row_path_wt1_no_pipeline) is covered by a general predicate in is_demoted() below
+// rather than enumerated here, which is why no row in this table has Wt == 1. Wt == 3 without
+// the column split was probed for the same treatment and rejected (see the table's tail).
 //
 // Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
 // are one row, since they produce the same program. Placement is part of the key because the
@@ -147,29 +155,23 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
     {6, 7, 5, DataType::BFLOAT16, BufferType::L1},
     // [6, 4, 96, 64] — NC 24, Ht 3, Wt 2.
     {24, 3, 2, DataType::BFLOAT16, BufferType::L1},
+    // Wt == 3 without the column split (3 * total_ht > cores). A general no-split demotion was
+    // probed and rejected: wins and losses do not separate on any geometry scalar — total_ht 66
+    // beats native by up to 1.21 while total_ht 63 and 132 trail it ([5, 160, 96] wins at 25,
+    // [2, 12, 64, 96] at 48). Enumerated conclusive losers only:
+    // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3; DRAM loses (0.94-0.97), the L1 twin is a tie.
+    {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
+    // [63, 32, 96] — NC 63, Ht 1, Wt 3; DRAM loses (0.98-0.99), L1 ties.
+    {63, 1, 3, DataType::BFLOAT16, BufferType::DRAM},
+    // [6, 11, 64, 96] — NC 66, Ht 2, Wt 3; loses on both placements (0.89-0.95).
+    {66, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
+    {66, 2, 3, DataType::BFLOAT16, BufferType::L1},
 };
-
-// row_path_wt3_no_column_split / row_path_wt3_column_split_unavailable: build_tilize_row's 2D
-// column split (choose_tilize_2d_ncol in tilize_codegen_program_factory.cpp) has exactly one
-// candidate factor for Wt == 3 — ncol == 3 — and grants it only when the grid has room for
-// total_ht * 3 cores, i.e. 3 * total_ht <= cores (floor(cores / total_ht) >= 3, exact under integer
-// floor division). Below that bound build_tilize_row falls back to the plain row split: same core
-// assignment and same per-core tile-row count as native's split_blocks_for_tilize, so the codegen
-// path pays the unified reader's per-stick indirection and the batched writer's setup with none of
-// the column split's extra parallelism to amortize it against. Ledger evidence is exact on this
-// boundary with no exception in either direction (device_vs_native 0.89-0.98 below it, 1.16-1.83
-// at or above it), so this is a condition rather than another block of exact rows. Queries the
-// real device grid rather than a hardcoded core count, per the porting guide's alignment-guard
-// rule — the boundary moves with the grid, a sweep-derived constant would not.
-bool tilize_wt3_column_split_available(uint32_t total_ht, IDevice* device) {
-    const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t num_avail_cores = grid.x * grid.y;
-    return 3 * total_ht <= num_avail_cores;
-}
 
 }  // namespace
 
-bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
+bool is_demoted(
+    const TilizeCodegenParams& operation_attributes, [[maybe_unused]] const TilizeCodegenInputs& tensor_args) {
     // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
     // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
     // codegen's pipelining has nothing to overlap, and native has a route built for that request.
@@ -198,19 +200,6 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // Wt == 1 counterexample, so this is a condition rather than another block of exact rows.
     if (operation_attributes.Wt == 1) {
         return true;
-    }
-
-    // GENERAL PREDICATE — row_path_wt3_no_column_split / row_path_wt3_column_split_unavailable
-    // (see tilize_wt3_column_split_available above). Needs the real device grid, so it is skipped
-    // for a host tensor the same way supported_by_codegen's CB-fit check is: `auto` never reaches a
-    // host tensor here, and the prim's structural TT_FATALs cover that case independently of this
-    // perf gate.
-    if (operation_attributes.Wt == 3) {
-        const Tensor& input = tensor_args.input_tensor;
-        const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
-        if (is_device_tensor(input) && !tilize_wt3_column_split_available(total_ht, input.device())) {
-            return true;
-        }
     }
 
     // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's

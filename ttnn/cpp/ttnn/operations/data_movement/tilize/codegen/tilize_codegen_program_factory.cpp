@@ -35,8 +35,6 @@ constexpr uint32_t kCbOutId = 16;
 constexpr uint32_t kDefaultWriteBatch = 4;
 // reader_stick_interleaved_unified.cpp MODE_TILEROW
 constexpr uint32_t kModeTilerow = 1;
-// ops/tilize/builder.py _BLOCK_THRESHOLD
-constexpr uint32_t kBlockThreshold = 32;
 // ops/tilize/spec.py _L1_RESERVE — L1 held back for kernel code and stacks, so the CB plan is
 // sized against l1_size_per_core() minus this, not the whole physical bank.
 constexpr uint32_t kL1Reserve = 128 * 1024;
