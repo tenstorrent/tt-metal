@@ -898,10 +898,15 @@ def test_unary_right_shift(input_shapes, device):
 
 
 # Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * up, with up optionally
-# softcapped by beta2. Kimi K3 uses beta1 4 (gate half) and beta2 25 (up half). Blackhole only,
-# since it builds on the softcap SFPU op.
+# softcapped by beta2. Kimi K3 uses beta1 4 (gate half) and beta2 25 (up half), with bf16 /
+# bfp8_b activations. Blackhole only, since it builds on the softcap SFPU op.
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
+
+# bf16 is near-exact; bfp8_b re-quantizes every composite intermediate (one shared exponent
+# per 16-element block), so its PCC is lower and its bounded output lands on a coarser grid.
+SITU_GLU_PCC = {ttnn.bfloat16: 0.9999, ttnn.bfloat8_b: 0.99}
+SITU_GLU_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
@@ -914,21 +919,15 @@ SITU_GLU_BETA2 = 25.0
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.float32, ttnn.float32),
-    ],
-)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 # beta2=None exercises the branch where the up half skips the second tanh entirely; a
 # concrete beta2 exercises the fully-softcapped path.
 @pytest.mark.parametrize("beta2", [None, SITU_GLU_BETA2], ids=["beta2_none", "beta2_25"])
-def test_situ_glu(input_shapes, torch_dtype, ttnn_dtype, beta2, device):
+def test_situ_glu(input_shapes, ttnn_dtype, beta2, device):
     torch.manual_seed(0)
     # Span the saturating and near-linear regions of both halves.
-    gate = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-30.0, 30.0)
-    up = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-30.0, 30.0)
+    gate = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
 
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -938,7 +937,7 @@ def test_situ_glu(input_shapes, torch_dtype, ttnn_dtype, beta2, device):
 
     if beta2 is not None:
         # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
-        bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + 1e-3)
+        bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + SITU_GLU_BOUND_TOL[ttnn_dtype])
         assert tt_res.to(torch.float32).abs().max().item() <= bound
 
-    assert_with_pcc(golden, tt_res, pcc=0.9999)
+    assert_with_pcc(golden, tt_res, pcc=SITU_GLU_PCC[ttnn_dtype])

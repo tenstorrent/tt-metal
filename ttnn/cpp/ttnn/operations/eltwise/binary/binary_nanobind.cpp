@@ -867,7 +867,7 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 
                * - Dtypes
                  - Layouts
-               * - FLOAT32, BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B
                  - TILE
 
             Implemented for Blackhole only.
