@@ -13,6 +13,8 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
+inline constexpr uint32_t DISPATCH_METADATA_FIELDS = 3;
+
 std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,
