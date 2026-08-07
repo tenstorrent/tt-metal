@@ -10,17 +10,22 @@ count this file uses — the op's cost and its collective's algorithm both turn 
 (`ROOFLINE.md` §4, §5), and a suite parametrized at 64 tokens exercises a reduction
 production never issues.
 
-Three placements, one gate each way:
+Two placements, both sharded:
 
-  * `(1, 1)` — no collective, no sharding. The arithmetic gate, and the only arm
-    that runs under L2 nightly, whose SKUs are all one or two chips.
   * `(2, 4)` — LoudBox. `d` split 4 ways, tokens split 2 ways. TP factor 4 is
     Galaxy's, so this arm covers the reduction Galaxy runs.
   * `(8, 4)` — Galaxy. Same TP factor over a wider sequence axis, which the op is
     indifferent to; it is here to be run on the box, not to add coverage.
 
-`mesh_device` skips an arm that asks for more chips than the host has, so the two
-mesh arms are inert on a smaller runner rather than failing.
+No single-device arm. `tp_factor == 1` makes `_reduce_stats` the identity, so a green
+`(1, 1)` run certifies a score chain the model never executes — the one thing this
+file exists to gate is the reduction, and that arm has none.
+
+`mesh_device` skips a placement asking for more chips than the host has, so this file
+is inert rather than failing on a runner that cannot hold it. That includes every SKU
+L2 nightly currently schedules for Blackhole (`bh_p100`, `bh_p150b_civ2`,
+`bh_p150b_civ2_viommu`, `sim_blackhole` — all one card); reaching it in CI needs a
+multi-card Blackhole SKU such as `bh_loudbox`.
 """
 
 import pytest
@@ -45,7 +50,6 @@ PROJ_STD = 0.02
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 PLACEMENTS = [
-    pytest.param((1, 1), {}, id="mesh-1x1"),
     pytest.param((2, 4), FABRIC, id="mesh-2x4"),
     pytest.param((8, 4), FABRIC, id="mesh-8x4"),
 ]
@@ -170,9 +174,6 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params):
     statistics in run B; either way the two disagree. PCC against torch cannot see it,
     because both runs stay self-consistent within their own placement."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    if op.sp_factor == 1:
-        pytest.skip("no sequence axis to communicate on at sp_factor 1")
-
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     prefix_sum, block_residual, query = _make_case(num_tokens, 8)
 

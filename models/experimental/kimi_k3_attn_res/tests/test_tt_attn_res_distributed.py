@@ -8,23 +8,8 @@ already laid out by `tt_prefill_block.py:552-553` and `mla/rope.py:160-161`. Eve
 read all-reduces `2(S+1)` scalars per token across the TP axis; nothing of width
 `d` ever crosses a rank boundary.
 
-Prefill chunks 5120 tokens across the sequence-parallel axis, so **640 rows per
-chip** is what the collective sees on the Galaxy, and it is the row count this file
-uses wherever shape is what is under test. It is not an arbitrary size: the
-collective picks its algorithm from the payload, and below roughly 313 rows/chip
-the split form stops paying for itself (`ROOFLINE.md` §5, §7). A suite parametrized
-at 64 tokens spends most of its arms on a reduction production never issues.
-
-Two placements, both real boxes:
-
-  * `(2, 4)` — LoudBox. Of the three valid 8-chip meshes it is the one that
-    exercises both axes, and its TP factor of 4 is Galaxy's, so it covers the
-    reduction Galaxy runs.
-  * `(8, 4)` — Galaxy. Same TP factor over a wider sequence axis. The op is
-    indifferent to the SP axis by construction and
-    `test_sequence_axis_communicates_nothing` gates that at zero, so this arm is
-    here to be run on the box rather than to add coverage. It skips on anything
-    smaller than 32 chips.
+Placements and the per-chip row count come from `placements.py`, which is also where
+the case for both is written down.
 
 Three kinds of gate carry this file, and they fail on different mistakes:
 
@@ -44,6 +29,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import BLOCK_SIZE, EPS, NUM_LAYERS, attn_res
+from models.experimental.kimi_k3_attn_res.tests.placements import PER_CHIP_TOKENS, on_placements
 from models.experimental.kimi_k3_attn_res.tests.test_tt_attn_res_depth import (
     DEPTH_PCC_SLACK,
     _make_stack,
@@ -57,23 +43,6 @@ STAT_REL_TOL = 2e-2
 PROJ_STD = 0.02
 
 HIDDEN_SIZE = 7168
-PER_CHIP_TOKENS = 640
-READ_SITES = 24  # read sites per 12-layer block, the real per-block count
-
-# `ttnn.all_reduce` needs an initialized fabric context — without this the op dies
-# on `control_plane.cpp:2186` rather than returning wrong numbers. FABRIC_1D is
-# what the analog's own 2x4 prefill config uses (`test_prefill_block.py:513-517`)
-# and it is the right pairing for `Topology.Linear` on a single cluster axis.
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
-
-on_placements = pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param((2, 4), FABRIC, id="mesh-2x4"),
-        pytest.param((8, 4), FABRIC, id="mesh-8x4"),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
 
 
 def _pcc(a, b):
@@ -123,8 +92,8 @@ def test_forward_matches_torch(mesh_device, num_sealed, device_params):
     control: if it fails, the failure is placement, not the reduction. `S = 8` is the
     full snapshot set, where every candidate-axis kernel appears.
 
-    `d` stays at 7168 on the mesh. Narrower `d` is a shard-width question, not a
-    placement one, and `test_tt_attn_res.py` already walks it on one device."""
+    `d` stays at 7168 here. Narrower `d` is a shard-width question, not a placement
+    one, and `test_tt_attn_res.py` walks it."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     assert op.shard_width == HIDDEN_SIZE // op.tp_factor
@@ -144,42 +113,6 @@ def test_forward_matches_torch(mesh_device, num_sealed, device_params):
     )
     assert pcc >= PCC_GATE, f"S={num_sealed}: TP PCC {pcc:.7f} < {PCC_GATE}"
     assert rel_err <= STAT_REL_TOL, f"S={num_sealed}: TP rel err {rel_err:.2e} > {STAT_REL_TOL}"
-
-
-@on_placements
-def test_split_matches_torch(mesh_device, device_params):
-    """A whole 12-layer block through the split form — production's schedule.
-
-    The unit here is the block, not the read: `inter_block` computes the sealed half
-    once for all 24 sites and `merge` folds the live stream in per site, so pricing a
-    single `merge` against a single `forward` would compare 24 sites of shared work
-    against one site of total work.
-
-    Every site gets the same query, so every site must land on the same read as the
-    direct form's oracle. Which of the two forms is *faster* is a separate question
-    and depends on the per-chip shape — `test_perf_block_split_vs_direct` decides it."""
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    num_tokens = PER_CHIP_TOKENS * op.sp_factor
-
-    prefix_sum, block_residual, query = _make_case(num_tokens, 8)
-    tt_prefix, tt_block, tt_query = _to_device(op, prefix_sum, block_residual, query)
-    want = attn_res(prefix_sum, block_residual, query, EPS)
-
-    partials, shifts, masses = op.inter_block(tt_block, [tt_query] * READ_SITES)
-    worst_pcc, worst_rel_err = 1.0, 0.0
-    for partial, shift, mass in zip(partials, shifts, masses):
-        merged = op.merge(partial, shift, mass, tt_prefix, tt_query)
-        got = _from_device(op, merged)
-        ttnn.deallocate(merged)
-        worst_pcc = min(worst_pcc, _pcc(got, want))
-        worst_rel_err = max(worst_rel_err, _rel_err(got, want))
-
-    logger.info(
-        f"{tuple(mesh_device.shape)} split T={num_tokens} ({PER_CHIP_TOKENS}/chip) x{READ_SITES} sites: "
-        f"worst PCC {worst_pcc:.7f}, worst rel err {worst_rel_err:.3e}"
-    )
-    assert worst_pcc >= PCC_GATE, f"split: worst PCC {worst_pcc:.7f} < {PCC_GATE}"
-    assert worst_rel_err <= STAT_REL_TOL, f"split: worst rel err {worst_rel_err:.3e} > {STAT_REL_TOL}"
 
 
 @on_placements
