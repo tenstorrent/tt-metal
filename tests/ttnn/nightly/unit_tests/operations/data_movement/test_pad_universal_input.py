@@ -483,8 +483,7 @@ def test_pad_dram_block_sharded_composite_fallback_unsupported(device, expect_er
     DRAM bank coordinates, so from_torch fails before pad runs.
 
     The grid spans multiple rows, which Buffer rejects up front ("Invalid DRAM shard
-    grid", added in #51542). Before that check existed the failure surfaced later, from
-    the DRAM bank lookup, so both messages are accepted.
+    grid", added in #51542).
     """
     in_cfg = make_sharded_memory_config(
         device,
@@ -494,7 +493,7 @@ def test_pad_dram_block_sharded_composite_fallback_unsupported(device, expect_er
         buffer_type=ttnn.BufferType.DRAM,
     )
     torch_input = torch.randn([1, 1, 64, 128], dtype=torch.bfloat16)
-    with expect_error(RuntimeError, "Invalid DRAM shard grid|Logical DRAM core|No DRAM bank exists for core"):
+    with expect_error(RuntimeError, "Invalid DRAM shard grid"):
         ttnn.from_torch(
             torch_input,
             layout=ttnn.ROW_MAJOR_LAYOUT,
