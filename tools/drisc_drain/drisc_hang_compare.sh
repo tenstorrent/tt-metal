@@ -24,6 +24,9 @@ SUM=$OUT/summary.txt; CSV=$OUT/runs.csv; : > $SUM
 echo "k,delay,armed,rc,dur_s,card,class" > $CSV
 DELAY=${DELAY:-125}; N=${N:-40}   # N = runs PER ARM
 STOP_ON_WEDGE=0
+REPEAT=${REPEAT:-0}
+REPX=""
+[ "$REPEAT" != "0" ] && REPX="TT_METAL_PERF_DEBUG_SHIP_REPEAT=$REPEAT"
 
 # randomized 2-arm schedule (never alternate: a boundary-straddling failure would bias attribution)
 sched=()
@@ -41,7 +44,7 @@ recover(){ ssh -p $P -o ConnectTimeout=10 $H 'tt-smi -r' >/dev/null 2>&1; sleep 
     until ssh -p $P -o ConnectTimeout=5 $H 'true' 2>/dev/null; do sleep 15; done; sleep 10; st=$(card_state); fi
   echo "  [recover] card=$st" | tee -a $SUM; }
 
-echo "=== HARNESS: delay=$DELAY armed=$ARMED N=$N ===" | tee -a $SUM
+echo "=== HARNESS: delay=$DELAY armed=${ARMED:-mixed} N=$N repeat=$REPEAT ===" | tee -a $SUM
 echo "class rules: WEDGE=card Unknown|63 | TEARDOWN=core-wait, card healthy | MASKED=rc0 but caught timeout" | tee -a $SUM
 echo "start card=$(card_state)" | tee -a $SUM
 
@@ -54,7 +57,7 @@ for ARMED in "${sched[@]}"; do
   log=$OUT/${k}_a${ARMED}.log
   t0=$(python3 -c 'import time;print(time.time())')
   ssh -p $P -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 $H "cd $R && timeout -k 15 300 env \
-    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX \
+    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX $REPX \
     $BIN --gx 0 --gy 0 --iters 500 --delay $DELAY" > $log 2>&1 &
   sshpid=$!
   waited=0

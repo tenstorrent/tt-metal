@@ -66,3 +66,21 @@ The discriminator is **how far the log got**, not the exit code and not a log si
 The signature-only rule was wrong because `waiting for physical cores to finish` is emitted **only
 when the timeout is armed**. Unarmed runs hang at the identical place in silence, so every unarmed
 teardown hang was landing in OTHER.
+
+## Egress amplifier as a candidate fast repro
+
+`REPEAT=<n>` sets `TT_METAL_PERF_DEBUG_SHIP_REPEAT`, re-shipping each staged frame n times so egress
+stops being bounded by producer rate. The payload becomes duplicate frames, so it is a STRESS tool,
+never a capture (`NO_DECODE` is already on).
+
+```sh
+TAG=amp8 DELAY=500 N=60 ARMED=0 REPEAT=8 ./drisc_hang_harness.sh
+```
+
+**Calibrate before trusting it as a faster repro.** The historical basis is a single cell -- repeat=8,
+delay 500, 1 hang in 12 runs. That is ~8%, but against the ~2.5% base rate measured at delay 125/150/500
+it is p ~ 0.3, i.e. consistent with no difference at all. And the 84-run monitored churn used a full
+SHIP_REPEAT ladder {1,2,4,6,8,12,16} and produced zero wedges. Measure the rate with the classifying
+harness before spending a campaign on it, and check that what it produces is a WEDGE
+(card `Unknown|63`) rather than a TEARDOWN -- a faster repro of the wrong failure mode is worse than
+no repro, because it looks like progress.
