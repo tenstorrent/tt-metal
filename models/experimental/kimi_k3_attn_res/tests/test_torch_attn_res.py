@@ -3,20 +3,33 @@
 
 """Phase-4 numeric ladder for the AttnRes torch reference.
 
-Rung 1 anchors `torch_functional/attn_res.py` to the vendored upstream oracle.
-Rung 2 anchors the inter-block/merge split to the direct form. Rung 3 pins the
-`block_residual` lifecycle. See `API_SPEC.md` §6.
+Three implementations meet here, and each answers a question the others cannot:
 
-No rung is bit-exact: folding `res_norm.weight * res_proj.weight` reassociates
+  * `reference/attn_res_reference.py` — unfolded, fp64, ours. The precision root.
+    Pinned by closed forms in `test_attn_res_reference.py`, not by agreement.
+  * `reference/hf_attn_res.py` — the vendored upstream read. The external anchor:
+    the only evidence that upstream computes the equation we believe it does. It is
+    fp32-locked, so it can anchor the algebra but never the precision.
+  * `torch_functional/attn_res.py` — the folded form, what the device op mirrors.
+
+Rung 0b crosses the anchor against the root. Rung 1 proves the fold against the
+root, at fp64 as well as fp32: the fp32 arm alone cannot separate an algebra error
+near the rounding floor from rounding itself, while at fp64 the two forms must agree
+to ~1e-14, so a real reassociation error has nowhere to hide. Rung 2 anchors the
+inter-block/merge split to the direct form. Rung 3 pins the `block_residual`
+lifecycle. See `API_SPEC.md` §6.
+
+No rung above 1 is bit-exact: folding `res_norm.weight * res_proj.weight` reassociates
 the score from `Σ_j (v_j · rms_inv · w_j)` to `rms_inv · Σ_j (v_j · q_j)`, and the
-online-softmax split reassociates the mixture. Both change fp32 rounding. The
-tolerance is the fp32 dot-product noise floor, `√d · ε_fp32` ≈ 1e-5 at d=7168,
-which a real algebra error clears by orders of magnitude.
+online-softmax split reassociates the mixture. Both change rounding. The fp32
+tolerance is the dot-product noise floor, `√d · ε_fp32` ≈ 1e-5 at d=7168, which a
+real algebra error clears by orders of magnitude.
 """
 
 import pytest
 import torch
 
+from models.experimental.kimi_k3_attn_res.reference import attn_res_reference as ref
 from models.experimental.kimi_k3_attn_res.reference.hf_attn_res import hf_attn_res
 from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
     BLOCK_SIZE,
@@ -33,6 +46,10 @@ from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
 )
 
 FP32_DOT_TOL = 1e-5
+
+# fp64 summation-order noise over d = 7168, the floor the fold has to clear when
+# rounding is taken off the table.
+FP64_DOT_TOL = 1e-13
 
 # Queries are built the way the model does — an RMSNorm gain near one times a
 # small linear projection — because score magnitude decides whether the softmax
@@ -52,21 +69,6 @@ def _pcc(actual, expected):
 def _rel_err(actual, expected):
     scale = expected.double().abs().max().clamp_min(1e-300)
     return ((actual.double() - expected.double()).abs().max() / scale).item()
-
-
-def _exact(prefix_sum, block_residual, norm_weight, proj_weight, eps):
-    """fp64 ground truth in the reference's operation order.
-
-    The vendored oracle cannot supply this: it spells its internal widening
-    `.float()`, so it computes in fp32 no matter what dtype it is handed. Keeping
-    reference order here leaves this ground truth neutral between the reference
-    form and the folded form under test.
-    """
-    v = torch.cat((block_residual, prefix_sum.unsqueeze(1)), dim=1).double()
-    k = v * torch.rsqrt(v.pow(2).mean(-1, keepdim=True) + eps)
-    score_weight = norm_weight.double().reshape(-1) * proj_weight.double().reshape(-1)
-    probs = (k * score_weight).sum(-1).softmax(-1).unsqueeze(1)
-    return torch.matmul(probs, v).squeeze(1)
 
 
 def _make_case(num_tokens, hidden_size, num_sealed, score_scale=1.0, dtype=torch.float32, seed=0):
@@ -89,14 +91,61 @@ SEALED = [0, 1, 4, 8]
 @pytest.mark.parametrize("num_tokens, hidden_size", SHAPES, ids=["d256", "d7168"])
 @pytest.mark.parametrize("num_sealed", SEALED, ids=[f"S{s}" for s in SEALED])
 @pytest.mark.parametrize("score_scale", [1.0, 8.0], ids=["scores-o1", "scores-saturated"])
-def test_folded_matches_hf_oracle(num_tokens, hidden_size, num_sealed, score_scale):
-    """Rung 1 — the folded reference reproduces the vendored upstream read."""
+def test_reference_matches_the_upstream_read(num_tokens, hidden_size, num_sealed, score_scale):
+    """Rung 0b — our unfolded reference computes the same read upstream does.
+
+    This is the only rung that reaches outside the module. Every other gate
+    compares two things we wrote, so all of them are consistent with the whole
+    ladder having the wrong equation; this one is not.
+
+    It cannot run at fp64: the vendored function spells `.float()`, so it computes
+    in fp32 whatever it is handed. So the gate is upstream-at-fp32 against
+    ours-at-fp64, and the residual is fp32 rounding — which is why the direction of
+    evidence only ever runs one way. This rung says the equation is right. It says
+    nothing about precision, and `attn_res_reference.py` is the root for that.
+    """
     prefix_sum, block_residual, norm_weight, proj_weight = _make_case(num_tokens, hidden_size, num_sealed, score_scale)
 
-    expected = hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    expected = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    actual = hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+
+    assert actual.shape == expected.shape
+    assert actual.dtype == prefix_sum.dtype
+    assert _rel_err(actual, expected) <= FP32_DOT_TOL
+    assert _pcc(actual, expected) >= 1.0 - 1e-9
+
+
+@pytest.mark.parametrize("num_tokens, hidden_size", SHAPES, ids=["d256", "d7168"])
+@pytest.mark.parametrize("num_sealed", SEALED, ids=[f"S{s}" for s in SEALED])
+@pytest.mark.parametrize("score_scale", [1.0, 8.0], ids=["scores-o1", "scores-saturated"])
+def test_folded_matches_reference_exactly_in_fp64(num_tokens, hidden_size, num_sealed, score_scale):
+    """Rung 1, algebra arm — the fold and the rsqrt pull-out are exact.
+
+    Both sides run in fp64, so the only difference left is summation order. This
+    is what proves the reassociation rather than merely failing to detect it.
+    """
+    prefix_sum, block_residual, norm_weight, proj_weight = _make_case(
+        num_tokens, hidden_size, num_sealed, score_scale, dtype=torch.float64
+    )
+
+    expected = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
     actual = attn_res(prefix_sum, block_residual, fold_query(norm_weight, proj_weight), EPS)
 
     assert actual.shape == expected.shape
+    assert actual.dtype == torch.float64
+    assert _rel_err(actual, expected) <= FP64_DOT_TOL
+
+
+@pytest.mark.parametrize("num_tokens, hidden_size", SHAPES, ids=["d256", "d7168"])
+@pytest.mark.parametrize("num_sealed", SEALED, ids=[f"S{s}" for s in SEALED])
+@pytest.mark.parametrize("score_scale", [1.0, 8.0], ids=["scores-o1", "scores-saturated"])
+def test_folded_matches_reference_in_fp32(num_tokens, hidden_size, num_sealed, score_scale):
+    """Rung 1, precision arm — at fp32 the fold stays at the dot-product floor."""
+    prefix_sum, block_residual, norm_weight, proj_weight = _make_case(num_tokens, hidden_size, num_sealed, score_scale)
+
+    expected = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    actual = attn_res(prefix_sum, block_residual, fold_query(norm_weight, proj_weight), EPS)
+
     assert _rel_err(actual, expected) <= FP32_DOT_TOL
     assert _pcc(actual, expected) >= 1.0 - 1e-9
 
@@ -105,18 +154,21 @@ def test_folded_matches_hf_oracle(num_tokens, hidden_size, num_sealed, score_sca
 def test_fold_does_not_degrade_accuracy(num_sealed):
     """The fold is a load-time transform, so it must not cost accuracy.
 
-    Both forms are measured against the same fp64 ground truth. Equal-or-better
-    is the claim D5 makes; the 4x slack absorbs which one happens to round
-    luckier, and the noise-floor arm keeps the ratio meaningful when the
-    reference form lands exactly on the correctly-rounded fp32 answer.
+    Both forms run in fp32 against the same fp64 ground truth: the unfolded form
+    is the reference held down to fp32, the folded form is what ships.
+    Equal-or-better is the claim D5 makes; the 4x slack absorbs which one happens
+    to round luckier, and the noise-floor arm keeps the ratio meaningful when the
+    unfolded form lands exactly on the correctly-rounded fp32 answer.
     """
     prefix_sum, block_residual, norm_weight, proj_weight = _make_case(64, 7168, num_sealed)
 
-    exact = _exact(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
-    oracle_err = _rel_err(hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS), exact)
+    exact = ref.read(prefix_sum.double(), block_residual.double(), norm_weight.double(), proj_weight.double(), EPS)
+    unfolded_err = _rel_err(
+        ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS, dtype=torch.float32), exact
+    )
     folded_err = _rel_err(attn_res(prefix_sum, block_residual, fold_query(norm_weight, proj_weight), EPS), exact)
 
-    assert folded_err <= max(4.0 * oracle_err, FP32_DOT_TOL), (oracle_err, folded_err)
+    assert folded_err <= max(4.0 * unfolded_err, FP32_DOT_TOL), (unfolded_err, folded_err)
 
 
 @pytest.mark.parametrize("num_tokens, hidden_size", SHAPES, ids=["d256", "d7168"])
