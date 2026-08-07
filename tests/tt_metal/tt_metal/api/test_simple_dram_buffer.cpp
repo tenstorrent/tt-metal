@@ -27,8 +27,8 @@ bool SimpleDramLoopback(
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     uint32_t dram_channel = mesh_device->allocator_impl()->get_dram_channel_from_bank_id(0);
-    tt_metal::slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_channel, local_address, inputs);
-    tt_metal::slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_channel, local_address, outputs);
+    slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_channel, local_address, inputs);
+    slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_channel, local_address, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
         log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
