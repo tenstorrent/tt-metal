@@ -27,6 +27,7 @@ from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
     AttnResStream,
     attn_res_layer,
 )
+from models.experimental.kimi_k3_attn_res.tests.placements import PER_CHIP_TOKENS, on_placements
 from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
 from models.experimental.kimi_k3_attn_res.tt.attn_res_stream import (
     TtAttnResStream,
@@ -133,17 +134,18 @@ def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidd
     return result, curve
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@on_placements
 @pytest.mark.parametrize("hidden_size", [256, 7168])
-def test_depth_fidelity(mesh_device, hidden_size):
+def test_depth_fidelity(mesh_device, hidden_size, device_params):
     """93 layers, 8 seals, 187 reads. Gate the device against torch-bf16, not
     against an absolute number."""
-    num_tokens = 64
+    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
+    num_tokens = PER_CHIP_TOKENS * op.sp_factor
     hidden_states, q_pre, q_post, q_out, weights = _make_stack(num_tokens, hidden_size, NUM_LAYERS)
 
     reference, reference_curve = _walk_torch(hidden_states, weights, q_pre, q_post, q_out, torch.float32)
     analog, analog_curve = _walk_torch(hidden_states, weights, q_pre, q_post, q_out, torch.bfloat16)
-    device, device_curve = _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size)
+    device, device_curve = _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size, op=op)
 
     # A stream that has decayed to noise or overflowed would make every PCC below
     # meaningless, so state the regime before trusting the gate.
@@ -184,8 +186,8 @@ def test_depth_fidelity(mesh_device, hidden_size):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_device_lifecycle_matches_torch(mesh_device):
+@on_placements
+def test_device_lifecycle_matches_torch(mesh_device, device_params):
     """The seal schedule and snapshot growth, on device. Seals fire at
     `{0, 12, ..., 84}`, `S` ramps 0 -> 8, and the walk performs 185 in-layer reads
     plus the model-level read."""
@@ -193,20 +195,19 @@ def test_device_lifecycle_matches_torch(mesh_device):
     # 187 folded queries but only 186 reads: `q_pre[0]` is loaded and never used,
     # because the layer-0 pre-attention read is skipped at `S == 0`.
     assert parameter_sets == executed_reads + 1
-    num_tokens, hidden_size = 64, 256
+    hidden_size = 256
+    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
+    num_tokens = PER_CHIP_TOKENS * op.sp_factor
     hidden_states, q_pre, q_post, q_out, weights = _make_stack(num_tokens, hidden_size, NUM_LAYERS)
 
-    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
-    stream = TtAttnResStream(
-        op,
-        ttnn.from_torch(
-            hidden_states.reshape(1, 1, num_tokens, hidden_size),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-        ),
-        block_size=BLOCK_SIZE,
+    place = lambda t, mapper: ttnn.from_torch(
+        t.reshape(1, 1, -1, hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mapper,
     )
+    stream = TtAttnResStream(op, place(hidden_states, op.stream_mapper), block_size=BLOCK_SIZE)
 
     reads = 0
     original_read = stream.read
@@ -221,17 +222,9 @@ def test_device_lifecycle_matches_torch(mesh_device):
     _walk(
         stream,
         tt_attn_res_layer,
-        [
-            (
-                ttnn.from_torch(
-                    a.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
-                ),
-                ttnn.from_torch(
-                    m.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
-                ),
-            )
-            for a, m in weights
-        ],
+        # A `[d]` module weight has no token axis to split, so it takes the same
+        # placement as a folded query.
+        [(place(a, op.vector_mapper), place(m, op.vector_mapper)) for a, m in weights],
         [op.to_query(q) for q in q_pre],
         [op.to_query(q) for q in q_post],
         op.to_query(q_out),
