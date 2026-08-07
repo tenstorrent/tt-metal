@@ -1943,10 +1943,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
 
-    // Sparse-frames extension (slots 72..74, after the CB block). Compile-time args reflect the
-    // pattern's shape (enable flag + tiles_per_frame + nf_padded); the packed sparse_frame_mask bits
-    // ride as compute-kernel runtime args (see below). Zero when disabled — the compute kernel
-    // gates on `sparse_frames_enabled` and skips the check entirely.
+    // Sparse-frames extension.
     const bool sparse_frames_enabled = args.has_sparse_frames();
     const uint32_t tiles_per_frame =
         sparse_frames_enabled ? (args.tokens_per_frame.value() / tt::constants::TILE_HEIGHT) : 0u;
@@ -1954,27 +1951,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
     compute_compile_time_args.push_back(tiles_per_frame);
     compute_compile_time_args.push_back(sparse_num_frames_padded);
-    // Reader gets the same three: with them, the reader mirrors the compute-side sparse-frames
-    // skip inside its per-k_chunk loop (skipping reserve/chain/push for disallowed chunks) so
-    // that head_chain/batch_chain multicast stays in lockstep between sender and receiver even
-    // when compute takes different-latency paths per Q chunk under sparse. Slots are at the end
-    // of reader compile args (after the 3 CB slots that were just appended above).
+    // The reader mirrors the compute-side sparse-frames skip inside its per-k_chunk loop (skipping
+    // reserve/chain/push for disallowed chunks) so that head_chain/batch_chain multicast stays in lockstep
+    // between sender and receiver even when compute takes different-latency paths per Q chunk under sparse.
     reader_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
     reader_compile_time_args.push_back(tiles_per_frame);
     reader_compile_time_args.push_back(sparse_num_frames_padded);
-    // Writer gets the same three: writer must mirror compute's zero-work fast-path decisions
-    // per (q_chunk, ring_iter) so it can skip its per-iter save/restore protocol (complete_restore
-    // push, deferred save wait, prefetch push) for q_chunks with per_q_valid_kv == 0 in that iter.
-    // Without this, compute's fast path leaves cb_prev_out unpopped (writer's restore push stalls
-    // at reserve_back) and cb_out unpushed (writer's flush_deferred_save stalls at wait_front).
+    // Writer must mirror compute's zero-work fast-path decisions per (q_chunk, ring_iter) so it can skip its
+    // per-iter save/restore protocol (complete_restore push, deferred save wait, prefetch push) for q_chunks
+    // with per_q_valid_kv == 0 in that iter. Without this, compute's fast path leaves cb_prev_out unpopped (writer's
+    // restore push stalls at reserve_back) and cb_out unpushed (writer's flush_deferred_save stalls at wait_front).
     writer_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
     writer_compile_time_args.push_back(tiles_per_frame);
     writer_compile_time_args.push_back(sparse_num_frames_padded);
 
     // Precompute per-q_chunk work bitmap for this device. Both compute and writer consume it to
-    // derive per-(q_chunk, iter) work status, first/last work iter, and zero-work checks — all
-    // without runtime aggregate loops that would bloat kernel codegen and without on-stack
-    // counter arrays that pressured the TRISC stack. See compute_q_work_bitmap for details.
+    // derive per-(q_chunk, iter) work status, first/last work iter, and zero-work checks.
     const std::vector<uint32_t> q_work_bitmap = compute_q_work_bitmap(
         device_index,
         args.all_gather_operation_attributes.ring_size,
@@ -2840,10 +2832,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
-        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words. Reader reads
-        // them right after the fused-op signaler runtime args, gated at compile time on
-        // `sparse_frames_enabled` (so zeros are harmless when disabled). Same bit layout the
-        // compute kernel already uses — sender and receiver make identical skip decisions.
+        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words.
+        // Gated at compile time on `sparse_frames_enabled` (so zeros are harmless when disabled).
+        // Same bit layout the compute kernel already uses — sender and receiver make identical skip decisions.
         constexpr uint32_t kReaderSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kReaderSparseFramesPackedWords; ++w) {
             const uint32_t word =
@@ -2917,10 +2908,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words. Compute reads
-        // them right after `active_ring_iter_mask` (slot 11..42). Same values on every core (the
-        // pattern is device-global). Passes zeros when the feature is disabled — the kernel gates
-        // on `sparse_frames_enabled` at compile time so the reads have no effect.
+        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words.
+        // Same values on every core.
+        // Passes zeros when the feature is disabled.
         constexpr uint32_t kSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kSparseFramesPackedWords; ++w) {
             const uint32_t word =

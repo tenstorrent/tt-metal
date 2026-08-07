@@ -410,9 +410,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // converts them via `/ TILE_HEIGHT` at ring_joint_sdpa_program_factory.cpp:349). The
         // sparse-frames path requires each chunk to sit inside one frame — equivalently, chunk
         // size (tokens) must divide tokens_per_frame (tokens). The compute kernel derives
-        // q_frame/k_frame via integer division of the chunk's start-tile by tiles_per_frame
-        // (compute_streaming.hpp:2417, 2474), so any divisor works. This lets callers shrink
-        // chunks to fit L1 CB budgets at large tokens_per_frame (e.g. 720p fsl=3840).
+        // q_frame/k_frame via integer division of the chunk's start-tile by tiles_per_frame so any divisor works.
         TT_FATAL(
             args.get_q_chunk_size() > 0 && fsl % args.get_q_chunk_size() == 0,
             "sparse-frames requires q_chunk_size ({}) tokens to divide tokens_per_frame ({}) tokens",

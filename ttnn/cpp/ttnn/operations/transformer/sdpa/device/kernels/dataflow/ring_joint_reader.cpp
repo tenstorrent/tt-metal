@@ -388,10 +388,9 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // Sparse-frames packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words (zeros when
-    // the feature is disabled), so the read is unconditional here. Later use is gated on the
-    // sparse_frames_enabled compile-time flag. Same bit layout the compute kernel uses; must
-    // match exactly so sender and receiver make identical skip decisions in the chain.
+    // Sparse-frames packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words, so the read is
+    // unconditional here. Later use is gated on the sparse_frames_enabled compile-time flag.
+    // Must match exactly so sender and receiver make identical skip decisions in the chain.
     uint32_t sparse_frame_mask_words[32];
     for (uint32_t w = 0; w < 32; ++w) {
         sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
@@ -517,13 +516,9 @@ void kernel_main() {
         }
     }
 
-    // Sparse-frames extension args (mirror compute-side plumbing; see ring_joint_sdpa_program_
-    // factory.cpp where these are appended right after the reader CB compile args). Reader must
-    // skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast rounds
-    // fire only for chunks that will actually be processed — otherwise sparse's variable-rate
+    // Reader must skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast
+    // rounds fire only for chunks that will actually be processed — otherwise sparse's variable-rate
     // compute path breaks chain lockstep at high work-items-per-core.
-    // Appended right after the 5-entry reader CB block (cb_q_in/cb_k_in/cb_v_in/cb_attention_sink/
-    // cb_kv_pad_derived at cb_arg_offset + 0..4), so the sparse flags live at cb_arg_offset + 5/6/7.
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 7);
@@ -679,15 +674,12 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
-    // Sparse-frames: detect a shard whose Q frames are ALL padding (no real Q rows), so no q_frame
+    // Sparse-frames: detect a shard whose Q frames are ALL padding, i.e. no q_frame
     // attends any k_frame. The per-k_chunk aggregate skip below would then push ZERO chunks for the
     // whole device — but the skip sits above k_chain.forward and cb_k.push_back, so it also strands
-    // the head-chain multicast and the ring balance every other device depends on (deadlock at the
-    // 720p geometry, where sp=8/nf_padded=24 puts frames 21/22/23 all on the last shard). For such
+    // the head-chain multicast and the ring balance every other device depends on. For such
     // a shard we disable the skip: it participates fully in data movement (push + forward every
-    // chunk, exactly like dense — a known-good path) while compute still drains the pushed K/V via
-    // its per-q zero-work fast path (no matmul). This lets build_sparse_frame_mask keep padded Q
-    // rows honestly all-zero instead of the force-all-1 workaround.
+    // chunk) while compute still drains the pushed K/V via its per-q zero-work fast path (no matmul).
     bool shard_attends_nothing = false;
     if constexpr (sparse_frames_enabled == 1) {
         const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
@@ -909,7 +901,7 @@ void kernel_main() {
             // Sparse-frames: an ACTIVE ring iter can have EVERY k_chunk shard-aggregate-skipped (no
             // q_frame in this shard attends any of this iter's k-frames), so the in-loop first_k_for_q
             // push never fires — yet compute's zero-work fast path still pops cb_q_in. Push Q up front
-            // here so cb_q_in stays balanced (restores the pre-merge hoist); suppress the in-loop push.
+            // here so cb_q_in stays balanced; suppress the in-loop push.
             if constexpr (sparse_frames_enabled == 1) {
                 if (need_q_read) {
                     push_q();
@@ -957,18 +949,10 @@ void kernel_main() {
                     continue;
                 }
 
-                // Sparse-frames skip based on the SHARD-AGGREGATE allow (union of allow rows across
-                // all q_frames this device holds). Different cores in the same head/batch/gqa
-                // chain handle different q_chunks with potentially different sparse_frame_mask rows —
-                // if reader skipped per-q_chunk, chain participants would disagree per k_chunk
-                // and chain sync would break. Aggregate means "does ANY q_frame in the shard
-                // attend this k_frame?" — the answer is the same for all cores in the chain
-                // (they share the same shard, same q_frame set). Compute still does per-q_chunk
-                // drain for chunks reader pushed but this specific q_chunk doesn't attend.
                 if constexpr (sparse_frames_enabled == 1) {
-                    // Reader-side shard-aggregate skip check. Disabled for a fully-padded shard
-                    // (shard_attends_nothing) so it forwards/pushes every chunk like dense; compute
-                    // drains without matmul. See shard_attends_nothing definition above.
+                    // Different cores in the same head/batch/gqa chain handle different q_chunks with potentially
+                    // different sparse_frame_mask rows — if reader skipped per-q_chunk, chain participants would
+                    // disagree per k_chunk and chain sync would break.
                     if (!kv_chunk_is_joint && !shard_attends_nothing) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / tiles_per_frame;

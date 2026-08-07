@@ -201,7 +201,6 @@ def _run_sparse_frames_op(
     sparse_frames_enabled: bool = True,
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
-    diagnostic_scan: bool = False,
 ):
     """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
 
@@ -300,10 +299,8 @@ def _run_sparse_frames_op(
     # The golden (gt) is computed and Q/K/V are now on device, so the host-side f32 copies
     # (~1-2 GB each at 720p) are dead. Free them before the op runs to keep peak host RAM low
     # when 720p cases run back-to-back (they were OOM-killing the process otherwise).
-    if not diagnostic_scan:
-        # The layout scan recomputes per-frame goldens from padded_Q/K/V below, so keep them.
-        del padded_Q, padded_K, padded_V, Q, K, V
-        gc.collect()
+    del padded_Q, padded_K, padded_V, Q, K, V
+    gc.collect()
 
     # Persistent AllGather output buffers — the op internally gathers K/V across sp_axis into
     # these buffers. Shape is the full (unsharded) length on the sp_axis; kept sharded on tp_axis
@@ -396,66 +393,6 @@ def _run_sparse_frames_op(
             dims=input_shard_dims,
         ),
     )[:, :, :real_n, :]
-
-    if diagnostic_scan:
-        # DIAGNOSTIC (not pass/fail): the device ran with an allow where each Q frame attends
-        # exactly ONE K frame. For every candidate K frame G, recompute the golden "each Q attends
-        # only G" and report, per Q frame, which G the DEVICE output best PCC-matches. If the
-        # gathered K/V all-gather buffer is laid out as the reader's addressing expects, Q frame qi
-        # (whose allow points at K frame f) matches G=f. A constant offset between the intended f
-        # and the matched G localizes a gathered-buffer layout shift (the suspected merge bug).
-        out_f = out.reshape(out.shape[0], out.shape[1], num_frames_real, tokens_per_frame, out.shape[-1])
-        goldens_f = []
-        for g in range(num_frames_real):
-            allow_g = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
-            allow_g[:num_frames_real, g] = 1
-            gt_g = _torch_sdpa_ref(
-                padded_Q,
-                padded_K,
-                padded_V,
-                allow_g,
-                num_frames_real=num_frames_real,
-                tokens_per_frame=tokens_per_frame,
-            )[:, :, :real_n, :]
-            goldens_f.append(
-                gt_g.reshape(gt_g.shape[0], gt_g.shape[1], num_frames_real, tokens_per_frame, gt_g.shape[-1])
-            )
-        # Also compare against the DENSE (every real Q attends every real K) golden. If the device
-        # is silently ignoring the sparse mask and attending ALL frames, `out` will PCC-match this
-        # dense golden at ~0.99 even though each Q was told to attend a single frame. That would
-        # pinpoint the bug as "skip not happening / mask ignored" rather than a data-layout shift.
-        allow_dense = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
-        allow_dense[:num_frames_real, :num_frames_real] = 1
-        gt_dense = _torch_sdpa_ref(
-            padded_Q,
-            padded_K,
-            padded_V,
-            allow_dense,
-            num_frames_real=num_frames_real,
-            tokens_per_frame=tokens_per_frame,
-        )[:, :, :real_n, :]
-        gt_dense_f = gt_dense.reshape(
-            gt_dense.shape[0], gt_dense.shape[1], num_frames_real, tokens_per_frame, gt_dense.shape[-1]
-        )
-        dense_pccs = [comp_pcc(gt_dense_f[:, :, qi], out_f[:, :, qi])[1] for qi in range(num_frames_real)]
-        logger.info(
-            "[layout-scan] DEVICE-vs-DENSE(attend-all) per-frame PCC (high => device ignores mask "
-            f"and attends all frames): {[f'{p:.3f}' for p in dense_pccs]}"
-        )
-        intended = [int(allow[qi].argmax()) if allow[qi].sum() > 0 else -1 for qi in range(num_frames_real)]
-        logger.info(
-            "[layout-scan] per Q frame: intended K frame -> best-matching K frame in DEVICE output "
-            "(a constant offset => gathered-buffer layout shift)"
-        )
-        for qi in range(num_frames_real):
-            pccs = [comp_pcc(goldens_f[g][:, :, qi], out_f[:, :, qi])[1] for g in range(num_frames_real)]
-            best_g = max(range(num_frames_real), key=lambda g: pccs[g])
-            row = " ".join(f"K{g}={pccs[g]:5.2f}" for g in range(num_frames_real))
-            logger.info(
-                f"[layout-scan] Q frame {qi:2d}: intended K{intended[qi]:2d} -> best K{best_g:2d} "
-                f"(pcc={pccs[best_g]:.4f}) | {row}"
-            )
-        return
 
     # Degenerate pattern: if any REAL Q frame attends zero K frames, the torch reference is a
     # fully-masked softmax row (which PyTorch collapses to 0/undefined), while the kernel's
@@ -599,49 +536,6 @@ class TestSparseFramesRing:
             window=5,
             add_last_frame=False,
             all_gather_topology=all_gather_topology,
-        )
-
-    @_MESH_TOPOLOGY
-    def test_gathered_buffer_layout_diagnostic(
-        self,
-        mesh_device,
-        num_links,
-        sp_axis,
-        sp_factor,
-        tp_axis,
-        tp_factor,
-        device_params,
-        all_gather_topology,
-        reset_seeds,
-    ):
-        """DIAGNOSTIC (not a pass/fail correctness test): 1 frame per shard, each Q frame attends
-        exactly ONE *remote* K frame (the next one, (qi+1) mod nf). Reports, per Q frame, which K
-        frame the DEVICE output actually matches. Correct all-gather layout => Q frame qi matches
-        K frame (qi+1). A constant offset in the matches reveals a gathered-buffer layout shift —
-        the suspected merge regression (host args + kernel code are byte-identical to the passing
-        baseline, so the K/V *data* the reader sees at fixed offsets is the remaining suspect)."""
-        nf = sp_factor  # one frame per shard, so every (qi+1) target is a remote (gathered) frame
-        allow = torch.zeros(nf, nf, dtype=torch.uint8)
-        for qi in range(nf):
-            allow[qi, (qi + 1) % nf] = 1
-        _run_sparse_frames_op(
-            mesh_device=mesh_device,
-            sp_axis=sp_axis,
-            sp_factor=sp_factor,
-            tp_axis=tp_axis,
-            tp_factor=tp_factor,
-            num_links=num_links,
-            num_frames_real=nf,
-            num_frames_padded=nf,
-            tokens_per_frame=64,
-            b=1,
-            nh=8,
-            d=128,
-            window=0,
-            add_last_frame=False,
-            all_gather_topology=all_gather_topology,
-            allow_override=allow,
-            diagnostic_scan=True,
         )
 
     @_MESH_TOPOLOGY
