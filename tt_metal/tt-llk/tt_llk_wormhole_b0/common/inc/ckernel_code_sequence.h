@@ -10,11 +10,7 @@
 #include <type_traits>
 
 #include "ckernel.h"
-
-// lltt is only available on trisc, and this header may be included on non-trisc builds.
-#if defined(COMPILE_FOR_TRISC)
 #include "lltt.h"
-#endif
 
 // Code sequences: driving an execution unit from a table instead of from branches.
 //

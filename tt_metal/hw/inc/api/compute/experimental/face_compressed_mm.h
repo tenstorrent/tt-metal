@@ -6,13 +6,16 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#ifdef TRISC_MATH
+// Blackhole-only: both LLK halves and the mutexed pack API exist only in the Blackhole trees, so the
+// includes are gated on the arch as well as the TRISC role -- otherwise merely including this header
+// breaks a Wormhole or Quasar kernel build.
+#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_math_face_compressed_mm_api.h"
 #endif
-#ifdef TRISC_UNPACK
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_unpack_AB_face_compressed_mm_api.h"
 #endif
-#ifdef TRISC_PACK
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_pack_custom_api.h"
 #endif
 // =============================================================================================
@@ -45,6 +48,8 @@
 
 namespace ckernel {
 
+#if defined(ARCH_BLACKHOLE)
+
 // clang-format off
 /**
  * Short initialization for face_compressed_mm_block operation. Must be called before face_compressed_mm_block and is safe to call at any point in the kernel.
@@ -69,19 +74,19 @@ namespace ckernel {
  * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16 (compile-time)                | False (default 1)     |
  * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | in0_cb_id      | The identifier of the input activation circular buffer (CB)                            | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the compressed-weight circular buffer (CB)                           | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool transpose = false, bool dense_packing = false>
+template <std::uint32_t ct_dim = 1, bool transpose = false>
 ALWI void face_compressed_mm_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
     UNPACK((llk_unpack_AB_face_compressed_mm_init<transpose>(in0_cb_id, in1_cb_id)));
 
     MATH((llk_math_face_compressed_mm_init<ct_dim>(in0_cb_id, in1_cb_id)));
 
+    consexpr bool dense_packing = true;  // only dense packing is supported
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
@@ -220,14 +225,13 @@ ALWI void face_compressed_mm_block_math(
  *
  * | Argument       | Description                                                                            | Type     | Valid Range                  | Required              |
  * |----------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
  * | in0_cb_id      | The identifier of the input activation circular buffer (CB)                            | uint32_t | 0 to 31                      | True                  |
  * | in1_cb_id      | The identifier of the compressed-weight circular buffer (CB)                           | uint32_t | 0 to 31                      | True                  |
  */
 // clang-format on
-template <bool dense_packing = false>
 ALWI void face_compressed_mm_block_uninit(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {
     UNPACK((llk_unpack_AB_face_compressed_mm_uninit(in0_cb_id, in1_cb_id)));
+    constexpr bool dense_packing = true;  // only dense packing is supported
     if constexpr (dense_packing) {
         // Restore default packing stride of 64 rows between tiles
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
@@ -280,5 +284,7 @@ template <bool out_of_order_output = false>
 ALWI void pack_tile_mutex_ADC(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
     PACK((llk_pack_mutex_ADC<DST_ACCUM_MODE, out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel
