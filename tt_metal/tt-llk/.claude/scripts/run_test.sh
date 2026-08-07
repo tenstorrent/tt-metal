@@ -2,10 +2,9 @@
 # run_test.sh — synchronous LLK test runner for codegen agents and humans.
 #
 # Invoke it like pytest: one blocking call, wait for the verdict. There is no
-# timeout to set and no resume loop. The only wait is on the global lock (first
-# come, first served, unbounded); once a run starts, a watcher bounds it — a hang
-# is detected from a log stall and killed gracefully, so the call always returns
-# on its own.
+# timeout to set and no resume loop. Build entry and device locks are first come,
+# first served and unbounded; once a run starts, a watcher bounds it — a hang is
+# detected from a log stall and killed gracefully, so the call always returns.
 #
 # Two device paths:
 #   quasar              Aether VCS/emulator — pytest --run-simulator --port;
@@ -14,21 +13,22 @@
 #   blackhole/wormhole  real silicon (/dev/tenstorrent). HANG = TENSIX TIMED OUT
 #                       or log stall; recovered with llk_triage.py + tt-smi -r.
 #
-# ONE global lock (/tmp/tt-llk-test.lock) serialises every invocation on the host,
-# so while a run holds it no peer can wipe the shared build cache.
+# ONE global device lock (/tmp/tt-llk-test.lock) serialises execution. Build
+# artifacts are isolated by run/worktree + full build-input digest, with a
+# per-entry build lock, so independent producers never wipe each other's files.
 #
-# BUILD STAMP (why simulate can rebuild): the shared build cache is wiped+rebuilt
-# by any producer. `compile` is lock-free and stamps the cache with a fingerprint
-# of THIS run's source. `simulate`/`run` take the lock and, if the stamp is not
-# ours (a peer recompiled), rebuild under the lock before running — so the ELFs
-# executed are always built from our own source.
+# BUILD STAMP (why simulate can rebuild): `compile` and `simulate` are separate
+# script invocations but derive the same attempt-owned artifact directory and
+# stamp. If source/compiler/selection changes, `simulate` derives a new digest
+# and rebuilds before execution.
 #
 # Usage:
 #   run_test.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
 #
 # Commands:
-#   count     Count test variants (collection-only; prints an integer). Lock-free.
-#   compile   Compile-producer step (parallel, -x). Lock-free. Stamps the build.
+#   count     Count test variants (collection-only; prints an integer). Uses its
+#             own artifact entry, separate from compiled outputs.
+#   compile   Compile-producer step (parallel, -x). Locks only its artifact entry.
 #   simulate  Run the pre-built variants. Takes the lock; rebuilds under it when
 #             the build stamp is not ours; then runs on the device/emulator.
 #   run       compile + run in one held-lock session (always rebuilds).
@@ -217,22 +217,6 @@ _validate() {
   # running, so strip that prefix or pytest collects 0 items.
   [[ -n "$TEST_ID" ]] && TEST_ID="${TEST_ID#${ARCH}/}"
 
-  # Build-stamp identity. SRC_ID fingerprints THIS run's source (worktree + LLK
-  # arch tree + test file). ARTKEY is worktree-independent (peers building the
-  # same target share it) so their differing SRC_IDs compare. STAMP_DIR lives
-  # outside the wiped build cache so a stamp survives a peer's wipe.
-  local _llk_dir
-  case "$ARCH" in
-    quasar)    _llk_dir="tt_llk_quasar" ;;
-    blackhole) _llk_dir="tt_llk_blackhole" ;;
-    wormhole)  _llk_dir="tt_llk_wormhole_b0" ;;
-    *)         _llk_dir="tt_llk_${ARCH}" ;;
-  esac
-  SRC_ID=$( { printf '%s\n' "$WORKTREE"; find "${WORKTREE}/${_llk_dir}" "${TEST_DIR}/${TEST_FILE}" -type f -printf '%P %s %T@\n' 2>/dev/null | sort; } | sha256sum | cut -c1-16 )
-  ARTKEY=$( printf '%s' "${ARCH}|${TEST_FILE}|${TEST_ID}|${K_FILTER}|${NO_SPLIT}|${MAXFAIL}" | sha256sum | cut -c1-16 )
-  STAMP_DIR="/tmp/tt-llk-build-stamps-${ARCH}"
-  STAMP="${STAMP_DIR}/${ARTKEY}"
-
   # Codegen infra (symlinked into each worktree).
   REAP="${WORKTREE}/codegen/scripts/reap_stale_emu.sh"
   TRIAGE="${WORKTREE}/.claude/scripts/llk_triage.py"
@@ -251,6 +235,113 @@ _ensure_sfpi() {
   ( cd "${WORKTREE}/tests" && CHIP_ARCH="$ARCH" ./setup_testing_env.sh ) >&2 2>&1
   [[ -d "${WORKTREE}/tests/sfpi/compiler/bin" ]] || { echo "[run_test] SFPI still missing after setup" >&2; return 3; }
   return 0
+}
+
+# Hash every tracked or candidate-created, nonignored tt-llk file by content.
+# Paths, kinds, executable bits, sizes, and hashes are framed with NUL bytes so
+# names cannot alias one another. This deliberately matches the dashboard's
+# source policy instead of relying on size/mtime fingerprints.
+_source_tree_sha256() {
+  local -a files=()
+  local relative path kind executable size digest target
+  git -C "$WORKTREE" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "ERROR: worktree is not a git checkout: ${WORKTREE}" >&2
+    return 3
+  }
+  mapfile -d '' files < <(
+    git -C "$WORKTREE" ls-files -z --cached --others --exclude-standard -- .
+  )
+  [[ ${#files[@]} -gt 0 ]] || {
+    echo "ERROR: worktree contains no tracked or candidate-created files: ${WORKTREE}" >&2
+    return 3
+  }
+  (
+    set -o pipefail
+    {
+      printf '%s\0' "tt-llk-git-files-v1"
+      for relative in "${files[@]}"; do
+        path="${WORKTREE}/${relative}"
+        if [[ -L "$path" ]]; then
+          kind="symlink"
+          executable="false"
+          target="$(readlink "$path")"
+          size="$(printf '%s' "$target" | wc -c)"
+          digest="$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)"
+        elif [[ -f "$path" ]]; then
+          kind="file"
+          [[ -x "$path" ]] && executable="true" || executable="false"
+          size="$(stat -c %s "$path")"
+          digest="$(sha256sum "$path" | cut -d' ' -f1)"
+        else
+          echo "ERROR: unsupported source-tree entry: ${relative}" >&2
+          return 3
+        fi
+        printf '%s\0%s\0%s\0%s\0%s\0' \
+          "$relative" "$kind" "$executable" "$size" "$digest"
+      done
+    } | sha256sum | cut -d' ' -f1
+  )
+}
+
+# Derive the artifact path only after SFPI setup, so the selected compiler's
+# bytes are part of the identity. `count` uses a separate purpose namespace and
+# therefore cannot clear a compiled entry while collection initializes pytest.
+_prepare_artifact_identity() {
+  local purpose="${1:-build}"
+  local compiler owner_scope selector
+  compiler="${WORKTREE}/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
+  SOURCE_TREE_SHA256="$(_source_tree_sha256)" || return $?
+  if [[ -f "$compiler" ]]; then
+    COMPILER_SHA256="$(sha256sum "$compiler" | cut -d' ' -f1)"
+  elif [[ "$purpose" == "count" ]]; then
+    COMPILER_SHA256="unavailable-for-collection"
+  else
+    echo "ERROR: compiler is unavailable after SFPI setup: ${compiler}" >&2
+    return 3
+  fi
+
+  selector="${ARCH}|${TEST_FILE}|${TEST_ID}|${K_FILTER}|${NO_SPLIT}"
+  ARTKEY="$(printf '%s' "$selector" | sha256sum | cut -d' ' -f1)"
+  BUILD_INPUT_DIGEST="$({
+    printf '%s\0' "tt-llk-local-build-input-v2"
+    printf '%s\0' "$purpose" "$SOURCE_TREE_SHA256" "$COMPILER_SHA256"
+    printf '%s\0' "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$NO_SPLIT"
+  } | sha256sum | cut -d' ' -f1)"
+
+  owner_scope="${CODEGEN_RUN_ID:-${RUN_ID:-manual}}|${CODEGEN_ATTEMPT_ID:-manual}|${LOG_DIR:-no-log}|$(realpath -m "$WORKTREE")"
+  ARTIFACT_OWNER="$(printf '%s' "$owner_scope" | sha256sum | cut -d' ' -f1)"
+  MANAGED_ARTIFACT_ROOT="$(realpath -m "${TT_LLK_LOCAL_ARTIFACT_ROOT:-/tmp/tt-llk-build-v2}")"
+  local worktree_root
+  worktree_root="$(realpath -m "$WORKTREE")"
+  case "$MANAGED_ARTIFACT_ROOT" in
+    /|"$HOME"|"$worktree_root"|"$worktree_root"/*)
+      echo "ERROR: unsafe managed artifact root: ${MANAGED_ARTIFACT_ROOT}" >&2
+      return 3
+      ;;
+  esac
+  ARTIFACT_DIR="${MANAGED_ARTIFACT_ROOT}/v2/${ARTIFACT_OWNER}/${BUILD_INPUT_DIGEST}"
+  ARTIFACT_LOCK="${MANAGED_ARTIFACT_ROOT}/locks/${ARTIFACT_OWNER}-${BUILD_INPUT_DIGEST}.lock"
+  STAMP_DIR="${MANAGED_ARTIFACT_ROOT}/stamps/${ARTIFACT_OWNER}"
+  STAMP="${STAMP_DIR}/${ARTKEY}"
+  mkdir -p "$(dirname "$ARTIFACT_DIR")" "$(dirname "$ARTIFACT_LOCK")" "$STAMP_DIR" || {
+    echo "ERROR: cannot create managed artifact namespace: ${MANAGED_ARTIFACT_ROOT}" >&2
+    return 3
+  }
+  export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  SRC_ID="${SOURCE_TREE_SHA256:0:16}"
+  _vlog "artifact owner=${ARTIFACT_OWNER} build=${BUILD_INPUT_DIGEST} root=${ARTIFACT_DIR}"
+}
+
+_lock_artifact_entry() {
+  exec 8>>"$ARTIFACT_LOCK" || {
+    echo "ERROR: cannot open artifact lock ${ARTIFACT_LOCK}" >&2
+    return 3
+  }
+  _vlog "waiting for artifact lock ${ARTIFACT_LOCK}"
+  flock 8 || {
+    echo "ERROR: cannot acquire artifact lock ${ARTIFACT_LOCK}" >&2
+    return 3
+  }
 }
 
 # The pytest target selector (file, -k filter, or a single parametrize id).
@@ -272,8 +363,8 @@ _emit_verdict() {
 # ── Producer (compile) ─────────────────────────────────────────────────────────
 
 # Parallel compile with the transient parallel-build-setup retry. The producer's
-# xdist workers each rmtree+recreate the shared build dir at startup, which under
-# load can race into a FileNotFoundError INTERNALERROR — not a real compile error.
+# xdist workers share only this attempt-owned entry; the entry flock prevents a
+# second producer from clearing it concurrently.
 # Retry on that signature; treat anything else as a genuine compile failure.
 # Returns pytest's exit code.
 _producer() {
@@ -412,10 +503,13 @@ _run_consumer() {
   return "$code"
 }
 
-# ── count / compile (lock-free) ────────────────────────────────────────────────
+# ── count / compile (per-entry artifact lock) ─────────────────────────────────
 
 _do_count() {
-  _validate; _activate_venv; cd "$TEST_DIR" || { echo "0"; return 3; }
+  _validate; _activate_venv
+  _prepare_artifact_identity count || { echo "0"; return 3; }
+  _lock_artifact_entry || { echo "0"; return 3; }
+  cd "$TEST_DIR" || { echo "0"; return 3; }
   local out rc=0
   if [[ -n "$K_FILTER" ]]; then
     out="$(CHIP_ARCH="$ARCH" pytest --compile-producer --co -q -k "$K_FILTER" "$TEST_FILE" 2>&1)" || rc=$?
@@ -429,10 +523,12 @@ _do_count() {
 
 _do_compile() {
   _validate; _activate_venv; _ensure_sfpi || return 3
+  _prepare_artifact_identity build || return 3
+  _lock_artifact_entry || return 3
   _build_target; cd "$TEST_DIR" || return 3
   _vlog "compile ${TEST_FILE} (arch=${ARCH}, -n ${JOBS})"
   _producer; local rc=$?
-  [[ $rc -eq 0 ]] && { mkdir -p "$STAMP_DIR" 2>/dev/null; printf '%s' "$SRC_ID" > "$STAMP"; return 0; }
+  [[ $rc -eq 0 ]] && { printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"; return 0; }
   return 2
 }
 
@@ -444,6 +540,7 @@ _do_compile() {
 _run_under_lock() {
   local force="$1"
   _validate; _activate_venv; _ensure_sfpi || return 3
+  _prepare_artifact_identity build || return 3
   _build_target; cd "$TEST_DIR" || return 3
 
   mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
@@ -452,6 +549,7 @@ _run_under_lock() {
   _vlog "waiting for global lock ${LOCKFILE}"
   flock 9                       # unbounded — wait in line
   _vlog "acquired lock"
+  _lock_artifact_entry || return 3
 
   # Pre-flight reap under the lock: any live emu job now is an orphan from a run
   # whose peer died non-gracefully. Clear it before booting ours.
@@ -463,11 +561,11 @@ _run_under_lock() {
   # --no-split compiles inside the consumer, so it is skipped here.
   if [[ "$NO_SPLIT" == "false" ]]; then
     local need="$force"
-    [[ "$(cat "$STAMP" 2>/dev/null)" != "$SRC_ID" ]] && need=1
+    [[ "$(cat "$STAMP" 2>/dev/null)" != "$BUILD_INPUT_DIGEST" ]] && need=1
     if [[ "$need" == "1" ]]; then
-      _vlog "building under lock (have=$(cat "$STAMP" 2>/dev/null) want=${SRC_ID} force=${force})"
+      _vlog "building under lock (have=$(cat "$STAMP" 2>/dev/null) want=${BUILD_INPUT_DIGEST} force=${force})"
       _producer || return 2
-      mkdir -p "$STAMP_DIR" 2>/dev/null; printf '%s' "$SRC_ID" > "$STAMP"
+      printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"
     else
       _vlog "reusing build (stamp matches ${SRC_ID})"
     fi

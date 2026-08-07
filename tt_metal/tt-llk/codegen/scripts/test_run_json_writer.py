@@ -5,11 +5,13 @@
 """Tests for run_json_writer.py — dashboard-compatibility schema."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).parent / "run_json_writer.py"
+RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
 
 
 def _run(log_dir, *args):
@@ -19,6 +21,98 @@ def _run(log_dir, *args):
         capture_output=True,
         text=True,
     )
+
+
+def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "artifact-roots.txt"
+    pytest_bin = fake_bin / "pytest"
+    pytest_bin.write_text(
+        "#!/bin/bash\n"
+        'printf \'%s\\n\' "$TT_LLK_ARTEFACTS_DIR" >> "$CAPTURE"\n'
+        'mkdir -p "$TT_LLK_ARTEFACTS_DIR"\n'
+        'touch "$TT_LLK_ARTEFACTS_DIR/fake-output"\n'
+    )
+    pytest_bin.chmod(0o755)
+
+    def make_worktree(name):
+        worktree = tmp_path / name
+        test_dir = worktree / "tests" / "python_tests"
+        compiler_dir = worktree / "tests" / "sfpi" / "compiler" / "bin"
+        source_dir = worktree / "tt_llk_blackhole"
+        test_dir.mkdir(parents=True)
+        compiler_dir.mkdir(parents=True)
+        source_dir.mkdir()
+        (test_dir / "test_fake.py").write_text("def test_fake(): pass\n")
+        compiler = compiler_dir / "riscv-tt-elf-g++"
+        compiler.write_bytes(b"compiler-v1")
+        compiler.chmod(0o755)
+        header = source_dir / "kernel.hpp"
+        header.write_text("#define VALUE_A 1\n")
+        subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "user.name", "Test"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(worktree), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "commit", "-q", "-m", "fixture"],
+            check=True,
+        )
+        return worktree, header
+
+    first_worktree, header = make_worktree("attempt-one")
+    second_worktree, _ = make_worktree("attempt-two")
+    managed_root = tmp_path / "managed-artifacts"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "CAPTURE": str(capture),
+        "TT_LLK_LOCAL_ARTIFACT_ROOT": str(managed_root),
+    }
+
+    def compile_in(worktree, log_dir):
+        return subprocess.run(
+            [
+                "bash",
+                str(RUN_TEST),
+                "compile",
+                "--worktree",
+                str(worktree),
+                "--arch",
+                "blackhole",
+                "--test",
+                "test_fake.py",
+                "--log-dir",
+                str(log_dir),
+            ],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    compile_in(first_worktree, tmp_path / "logs-one")
+    compile_in(second_worktree, tmp_path / "logs-two")
+    roots = capture.read_text().splitlines()
+    assert len(roots) == 2
+    assert roots[0] != roots[1]
+    assert all(Path(root).is_relative_to(managed_root / "v2") for root in roots)
+
+    original = header.stat()
+    header.write_text("#define VALUE_B 1\n")  # same size; only content differs
+    os.utime(header, ns=(original.st_atime_ns, original.st_mtime_ns))
+    compile_in(first_worktree, tmp_path / "logs-one")
+    changed_root = capture.read_text().splitlines()[-1]
+    assert changed_root != roots[0]
+
+    compile_in(first_worktree, tmp_path / "logs-one")
+    assert capture.read_text().splitlines()[-1] == changed_root
 
 
 def test_init_emits_dashboard_fields(tmp_path):
