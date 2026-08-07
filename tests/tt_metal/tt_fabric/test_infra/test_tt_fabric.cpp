@@ -145,11 +145,11 @@ private:
     // Dump the debug slot every ~30s (kPollIntervalMs * 150).
     static constexpr int kSlotDumpEveryRounds = 150;
     static constexpr uint64_t kDbgSlotBase =
-        0x6F208;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
+        0x6F200;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
                   // DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so changing
-                  // MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
-    // 18 words: 16 original + words 16/17 for the per-channel send-gate probe.
-    static constexpr std::size_t kDbgSlotWords = 22;
+                  // MEM_AERISC_RESUME_PHASE_SIZE MOVES this base. (SIZE=96 -> base 0x6F200.)
+    // 24 words: 16 original + 16/17 send-gate, 18/19 sync tx/rx, 20/21 slot, 22 sync-seen, 23 min-free.
+    static constexpr std::size_t kDbgSlotWords = 24;
     static constexpr uint64_t kErisc0Heartbeat = 0x7CC70;
 
     void dump_slots(const std::vector<MonitoredCore>& cores) {
@@ -184,10 +184,11 @@ private:
 // (no second process needed). Emits the same "SLOT <dev> <chan> w0..w15 hb0 hb1" lines the external
 // `run_link_control dump_dbg_slot` produces, so one parser handles both.
 void dump_erisc_debug_slots_from_host() {
-    constexpr uint64_t DBG_SLOT_BASE = 0x6F208;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
-                                                 // region grows DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so
-                                                 // changing MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
-    constexpr std::size_t DBG_SLOT_WORDS = 22;   // incl. words 16/17 send-gate probe
+    constexpr uint64_t DBG_SLOT_BASE =
+        0x6F200;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
+                  // region grows DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so
+                  // changing MEM_AERISC_RESUME_PHASE_SIZE MOVES this base. (SIZE=96 -> 0x6F200.)
+    constexpr std::size_t DBG_SLOT_WORDS = 24;  // incl. 16/17 send-gate, 18/19 tx/rx, 20/21 slot, 22 seen, 23 min-free
     constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

@@ -139,6 +139,16 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         has_unsent_packet,
         receiver_has_space_for_packet,
         can_send);
+
+    // [HOP-1 vs HOP-2 PROBE] Sticky-count whether a SYNC packet ever actually sits ready-to-send in this
+    // ERISC's transmit slot. A large count at the hang proves the sync packet landed here and was not
+    // forwarded (arrived-not-sent); ~0 proves it never landed. Immune to resync/reinit (see eth_fw_api.h).
+    fabric_dbg_latch_sync_ready(local_sender_channel.get_cached_next_buffer_slot_addr(), has_unsent_packet);
+
+    // [DECREMENT-LOST vs DECREMENT-RESET PROBE] Min free_slots seen while the sync packet occupies the
+    // slot (payload demonstrably landed via L1 scan, but free_slots reads 32). ==32 => the worker's
+    // doorbell decrement never landed; <32 => it landed then got reset. See eth_fw_api.h.
+    fabric_dbg_track_sync_min_free(local_sender_channel.get_cached_next_buffer_slot_addr(), free_slots);
 #endif
 
     if (can_send) {
