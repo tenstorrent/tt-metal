@@ -1285,12 +1285,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
-        B = tokens.shape[0]
-        decode_trace_key = (on_device_sampling, B)
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        # Must match _decode_forward_trace_text: key is (sampling, per-DP chunk
+        # batch), not the pre-chunk global batch. Using global B under DP>1
+        # misses the warmed trace and skips async-ahead device-token keep.
+        decode_trace_key = (
+            on_device_sampling,
+            int(tokens[0].shape[0]) if tokens else 1,
+        )
 
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
