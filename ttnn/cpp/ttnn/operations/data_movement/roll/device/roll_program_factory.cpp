@@ -421,7 +421,8 @@ RollPlan compute_roll_plan(
     // Per core: [dst_bank_id, dst_bank_base, num_src, (src0_bank_id, src0_addr)..., num_xfers,
     //            (src_slot, src_off, dst_off, copy_size, src_stride, dst_stride, num_rows) x N]
     auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
-        // Collect unique source shards (at most 2) and assign them to staging slots 0/1.
+        // Reader hard-codes 2 staging CBs (src0/src1) and `src_base[2]`; higher-dim rolls whose
+        // shard band straddles an outer-dim period can need 3+ sources — reject before args emit.
         std::vector<uint32_t> src_shards;
         std::unordered_map<uint32_t, uint32_t> src_to_slot;
         for (const auto& td : descs) {
@@ -430,6 +431,12 @@ RollPlan compute_roll_plan(
                 src_shards.push_back(td.src_dram_shard_idx);
             }
         }
+        TT_FATAL(
+            src_shards.size() <= 2,
+            "Native sharded roll DRAM RM: destination core {} needs {} source shards but the reader has only 2 "
+            "staging slots; use a non-native roll fallback or reduce shard/roll dim spanning.",
+            dst_core_idx,
+            src_shards.size());
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(dram_bank_id(dst_core_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.

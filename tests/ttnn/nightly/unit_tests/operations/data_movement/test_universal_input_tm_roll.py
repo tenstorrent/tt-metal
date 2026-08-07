@@ -414,3 +414,31 @@ def test_roll_col_major_height_sharded(device, shape, sh, sw, shifts, dims, layo
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), layout, mem_config, shifts, dims)
+
+
+# Regression #51213 item 6: rd=(2,6) shard_h=4 dim=2 needs 3 source shards on one dst core,
+# but the DRAM_RM reader only has `src_base[2]`; host must fatal before args emit.
+def test_roll_dram_sharded_row_major_rejects_3_source_shards(device, expect_error):
+    torch.manual_seed(51213)
+    shape = [1, 2, 6, 16]
+    sh, sw = 4, 16
+    total_h = shape[0] * shape[1] * shape[2]
+    ncores = total_h // sh
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has insufficient cores ({ncores} needed)")
+    shard_spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
+        [sh, sw],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    tt_in = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    with expect_error(RuntimeError, "source shards but the reader has only 2"):
+        ttnn.roll(tt_in, [1], [2])
