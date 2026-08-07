@@ -632,3 +632,41 @@ routing predicates — that is what the shakedown run exists to find out.
 - Cross-arch dispatch. V1 is N150 only; `ARCH_NAME` is currently hardcoded `wormhole_b0`.
 - Update mode, phase 2 manifest generation, phase 1 intake screen.
 - Scaffold `<op>_codegen_device_operation_types.hpp`.
+
+### 12.7 Shakedown run 1 — infrastructure validated, one real bug found
+
+Run 31202502782 on branch `ebanerjee/port-op-dryrun`. Every deterministic pre-step passed on an
+N150 card runner:
+
+| Step | Result | Time |
+| --- | --- | ---: |
+| Checkout tt-metal (submodules) | success | 5.5m |
+| Checkout tt-dm-codegen via `CODEGEN_REPO_TOKEN` | success | 1.5m |
+| Start the toolchain container (card visible inside) | success | 3.5m |
+| Scaffold the port | success | <0.1m |
+| Build tt-metal | **falsely green** | 0.0m |
+
+So the whole cross-repo, on-card, containerised half of the design works in CI: the token reaches
+tt-dm-codegen, the container starts with `/dev/tenstorrent` and sees the card, and `scaffold.py`
+runs against both checkouts.
+
+The build step was the bug, and it is worth recording because it is the kind that quietly poisons
+every result downstream. Two mistakes compounded:
+
+1. I passed `./build_metal.sh --enable-profiler`. That flag does not exist — Tracy is on by default
+   and the script only offers `--disable-profiler` — so it exited immediately on an unknown
+   argument.
+2. The command was `bash -c 'ccache -z || true; ./build_metal.sh ...; ccache -sv || true'`. A
+   `bash -c` returns the status of its **last** command, so the trailing `ccache -sv || true`
+   turned a failed build into a successful step.
+
+The step therefore went green in zero seconds and the agent was handed an unbuilt tree. The fix
+makes the build the last command in the step and moves the ccache summary to its own non-fatal
+step. **General rule for this workflow: never end a `docker exec bash -c` with a `|| true`
+housekeeping command**, or the step cannot fail.
+
+Worth noting the pre-agent baseline exists precisely to catch this class of problem — it is meant
+to prove the harness and card work before the agent starts, so that a later failure is
+unambiguously the agent's code. It reported success here only because it too was `continue-on-error`
+and swallowed the error from an unbuilt tree. V2 should make the baseline assert that the native
+leg produced real timings, rather than merely not crashing.
