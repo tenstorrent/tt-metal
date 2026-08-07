@@ -4,8 +4,7 @@
 
 #include <stdint.h>
 
-// Fill one CB stick with zeros by reading from the device's MEM_ZEROS scratch region. Used for the
-// zero-pad rows of the NP halo exchange. Shared by np_h_reader and np_phase2_w_reader.
+// Fill one CB stick with zeros by reading from the device's MEM_ZEROS scratch region
 template <uint32_t stick_size_bytes>
 inline void zeroPadCb(uint32_t cb_id) {
     constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;

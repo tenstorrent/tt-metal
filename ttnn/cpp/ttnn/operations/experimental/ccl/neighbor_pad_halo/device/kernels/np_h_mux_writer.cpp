@@ -47,9 +47,7 @@ void kernel_main() {
 
     // ---- Per-core runtime args ----
     uint32_t arg_idx = 0;
-    // Compact-buffer H-section base for this worker's first frame (h_top or h_bot section base +
-    // outer_dim_start*padding*num_sticks_per_halo_dim). The compact buffer stores H-top and H-bot as
-    // SEPARATE sections (stride padding, not output_halo_dim_size) — see np_writer's fabric_only override.
+    // Compact-buffer H-section base for this worker's first frame
     const uint32_t h_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_count = get_arg_val<uint32_t>(arg_idx++);   // frames this worker owns
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
@@ -83,17 +81,12 @@ void kernel_main() {
     const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // The H->W barrier is signaled by np_h_reader after its recv drains (recv-authority), not here — the
-    // W corner reads need this device's incoming H to have LANDED, which the writer's send-done can't
-    // guarantee for >2 H-axes or small shapes. Only the startup-barrier opp coords are read here.
-    // Opposite-direction H-worker coords on the neighbor device, for the pairwise startup barrier (so the
-    // non-sending edge worker on the neighbor also gets incremented). NOC coords are device-independent.
+    // The H->W barrier is signaled by np_h_reader after its recv drains (recv-authority), not here
     const uint8_t opp_bar_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opp_bar_y = get_arg_val<uint32_t>(arg_idx++);
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
-    // is_first_chip/is_last_chip are direction-adjusted by the factory (match np_h_reader + np_writer):
-    // a worker sends iff !is_last_chip; it fills its own outward padding locally iff is_first_chip.
+    // is_first_chip/is_last_chip are direction-adjusted by the factory
     const bool has_neighbor = !is_last_chip;
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
@@ -118,21 +111,14 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
-    // No startup barrier: it was a cross-device start-of-op sync needed when the writer signaled the H->W
-    // barrier on H-SEND (to make send~=recv). np_h_reader now signals that barrier AFTER its recv drains,
-    // so W corners already wait for real H-recv and the startup barrier is redundant.
+    // No startup barrier: it was a cross-device start-of-op sync needed when the writer signaled the H->W barrier
     (void)opp_bar_x;
     (void)opp_bar_y;
 
-    // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base already
-    // includes this worker's outer_dim_start offset + the h_top/h_bot section base. Per frame the reader
-    // produces (in order): the is_first local-pad row into c_in0 (edge devices only), then the coalesced
-    // send rows into hsend. Drain in the same order.
+    // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame
     for (uint32_t od = 0; od < outer_dim_count; od++) {
         if (is_first_chip) {
-            // Local outward padding for this device's edge H-halo (no fabric): write c_in0 to the compact
-            // H-section. Replicate: reader pushed one stick per W col -> broadcast each to all padding rows.
-            // Zeros: reader pushed one stick -> broadcast to all padding rows x W cols.
+            // Local outward padding for this device's edge H-halo (no fabric): write c_in0 to the compact H-section
             const uint32_t frame_base = h_base + od * padding * num_sticks_per_halo_dim;
             if (!is_padding_zeros) {
                 for (uint32_t col = 0; col < num_sticks_to_read; col++) {
@@ -179,11 +165,7 @@ void kernel_main() {
                             row_l1 + m * stick_size,
                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
                             static_cast<uint16_t>(g * stick_size));
-                        // The payload copy (send_cb -> mux slot) is non-blocking and pkt_hdr is reused for
-                        // the next packet; flush per packet so neither the source row nor the header is
-                        // touched while the mux is still reading it (a dropped-packet race, worse at large
-                        // page where the copy takes longer). Measured free: the writes have drained by the
-                        // next loop iteration, so the poll returns immediately.
+                        // The payload copy (send_cb -> mux slot) is non-blocking and pkt_hdr is reused for the next
                         noc_async_writes_flushed();
                         m += g;
                         w += g * NP_NUM_DRAM_BANKS;

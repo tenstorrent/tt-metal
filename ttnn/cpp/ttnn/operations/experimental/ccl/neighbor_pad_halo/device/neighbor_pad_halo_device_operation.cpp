@@ -44,8 +44,7 @@ void NpHaloDeviceOperation::validate_on_program_cache_miss(
     // Only the 2D (H+W) compact-buffer path is implemented (the deployed VAE always pads both H and W).
     TT_FATAL(args.np_pad_dim2.has_value(), "NpHalo: requires 2D padding (H+W); np_pad_dim2 must be set.");
 
-    // The halo_buffer is pre-allocated by the caller and written in place; it must be a DRAM tensor
-    // with the same dtype as the input (the exchange is a raw stick copy, no arithmetic).
+    // The halo_buffer is pre-allocated by the caller and written in place
     const auto& halo_buffer = tensor_args.halo_buffer;
     TT_FATAL(
         halo_buffer.dtype() == input_tensor.dtype(),

@@ -10,8 +10,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Kernel handles + core set for the NP fabric kernels the halo-only program factory builds.
-// Retained in the cached program so override_runtime_arguments can refresh per-dispatch args.
+// Kernel handles + core set for the NP fabric kernels the halo-only program factory builds
 struct NpHaloArtifacts {
     tt::tt_metal::KernelHandle h_reader_kernel_id = 0;
     tt::tt_metal::KernelHandle h_writer_kernel_id = 0;

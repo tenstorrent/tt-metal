@@ -8,10 +8,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
-// Logical-pad masking (opt-in, halo mode only): the gather's interior-read path zeros sticks whose
-// GLOBAL spatial index is a padding position (global >= logical). Set once in main() from the CT
-// logical dims + this device's per-device [h_start, w_start] offset; 0 == disabled (all other conv3d
-// callers), so the runtime guard short-circuits and output is unchanged.
+// Logical-pad masking (opt-in, halo mode only): the gather's interior-read path zeros sticks whose GLOBAL spatial
 namespace {
 uint32_t g_mask_logical_h = 0;
 uint32_t g_mask_logical_w = 0;
@@ -415,11 +412,7 @@ void gather_rows_to_shard(
                     }
                 }
                 if constexpr (check_padding) {
-                    // Universal logical-pad mask (halo mode): any position whose GLOBAL coord is beyond the
-                    // logical extent reads zero. global = start_dev + in holds across the neighbor boundary,
-                    // so this also catches halo reads of a neighbor's pad region (the H-halo/W-tail corner)
-                    // — the halo buffer is built from unmasked input, unlike the full-pad pre-mask. Globals
-                    // are 0 for every non-halo conv3d caller, so this short-circuits.
+                    // Universal logical-pad mask (halo mode): any position whose GLOBAL coord is beyond the logical
                     bool logical_masked = false;
                     if (g_mask_logical_h != 0 &&
                         static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
@@ -436,9 +429,7 @@ void gather_rows_to_shard(
                     const bool in_padding = t_outside || h_outside || w_outside;
                     if (in_padding) {
                         if constexpr (halo_mode) {
-                            // Temporal boundary stays zero (T not halo-exchanged); spatial boundary reads
-                            // the neighbor's stick from the compact [Htop|Hbot|Wleft|Wright] halo buffer.
-                            // W sections are h_total tall (cover corners); H sections are W_in wide.
+                            // Temporal boundary stays zero (T not halo-exchanged)
                             if (t_outside) {
                                 zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                             } else {
@@ -512,10 +503,7 @@ void gather_rows_to_shard(
                     }
                     }  // end logical_masked else
                 } else {
-                    // Fast path: no conv-padding checks. Still honor the logical-pad mask when enabled
-                    // (persistent-padded plain conv reads a padded input; pass logical+pad as the
-                    // threshold): zero any read whose GLOBAL coord is beyond the logical extent. The
-                    // g_mask_logical==0 guard short-circuits for every non-masking caller.
+                    // Fast path: no conv-padding checks
                     bool logical_masked = false;
                     if (g_mask_logical_h != 0 &&
                         static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
@@ -851,11 +839,9 @@ void kernel_main() {
     constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
     constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
     constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
-    // Halo-aware mode: spatial (H/W) boundary conv-window positions read from a compact
-    // [H-top|H-bot|W-left|W-right] halo buffer (produced by neighbor_pad_halo) instead of zero-padding.
+    // Halo-aware mode: spatial (H/W) boundary conv-window positions read from a compact [H-top|H-bot|W-left|W-right]
     constexpr bool halo_mode = get_compile_time_arg_val(42) == 1;
-    // Logical-pad masking (opt-in, halo mode only). mask_mode==0 => all new code below is elided and
-    // the RT/CT layout past halo is unchanged for every other conv3d caller.
+    // Logical-pad masking
     constexpr bool mask_mode = get_compile_time_arg_val(43) == 1;
     constexpr uint32_t logical_h_mask = get_compile_time_arg_val(44);
     constexpr uint32_t logical_w_mask = get_compile_time_arg_val(45);
@@ -885,14 +871,12 @@ void kernel_main() {
     // Halo buffer accessor follows the input accessor.
     constexpr auto halo_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     const auto halo_reader = TensorAccessor(halo_args, halo_addr);
-    // Reset mask globals every invocation: the gather reads them unconditionally, and a non-mask
-    // conv3d can reuse this core's L1 after a mask kernel — never inherit stale mask state.
+    // Reset mask globals every invocation: the gather reads them unconditionally
     g_mask_logical_h = 0;
     g_mask_logical_w = 0;
     g_mask_h_start = 0;
     g_mask_w_start = 0;
-    // Per-device [h_start, w_start] offset accessor follows the halo accessor; read page 0 into the
-    // mask globals used by the gather's interior-read path. Only when masking is enabled.
+    // Per-device [h_start, w_start] offset accessor follows the halo accessor
     if constexpr (mask_mode) {
         constexpr auto offset_args = TensorAccessorArgs<halo_args.next_compile_time_args_offset()>();
         const auto offset_reader = TensorAccessor(offset_args, pad_offset_addr);
@@ -910,8 +894,7 @@ void kernel_main() {
         g_mask_logical_w = logical_w_mask;
     }
 
-    // Compact halo section bases (pages), layout [H-top | H-bot | W-left | W-right]. H sections are W_in
-    // wide (interior W), W sections are (H_in + 2*padding_h) tall (include the corner rows). outer = N*T_in.
+    // Compact halo section bases (pages), layout [H-top | H-bot | W-left | W-right]
     constexpr uint32_t halo_outer = N * T_in;
     constexpr uint32_t halo_h_total = H_in + 2 * padding_h;
     constexpr uint32_t halo_htop_base = 0;
@@ -983,10 +966,7 @@ void kernel_main() {
                                 const int32_t w_shard_start =
                                     static_cast<int32_t>(w_block * stride_w) - static_cast<int32_t>(padding_w);
                                 const uint32_t W_shard_cur = (w_block_end - 1 - w_block) * stride_w + kW;
-                                // Pad-block gate: a block whose largest GLOBAL input index exceeds the
-                                // logical extent holds propagated pad rows/cols (last H-row / last W-col
-                                // device only). Force it off the fast/coalesced path so the guarded
-                                // per-stick gather masks those positions (interior-read path in §gather).
+                                // Pad-block gate: a block whose largest GLOBAL input index exceeds the logical
                                 bool block_has_pad = false;
                                 if constexpr (mask_mode) {
                                     const int32_t h_max_g = static_cast<int32_t>(g_mask_h_start) + h_shard_start +

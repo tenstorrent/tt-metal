@@ -21,8 +21,7 @@
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
-// Runtime-arg versions of route info readers, local to this kernel.
-// Used because consolidated kernels have per-core routing via runtime args.
+// Runtime-arg versions of route info readers, local to this kernel
 inline ccl_routing_utils::line_unicast_route_info_t get_line_unicast_route_info_from_rt_args(uint32_t& arg_idx) {
     return {
         .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
@@ -56,32 +55,22 @@ constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_dst
 // CB the fabric-send loop drains. H writer: dedicated batched send ring (c_in2). W writer: c_in0.
 constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_dst + 6);
 
-// Global two-pass gate, set per-shape by the program factory (lockstep with np_phase2_w_reader via
-// the same factory value). Follows send_cb_id (ct_after_dst + 6) in the W-writer/H-writer arg layout.
+// Global two-pass gate, set per-shape by the program factory
 constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_dst + 7);
 
-// H-writer corner-first send (H-writer path only): raise the recv sem after the corner sticks, before
-// the bulk middle, so the neighbor's recv-wait clears after ~pad2 sticks instead of the whole row. Set
-// per-shape by the program factory; unused on the W writer. Follows W_TWO_PASS in the arg layout.
+// H-writer corner-first send (H-writer path only): raise the recv sem after the corner sticks
 constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
 
-// W-send bank-major coalesce factor (0 = per-stick). Lockstep with np_phase2_w_reader: a middle W
-// device ships N same-dst-bank sticks (base+r, base+r+8, ...) as one N*page fabric write to the
-// neighbor's interleaved DRAM. Follows H_CORNER_FIRST in the arg layout. BH: 8 DRAM banks.
+// W-send bank-major coalesce factor (0 = per-stick)
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 9);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 
 void kernel_main() {
-    ///////////////////////////////////////////////////
-    // ARGS
-    ///////////////////////////////////////////////////
-    // Common runtime args (uniform across all cores, updated between dispatches). Index 0 (input addr)
-    // is part of the shared CRTA layout but unused by the writer (it reads/writes the output buffer).
+    // ///////////////////////////////////////////////// ARGS /////////////////////////////////////////////////
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
-    // Number of conv3d reader cores to signal and their NOC (x,y) coordinates.
-    // Packed as: [num_reader_cores, x0, y0, x1, y1, ...]
+    // Number of conv3d reader cores to signal and their NOC (x,y) coordinates
     const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(4);
     // Reader core NOC coords start at CRTA index 5: x0=5, y0=6, x1=7, y1=8, ...
 
@@ -102,8 +91,7 @@ void kernel_main() {
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
-    // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
+    // Phase 2 barrier signal targets (0 for 1D, >0 for 2D) Max targets = pad2_num_links * 2 directions
     constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
@@ -124,8 +112,7 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
     const uint32_t outer_dim_offset_start_t = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab));
-    // This (direction,link)'s H-region sem (H-top/H-bot), signalled per-batch from
-    // handle_incoming_writes so the W-reader corner gate + conv3d H-edge tiles ramp without a barrier.
+    // This (direction,link)'s H-region sem (H-top/H-bot), signalled per-batch from handle_incoming_writes
     uint32_t h_region_sem_addr = 0;
     if constexpr (progress_t_batch_size > 0) {
         h_region_sem_addr = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab) + 1);
@@ -168,20 +155,14 @@ void kernel_main() {
         noc_async_writes_flushed();
     };
 
-    // H writers: always open fabric at start (for data transfer in main loop).
-    // W writers: open at start only when startup barrier is enabled (defer data transfer until CB ready).
+    // H writers: always open fabric at start (for data transfer in main loop)
     bool fabric_opened = false;
     if (!is_w_fabric_writer || use_barrier_sem) {
         fabric_connection.open();
         fabric_opened = true;
     }
 
-    // Startup barrier: sync across all devices before sending new fabric data.
-    // H writers: multicast to all H-axis devices (same column, consistent harvesting).
-    // W writers: 1-hop unicast to immediate W neighbor only.
-    //   W-axis devices span different UBBs with potentially different core harvesting,
-    //   so multicast (which targets fixed NOC x,y) would hit wrong cores on remote devices.
-    //   H all-to-all multicast + W 1-hop unicast transitively synchronizes the full mesh.
+    // Startup barrier: sync across all devices before sending new fabric data
     if (use_barrier_sem) {
         if constexpr (!is_w_fabric_writer) {
             // H barrier: multicast to all H-axis devices (same column)
@@ -232,10 +213,7 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             }
         } else {
-            // W barrier: 1-hop unicast to immediate W neighbor only.
-            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are NOC coords of the local
-            // device's worker cores. Since NOC coords are not chip-dependent, these are
-            // valid targets on the neighbor device as well.
+            // W barrier: 1-hop unicast to immediate W neighbor
             if (!is_last_chip) {
                 auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 
@@ -280,22 +258,11 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
-    // Corners-only optimization for 2D H writers:
-    // Only W-boundary sticks (corners) go to neighbor L1; non-corner sticks go directly to DRAM.
-    // Phase 2 W reader only needs corners, so this is safe.
-    // Derivation: the output row is [pad2_left | W interior sticks | pad2_right].
-    // The factory sets stick_start_id = pad2_left (the W offset where interior data begins),
-    // num_sticks_per_halo_dim = W + pad2_left + pad2_right (full output row width),
-    // and num_sticks_to_read = W (interior width). So:
-    //   pad2_left_sticks  = stick_start_id = pad2_left
-    //   pad2_right_sticks = (W + pad2_left + pad2_right) - W - pad2_left = pad2_right
-    // These can be different (asymmetric W padding is supported).
+    // Corners-only optimization for 2D H writers: Only W-boundary sticks (corners) go to neighbor L1
     uint32_t pad2_left_sticks = 0;
     uint32_t pad2_right_sticks = 0;
     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        // Use padding_left for corner count (not stick_start_id) so it works when stick_start_id=0
-        // (fabric_only mode). In fabric_only: stick_start_id=0 but padding_left=W/2=104,
-        // giving pad2_left_sticks=104, pad2_right_sticks=104 → overlap case → all sticks are corners.
+        // Use padding_left for corner count (not stick_start_id) so it works when stick_start_id=0 (fabric_only mode)
         pad2_left_sticks = (padding_left > 0) ? padding_left : stick_start_id;
         uint32_t w_overhead = num_sticks_per_halo_dim - num_sticks_to_read;
         pad2_right_sticks = (w_overhead >= pad2_left_sticks) ? (w_overhead - pad2_left_sticks) : pad2_left_sticks;
@@ -305,8 +272,7 @@ void kernel_main() {
         return iter < pad2_right_sticks || iter >= (num_sticks_to_read - pad2_left_sticks);
     };
 
-    // W-path interior-first reorder dims (common args [4],[5], W-writer only). Parsed for every W-writer
-    // (the factory always sets [4],[5]); used by W_TWO_PASS (progress>0) and the progress==0 halo path.
+    // W-path interior-first reorder dims
     uint32_t w_input_H = 0, w_pad_h = 0, w_h_total = 1, w_row_stride = 0, w_slice_frames = 0;
     bool w_interior_first_p0 = false;
     if constexpr (is_w_fabric_writer) {
@@ -319,10 +285,7 @@ void kernel_main() {
         w_interior_first_p0 = (progress_t_batch_size == 0) && (outer_dim_size == w_slice_frames * w_h_total);
     }
 
-    // Coalesced W-send (middle device): ship g (<= W_COALESCE) same-dst-bank sticks as one g*page fabric
-    // write, lockstep with np_phase2_w_reader's bank-major gather. base = outer_dim_offset_start_id =
-    // section_base + w_link_start (compact W base, 8-aligned by factory eligibility), so dst sticks
-    // base+r, base+r+8, ..., base+r+8*(g-1) are contiguous on bank (base+r)%8 in interleaved DRAM.
+    // Coalesced W-send (middle device): ship g (<= W_COALESCE) same-dst-bank sticks as one g*page fabric write
     if constexpr (is_w_fabric_writer && W_COALESCE > 0) {
         if (!is_first_chip && !is_last_chip) {
             if (!fabric_opened) {
@@ -447,13 +410,7 @@ void kernel_main() {
 
         if (!is_last_chip) {
             bool did_corner_first = false;
-            // H writer, corners-only, padding==1: the neighbor's H reader recv-commit pulls only the
-            // corner sticks; the bulk middle sticks go straight to its output DRAM for conv (gated far
-            // later by w_region_sem). So send the few corners first and raise the recv sem BEFORE the
-            // middle bulk — the neighbor clears its recv-wait after ~pad2 sticks instead of the whole
-            // row, taking the full-row send off the H-recv critical path. The single send_cb row holds
-            // both passes, so no extra read. padding!=1 needs all pad rows resident before the sem inc
-            // (the 2-row send_cb can't guarantee that), so it keeps the in-order path below.
+            // H writer, corners-only, padding==1: the neighbor's H reader recv-commit pulls only the corner sticks
             if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
                 if (H_CORNER_FIRST && padding == 1) {
                     uint32_t dst_stick_id =
@@ -474,8 +431,7 @@ void kernel_main() {
                     }
                     noc_async_write_barrier();
 
-                    // Corners delivered: raise the recv sem before the middle bulk so the neighbor's
-                    // recv-commit clears now instead of after the whole row.
+                    // Corners delivered: raise the recv sem before the middle bulk so the neighbor's recv-commit
                     raise_neighbor_sem();
 
                     // Pass 2: bulk middle sticks -> neighbor DRAM (off the H-recv critical path).
@@ -502,10 +458,7 @@ void kernel_main() {
                         dst_stick_id = pad_id * num_sticks_per_halo_dim + stick_start_id;
                     }
                     dst_stick_id += eff_offset;
-                    // H-writer bank-major coalesced send (use_l1=0). np_h_reader gathered the row into
-                    // send_cb in bank-major order (w=0,8,..; 1,9,..); ship each bank's sticks as
-                    // W_COALESCE-sized packets to base_row+w (contiguous on bank (base_row+w)%8, 8-aligned
-                    // base_row). W_COALESCE here holds h_coalesce_n (the H writer's factory arg slot).
+                    // H-writer bank-major coalesced send (use_l1=0)
                     if constexpr (!is_w_fabric_writer && W_COALESCE > 0) {
                         const uint32_t base_row = dst_stick_id;
                         cb_wait_front(send_cb_id, num_sticks_to_read);
@@ -570,9 +523,7 @@ void kernel_main() {
 
                         dst_stick_id++;
 
-                        // fabric_send_stick already flushed the local writes (source read done), so the
-                        // CB slot is safe to reuse. The receiver only reads after the post-loop
-                        // raise_neighbor_sem, so no per-stick remote-completion barrier is needed here.
+                        // fabric_send_stick already flushed the local writes (source read done)
                         cb_pop_front(send_cb_id, 1);
                     }
                 }
@@ -585,10 +536,7 @@ void kernel_main() {
 
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
 
-        // Per-batch H-commit: commit this od's incoming H-halo (pushed by the paired reader from the
-        // L1 recv buffer as soon as the sender link delivered it), then signal HT/HB per batch — so
-        // the W-reader corner gate + conv3d H-edge tiles ramp this batch rather than after the whole
-        // send pass.  One producer per (region,link) -> monotonic.
+        // Per-batch H-commit: commit this od's incoming H-halo
         if constexpr (handle_incoming_writes) {
             if (!is_first_chip) {
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -667,10 +615,7 @@ void kernel_main() {
     // Ensure all DRAM writes from main loop are complete.
     noc_async_write_barrier();
 
-    // Partial-last-batch tail: the partial last batch never hit a (od+1)%pb boundary in the loop
-    // above, so its HT/HB sem was never bumped — fire it once here, else consumers waiting
-    // ceil(link_dims/pb) deadlock on the missing count. Recv+commit of incoming H-halo is interleaved
-    // per-od into the send loop above, so this only handles the trailing partial batch.
+    // Partial-last-batch tail: the partial last batch never hit a (od+1)%pb boundary in the loop above
     if constexpr (handle_incoming_writes) {
         if (!is_first_chip) {
             if constexpr (progress_t_batch_size > 0) {
@@ -696,9 +641,7 @@ void kernel_main() {
         fabric_connection.close();
     }
 
-    // Signal Phase 2 W-cores AFTER handle_incoming_writes and fabric close.
-    // This guarantees L1-routed corners are committed to DRAM before W-readers start.
-    // In 1D mode num_phase2_signal_targets == 0, so this is a no-op.
+    // Signal Phase 2 W-cores AFTER handle_incoming_writes and fabric close
     noc_async_write_barrier();
     for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
         uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
