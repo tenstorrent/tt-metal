@@ -237,7 +237,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
 
     auto temp_tensor2 = ttnn::prim::reshape_view(
-        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
+        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, sub_core_grid);
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
@@ -366,7 +366,8 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
     const PadValue& pad_value,
-    const bool recreate_mapping_tensor,
+    // Accepted for API compatibility; the tiled factory does not act on it (see reshape_tiled_program_factory).
+    [[maybe_unused]] const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid,
     bool explicit_memory_config,
     const bool skip_padding_fill,
@@ -412,12 +413,7 @@ ttnn::Tensor reshape_tiled(
                     MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
             }
             auto output_tensor_3d = ttnn::prim::reshape_view(
-                tensor3d,
-                requested_shape_3d,
-                requested_padded_shape_3d,
-                working_output_memory_config,
-                recreate_mapping_tensor,
-                sub_core_grid);
+                tensor3d, requested_shape_3d, requested_padded_shape_3d, working_output_memory_config, sub_core_grid);
             // Fill in BF16 (rank-3, non-recursive). skip_padding_fill is *intentionally*
             // ignored for block-float: shared exponent over 16-elem sub-blocks would otherwise
             // let unfilled padding corrupt logical lanes. See skip_padding_fill docstring.
@@ -464,12 +460,7 @@ ttnn::Tensor reshape_tiled(
         }
 
         auto output_tensor_3d = ttnn::prim::reshape_view(
-            tensor3d,
-            requested_shape_3d,
-            requested_padded_shape_3d,
-            target_output_mem_config,
-            recreate_mapping_tensor,
-            sub_core_grid);
+            tensor3d, requested_shape_3d, requested_padded_shape_3d, target_output_mem_config, sub_core_grid);
 
         // Fill implicit tile padding only when the caller explicitly asked for it (pad_value_explicit).
         // Default-on fill would write into "padding" lanes of prim::reshape_view, which can be a zero-cost
@@ -526,12 +517,7 @@ ttnn::Tensor reshape_tiled(
     }
 
     auto output_tensor_3d = ttnn::prim::reshape_view(
-        tensor3d,
-        requested_shape_3d,
-        requested_padded_shape_3d,
-        updated_mem_config,
-        recreate_mapping_tensor,
-        sub_core_grid);
+        tensor3d, requested_shape_3d, requested_padded_shape_3d, updated_mem_config, sub_core_grid);
 
     // Fill rules:
     //   - Block-float (BFLOAT8_B / BFLOAT4_B): ALWAYS fill (skip_padding_fill is ignored). The downstream

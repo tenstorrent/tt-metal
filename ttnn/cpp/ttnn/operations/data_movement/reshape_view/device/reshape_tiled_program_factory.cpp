@@ -460,10 +460,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeViewTiledProgramFactory::create_workload
     tt::tt_metal::Buffer* mapping_buffer = mapping_owner->buffer();
     workload_descriptor.buffers.push_back({std::move(mapping_owner), mapping_buffer});
 
-    // Note: operation_attributes.recreate_mapping_tensor is intentionally
-    // ignored here — it's excluded from the program hash, so on a cache
-    // hit the cached mapping_tensor (which depends only on hashed inputs)
-    // is always valid.
+    // The cached mapping_tensor depends only on keyed inputs, so it stays valid on a cache hit.
 
     // Single-device op: build the per-coord ProgramDescriptor ONCE and
     // copy it into each coord-range entry to avoid redundant work on

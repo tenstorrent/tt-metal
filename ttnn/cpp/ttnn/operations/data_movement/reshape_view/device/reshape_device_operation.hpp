@@ -29,9 +29,6 @@ struct ReshapeViewDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 ttnn::Tensor reshape_view(
@@ -39,7 +36,6 @@ ttnn::Tensor reshape_view(
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid);
 
 }  // namespace ttnn::prim
