@@ -977,6 +977,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
         writer_untilize_compile_time_args.push_back(
             SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
+        // output_pages: bound for the metadata-derived output page id on the local write path.
+        // The metadata is DRAM-sourced, so the kernel must range-check before writing.
+        writer_untilize_compile_time_args.push_back(detail::get_num_pages(output_tensor));  // output_pages
 
         std::map<std::string, std::string> writer_untilize_defines;
         writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";

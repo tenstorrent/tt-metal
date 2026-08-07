@@ -106,6 +106,8 @@ void kernel_main() {
     //  +13: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer);
     //                                              used for cb_wait_front on the multicasted CB
     //  +14: SLOTS_PER_UNTILIZER                    - per-untilizer ring depth on the sender's receive_buf
+    //  +15: output_pages                          - number of pages in the output tensor; bound for the
+    //                                               metadata-derived output_page_idx on the local write path
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_experts_tok_counter_id =
@@ -131,6 +133,7 @@ void kernel_main() {
     constexpr uint32_t cb_counter_total_pages =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 13);
     constexpr uint32_t SLOTS_PER_UNTILIZER = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 14);
+    constexpr uint32_t output_pages = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 15);
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
@@ -269,12 +272,21 @@ void kernel_main() {
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                    noc.async_write(
-                        cb_untilize,
-                        output_addr_gen,
-                        aligned_output_page_size,
-                        {.offset_bytes = t * aligned_output_page_size},
-                        {.page_id = output_page_idx});
+                    // dst_token_idx / dst_topk_indice come from the DRAM-resident dispatched
+                    // metadata, so output_page_idx is unbounded here.  The output tensor may be
+                    // interleaved L1, in which case an out-of-range page id would scribble over
+                    // another worker core's L1.  Drop the row instead of clamping it into a valid
+                    // page — landing a token in the wrong output slot silently corrupts results.
+                    // ASSERT is a no-op in release builds, hence the unconditional check too.
+                    ASSERT(output_page_idx < output_pages);
+                    if (output_page_idx < output_pages) {
+                        noc.async_write(
+                            cb_untilize,
+                            output_addr_gen,
+                            aligned_output_page_size,
+                            {.offset_bytes = t * aligned_output_page_size},
+                            {.page_id = output_page_idx});
+                    }
 
                 } else {
                     if (local_credits == 0) {
@@ -355,4 +367,13 @@ void kernel_main() {
     noc_async_write_set_trid(0);
 
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
+
+    // NOC_PACKET_TAG is a STICKY per-cmd-buf register: the noc_async_write_one_packet_with_trid()
+    // calls above leave TRID_NON_LOCAL_WRITE latched in it.  Firmware only zeroes it once, at init
+    // (brisc.cc: noc_clear_all_packet_tags() sits before the while(1) dispatch loop), NOT between
+    // kernels -- so a non-zero tag leaks into every subsequent kernel on this core until reset.
+    // The next kernel's implicit-transaction-id users would then start from a non-zero id, which
+    // the firmware flags as "invalid NOC command buffer state before starting the next kernel".
+    // Safe here because every TRID write is already drained by the barriers above.
+    noc_clear_all_packet_tags();
 }
