@@ -80,6 +80,26 @@ _DIFF_N1536_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
+# cond_proj (B=2, K=1536, N=1536).  This was the ONLY matmul in the frame left on the auto
+# program config, and auto lands it at 55 us / 19.6% of DRAM peak while its five progcfg'd fp32
+# siblings (the adaLN modulations, same HiFi4 FP32 x BF16 dtypes) run at 63-79%.  So the fp32
+# activation was never the problem — the missing config was.  The LM's wq/wo config is legal
+# here (identical 1536x1536 shape, K=1536 -> 48 tiles, 24 cores x per_core_N=2 == Nt) and is what
+# gets that shape to 16.4 us in the LM.  Measured -35 us/frame (-0.11% end-to-end; 4/5 wins on a
+# paired head-to-head, pooled over 11 baseline and 8 candidate interleaved runs with a control
+# arm); every run BYTE-IDENTICAL to the auto baseline, so this is blocking/placement only.
+# Applied at B==2; B=1 PCC paths keep auto.
+_COND_PROJ_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
 # final_linear 1536→64: auto runs this on only 2 cores (~36 µs).  in0_block_w=2 matches auto's
 # K-reduction (maxabsdiff==0 vs auto) and brings it to ~21 µs.  Any other in0_block_w changes the
 # reduction order, so it is not byte-identical and must not be used on the long-form path.
@@ -551,6 +571,7 @@ class TTDiffusionHead:
             condition,
             self.w.cond_proj_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_COND_PROJ_B2 if condition.shape[0] == 2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
