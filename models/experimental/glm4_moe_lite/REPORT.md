@@ -536,9 +536,22 @@ Ranked by how much each contributed:
 3. **Op count is a measured 0.0 ms lever under trace** — Blaze's headline mechanism is a null here.
 4. **8 bank workers vs ttnn's 80 cores** — 56 vs 152 GB/s. Widening recovers 3.01×, but GLM's
    768/576 projection widths then pay 33–78% padding to satisfy `N % (32·banks·W) == 0`.
-5. **GLM-4.7-Flash's specific shapes fight Blaze's assumptions** — 20 heads breaks
-   `layout_plan`'s `n_heads_per_device % 8 == 0`; `glm_post_sdpa` needs w_o in L1 (523 MB against
-   180 MB available); the routed-expert path gives PCC 0.0235 at 64 experts.
+5. **Some GLM-4.7-Flash shapes fight Blaze's assumptions** — `glm_post_sdpa` needs w_o in L1
+   (523 MB against 180 MB available), and the routed-expert path gives PCC 0.0235 at 64 experts.
+
+   **CORRECTION:** this report previously also listed "20 heads breaks `layout_plan`'s
+   `n_heads_per_device % 8 == 0`, which no TP divisor fixes". **That is wrong.** The `% 8` rule is
+   historical — `layout_plan.py:193` says so explicitly — and `solve_mla_q_grid` now searches the
+   constraint set the ops actually impose. At GLM-4.7-Flash's dims it solves:
+
+   ```
+   tp=1, n_heads=20 -> MLAQGridLayout(sender_rows=4, qnope_cols=5, qrope_cols=1,
+                                      num_workers=4, heads_per_receiver=5, q_tile_height=8)
+   ```
+
+   tp=2 (10 heads) and tp=4 (5 heads) fail, but **tp=1 is our operating point** because TP is
+   pinned off. So Blaze's MLA *can* express this model's attention, and the head count is not a
+   blocker to whole-layer fusion.
 
 **The honest summary:** Blaze is not unsuited to GLM — `dsa_glm_sparse_layer` shows GLM-family
 models are first-class there. What is unsuited is *retrofitting Blaze ops into a working ttnn
