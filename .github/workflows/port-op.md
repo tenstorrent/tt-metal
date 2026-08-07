@@ -163,16 +163,22 @@ steps:
       if [ -z "$AWS_ACCESS_KEY_ID" ]; then
         echo "::warning::Garage S3 credentials missing; this build will be cold."
       fi
+      docker exec portdev ccache -z || true
+      # Tracy is on by default and there is no --enable-profiler flag; passing one makes
+      # build_metal.sh exit immediately on an unknown argument. The build is deliberately the last
+      # command so its status is the step's -- a trailing `ccache -sv || true` masked a failed
+      # build behind a green step on the first shakedown run.
       docker exec \
         -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
         -e AWS_DEFAULT_REGION=garage \
         -e CCACHE_REMOTE_ONLY=true -e CCACHE_COMPRESS=true \
         -e "CCACHE_REMOTE_STORAGE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" \
-        portdev bash -c '
-          ccache -z || true
-          ./build_metal.sh --build-dir build --build-type Release --enable-ccache --enable-profiler
-          ccache -sv || true
-        '
+        portdev ./build_metal.sh --build-dir build --build-type Release --enable-ccache
+
+  - name: ccache summary
+    if: always()
+    continue-on-error: true
+    run: docker exec portdev ccache -sv || true
 
   # Informational, and deliberately non-fatal: the ported leg is still an empty stub here, so this
   # is expected to report a failing verdict. Its value is proving the harness and the card work
