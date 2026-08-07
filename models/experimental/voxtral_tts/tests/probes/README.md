@@ -21,6 +21,8 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `silu_fusion.py` | is `activation="silu"` actually fused? | **no** — it costs the same as a separate `ttnn.silu`; only `fused_activation` fuses (§6.52) |
 | `mm_block_ab.py` | do `sweep_mm`'s isolated wins survive in the whole block? | mostly **no**, and the direction of the error reverses — the decisive experiment (§6.52) |
 | `codes_real.py` | is the codes gate's 29.5% real, or an artefact of its synthetic input? | **artefact** — real prompts read 3.9% and are 100% off-by-one (§6.54) |
+| `ref_vs_ref.py` | does the **reference** flip codes too, and are synthetic inputs near FSQ boundaries? | **no to both** — fp32 vs fp64 is 0/288, and the margins are identical (§6.54) |
+| `device_err.py` | is the codes gate's 29.5% coming from Block 2 / FSQ? | **no** — with `h` fixed, Block 2 flips 2.4%; it is Block 1, 22× worse off-manifold (§6.54) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 
 **Read `mm_block_ab.py` before trusting any isolated sweep.** It is the counterexample: `w2` and
