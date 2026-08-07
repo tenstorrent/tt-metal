@@ -24,7 +24,7 @@ The two are worth separating, because they are not the same verdict.
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. |
 | **What is the single biggest miss?** | The **screening order**. It builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
 | **Did it follow the advice?** | **7 of 15 cells tried the exact advice**, 6 of them first — and all 7 ended cleanly, shipping it or recording a measured regression. **4 never tried it and recorded no reason.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly no. Of 7 zeros: **2 are honest** — the decoder was already well placed, which is a fact about the decoder, not the advisor. **3 are tracer-coverage** zeros, **1 a legality wall**, **1 unseparable from its own noise floor**. |
+| **Are the zeros failures?** | Mostly not the advisor's. But only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder I swept). **3 are coverage gaps** — nobody could look, so the headroom is *unknown, not zero*. The rest are asserted or partial. Graded in §2 **of this file**. |
 | **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds — the ledger is §3 **of this file**. |
 
 ### 1b. Is `ttnn-advise` a promising thing to build a stage on?
@@ -67,28 +67,55 @@ tested.
 that cell's *incumbent* came from — **all 15 cells ran on the same host**, so no difference below is a
 hardware difference.
 
-| model | cell | control ms/layer | what shipped | model-level |
-|---|---|---|---|---|
-| llama-3.2-1B | exp17 | 0.3731 | nothing | **0.0 %** — honest zero |
-| llama-3.1-8B | exp17 | 0.6650 | nothing | **0.0 %** — honest zero, re-verified |
-| phi-3.5-mini | **onA** | 0.6570 | `rope_l1_rect32` | **−8.75 %** |
-| phi-3.5-mini | **B** | 0.7888 | `rope_l1_chain` | **−5.74 %** |
-| phi-3.5-mini | **FN** | 0.8072 | rope only | −4.91 % — **−13.4 % measured and discarded; −17.84 % was reachable (§3.27)** |
-| phi-3.5-mini | exp17 | 1.1009 | nothing | 0.0 % — every direction overlapped or hard-failed |
-| qwen3.6-27B | **FN** | 1.2083 full / 19.14 linear | `packed_qkv_l1_chain` | −445.7 µs — **inside its ±618.5 µs band** |
-| qwen3.6-27B | **B** | 1.4494 full / 15.85 linear | nothing | 0.0 % — geometry hard-failed |
-| gemma-4-12B | exp11 | 1.2541 / 1.3774 | `Q+K+V+MLP` + output chain | **−1.14 %** |
-| gemma-4-26B | **B** | 1.2597 | `sliding_attention_o_chain` | **−147.9 µs** |
-| gemma-4-26B | **onA** | 1.8252 | `advisor_norm88` | **−12.98 %/layer** |
-| gemma-4-26B | **FN** | 1.3412 / 1.5394 | `advisor_concat_projection` | **−2.04 %** — *88-core norm regressed here* |
-| north-mini | **FN** | 0.5537 MoE | MoE norm at 32 cores | **−10.23 %** — **16 cores is 1 pp better** |
-| north-mini | **B** | 0.6138 / 0.2033 | nothing | 0.0 % — all geometries slower or stalled |
-| north-mini | **onA** | 0.2918 / 0.8465 | nothing | 0.0 % — sparse MoE untraceable |
+The last column is **what I measured to be reachable from the advisor's own directions on that same decoder** —
+the answer to "how much better could this have been if the advice were followed better". It is per-layer on the
+named kind, and **blank means I have no measurement**, not that nothing was available.
 
-8 shipped, 7 returned zero. Of the zeros: **2 honest** (already well-placed), **3 structural** (the advisor
-could not see the layer), **1 geometry wall**, **1 unseparable from its own noise floor**.
+| model | cell | control ms/layer | what v2 shipped | v2 result | **reachable (measured)** |
+|---|---|---|---|---|---|
+| llama-3.2-1B | exp17 | 0.3731 | nothing | 0.0 % | — *ladder never swept* |
+| llama-3.1-8B | exp17 | 0.6650 | nothing | 0.0 % | **0.0 % — verified**, full ladder swept |
+| phi-3.5-mini | **onA** | 0.6570 | `rope_l1_rect32` | **−8.75 %** | = shipped, nothing further found |
+| phi-3.5-mini | **B** | 0.7888 | `rope_l1_chain` | **−5.74 %** | = shipped, nothing further found |
+| phi-3.5-mini | **FN** | 0.8072 | rope only, L1 interleaved | −4.91 % | **−17.84 % / layer** — the advised rope (−10.43 %, *bit-identical*) plus the advised 11-core norm |
+| phi-3.5-mini | exp17 | 1.1009 | nothing | 0.0 % | — *advised sharding never tried* |
+| qwen3.6-27B | **FN** | 1.2083 full / 19.14 linear | `packed_qkv_l1_chain` | −445.7 µs — inside its ±618.5 µs band | — *its `linear` kind, 97 % of model time, was never advised on* |
+| qwen3.6-27B | **B** | 1.4494 full / 15.85 linear | nothing | 0.0 % | — *same; geometry hard-failed on the rest* |
+| gemma-4-12B | exp11 | 1.2541 / 1.3774 | `Q+K+V+MLP` + output chain | **−1.14 %** | — *52 measurements, no advised grid among them* |
+| gemma-4-26B | **B** | 1.2597 | `sliding_attention_o_chain` | −147.9 µs *(−0.34 %/layer sliding)* | **−12.44 % / layer** — a win it wrote, shipped disabled, never screened. **36×** |
+| gemma-4-26B | **onA** | 1.8252 | `advisor_norm88` | **−12.98 %** | **−13.63 % / layer** — 44 cores beats the advised 88, bit-identically |
+| gemma-4-26B | **FN** | 1.3412 / 1.5394 | `advisor_concat_projection` | **−2.04 %** *(−1.69 %/layer sliding)* | −1.86 % / layer sliding — *only 0.17 pp; the 88-core norm regressed here and was correctly rejected* |
+| north-mini | **FN** | 0.5537 MoE | MoE norm at 32 cores | **−10.23 %** *(−10.37 %/layer sliding MoE)* | **−11.28 % / layer** — 16 cores beats both the advised 22 and the shipped 32 |
+| north-mini | **B** | 0.6138 / 0.2033 | nothing | 0.0 % | — *all measured geometries slower or stalled* |
+| north-mini | **onA** | 0.2918 / 0.8465 | nothing | 0.0 % | — *sparse MoE untraceable; headroom unknown* |
 
-Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
+*Scope: `v2 result` is what the cell reported at its own scope (model-level % where it had one, µs where it did
+not). `reachable` is per-layer on the named kind, from my re-measurements — the two are not directly
+subtractable. The corpus totals that combine them are in §4 and* [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) *§3.11.*
+
+**8 shipped, 7 returned zero.**
+
+### How solid are the zeros?
+
+Worth grading, because "honest zero" was doing more work in earlier drafts than the evidence supports. Only one
+of the seven is verified by measurement:
+
+| cell | zero because | how well established |
+|---|---|---|
+| **llama-3.1-8B** | nothing on its ladder beats the default | **Verified.** I swept the whole achievable ladder — {8, 16, 32, 64}, the only counts its knob can express — and 16 (≈ the advised 22) and 32 are both **inside the noise floor**, 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not even expressible; the knob rounds it to 16. There is no hidden norm win |
+| llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** I never swept its ladder. Its norm arrived well placed and the advisor wanted *fewer* cores, a direction that wins ~half the time — so I have no reason to expect a win, and no measurement either |
+| phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
+| qwen3.6-27B B | the geometry hard-failed | **Structurally incomplete.** 97 % of its model decode time is in a `linear_attention` kind the tracer cannot reach, so it was never advised on at all. Its headroom is **unknown, not zero** — and it very likely carries the same ~191 ms/model `retilize` cost qwen B's profile shows |
+| north-mini onA | sparse MoE untraceable | **Structurally incomplete.** Same shape: **unknown, not zero** |
+| north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
+| qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
+
+**So: 1 verified zero, 1 asserted, 1 reasonable, 1 partly, and 3 that are coverage gaps rather than zeros.** The
+corpus's headline "7 of 15 returned zero" is true but should not be read as "7 decoders had no placement
+headroom" — for three of them nobody could look, and that is a
+[tracer-coverage](ADVCHAL-V2-FINDINGS.md) problem, not an advisor result.
+
+Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
 
 ---
 
