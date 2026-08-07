@@ -316,11 +316,13 @@ same harness — apply-all gives 3.7× what building up gave.
 
 ```
 1. apply_all      = every advised placement at once, from final_ir.mlir (shard shapes + full CoreRangeSet)
-2. if it does not run, remove ONLY the item that fails, with a single-op test naming it, and record that
-3. measure. if apply_all wins, that is the floor, not the ceiling
-4. ablate: remove one advised item at a time. an item whose removal makes it FASTER is a real finding
-   about the advisor and should be reported as one
-5. build up from the incumbent only for what apply_all could not reach
+2. before anything, drop every op in report.json's `unfixable_ops` -- the advisor has already told you
+   those cannot be done, with the exact TT_FATAL. 41 of 54 such declarations were screened anyway (§11)
+3. if what remains does not run, remove ONLY the item that fails, with an isolated single-op test naming it
+4. measure. if apply_all wins, that is the floor, not the ceiling
+5. ablate: remove one advised item at a time. an item whose removal makes it FASTER is a real finding
+   about the advisor; an item that changes nothing gets dropped with a measurement behind it (§10)
+6. build up from the incumbent only for what apply_all could not reach
 ```
 
 This inverts the failure mode. Today a cell that does nothing lands at "no_change" and passes its gate; under
@@ -356,3 +358,108 @@ corrected `report.json`, with what it actually did instead. **Analysis, not meas
 **The pattern in one line: every cell whose advised plan was dominated by a starved reduction and which applied
 it first, won big. Every cell that assembled its own chains instead is in the bottom half — and the one case
 where the counterfactual is measured, it lost 3.7×.**
+
+---
+
+## 10. E27 — applying the rest of the advised plan: the matmul advice is neutral
+
+§7 applied the two dominant advised blocks. This applies the next one: the advisor wants phi FN's big matmuls
+as **DRAM-sharded** matmuls with L1 width-sharded activations, which is the same treatment `_decode_down`
+already gets and which nobody tried. From `final_ir.mlir`:
+
+| op | advised program config | advised in / out |
+|---|---|---|
+| qkv `linear` `%6` | `dram_sharded<in0_block_w=12, per_core_m=1, per_core_n=3>` | in `#ttnn_layout13` L1 width-sharded **8** cores, shard (32,384); out `#ttnn_layout15` L1 width-sharded **96** cores, shard (32,96) |
+| MLP `gate_up` `%53` | `dram_sharded<in0_block_w=6, per_core_m=1, per_core_n=5>` | in the same layout13; out width-sharded **103** cores |
+
+Shipped: both are plain interleaved `ttnn.linear` with no program config. I implemented `gate_up` — the largest
+single op in the layer at 103.9 µs — exactly as advised, weight converted to DRAM width-sharded the same way
+`down_decode` is:
+
+| configuration | median ms | vs its base | noise floor |
+|---|---|---|---|
+| incumbent | 0.807535 | — | 0.001368 |
+| **advised `gate_up` alone** | 0.806777 | **−0.09 %** | 0.001145 |
+| rope advised + norm 11 | 0.663507 | — | 0.002121 |
+| **+ advised `gate_up`** | 0.664100 | **+0.09 %** | 0.000986 |
+
+**Both deltas are inside the noise floor. The advised matmul placement is neutral — it neither helps nor
+hurts.** So the ablation verdict is: drop it, and the −17.84 % from rope + norm is essentially the whole
+available win from phi FN's advised plan.
+
+This is consistent with E20 (DS matmuls are DRAM-bandwidth-bound, so core count is not the limiting resource),
+and it is exactly what step 4 of the F5 procedure is for: **apply everything, then ablate, and an item that
+contributes nothing gets dropped with a measurement behind the decision** rather than never being tried.
+
+**Not applied**, and so still unmeasured: the qkv `linear` (72.6 µs — it sits inline in the parent's
+`decode_forward`, so reaching it means reimplementing that method), `o_proj` (30.4 µs), the MLP `multiply`
+(8.5 µs), and the cos/sin `embedding`s. Given `gate_up` came back neutral I would not expect these to change
+the total, but that is an expectation, not a measurement.
+
+---
+
+## 11. The one advised item that genuinely cannot be done — and the advisor said so first
+
+The advisor places SDPA and `nlp_concat_heads_decode` in `dram/interleaved`. phi FN's cell tried it, and
+recorded `TT_FATAL: Sharded output not supported for GQA`; its paired chain `dense:b43` was rejected with
+`nlp_concat_heads_decode input must be sharded`.
+
+**Isolated single-op test** — the op alone, in the advised config, no chain reconstruction:
+
+| op | config | result |
+|---|---|---|
+| `ttnn.nlp_concat_heads_decode` | **DRAM interleaved** input, batch 32, 32 heads, head_dim 96 | **FAIL** — `TT_FATAL .../nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded()`, *"Input tensor must be sharded"* |
+
+*(Two further variants in that script failed on my own harness error — `ttnn.from_torch` needs an explicit
+shard spec for a sharded memory config — so only the row above counts.)*
+
+So the constraint is real and it is in the op's own device operation. **But the advisor is not the one that got
+this wrong.** From its own `final_ir.mlir`, line 88:
+
+```
+%39 = "ttnn.nlp_concat_heads_decode"(%38) <{num_heads = 32 : ui32}>
+  {ttnn.validation_unfixable = "MetalBackendError - Op constraint query failed with error:
+   TT_FATAL @ .../nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded()
+   info: Input tensor must be sharded"}
+```
+
+and in `report.json`:
+
+```json
+"unfixable_ops": [{"op": "ttnn.nlp_concat_heads_decode",
+                   "reason": "MetalBackendError - Op constraint query failed with error: TT_FATAL @ ...
+                              input_tensor.is_sharded() info: Input tensor must be sharded"}]
+```
+
+**The advisor detected it, declared the op unfixable, and reported the exact error string the cell later
+rediscovered on device.** The `dram/interleaved` in `report.json`'s `ops[]` for that op is the **fallback after
+a declared failure, not a recommendation** — and `OpModel<NLPConcatHeadsDecodeOp>::getOpConstraints`
+(`TTNNOpModel.cpp:3621`) reaches this conclusion by querying tt-metal's own constraint machinery
+(`QUERY_OP_CONSTRAINTS`), which is why it is right.
+
+### The stage throws that away — 41 times
+
+`reconcile.py:603` does read `unfixable_ops`:
+
+```python
+declared |= {str(x.get("op", "")).split(".")[-1] for x in (report.get("unfixable_ops") or [])}
+```
+
+but only to build `untraced_detail.declared_uncapturable_by_report` — **an informational note on the `untraced`
+bucket**. An unfixable op that lands in `dram_resident` or `chain` is never cross-referenced, and
+`nlp_concat_heads_decode` lands in `dram_resident`, where the reconciliation labels it:
+
+> `"reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op"`
+
+**Corpus-wide: 54 unfixable declarations, of which 41 are still presented as screenable advice** in a `chain` or
+`dram_resident` bucket. The declared-unfixable ops are `nlp_concat_heads_decode` (every cell),
+`rotary_embedding` / `rotary_embedding_llama`, and `repeat` — each with the advisor's own `TT_FATAL` or
+`TT_THROW` attached. `SKILL.md` and the stage prompt never mention the field at all.
+
+**Cost:** cells spend device time rediscovering errors the advisor handed them in writing. phi FN's
+`advisor_sdpa_concat_l1` knob and its `dense:b43` chain both record the identical string from
+`unfixable_ops`; gemma-4-26B FN has a `sharded_sdpa_output_extension` rejected knob for the same op; phi exp17
+hit the same wall independently.
+
+→ new action **C5g**. And it revises the premise of the `dram_resident` bucket: for an unfixable op, "the
+advisor placed it in DRAM" is not a disagreement to screen.

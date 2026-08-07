@@ -116,7 +116,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty-eight findings that matter
+## 3. The twenty-nine findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -885,6 +885,45 @@ because such items are never applied. Same device time; it is a reordering.
 
 ---
 
+### 3.28 The advisor reports what it cannot place. The stage screens it anyway — 41 times
+
+`report.json` carries an `unfixable_ops` list: ops the advisor could not place, each with the exact runtime
+error, obtained by querying tt-metal's own constraint machinery. phi FN's:
+
+```json
+"unfixable_ops": [{"op": "ttnn.nlp_concat_heads_decode",
+  "reason": "... TT_FATAL @ nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded()
+             info: Input tensor must be sharded"}]
+```
+
+`reconcile.py:603` reads the field — but **only** to annotate the `untraced` bucket's informational note. An
+unfixable op that lands in `dram_resident` or `chain` is never checked against it, and
+`nlp_concat_heads_decode` lands in `dram_resident`, where the reconciliation labels it *"advisor placed it in
+DRAM — that is advice, and it disagrees with a sharded shipped op."*
+
+**Corpus-wide: 54 unfixable declarations, 41 still presented as screenable advice.** The ops are
+`nlp_concat_heads_decode` (every cell), `rotary_embedding`/`rotary_embedding_llama` and `repeat`. `SKILL.md` and
+the stage prompt never mention the field.
+
+**Cells then spend device time rediscovering the advisor's own written errors.** phi FN's
+`advisor_sdpa_concat_l1` knob and its `dense:b43` chain both record the same string that was already in
+`unfixable_ops`; gemma-4-26B FN has the same for `sharded_sdpa_output_extension`; phi exp17 hit it
+independently. **I confirmed the constraint with an isolated single-op test — a DRAM-interleaved input to
+`nlp_concat_heads_decode` fails at `device_operation.cpp:44` — so the advisor's declaration was right and the
+waste is entirely on the consumer side.** → C5g.
+
+**And it revises the `dram_resident` bucket's premise:** for an unfixable op, the `dram/interleaved` in `ops[]`
+is a fallback after a declared failure, not a recommendation to screen.
+
+Separately, applying the advisor's remaining big item — the `gate_up` matmul as a DRAM-sharded matmul, exactly
+as the IR specifies — is **neutral** (0.806777 vs 0.807535 incumbent; 0.664100 vs 0.663507 stacked, both inside
+the floor). So the rope + norm −17.84 % is essentially the whole available win from phi FN's advised plan, and
+the matmul item gets dropped *with a measurement behind the decision* — which is the ablation half of F5 working.
+
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §10–§11
+
+---
+
 ## 4. What makes a model advisor-compatible
 
 Ranked by how much it actually decided outcomes.
@@ -1033,4 +1072,5 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | `advchal-v2-data.json` covers the corpus | **It has 14 rows, not 15** — gemma-4-26B FN is missing. Counts taken from that file alone are one cell short ([`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md)) |
 | **"The advisor gave an unrunnable layout / there is a tt-mlir↔tt-metal validation gap"** | **RETRACTED IN FULL — my error.** The advised shard is **(32,64)**, tile-aligned, on **32** cores; I probed **(32,48)**, a shape the advisor never specified. Every op in its real plan runs (isolated single-op test), and the plan verbatim is **−10.43 % at PCC 1.0** vs the −4.88 % shipped (§3.23, E25) |
 | The advisor advised 22 cores for phi's rope (and 11/22 generally) | **It advised 32.** `cores=` in `report.json` is a lossy single-range rendering of a two-range `CoreRangeSet`; `reconcile.py` parses it. **58.3 % of advised core counts corpus-wide are understated** (§3.23b) |
+| The advisor "advised DRAM interleaved" for SDPA / `nlp_concat_heads_decode` | **It declared the op `unfixable` and reported the exact `TT_FATAL`.** The DRAM layout in `ops[]` is a fallback after a declared failure, not a recommendation. The stage screens 41 of 54 such declarations anyway (§3.28) |
 | Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |

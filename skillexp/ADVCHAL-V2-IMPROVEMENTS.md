@@ -533,6 +533,34 @@ shipped.
 Nothing to change in tt-mlir or tt-metal from this. What replaces it is C5f (below) and F4.
 → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §4–§5.
 
+### C5g. Honour `report.json`'s `unfixable_ops` before screening anything ⭐⭐
+
+The advisor already tells the cell which ops cannot be placed, with the exact runtime error. `reconcile.py:603`
+reads the field — but only to annotate the `untraced` bucket's informational note. An unfixable op that lands in
+`dram_resident` or `chain` is never cross-referenced against it.
+
+**Corpus-wide: 54 unfixable declarations, 41 of them still presented as screenable advice.** The ops are
+`nlp_concat_heads_decode` (every cell), `rotary_embedding` / `rotary_embedding_llama`, and `repeat`, each
+carrying the advisor's own `TT_FATAL` / `TT_THROW`. `SKILL.md` and the stage prompt never mention the field.
+
+Worked example — phi FN. The advisor wrote:
+
+```json
+"unfixable_ops": [{"op": "ttnn.nlp_concat_heads_decode",
+  "reason": "... TT_FATAL @ nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded()
+             info: Input tensor must be sharded"}]
+```
+
+The reconciliation put that op in `dram_resident` with `reason: "advisor placed it in DRAM -- that is advice,
+and it disagrees with a sharded shipped op"`. The cell screened it and recorded the same error back. I confirmed
+the constraint with an isolated single-op test, so the advisor's declaration was correct — **the waste is
+entirely on the consumer side.**
+
+**Fix:** mark those rows `advisor_unfixable`, exclude them from screening and from the disagreement accounting,
+and surface the advisor's `reason` verbatim. Small change in `reconcile.py`; no build. Also: for these ops the
+`dram/interleaved` in `ops[]` is a **fallback after a declared failure, not a recommendation**, so the
+`dram_resident` bucket's premise does not hold for them.
+
 ### C5f. Derive `advised_cores` from the grid string, not the `cores=` bounding box ⭐⭐ one line
 
 `reconcile.py:194` parses `cores=(0,0)-(10,1)` → 22. The chosen layout's `CoreRangeSet` in `final_ir.mlir` has
@@ -742,6 +770,12 @@ unit, one variable per measurement, against the frozen incumbent."* That is buil
 **3.7× what it shipped**, strict non-overlap throughout. And the −10.43 % is at **PCC exactly 1.0** — so the
 oracle is not what cost this cell the difference; not trying the advice is.
 
+**And the ablation half works too.** Applying the advisor's remaining big item — the `gate_up` matmul as a
+DRAM-sharded matmul with L1 width-sharded activations, `in0_block_w=6, per_core_n=5`, exactly as the IR
+specifies — is **neutral**: 0.806777 alone against a 0.807535 incumbent, and 0.664100 against 0.663507 stacked
+on rope+norm. Both inside the noise floor. So it gets dropped *with a measurement behind the decision*, which
+is what step 5 is for and what the current build-up order never produces.
+
 **Corpus support:** the three best outcomes in the corpus (gemma-4-26B onA −12.98 %, north-mini FN −9.26 %,
 phi onA −7.58 %) are the three cells whose *first* candidate was the advisor's placement. The four worst are
 cells that never applied it. Correlation, not proof — cells differ in how much defect there was to find — but
@@ -752,11 +786,13 @@ phi FN is the measured counterfactual.
 ```
 1. apply_all = every advised placement at once, built from final_ir.mlir
    (it carries the shard shape and the full CoreRangeSet; report.json carries neither -- C5f)
-2. if it will not run, remove ONLY the failing item, with an isolated single-op test naming it
-3. measure. apply_all is the floor, not the ceiling
-4. ablate one advised item at a time. an item whose REMOVAL is faster is a finding about the advisor
-   and gets reported as one
-5. build up from the incumbent only for what apply_all could not reach
+2. first drop every op in `unfixable_ops` -- the advisor already said those cannot be done, with the
+   exact TT_FATAL (C5g). 41 of 54 such declarations were screened anyway
+3. if what remains will not run, remove ONLY the failing item, with an isolated single-op test naming it
+4. measure. apply_all is the floor, not the ceiling
+5. ablate one advised item at a time. an item whose REMOVAL is faster is a finding about the advisor;
+   an item that changes nothing gets dropped with a measurement behind the decision
+6. build up from the incumbent only for what apply_all could not reach
 ```
 
 **Why it is strictly better, not just different:**
