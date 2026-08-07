@@ -117,9 +117,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    tile_sizes = (
-        [(32, 32)] if is_perf else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
-    )
+    tile_sizes = [(32, 32)] if is_perf else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
 
     combinations = []
 
