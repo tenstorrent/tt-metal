@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
     DataflowBuffer dfb_inter2_obj(cb_inter2);
 
-    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+    compute_kernel_hw_startup(cb_y, cb_bcast_scaler, cb_dx);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);
