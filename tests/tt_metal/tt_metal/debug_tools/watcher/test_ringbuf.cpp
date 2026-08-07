@@ -86,7 +86,8 @@ void RunTest(
                         program,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                         logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                        ComputeConfig{
+                            .defines = {{fmt::format("WATCHER_RINGBUF_TRISC{}", processor.processor_type), "1"}}});
                     break;
             }
             break;
@@ -131,6 +132,15 @@ void RunTest(
                 logical_core,
                 DramConfig{.noc = tt_metal::NOC::NOC_0});
             break;
+        }
+        case HalProgrammableCoreType::DISPATCH: {
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+                log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            log_info(LogTest, "Skipping: watcher ringbuf test not yet supported on dispatch-engine cores.");
+            GTEST_SKIP();
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }

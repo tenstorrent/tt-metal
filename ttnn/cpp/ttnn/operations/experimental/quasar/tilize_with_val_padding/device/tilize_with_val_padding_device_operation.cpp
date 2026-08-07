@@ -43,13 +43,18 @@ bool can_use_sharded_optimized_factory(
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
-            return TilizeWithValPaddingMultiCoreShardedFactory{};
-        }
+        // [Quasar bring-up] MultiCoreShardedFactory uses the legacy ProgramDescriptor path -> a plain
+        // DataMovementKernel, which Quasar rejects ("Use QuasarDataMovementKernel instead"). Route sharded
+        // input to the Metal2-ported MultiCoreDefaultFactory (which handles sharded; it's already the
+        // non-optimized-sharded fallback). Restore the optimized factory once it's ported to
+        // create_program_artifacts. (can_use_sharded_optimized_factory is still used in compute_output_specs.)
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        // [Quasar bring-up] BlockInterleavedFactory is also unported (legacy DataMovementKernel). Fall back
+        // to the Metal2 MultiCoreDefaultFactory. NOTE: Default may handle the low-L1 (!enough_space_height)
+        // case less well; revisit if it OOMs. Port BlockInterleaved to create_program_artifacts to fix.
+        return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.use_multicore) {
         return TilizeWithValPaddingSingleCoreFactory{};
@@ -75,7 +80,8 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+            // [Quasar bring-up] BlockInterleaved unported -> Metal2 MultiCoreDefaultFactory (see note above).
+            return TilizeWithValPaddingMultiCoreDefaultFactory{};
         }
     }
     return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -165,7 +171,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
@@ -184,7 +190,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec);  // If the input is using the legacy sharded optimized program
                           // factory, the output has the same shard spec as the input.
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
@@ -194,7 +200,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
                 operation_attributes.output_padded_shape));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_shape,
         TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,

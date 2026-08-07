@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -56,6 +56,43 @@ def test_matches_config_detects_dsa(variant, config_only):
     assert TtIndexer.matches_config(config_only), f"{variant.name}: runtime config should carry DSA index_* fields"
     # No host weights, no cache, no explicit override -> still resolves sparse purely from the config.
     assert resolve_has_indexer(config_only) is True
+
+
+# --------------------------------------------------------------------------------------------------
+# Host-only: completeness is dtype-aware. as_tensor stamps the requested dtype into the tensorbin
+# filename, so a cache holding only the OLD bf16 wq_b/wk (before those two projections went bf8) must
+# read as INCOMPLETE — else cache-only construction finds no bf8 file and loads the empty placeholder
+# as garbage weights. No device: this is pure filename logic on check_cache_complete.
+# --------------------------------------------------------------------------------------------------
+def _touch_indexer_bin(cache_dir, prefix, short, dtype, layout=ttnn.TILE_LAYOUT):
+    # Reproduce the exact name as_tensor writes: core.py appends `_dtype_{dtype.name}_layout_{layout.name}`.
+    (cache_dir / f"{prefix}.indexer_{short}_dtype_{dtype.name}_layout_{layout.name}.tensorbin").touch()
+
+
+def test_check_cache_complete_is_dtype_aware(tmp_path):
+    prefix = "layer_0.mla"
+    expected = TtIndexer.WEIGHT_DTYPES
+
+    def write(dtypes):
+        for f in tmp_path.glob("*.tensorbin"):
+            f.unlink()
+        for name in TtIndexer.WEIGHT_NAMES:
+            _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name(name), dtypes[name])
+
+    # Stale pre-bf8 cache: wq_b/wk on disk but at bf16 -> incomplete (their bf8 tensorbins are absent).
+    write({**expected, "indexer.wq_b": ttnn.bfloat16, "indexer.wk": ttnn.bfloat16})
+    assert not TtIndexer.check_cache_complete(
+        tmp_path, prefix
+    ), "bf16-only wq_b/wk must fail the bf8 completeness check"
+
+    # Each weight at its expected dtype -> complete.
+    write(expected)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix), "expected-dtype cache must be complete"
+
+    # Superset cache (bf16 kept alongside bf8, as regenerated caches carry) -> still complete.
+    _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name("indexer.wq_b"), ttnn.bfloat16)
+    _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name("indexer.wk"), ttnn.bfloat16)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix), "bf8 present alongside bf16 must stay complete"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -114,7 +151,7 @@ def cleanup_cache():
     report_and_clear()
 
 
-def _forward(mla, mesh_device, rope_tensors, kvpe_cache, hidden):
+def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden):
     """Single-shot sparse MLA forward, mirroring run_mla_inference's SP×TP input sharding."""
     shard_dims = [None, None]
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
@@ -126,20 +163,40 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, hidden):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    out = mla.forward(hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache)
+    out = mla.forward(
+        hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, index_kv_cache=index_kv_cache
+    )
     return ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)
 
 
 def _new_kvpe(config, mesh_device, mesh_shape):
-    return init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    # Sparse attention (sparse_sdpa) reads the KVPE cache natively: it must be uncompressed bf16 and
+    # ROW_MAJOR (the sparse forward asserts this), not the init_kvpe_cache bf8/TILE default.
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_LEN,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
+    )
+
+
+def _new_index_kv(config, mesh_device, mesh_shape):
+    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path: 1 layer / 1 user, so
+    # update_padded_kv_cache's num_slots = cache_batch / layer_num stays >= 1 with the MLA's layer_num=1.
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=mesh_shape,
+        sp_axis=SP_AXIS,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
     )
 
 
@@ -153,6 +210,10 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=weight_cache_path,
+        # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
+        # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
+        # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
+        layer_num=1,
     )
 
 
@@ -182,14 +243,25 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     weights = random_mla_weights(config)  # device-vs-device round-trip: config-shaped weights suffice
     mesh_shape = list(mesh_device.shape)
 
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0): indexed rope
+    # tables + a caller-owned indexer key cache, exactly like the chunked path.
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
     torch.manual_seed(42)
     hidden = torch.randn(1, SEQ_LEN, config.hidden_size, dtype=torch.bfloat16)
 
     # === from weights (no cache) ===
     mla_w = _build_mla(config, weights, mesh_device, weight_cache_path=None)
     assert mla_w._has_indexer, f"{variant.name}: from-weights construction must be sparse"
-    out_weights = _forward(mla_w, mesh_device, rope_tensors, _new_kvpe(config, mesh_device, mesh_shape), hidden)
+    out_weights = _forward(
+        mla_w,
+        mesh_device,
+        rope_tensors,
+        _new_kvpe(config, mesh_device, mesh_shape),
+        _new_index_kv(config, mesh_device, mesh_shape),
+        hidden,
+    )
 
     # === offline cache build: dense + indexer tensorbins ===
     init_checker(CACHE_DIR)
@@ -202,7 +274,14 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     mla_c = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR)
     assert mla_c._has_indexer, f"{variant.name}: cache-only construction must stay sparse, not fall back to dense"
     assert type(mla_c._indexer).__name__ == "TtIndexer", "cache-only must bind TtIndexer, not NullIndexer"
-    out_cache = _forward(mla_c, mesh_device, rope_tensors, _new_kvpe(config, mesh_device, mesh_shape), hidden)
+    out_cache = _forward(
+        mla_c,
+        mesh_device,
+        rope_tensors,
+        _new_kvpe(config, mesh_device, mesh_shape),
+        _new_index_kv(config, mesh_device, mesh_shape),
+        hidden,
+    )
 
     passed, pcc = comp_pcc(out_weights, out_cache, 0.999)
     logger.info(f"[{variant.name}] sparse cache-only vs from-weights PCC: {pcc}")

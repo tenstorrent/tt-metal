@@ -12,11 +12,11 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 void kernel_main() {
-    std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
-        get_semaphore(get_compile_time_arg_val(7)),
-        get_semaphore(get_compile_time_arg_val(8)),
-        get_semaphore(get_compile_time_arg_val(9)),
-        get_semaphore(get_compile_time_arg_val(10)),
+    std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_id = {
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(8),
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(10),
     };
     std::array<uint32_t, 4> chunk_indices = {
         get_compile_time_arg_val(11),
@@ -62,12 +62,9 @@ void kernel_main() {
 
     cb_in0.reserve_back(multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
-        volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                fused_op_receiver_signal_semaphore_addr[chunk_indices[istep]]);
-
-        noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
-        noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
+        Semaphore<> fused_op_receiver_signal_semaphore(fused_op_receiver_signal_semaphore_id[chunk_indices[istep]]);
+        fused_op_receiver_signal_semaphore.wait_min(1);
+        fused_op_receiver_signal_semaphore.set(0);
         cb_in0.push_back(multicast_chunk_size_in_tiles);
     }
 }

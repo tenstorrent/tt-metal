@@ -7,6 +7,9 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
@@ -23,17 +26,21 @@ void kernel_main() {
 
     const auto output_accessor = TensorAccessor(output_args, output_addr);
 
+    Noc noc;
+    CircularBuffer cb_output(output_cb);
+
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t tile_id = tile_row * output_tiles_per_row;
-        cb_wait_front(output_cb, output_tiles_per_row);
-        uint32_t l1_read_addr = get_read_ptr(output_cb);
+        cb_output.wait_front(output_tiles_per_row);
+        uint32_t output_rd_offset = 0;
         for (uint32_t tile_col = 0; tile_col < output_tiles_per_row; tile_col++) {
-            noc_async_write_page(tile_id, output_accessor, l1_read_addr);
+            noc.async_write(
+                cb_output, output_accessor, tile_bytes, {.offset_bytes = output_rd_offset}, {.page_id = tile_id});
             tile_id++;
-            l1_read_addr += tile_bytes;
+            output_rd_offset += tile_bytes;
         }
-        noc_async_writes_flushed();
-        cb_pop_front(output_cb, output_tiles_per_row);
+        noc.async_writes_flushed();
+        cb_output.pop_front(output_tiles_per_row);
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

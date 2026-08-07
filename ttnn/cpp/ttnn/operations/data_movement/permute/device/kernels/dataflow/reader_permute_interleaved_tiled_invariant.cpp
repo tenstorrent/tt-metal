@@ -5,37 +5,35 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t N = get_named_compile_time_arg_val("rank");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr uint32_t N = get_arg(args::rank);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_tile = get_arg_val<uint32_t>(1);
-    const uint32_t end_tile = get_arg_val<uint32_t>(2);
+    const uint32_t start_tile = get_arg(args::start_tile);
+    const uint32_t end_tile = get_arg(args::end_tile);
 
-    constexpr uint32_t cb_id_in0 = 0;
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s = TensorAccessor(src_args, src_addr);
-    CircularBuffer cb(cb_id_in0);
+    const auto s = TensorAccessor(tensor::input);
+    DataflowBuffer dfb(dfb::cb_in0);
+    const uint32_t tile_bytes = dfb.get_tile_size();
     Noc noc;
 
-    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    // Rank-length arrays (count = N, a CTA) delivered as runtime varargs:
+    // output_tiled_shape in varargs [0, N), inv_perm in [N, 2N), src_strides in [2N, 3N).
     uint32_t output_tiled_shape[N], inv_perm[N], src_strides[N];
-    for (uint32_t i = 3; i < N + 3; i++) {
-        output_tiled_shape[i - 3] = get_arg_val<uint32_t>(i);
-        inv_perm[i - 3] = get_arg_val<uint32_t>(i + N);
-        src_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
+    for (uint32_t i = 0; i < N; i++) {
+        output_tiled_shape[i] = get_vararg(i);
+        inv_perm[i] = get_vararg(i + N);
+        src_strides[i] = get_vararg(i + 2 * N);
     }
 
-    uint32_t curr_addr = src_addr;
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
         // Compute multi-dimensional index for the source tile
         uint32_t dest_multi_idx[N];
@@ -58,9 +56,9 @@ void kernel_main() {
             src_linear_idx += src_multi_idx[i] * src_strides[i];
         }
 
-        cb.reserve_back(onetile);
-        noc.async_read(s, cb, tile_bytes, {.page_id = src_linear_idx}, {.offset_bytes = 0});
+        dfb.reserve_back(onetile);
+        noc.async_read(s, dfb, tile_bytes, {.page_id = src_linear_idx}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb.push_back(onetile);
+        dfb.push_back(onetile);
     }
 }

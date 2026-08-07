@@ -124,7 +124,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
@@ -135,7 +135,7 @@ TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     if (args.t_front_pad > 0) {
         shape[args.dim - 1] += args.t_front_pad;
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 

@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Sparse-attention (DSA) prefill adapters: DeepSeek-V3.2-Exp and GLM-5.2.
+"""Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base + DeepSeek-V3.2-Exp.
 
-(GLM-5.1 has a full serving runtime and lives in its own ``glm_5_1.py``; the test-only DSA
-variants stay here.) Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA
-+ MoE family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK26Adapter``:
+GLM-5.1 / GLM-5.2 have their own serving adapters (``adapters/glm_5_1.py`` / ``adapters/glm_5_2.py``);
+what remains here is the test-only base + DeepSeek-V3.2-Exp.
+
+Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
+family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK26Adapter``:
 
   * Their HF ``model_type`` (``deepseek_v32`` / ``glm_moe_dsa``) is NOT registered with
     transformers, so ``AutoConfig`` cannot load them — the config is HAND-BUILT via
@@ -26,7 +28,6 @@ from typing import Callable
 
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -79,34 +80,3 @@ class DeepSeekV32Adapter(SparseMLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 
         return deepseek_v32_hf_config
-
-
-class GLM52Adapter(SparseMLAPrefillAdapter):
-    # --- identity ---
-    name = "glm_5_2"
-    model_config = GLM52Config
-
-    # --- test metadata ---
-    # GLM-5.2 adds cross-layer DSA indexer reuse; geometry otherwise matches 5.1. FP8 repo, mirroring
-    # GLM-5.1 (a bf16 checkout would diverge from an FP8-derived trace).
-    hf_repo_id = "zai-org/GLM-5.2-FP8"
-    env_var = "GLM52_HF_MODEL"
-    mla_ref_cache_env = "GLM52_MLA_REF_CACHE"
-    mla_pcc_threshold = 0.995
-    moe_pcc_threshold = 0.971
-
-    # Pretrained path: the cache build is per-layer indexer-aware (full layers cache MLA+indexer;
-    # shared layers cache MLA only — they own no indexer weights). No reference_model_cls (the HF
-    # glm_moe_dsa indexer is a numerical outlier vs the vLLM/device lineage), so PCC validation uses a
-    # vLLM trace, as GLM-5.1 does.
-    supports_pretrained = True
-    ttnn_cache_env = "TT_GLM52_PREFILL_TTNN_CACHE"
-    ref_cache_env = "TT_GLM52_PREFILL_HOST_REF_CACHE"
-    prefill_trace_layout = "chunked_group_a_v1"
-    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
-
-    @property
-    def config_builder(self) -> Callable:
-        from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import glm_5_2_hf_config
-
-        return glm_5_2_hf_config

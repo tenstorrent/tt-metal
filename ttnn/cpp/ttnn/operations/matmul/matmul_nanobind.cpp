@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -522,12 +522,10 @@ void py_module(nb::module_& mod) {
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
         .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
-            Stream in1 weights from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender
-            GCB only). When true, each weight block is consumed as it arrives instead of waiting
-            for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
-            be queued for streaming (the ``(weight, block_count, rotation)`` form of
-            ``queue_tensor_prefetcher_request``, passing the per-receiver ring-rotation list) to
-            match, else the matmul deadlocks. Defaults to false.
+            Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The weight
+            MUST be queued with the ``(weight, block_count, rotation)`` request form. GCB-backed
+            mcast_in0 consumes natural FIFO order and requires this flag to remain false.
+            Defaults to false.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
@@ -863,6 +861,9 @@ void py_module(nb::module_& mod) {
 
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+                Most program configs take a row-vector bias of shape ``[1, N]`` (or ``[1, 1, 1, N]``), broadcast across the output rows.
+                The batched ``MatmulMultiCoreReuseProgramConfig`` path additionally supports a full-tile bias of shape ``[M, N]``,
+                added to the output and broadcast over the batch dimension.
             transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
@@ -1216,7 +1217,7 @@ void py_module(nb::module_& mod) {
             nb::arg("tensor_args"))
         .def_static(
             "compute_program_hash",
-            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
+            &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 

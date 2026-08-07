@@ -37,12 +37,15 @@ import ttml
 import ttml.common.muon_optimizer
 from ttml.common.config import DeviceConfig, SpeedrunSchedulerConfig, TrainingConfig as BaseTrainingConfig, load_config
 from ttml.common.data import CharTokenizer
+from ttml.common.performance import (
+    get_available_device_memory_in_bytes,
+    get_device_peak_tflops_bf16,
+)
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
     build_causal_mask,
     build_mesh,
     create_optimizer,
-    get_available_device_memory_in_bytes,
     get_tt_metal_runtime_root,
     round_up_to_tile,
     summary,
@@ -51,7 +54,14 @@ from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
-from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
+from model_builders import (
+    FLOPS_REGISTRY,
+    LlamaSpec,
+    Model,
+    ModelConfig,
+    instantiate_model_from_config,
+    parse_model_config,
+)
 from callbacks import (
     AverageLossCallback,
     MemoryTrackerCallback,
@@ -111,21 +121,6 @@ def _device_arch_name() -> str:
     if is_blackhole(device):
         return "blackhole"
     return "unknown"
-
-
-def get_device_peak_tflops_bf16() -> float:
-    """Per-device theoretical BF16 TFLOPS. Whole-mesh peak = this × num_devices."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    grid = device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
-    # Per-core BF16 TFLOPS for each supported TT architecture.
-    if is_wormhole_b0(device):
-        per_core = 1.0
-    elif is_blackhole(device):
-        per_core = 1.35
-    else:
-        raise ValueError(f"Unknown device: {device.arch()}")
-    return num_cores * per_core
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -785,13 +780,53 @@ def main() -> None:
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
     if args.sequence_length is not None:
         model_cfg.max_sequence_length = args.sequence_length
+    device_cfg = DeviceConfig(yaml_config)
+
+    if args.embedding_placement is not None:
+        if not isinstance(model_cfg.spec, LlamaSpec):
+            raise SystemExit("error: --embedding-placement is only supported for model_type=llama")
+        try:
+            placement = ttml.models.EmbeddingPlacement.from_string(args.embedding_placement)
+        except ValueError as e:
+            raise SystemExit(f"error: {e}")
+        if placement != ttml.models.EmbeddingPlacement.Replicated and not device_cfg.enable_tp:
+            raise SystemExit(
+                f"error: --embedding-placement {args.embedding_placement} requires tensor parallelism "
+                "(enable_tp); the embedding table is only sharded under TP."
+            )
+        model_cfg.spec.embedding_placement = placement
 
     if args.checkpoint_dir:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    device_cfg = DeviceConfig(yaml_config)
-
     mesh = build_mesh(device_cfg)
+
+    # Optional MoE-only expert-parallel axis (DeepSeek). device_cfg.moe_axis is an index
+    # into mesh_shape; rename that mesh axis to "moe_ep" (unless it already carries a
+    # parallelism name) and record it on the DeepSeek spec so SparseMoEEP partitions experts
+    # across it. When enable_tp is true, MoE uses the "tp" axis and this is ignored.
+    moe_ax = device_cfg.moe_axis
+    resolved_moe_axis: str | None = None
+    if moe_ax != -1:
+        shape = tuple(int(s) for s in device_cfg.mesh_shape)
+        if not (0 <= moe_ax < len(shape)):
+            raise ValueError(f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}")
+        names = list(mesh.axis_names)
+        logical = names[moe_ax]
+        if logical.startswith("_"):
+            names[moe_ax] = "moe_ep"
+            mesh = ttml.Mesh(mesh.shape, tuple(names))
+            resolved_moe_axis = "moe_ep"
+        else:
+            resolved_moe_axis = logical
+
+    # Record the resolved MoE axis on the DeepSeek spec so sparse_ep partitions experts
+    # across it. No-op for non-DeepSeek models.
+    if model_cfg.model_type == "deepseek":
+        model_cfg.spec.moe_axis_name = resolved_moe_axis
+
+    if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
     ttml.manual_seed(training_cfg.seed)

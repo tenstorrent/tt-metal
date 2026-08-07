@@ -11,19 +11,13 @@ namespace ckernel::math
 {
 
 // Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS       = MATH_ROWS; // 8 for quasar, 4 for trinity
-constexpr static std::uint32_t MOVE_MATH_ROWS[3]       = {8, 4, 1};
-constexpr static unsigned int SFP_ROWS                 = 2;
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for quasar automotive
+constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
+constexpr static unsigned int SFP_ROWS           = 2;
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
 constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
-
-#if defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr static std::uint32_t TRISC_ID = 3;
-#else
-constexpr static std::uint32_t TRISC_ID = 1;
-#endif
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
@@ -66,9 +60,9 @@ typedef union
 // List of possible data format config states
 enum class DataFormatConfigSet : std::uint8_t
 {
-    UNCONFIGURED          = 0,
-    DEFAULT               = 1,
-    MOV_OPS_EXPLICIT_FMT  = 2
+    UNCONFIGURED         = 0,
+    DEFAULT              = 1,
+    MOV_OPS_EXPLICIT_FMT = 2
 };
 
 // /**
@@ -113,6 +107,10 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 inline void _init_sfpu_config_reg_()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+    // Quasar simulator doesn't apply the SFPU const-lreg reset default at boot.
+    // Reload programmable constant LREG11 = -1.0 (its RTL reset default) each launch: config_dest=0xB,
+    // instr_mod1[0]=1 loads the default. sfpi materializes -1.0 and subtract-based float compares via LREG11.
+    TTI_SFPCONFIG(0, 0xB, 1);
 }
 
 /**
@@ -144,9 +142,8 @@ inline void _inc_dst_addr_()
 template <ckernel::trisc::DstTileShape TILE_SHAPE>
 inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx =
-        (TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x16) ? 5 : 4);
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    constexpr std::uint32_t tile_shape_idx = ckernel::trisc::get_dest_tile_size_log2(TILE_SHAPE);
+    const std::uint32_t dst_index          = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 

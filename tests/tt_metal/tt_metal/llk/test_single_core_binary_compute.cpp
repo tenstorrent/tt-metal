@@ -305,6 +305,13 @@ bool single_core_binary(
         .tile_format_metadata = test_config.tile,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -334,15 +341,16 @@ bool single_core_binary(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -351,15 +359,19 @@ bool single_core_binary(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fpu_math_fidelity = test_config.math_fidelity,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fpu_math_fidelity = test_config.math_fidelity,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -393,10 +405,7 @@ bool single_core_binary(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = test_config.math_fidelity,
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -419,25 +428,25 @@ bool single_core_binary(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", input0_dram_buffer->address()},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", input1_dram_buffer->address()},
-                   {"src1_bank_id", 0u},
-                   {"num_tiles", num_tiles_u},
-                   {"src2_addr", input2_dram_buffer->address()},
-                   {"src2_bank_id", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", input0_dram_buffer->address()},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", input1_dram_buffer->address()},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", num_tiles_u},
+                 {"src2_addr", input2_dram_buffer->address()},
+                 {"src2_bank_id", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values =
-                {{node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -464,8 +473,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -484,8 +493,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -504,8 +513,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -525,8 +534,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -546,8 +555,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -567,8 +576,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         }
     }
 }
@@ -587,8 +596,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -611,8 +620,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -635,8 +644,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -659,8 +668,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -683,8 +692,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -707,8 +716,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -733,8 +742,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i),
         };
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -759,8 +768,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i),
         };
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
@@ -785,8 +794,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             .math_fidelity = MathFidelity(i),
         };
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
             // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;

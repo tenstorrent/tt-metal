@@ -94,8 +94,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const ttsl::SmallVector<uint32_t> token_end = {
         cache_shape[0], cache_shape[1], mask->get_value().logical_shape()[-1], cache_shape[3]};
 
-    const tt::tt_metal::Tensor& k_cache_slice = ttnn::slice(k_cache, token_start, token_end, step);
-    const tt::tt_metal::Tensor& v_cache_slice = ttnn::slice(v_cache, token_start, token_end, step);
+    const ttnn::Tensor& k_cache_slice = ttnn::slice(k_cache, token_start, token_end, step);
+    const ttnn::Tensor& v_cache_slice = ttnn::slice(v_cache, token_start, token_end, step);
 
     const auto k_cache_to_process = ttml::autograd::create_tensor(k_cache_slice);
     const auto v_cache_to_process = ttml::autograd::create_tensor(v_cache_slice);

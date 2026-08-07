@@ -21,14 +21,16 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -115,7 +117,7 @@ class TtPrefillTransformer(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -135,6 +137,8 @@ class TtPrefillTransformer(LightweightModule):
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        overlap_shared_expert_with_dispatch: bool = True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -154,6 +158,11 @@ class TtPrefillTransformer(LightweightModule):
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
+
+        # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
+        # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
+        # take the scalar TP element.
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -217,6 +226,8 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                sparse_kv_cache_format=sparse_kv_cache_format,
+                overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             )
             self.layers.append(layer)
 
@@ -232,7 +243,7 @@ class TtPrefillTransformer(LightweightModule):
                 epsilon=config.rms_norm_eps,
                 cluster_axis=tp_axis,
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
             )
@@ -246,12 +257,18 @@ class TtPrefillTransformer(LightweightModule):
         # Chunked prefill uses the KV-pad-aware indexed rotated path: whole-cache cos/sin/trans built
         # once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len is
         # the per-chunk size and max_seq_len the full per-user cache length.
+        #
+        # SPARSE (DSA) layers ALWAYS use the indexed rotated path — single-shot is folded onto the
+        # block-cyclic path as one full-seq chunk (chunk_size_global == seq_len), so build the indexed
+        # tables whenever the model is sparse too, not only when chunked. Dense single-shot keeps None
+        # (rotary_embedding_llama via get_rope_tensors).
+        self._has_indexer = resolve_has_indexer(config)
         self.indexed_rope = (
             self.rope_setup.get_rope_tensors_indexed(
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
             )
-            if is_chunked
+            if (is_chunked or self._has_indexer)
             else None
         )
 
@@ -263,7 +280,7 @@ class TtPrefillTransformer(LightweightModule):
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 is_balanced=is_balanced,
                 weight_cache_path=weight_cache_path,
                 is_column_parallel=lm_head_is_column_parallel,
@@ -276,6 +293,35 @@ class TtPrefillTransformer(LightweightModule):
         self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
+
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController on every layer's MoE, so a ttnn
+        trace captured over forward() is split at the shared-expert/dispatch sub-device boundaries
+        (see utils/sub_device_trace.py). Pass None to restore plain eager load/clear.
+
+        DENSE-MLA ONLY. Tracing a sparse/DSA (indexer) model is rejected: the traced forward advances
+        its per-chunk scalars through the metadata ops, and the indexer path has no metadata overload
+        yet — the captured forward also never threads index_kv_cache, so a sparse model would replay
+        silently WITHOUT its indexer cache and produce wrong KV rather than failing. Porting the
+        indexer ops is out of scope here."""
+        if controller is not None:
+            assert not self._has_indexer, (
+                "trace capture is not supported for sparse/DSA (indexer) attention. Supported today: "
+                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
+                "any other indexer/sparse-attention variant need their indexer ops ported to the "
+                "per-element-tensor metadata form first — until then run them untraced (use_trace=False "
+                "/ PREFILL_USE_TRACE=0)."
+            )
+        for layer in self.layers:
+            layer.set_trace_controller(controller)
+
+    def release_sub_device_managers(self):
+        """Remove every MoE-created overlap sub-device manager before closing the mesh device.
+        Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
+        has been observed to segfault the teardown. Safe/idempotent — call once at end of a run."""
+        self.mesh_device.clear_loaded_sub_device_manager()
+        for layer in self.layers:
+            layer.release_sub_device_managers()
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
@@ -290,16 +336,20 @@ class TtPrefillTransformer(LightweightModule):
     def forward(
         self,
         token_ids: ttnn.Tensor,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         actual_isl: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        metadata: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -314,17 +364,26 @@ class TtPrefillTransformer(LightweightModule):
                 emb_dim/tp] hidden-state activation handed over from the previous rank.
             kvpe_cache: externally created KVPE cache [num_layers, 1, seq_len_local, head_dim];
                         each layer writes to its own slot via cache_layer_idx
-            index_kv_cache: sparse-DSA chunked only — per-layer list of block-cyclic indexer key caches
-                        (the indexer is single-layer, so layers can't share one tensor). None otherwise.
+            index_kv_cache: sparse-DSA (v3.2 / GLM) — the caller-owned, layer-stacked block-cyclic indexer
+                        key cache [num_users * num_layers, 1, T, D_idx] (SP-sharded on the seq axis), same
+                        ownership as kvpe_cache. Required for EVERY sparse forward — chunked AND single-shot
+                        (folded onto the block-cyclic path); the indexer never self-allocates it. None only
+                        for dense (non-sparse) variants.
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
-            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
-                Called as on_layer_complete(layer_idx). Used for KV cache
-                migration in disaggregated prefill/decode. When set, MLA also zeros
-                the padding region of the cache before fill so migration sees valid KV
-                + zero padding. When None, no migration or zeroing.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                        each layer's KV cache has been populated on device. When set, each block zeros the
+                        cache pad window and enqueues the ack via the outbound_socket_service_sync device op
+                        on the same CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                        d2h_service is set.
+            on_layer_complete: the HOST-callback alternative to d2h_service (used by pipelined prefill's
+                        layer-completion router). Called as on_layer_complete(layer_idx) after the same
+                        pad-zero, but with a device sync first. Wire one or the other, never both.
+            on_layer_hidden: optional tap fired at the END of each block with (GLOBAL layer index, block
+                        output activation). Read-only — see tt_prefill_block.forward.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next
@@ -338,12 +397,27 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
+        # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
+        # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
+        # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
+        assert d2h_service is None or on_layer_complete is None, (
+            "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
+            "d2h_service and would silently drop on_layer_complete"
+        )
+
         # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
         # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
         # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token
         # is returned, but the chunked caller ignores it (the populated cache is the output).
-        if actual_start is not None:
-            assert self.is_chunked, "actual_start requires the transformer to be built with is_chunked=True"
+        if actual_start is not None or metadata is not None:
+            # metadata path: per-chunk actual_start/actual_end live on-device in the metadata tensor
+            # (read by the trace-safe MLA ops), so actual_start is None here -- still chunked prefill,
+            # still the prebuilt whole-cache indexed rope.
+            assert self.is_chunked, "chunked prefill (actual_start or metadata) requires is_chunked=True"
+            rope_tensors = self.indexed_rope
+        elif self._has_indexer:
+            # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0),
+            # so it uses the indexed rope tables just like the chunked path.
             rope_tensors = self.indexed_rope
         else:
             rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
@@ -381,7 +455,10 @@ class TtPrefillTransformer(LightweightModule):
                 kvpe_cache,
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
+                d2h_service=d2h_service,
+                record_dev=record_dev,
                 on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,
@@ -390,6 +467,7 @@ class TtPrefillTransformer(LightweightModule):
                 indexer_indices=inject,
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
+                metadata=metadata,
             )
             if reuse:
                 h, _, new_idx = ret

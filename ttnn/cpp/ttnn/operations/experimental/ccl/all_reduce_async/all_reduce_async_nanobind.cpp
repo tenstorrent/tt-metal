@@ -118,6 +118,7 @@ void bind_all_reduce_async(nb::module_& mod) {
                 std::optional<size_t>,
                 std::optional<tt::tt_metal::SubDeviceId>,
                 bool,
+                bool,
                 bool>(ttnn::experimental::all_reduce_async),
             nb::arg("input_tensor"),
             nb::arg("buffer_tensor"),
@@ -131,7 +132,8 @@ void bind_all_reduce_async(nb::module_& mod) {
             nb::arg("num_links") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_noc1_only") = false,
-            nb::arg("use_optimal_ccl_for_llama") = false));
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("fp32_dest_acc") = false));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

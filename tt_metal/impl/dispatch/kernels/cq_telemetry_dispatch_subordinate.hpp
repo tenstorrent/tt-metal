@@ -29,7 +29,8 @@ FORCE_INLINE void compress_work_runtime(
     avg_work_runtime_per_worker += current_sub_device_work_runtime / workers_per_sub_device;
     current_sub_device_work_runtime = 0;
     auto dispatch_telemetry =
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+            dispatch_telemetry_base);
     dispatch_telemetry->avg_work_runtime_per_worker = avg_work_runtime_per_worker;
 }
 
@@ -61,9 +62,11 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
     }
 
     auto dispatch_telemetry =
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+            dispatch_telemetry_base);
     auto dispatch_telemetry_control =
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
+            dispatch_telemetry_control_addr);
 
     // Start with all workers in the complete state until work is detected
     for (uint32_t i = 0; i < total_sub_devices; ++i) {
