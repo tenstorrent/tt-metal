@@ -88,32 +88,18 @@ def _trace_dir_ready(path: Path) -> bool:
     return path.exists() and (path / "metadata.json").exists()
 
 
-def find_trace_dir(
-    input_source: str,
-    isl_total: int,
-    padding_side: str,
-    use_pretrained: bool,
-    n_routed_experts: int,
-) -> tuple[Path, int] | None:
-    """Return ``(trace_dir, trace_isl)`` for a test configuration, or ``None``.
+def find_trace_dir(input_source: str, isl_total: int, padding_side: str) -> tuple[Path, int] | None:
+    """Return ``(trace_dir, trace_isl)`` for a registered, on-disk trace, or ``None``.
 
     ``trace_isl`` is the trace's NATIVE sequence length. When it is larger than the
     requested ``isl_total`` the caller must slice the trace down to ``isl_total``
     (see :func:`slice_debug_trace`) — valid for causal, nopad prefill traces.
-
-    A trace is eligible only when:
-    - the model uses pretrained weights with 256 experts (traces were generated from
-      the full pretrained DeepSeek-R1 model)
-    - the directory exists and contains a metadata.json
 
     Resolution order:
     1. Exact ``(input_source, isl_total, padding_side)`` match (no slicing).
     2. Otherwise the smallest ready trace with the same ``(input_source, padding_side)``
        whose native isl is ``>= isl_total`` (caller slices the first ``isl_total`` tokens).
     """
-    if not use_pretrained or n_routed_experts != 256:
-        return None
-
     # 1. Exact native-length match — preferred, no slicing needed.
     exact = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
     if exact is not None and _trace_dir_ready(exact):

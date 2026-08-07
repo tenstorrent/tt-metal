@@ -139,9 +139,8 @@ the loader reads by **fixed filenames/keys**, not by searching:
 - If no trace matches your `(input_source, padding_side)` with a native isl `>= isl_total`,
   **no trace is used regardless of the env var** — the test falls back to the reference
   cache / live HF compute.
-- This is a different mechanism from the variant's `prefill_trace_default` field
-  (`/mnt/models/.../golden/...`), which is consumed by the *chunked* transformer test and
-  the standalone runners via `PREFILL_TRACE_DIR` — not by this `find_trace_dir` path.
+- `DEEPSEEK_V3_TRACE_DIR` covers only the table above. The `variant_default` PCC rows instead read
+  `variant.test_prefill_trace_default` — a hardcoded adapter path, with no env override here.
 
 ### `HF_HOME`
 HuggingFace cache dir used for the auto-download fallback (weights, config, tokenizer).
@@ -152,8 +151,8 @@ Default `~/.cache/huggingface`.
 ## Tier 2 — optional behavior toggles
 
 ### `TT_DS_PREFILL_INFINITEBENCH_CACHE`
-Where the InfiniteBench subset is cached. Relevant only to `smoke-longbook_qa_eng` — the pcc row
-takes its tokens from the trace. The test's only network dependency. Falls back under `HF_HOME`.
+Where the InfiniteBench subset is cached. Needed whenever a `longbook_qa_eng` run tokenizes:
+the smoke rows, and any pcc run where no golden resolved. Falls back under `HF_HOME`.
 
 ### `TT_DS_PREFILL_DEBUG_TOKEN_COUNT`
 `1/true/yes` enables a token-count debug path inside the MoE block (`tt_moe.py`).

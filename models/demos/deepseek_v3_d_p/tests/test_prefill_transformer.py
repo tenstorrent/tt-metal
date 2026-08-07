@@ -78,6 +78,8 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 
 # Only the subset that is still a parametrized input_source; downloaded on first use.
 INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
+# input_source meaning "this variant's own golden" — naming it after a prompt would go stale.
+VARIANT_DEFAULT_TRACE = "variant_default"
 SEQ_LEN_1K = 1024
 SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
@@ -205,15 +207,13 @@ def run_model(
         else False
     )
 
-    # Priority 1: debug trace on disk
+    # Priority 1: debug trace on disk. A golden is captured from the full pretrained model, so it is
+    # a reference only for a run with those weights and that expert count.
     trace = None
     trace_dir = None
     trace_sliced = False
-    trace_match = (
-        find_trace_dir(input_source, isl_total, padding_side, use_pretrained, n_routed_experts)
-        if pcc_validation
-        else None
-    )
+    trace_eligible = pcc_validation and use_pretrained and n_routed_experts == variant.model_config.NUM_ROUTED_EXPERTS
+    trace_match = find_trace_dir(input_source, isl_total, padding_side) if trace_eligible else None
     if trace_match is not None:
         trace_dir, trace_isl = trace_match
         trace = load_debug_trace(trace_dir, num_layers=num_layers)
@@ -226,27 +226,26 @@ def run_model(
             f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
             f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
-    # Fallback: a variant may pin an explicit golden trace via variant.test_prefill_trace_default that
-    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover. load_debug_trace
-    # reads both the single_file and chunked_group_a_v1 layouts and slices to isl_total, so the single-shot
-    # test just chops the prefix it needs (e.g. the first 5120 rows == a 5120 single-shot prefill).
-    elif pcc_validation and getattr(variant, "test_prefill_trace_default", None):
-        _pinned = variant.test_prefill_trace_default
-        if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
-            trace_dir = Path(_pinned)
-            trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
-            # load_debug_trace(isl=...) chops the per-row tensors (token_ids/decoder/kv) to isl_total, but
-            # the stored logits/next_token_id stay the full-sequence products (never isl-sliced). Mark the
-            # trace sliced when we chopped a longer golden, so the later full-model logits/first-token
-            # checks are skipped — otherwise trace_full_model stays True and they compare this shorter
-            # prefill against the 55k golden's final-token logits and false-fail.
-            native_isl = len(trace.metadata.get("token_ids", []))
-            if native_isl > isl_total:
-                trace_sliced = True
-            logger.info(
-                f"Loaded pinned debug trace from {trace_dir} "
-                f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
-            )
+    # Explicitly asked for this variant's own golden (TRACE_LOOKUP is longbook/R1-only). Not a
+    # fallback: only this input_source lands here, so no other row gets handed someone else's golden.
+    elif trace_eligible and input_source == VARIANT_DEFAULT_TRACE:
+        _pinned = getattr(variant, "test_prefill_trace_default", None)
+        assert _pinned and os.path.exists(os.path.join(_pinned, "metadata.json")), (
+            f"{variant.name}: input_source={VARIANT_DEFAULT_TRACE} needs a usable "
+            f"test_prefill_trace_default, got {_pinned}"
+        )
+        trace_dir = Path(_pinned)
+        trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
+        # load_debug_trace(isl=...) chops the per-row tensors, but the stored logits/next_token_id stay
+        # full-sequence. Mark a chopped golden sliced so the later full-model checks are skipped instead
+        # of comparing this shorter prefill against the golden's final-token logits.
+        native_isl = len(trace.metadata.get("token_ids", []))
+        if native_isl > isl_total:
+            trace_sliced = True
+        logger.info(
+            f"Loaded {variant.name} variant golden from {trace_dir} "
+            f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
+        )
 
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,
@@ -311,7 +310,7 @@ def run_model(
                 f"variant.test_prefill_trace_default ({getattr(variant, 'test_prefill_trace_default', None)}) "
                 f"did not resolve"
             )
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+        token_ids, attention_mask, _ = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         profiler.end("tokenization")
         logger.info(
             f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
@@ -978,14 +977,14 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize(
     "input_source, pcc_validation, use_pretrained",
     [
-        ("code_debug", True, True),
+        (VARIANT_DEFAULT_TRACE, True, True),
         ("json_prompts", False, True),
         ("json_prompts", False, False),
         ("random", False, True),
         ("random", False, False),
     ],
     ids=[
-        "pcc-code_debug-pretrained",
+        "pcc-variant_default-pretrained",
         "smoke-json_prompts-pretrained",
         "smoke-json_prompts-random",
         "smoke-random-pretrained",
@@ -1095,10 +1094,10 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize(
     "input_source, pcc_validation",
     [
-        ("code_debug", True),
+        (VARIANT_DEFAULT_TRACE, True),
         ("json_prompts", False),
     ],
-    ids=["pcc-code_debug", "smoke-json_prompts"],
+    ids=["pcc-variant_default", "smoke-json_prompts"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
