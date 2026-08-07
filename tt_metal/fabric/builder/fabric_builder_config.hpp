@@ -49,44 +49,42 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 // num sender channels based on more accurate topology
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
+// The frozen non-express forwarding VC0 count, used by the tensix/L1 path. The wiring-side
+// statement of the same number is non_express_vc0_sender_count() in router_wiring_rules (the two
+// are static_assert-ed equal there); they unify when the tensix path is widened for express.
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
-// Intra-mesh Z (sub-torus "skip link") adds a 5th VC0 sender channel on the standard mesh router:
-//   [0]=worker [1..3]=mesh dirs [4]=intra-mesh Z. This makes the mesh-router VC0 symmetric to the
-//   Z_ROUTER VC0 (also 5-wide). Gated on has_intra_mesh_z; the no-Z case stays 4-wide.
-static constexpr std::size_t num_sender_channels_2d_mesh_with_z = 5;
 
-// Z router channel counts
-// VC0: 5 sender channels (mesh→Z: 0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
-// VC1: 4 sender channels (Z→mesh, one per direction: 0=E, 1=W, 2=N, 3=S) + 0 receiver (skipped)
-static constexpr std::size_t num_sender_channels_z_router_vc0 = 5;
-static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+// Per-family sender counts beyond the frozen non-express 2D width are not constants here: they
+// are derived in builder/router_wiring_rules.* from the wiring rules -- the express family as the
+// family max over facing of wired-producer arity, the boundary family from the mesh-direction
+// count. Both are 5 VC0 / 4 VC1, by unrelated arithmetic.
+
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;
-static constexpr std::size_t num_sender_channels_z_router_vc2 = 1;
-// Aggregate without VC2 — VC2 channels are added dynamically by channel mapping when requires_vc2 is true
-static constexpr std::size_t num_sender_channels_z_router =
-    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
-// Max including VC2 — used only for array sizing
-static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
-    num_sender_channels_z_router + num_sender_channels_z_router_vc2;
-static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-// VC0: Worker + 3 of [N/E/S/W] = 4 channels
-// VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// Total 2D without VC2: 4 + 3 + 1 = 8 channels (VC2 added dynamically)
-static constexpr std::size_t num_sender_channels_2d = 8;
+// VC0: Worker + 3 of [N/E/S/W], plus the express chord when express routing is on = 4 or 5 channels
+// VC1: Up to 4 channels (no worker): 3 of [N/E/S/W] for inter-mesh, plus a Z sender when the device
+// has an intermesh Z router or the mesh has express routing -- a carrier that crossed a mesh
+// boundary stays on VC1 and can still decode a Z action, so the express output must exist on VC1.
+// Total 2D without VC2: 5 + 4 = 9 channels (VC2 added dynamically)
+//
+// Sized for the widest 2D shape so the flat index space is the same whether or not express routing is
+// enabled. num_max_sender_channels is unchanged at 10: express with VC2 reaches it exactly (5+4+1),
+// matching the capacity analysis in GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 3.6. The
+// Z-facing intermesh boundary family is also 5+4(+1), so the ceilings below cover it as well.
+static constexpr std::size_t num_sender_channels_2d = 9;
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
 // Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
 static constexpr std::size_t num_max_sender_channels_without_vc2 =
-    std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
-// = max(2, 8, 9) = 9
+    std::max({num_sender_channels_1d, num_sender_channels_2d});
+// = max(2, 9) = 9
 // Absolute maximum — used for host-side array sizing (always big enough for any config)
 static constexpr std::size_t num_max_sender_channels =
-    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2, num_sender_channels_z_router_with_vc2});
-// = max(2, 9, 10) = 10
+    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2});
+// = max(2, 10) = 10
 static constexpr std::size_t num_receiver_channels_1d = 1;
 // Without VC2 — VC2 receiver added dynamically
 static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
@@ -94,26 +92,41 @@ static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
 static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
 // Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
 static constexpr std::size_t num_max_receiver_channels_without_vc2 =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
-// = max(1, 2, 2) = 2
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d});
+// = max(1, 2) = 2
 // Absolute maximum — used for host-side array sizing (always big enough for any config)
 static constexpr std::size_t num_max_receiver_channels =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2, num_receiver_channels_z_router});
-// = max(1, 3, 2) = 3
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2});
+// = max(1, 3) = 3
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-// With intra-mesh Z, a VC0 receiver may also forward to the intra-mesh Z neighbor, so it can have a
-// 4th downstream EDM (3 mesh directions + intra-mesh Z).
-static constexpr std::size_t num_downstream_edms_2d_vc0_with_z = 4;
+// With express routing, a Y-facing VC0 receiver can fan out to four downstream routers rather than
+// three: continue Y cardinally, take the express chord, and turn onto either X direction. The stream
+// register for that fourth edge already exists (vc_0_free_slots_from_downstream_edge_4), so this
+// widening needs no new flow-control resource.
+static constexpr std::size_t num_downstream_edms_2d_vc0_express = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
-static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
+static constexpr std::size_t num_downstream_edms_2d_vc1_wide =
+    4;  // widest VC1 fanout: 3 mesh + Z (Z-intermesh boundary or express)
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
 static constexpr std::size_t max_downstream_edms = 8;
 
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
+
+// The Z-facing intermesh boundary family's channel counts (5 VC0 / 4 VC1, family max) are derived
+// in builder/router_wiring_rules.* (boundary_vc0/vc1_sender_count) from this direction count, not
+// stated here.
+
+// Slots an injection channel's downstream receiver must have for bubble flow control to work: it only
+// sends when it sees this many free, so a smaller receiver stalls it permanently.
+//
+// Must match BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS on the device side, which the
+// host cannot include. That constant is already duplicated in fabric_router_mux_extension.cpp, so this
+// is the third copy; they have to move together.
+static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
@@ -125,7 +138,7 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool has_intra_mesh_z = false);
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 
