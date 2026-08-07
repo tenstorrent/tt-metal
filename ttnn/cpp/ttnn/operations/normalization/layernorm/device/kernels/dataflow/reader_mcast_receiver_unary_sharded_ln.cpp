@@ -29,6 +29,13 @@ namespace df = norm::layernorm::device::kernels::dataflow;
  *       in its own combine
  */
 void kernel_main() {
+#ifdef IDLE_CORE
+    // This core sits inside the sender's broadcast rectangle but owns no shard, because the shard grid
+    // does not fill its bounding box. It exists only to keep the broadcast's target L1 reserved, so it
+    // must not signal the coordinator: the coordinator counts exactly one partial per real shard.
+    return;
+#endif
+
     // ============================================================================
     // Kernel setup
     // ============================================================================

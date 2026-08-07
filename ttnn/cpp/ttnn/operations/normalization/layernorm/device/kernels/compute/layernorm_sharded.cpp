@@ -19,6 +19,11 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
+#ifdef IDLE_CORE
+    // No shard on this core (see reader_mcast_receiver_unary_sharded_ln.cpp): no partial to compute.
+    return;
+#endif
+
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);

@@ -15,6 +15,11 @@
 #endif
 
 void kernel_main() {
+#ifdef IDLE_CORE
+    // No shard on this core (see reader_mcast_receiver_unary_sharded_ln.cpp): nothing to write out.
+    return;
+#endif
+
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;

@@ -12,6 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::experimental::matmul_decode {
 
@@ -33,6 +34,10 @@ struct MatmulDecodeDeviceOperation {
         int batch = 1;
         int b_blocks = 1;
         int n_blocks = 1;
+        // DRAM-sender GlobalCircularBuffer feeding in1 from the tensor prefetcher.
+        // When set, the weight is a DRAM ND-sharded tensor (one slab per receiver)
+        // and the receiver grid comes from the GCB, not from a legacy shard spec.
+        std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -70,6 +75,13 @@ struct MatmulDecodeDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    // The default reflection hash cannot tell two identically shaped GlobalCircularBuffers apart
+    // (GlobalCircularBuffer::attribute_names carries no address), so the GCB's addresses are folded
+    // in on top of everything the default hash already covered. See the .cpp for why that matters.
+    // Note that declaring this opts the op out of attribute-level canonical-key collision
+    // resolution, so cache separation rests on the hash alone.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -83,5 +95,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 }  // namespace ttnn::prim
