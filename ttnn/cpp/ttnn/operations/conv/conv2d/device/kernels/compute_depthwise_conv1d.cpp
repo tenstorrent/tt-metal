@@ -11,6 +11,10 @@
 // defines alone are not enough -- without this the expansion of SFPU_OP_INIT_ACTIVATION does not
 // compile.
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+// `apply_snake_beta` calls sin_tile/sin_tile_init unconditionally. Those names are not
+// template-dependent, so they must be declared where the template is *defined*, not merely where it is
+// instantiated -- without this every depthwise conv fails to build, not just the snake path.
+#include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -117,6 +121,55 @@ inline void mul_and_accumulate_block(
 //     `matmul_multicore_reuse_mcast_1d_program_factory.cpp:743-761`.
 //
 // Measured together: 1.6e-03 -> fp32-grade against a float64 golden. DST usage is 3 tiles.
+// Per-channel snake, applied to the finished conv output while it is still in DST.
+//
+//     y = x + inv_beta * sin(alpha * x)^2
+//
+// `alpha` and `inv_beta` arrive as tiles with the per-channel value replicated down all 32 rows, so
+// this is plain `mul_binary_tile` with no broadcast. The host precomputes `inv_beta = 1/(beta+eps)`
+// so the kernel needs no reciprocal.
+//
+// The scalar SFPU_OP_*_ACTIVATION seam cannot express this: it is parameterised by compile-time
+// scalars, and snake's parameters are per channel. See AUDIO_FUSION_PLAN.md Step 2a for the three
+// cheaper routes that were ruled out by inspection.
+//
+// DST budget: this runs only on the last tap, by which point DST_A and DST_B have been consumed, so
+// it reuses them and the total stays at the 3 tiles the fp32 half-sync budget already allows.
+//
+//     DST_A <- alpha              DST_A = alpha * acc
+//     DST_A <- sin(DST_A)         DST_A = sin^2
+//     DST_B <- inv_beta           DST_A = inv_beta * sin^2
+//     DST_ACC += DST_A
+//
+// Reads one alpha tile and one inv_beta tile per output tile and pops both; the reader must push them
+// in that order at the same rate, or the op desyncs.
+template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
+inline void apply_snake_beta(DataflowBuffer params_dfb) {
+    const uint32_t params_cb_id = params_dfb.get_id();
+
+    params_dfb.wait_front(2);
+
+    copy_tile_to_dst_init_short(params_cb_id);
+    copy_tile(params_cb_id, 0, dst_a);  // alpha
+    mul_binary_tile_init();
+    mul_binary_tile(dst_acc, dst_a, dst_a);  // alpha * x
+
+    sin_tile_init();
+    sin_tile(dst_a);  // sin(alpha * x)
+    mul_binary_tile_init();
+    mul_binary_tile(dst_a, dst_a, dst_a);  // sin^2
+
+    copy_tile_to_dst_init_short(params_cb_id);
+    copy_tile(params_cb_id, 1, dst_b);  // inv_beta
+    mul_binary_tile_init();
+    mul_binary_tile(dst_a, dst_b, dst_a);  // inv_beta * sin^2
+
+    add_binary_tile_init();
+    add_binary_tile(dst_acc, dst_a, dst_acc);  // x + inv_beta * sin^2
+
+    params_dfb.pop_front(2);
+}
+
 inline void mul_and_accumulate_block_sfpu(
     DataflowBuffer in0_dfb,
     DataflowBuffer in1_dfb,
@@ -165,6 +218,14 @@ inline void mul_and_accumulate_block_sfpu(
         if (is_last_tap) {
             const uint32_t i = DST_ACC;
             SFPU_OP_FUNC_ACTIVATION
+        }
+#endif
+#ifdef SNAKE_PARAMS_CB_ID
+        // Per-channel snake, in place of (not as well as) the scalar activation seam. Off unless the
+        // program factory emits the define, so the default path is byte-for-byte unchanged.
+        if (is_last_tap) {
+            DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
+            apply_snake_beta<DST_ACC, DST_A, DST_B>(snake_params_dfb);
         }
 #endif
         tile_regs_commit();
