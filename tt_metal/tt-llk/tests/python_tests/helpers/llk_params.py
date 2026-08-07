@@ -755,6 +755,18 @@ class TopKSortDirection(Enum):
     Ascending = 1
 
 
+class TopKXLIndexOp(Enum):
+    RowMajor = 0
+    Separate = 1
+    RemoveMsb = 2
+
+
+class TopKXLChunkBaseMode(Enum):
+    Static = 0
+    UpperStatic = 1
+    Runtime = 2
+
+
 class VectorMode(Enum):
     """Mirrors ckernel::VectorMode in tt_llk_quasar/llk_lib/llk_defs.h.
 

@@ -45,6 +45,15 @@ void kernel_main() {
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
 
+    // Non-tile-aligned H*W (#50682): host-precomputed corrected reduce scaler, and K for the
+    // compute kernel's variance correction. See compute/groupnorm.cpp for the derivation.
+    constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
+    constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
+    constexpr bool has_pad_correction = padded_hw != logical_hw;
+    constexpr uint32_t dfb_k_id = tt::CBIndex::c_1;
+    constexpr uint32_t pad_scaler_bits = get_named_compile_time_arg_val("pad_scaler_bits");
+    constexpr uint32_t pad_k_bits = get_named_compile_time_arg_val("pad_k_bits");
+
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -97,13 +106,11 @@ void kernel_main() {
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
         out_block_h_last = residual % out_block_h_normal;
-        out_block_hw_last = out_block_h_last * block_w;
     }
 
     index_b_offset = 0;
@@ -133,12 +140,23 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
                     constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
-                    constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
-                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                        dfb_in_2,
-                        ckernel::PoolType::AVG,
-                        ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_w>();
+                    if constexpr (has_pad_correction) {
+                        // Corrected scaler = 1 / sqrt(reduce_factor_w * logical_hw / padded_hw),
+                        // precomputed on host to avoid a device-side sqrt.
+                        const float pad_corrected_scaler = __builtin_bit_cast(float, pad_scaler_bits);
+                        dataflow_kernel_lib::prepare_reduce_scaler<
+                            dfb_in_2,
+                            ckernel::PoolType::AVG,
+                            ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
+                        generate_bcast_col_scalar(CircularBuffer(dfb_k_id), pad_k_bits);
+                    } else {
+                        constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
+                        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                            dfb_in_2,
+                            ckernel::PoolType::AVG,
+                            ckernel::ReduceDim::REDUCE_SCALAR,
+                            reduce_factor_w>();
+                    }
                 }
 
                 if constexpr (!use_welford && is_mcast_sender) {
@@ -253,13 +271,11 @@ void kernel_main() {
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
                 dfb_out.wait_front(out_block_hw_normal);
                 uint32_t l1_read_addr = dfb_out.get_read_ptr();

@@ -20,7 +20,8 @@ void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
+    compute_kernel_hw_startup(cb_a_id, cb_b_id, cb_out_id);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id);
 
 #ifdef BCAST_SCALAR
     dfb_b.wait_front(onetile);

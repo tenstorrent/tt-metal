@@ -159,7 +159,7 @@ targets:
               decode_t/s/u: 17.16
               decode_t/s: 549.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 1024
@@ -169,7 +169,7 @@ targets:
               decode_t/s/u: 15.24
               decode_t/s: 487.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -179,7 +179,7 @@ targets:
               decode_t/s/u: 13.91
               decode_t/s: 445.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_llmbox_perf:
         entries:
@@ -191,7 +191,7 @@ targets:
               decode_t/s/u: 14.6
               decode_t/s: 3737.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 1024
@@ -201,7 +201,7 @@ targets:
               decode_t/s/u: 13.2
               decode_t/s: 3379.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 2048
@@ -211,7 +211,7 @@ targets:
               decode_t/s/u: 12.4
               decode_t/s: 3174.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_galaxy_perf:
         entries:
@@ -223,7 +223,7 @@ targets:
               decode_t/s/u: 6.9
               decode_t/s: 7065.6
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 1024
@@ -233,7 +233,7 @@ targets:
               decode_t/s/u: 6.3
               decode_t/s: 6451.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 2048
@@ -243,7 +243,51 @@ targets:
               decode_t/s/u: 6.6
               decode_t/s: 6758.4
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
+            team: models
+  gemma-2-2b:
+    aliases: ["gemma-2-2b", "google/gemma-2-2b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (90.0 / 100.0).
+      # N150 uses the same model path; CI will re-calibrate if it drifts.
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  gemma-2-9b:
+    aliases: ["gemma-2-9b", "google/gemma-2-9b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (91.8 / 99.8).
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 92
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
@@ -525,8 +569,11 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 8.8
-              prefill_time_to_first_token: 195
+              # Greedy decode now takes the on-device argmax fast-path on single-chip
+              # (allow_force_argmax gated on num_devices == 1). Measured 23.50-23.60 t/s/u
+              # over 3 CI runs, was 8.8; TTFT 113.2-113.5 ms, was 195.
+              decode_t/s/u: 23.5
+              prefill_time_to_first_token: 113
             accuracy: {}
       wh_n300:
         entries:
@@ -559,8 +606,10 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 20.3
-              prefill_time_to_first_token: 75
+              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
+              # was 20.3; TTFT 53.31-53.35 ms, was 75.
+              decode_t/s/u: 33.0
+              prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:
         entries:
@@ -601,13 +650,18 @@ targets:
       p300x2:
         entries:
           # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
-          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
-          # (b4 aggregate); accuracy is the token-matching (b1) target.
+          # token-matching (b1) accuracy check. Accuracy is the token-matching (b1) target.
+          # Perf re-seeded 2026-08-07 from the b4 data-parallel run 31146018726 after #48886
+          # (0a0510e7fc1, "Enable force_argmax fast-path on non-Galaxy") landed: measured
+          # 37.34 t/s/u / 149.35 t/s / 14.44 ms vs the old 20.88 / 83.5 / 19 targets, which
+          # tripped the validator's "much better than expected" upper bound. The 14 scheduled
+          # runs before #48886 sat at 18.9-21.3 t/s/u with no runner correlation, so this is a
+          # genuine step change from that optimization, not machine variance.
           - status: active
             perf:
-              prefill_time_to_first_token: 19
-              decode_t/s/u: 20.88
-              decode_t/s: 83.5
+              prefill_time_to_first_token: 14.4
+              decode_t/s/u: 37.3
+              decode_t/s: 149.4
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -1050,7 +1104,7 @@ targets:
               decode_t/s: 12.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1073,7 +1127,7 @@ targets:
               decode_t/s: 347.6
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1082,7 +1136,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen2.5-7b:
     aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
@@ -1149,7 +1203,7 @@ targets:
               decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1159,7 +1213,7 @@ targets:
               decode_t/s/u: 17.76
               decode_t/s: 568.19
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1168,7 +1222,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen3-32b:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]

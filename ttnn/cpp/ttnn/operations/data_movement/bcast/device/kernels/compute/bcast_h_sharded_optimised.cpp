@@ -23,7 +23,8 @@ void kernel_main() {
     uint32_t batch_b = get_arg_val<uint32_t>(4);
     uint32_t Ht_per_batch_b = get_arg_val<uint32_t>(5);
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
+    compute_kernel_hw_startup(cb_a_id, cb_b_id, cb_out_id);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id);
 
     dfb_a.wait_front(Wt * Ht);
     dfb_out.reserve_back(Wt * Ht);
