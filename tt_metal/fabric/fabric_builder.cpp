@@ -7,6 +7,8 @@
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -23,6 +25,10 @@ FabricBuilder::FabricBuilder(
     local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
         device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
+    // Bind this node's ring predicates once: every router on the chip shares them.
+    chip_facts_.protected_ring_queries =
+        make_protected_ring_queries(tt::tt_metal::MetalContext::instance().get_control_plane(), local_node_);
+
     // Determine if this device has tunneling dispatch
     auto mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -65,6 +71,17 @@ void FabricBuilder::discover_channels() {
 
         // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+
+        // Classify the edge once, here: the answer is threaded into the per-router build rather
+        // than re-derived per consumer. A same-mesh Z on a mesh without validated express intent
+        // means topology intent and the neighbor graph disagree, and catching that at discovery
+        // gives a far better message than whatever fails later.
+        //
+        // An express chord needs no rejection here any more: it is wired like any other direction, on
+        // the fifth VC0 sender, with its guard derived from the protected-ring effects.
+        chip_facts_.per_direction_capabilities.at(direction) =
+            classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
+
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
 
@@ -103,7 +120,7 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
+            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, chip_facts_);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
@@ -198,36 +215,18 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>> routers_by_direction_map{};
-    // Connect each pair (inter-device INTRA_MESH connections)
+    // Connect each pair: local turns between two routers on this device (one router's receiver
+    // feeds the other's sender, which transmits over its own eth link to a neighbor device).
+    // This is the single establishment pass for every connection -- the boundary turns (to and
+    // from the intermesh Z router) are wired here by the same path as every other local turn, so
+    // no second pass is needed. The link_idx pairing preserves plane identity across the turn;
+    // that is what lets the connection and channel mappings stay plane-independent archetypes
+    // (they carry no eth channel) -- the plane enters only here.
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
-
-        routers_by_direction_map[router1.get()].insert({router2->get_location().direction, router2.get()});
-        routers_by_direction_map[router2.get()].insert({router1->get_location().direction, router1.get()});
-    }
-
-    // Configure local connections between routers on this device
-    configure_local_connections(routers_by_direction_map);
-}
-
-void FabricBuilder::configure_local_connections(
-    const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>& routers_by_direction_map) {
-    // Generic local connection establishment: iterate through all routers and
-    // establish connections to local targets based on their connection mappings
-
-    // For each router, establish its local connections
-    for (const auto& [source_router, target_routers_by_direction] : routers_by_direction_map) {
-        // Build map of potential local targets (all other routers on this device)
-        std::map<RoutingDirection, FabricRouterBuilder*> local_targets;
-        for (const auto& [target_dir, target_router] : target_routers_by_direction) {
-            local_targets[target_dir] = target_router;
-        }
-
-        source_router->configure_local_connections(local_targets);
     }
 }
 

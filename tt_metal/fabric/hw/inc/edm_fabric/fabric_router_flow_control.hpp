@@ -10,6 +10,10 @@
 #include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
@@ -74,46 +78,54 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
 };
 
-using ReceiverChannelResponseCreditSender = typename std::conditional_t<
-    multi_txq_enabled,
+// Credit transport is chosen per VC, so the type is a function of the channel rather than one alias
+// for the whole router. One receiver channel serves each VC, and credits only flow back within a VC,
+// so the receiver channel index selects directly.
+//
+// When every VC picks the same transport these are all the same type and the container below is
+// homogeneous, which is exactly the shape this code had before. That is deliberate: switching the
+// whole router to one transport is just a particular host plan, not a separate code path.
+template <size_t RECEIVER_CHANNEL>
+using ReceiverChannelResponseCreditSenderFor = std::conditional_t<
+    receiver_channel_uses_counter_credits(RECEIVER_CHANNEL),
     ReceiverChannelCounterBasedResponseCreditSender,
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
 
-template <typename T = void>
-struct init_receiver_channel_response_credit_senders_impl;
-
-// Implementation for ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender
-template <>
-struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender> {
-    template <uint8_t NUM_RECEIVER_CHANNELS>
-    static constexpr auto init()
-        -> std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> {
-        std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
-        for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-            credit_senders[i] = ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender();
-        }
-        return credit_senders;
+// The two implementations do not agree on how they are built: the counter form needs its channel
+// index, the stream-register form reads the stream id table in its default constructor.
+template <typename CreditSender>
+constexpr CreditSender make_credit_sender(size_t channel_index) {
+    if constexpr (std::is_constructible_v<CreditSender, size_t>) {
+        return CreditSender(channel_index);
+    } else {
+        return CreditSender();
     }
-};
+}
 
-// Implementation for ReceiverChannelCounterBasedResponseCreditSender
-template <>
-struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelCounterBasedResponseCreditSender> {
-    template <uint8_t NUM_RECEIVER_CHANNELS>
-    static constexpr auto init() -> std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> {
-        std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
-        for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-            credit_senders[i] = ReceiverChannelCounterBasedResponseCreditSender(i);
-        }
-        return credit_senders;
+template <typename Sequence>
+struct ReceiverChannelResponseCreditSendersImpl;
+
+template <size_t... Is>
+struct ReceiverChannelResponseCreditSendersImpl<std::index_sequence<Is...>> {
+    std::tuple<ReceiverChannelResponseCreditSenderFor<Is>...> credit_senders{
+        make_credit_sender<ReceiverChannelResponseCreditSenderFor<Is>>(Is)...};
+
+    // Every access site already has the channel as a compile-time value, so nothing needs runtime
+    // indexing into this.
+    template <size_t RECEIVER_CHANNEL>
+    FORCE_INLINE auto& get() {
+        return std::get<RECEIVER_CHANNEL>(credit_senders);
     }
 };
 
 template <uint8_t NUM_RECEIVER_CHANNELS>
+using ReceiverChannelResponseCreditSenders =
+    ReceiverChannelResponseCreditSendersImpl<std::make_index_sequence<NUM_RECEIVER_CHANNELS>>;
+
+template <uint8_t NUM_RECEIVER_CHANNELS>
 constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
-    -> std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS> {
-    return init_receiver_channel_response_credit_senders_impl<ReceiverChannelResponseCreditSender>::template init<
-        NUM_RECEIVER_CHANNELS>();
+    -> ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS> {
+    return ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS>{};
 }
 struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
@@ -178,60 +190,36 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     uint32_t to_sender_packets_completed_stream;
 };
 
-template <typename T = void>
-struct init_sender_channel_from_receiver_credits_flow_controllers_impl;
-
-// Implementation for SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver
-
-template <>
-struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
-    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver> {
-    template <uint8_t NUM_SENDER_CHANNELS>
-    static constexpr auto init()
-        -> std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
-        std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS>
-            flow_controllers;
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            new (&flow_controllers[i]) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(i);
-        }
-        return flow_controllers;
-    }
-};
-
-// Implementation for SenderChannelFromReceiverCounterBasedCreditsReceiver
-template <>
-struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
-    SenderChannelFromReceiverCounterBasedCreditsReceiver> {
-    template <uint8_t NUM_SENDER_CHANNELS>
-    static constexpr auto init()
-        -> std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
-        std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> flow_controllers;
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            new (&flow_controllers[i]) SenderChannelFromReceiverCounterBasedCreditsReceiver(i);
-        }
-        return flow_controllers;
-    }
-};
-
-using SenderChannelFromReceiverCredits = typename std::conditional_t<
-    multi_txq_enabled,
+// Same per-VC selection on the sender side. Flat sender channels are laid out VC0 then VC1 then VC2,
+// so the channel index resolves to a VC without any extra state.
+template <size_t SENDER_CHANNEL>
+using SenderChannelFromReceiverCreditsFor = std::conditional_t<
+    sender_channel_uses_counter_credits(SENDER_CHANNEL),
     SenderChannelFromReceiverCounterBasedCreditsReceiver,
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>;
 
-// SFINAE-based overload for multi_txq_enabled case
-template <uint8_t NUM_SENDER_CHANNELS>
-constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_controllers()
-    -> std::enable_if_t<!multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
-    return init_sender_channel_from_receiver_credits_flow_controllers_impl<
-        SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
-}
+template <typename Sequence>
+struct SenderChannelFromReceiverCreditsImpl;
 
-// SFINAE-based overload for !multi_txq_enabled case
+template <size_t... Is>
+struct SenderChannelFromReceiverCreditsImpl<std::index_sequence<Is...>> {
+    std::tuple<SenderChannelFromReceiverCreditsFor<Is>...> credits{
+        make_credit_sender<SenderChannelFromReceiverCreditsFor<Is>>(Is)...};
+
+    template <size_t SENDER_CHANNEL>
+    FORCE_INLINE auto& get() {
+        return std::get<SENDER_CHANNEL>(credits);
+    }
+};
+
+template <uint8_t NUM_SENDER_CHANNELS>
+using SenderChannelFromReceiverCredits =
+    SenderChannelFromReceiverCreditsImpl<std::make_index_sequence<NUM_SENDER_CHANNELS>>;
+
 template <uint8_t NUM_SENDER_CHANNELS>
 constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_controllers()
-    -> std::enable_if_t<multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
-    return init_sender_channel_from_receiver_credits_flow_controllers_impl<
-        SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
+    -> SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS> {
+    return SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS>{};
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
