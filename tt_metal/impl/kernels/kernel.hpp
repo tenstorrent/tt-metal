@@ -340,8 +340,8 @@ protected:
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
-    // Metal 2.0 user compile-time varargs (set post-construction via set_compile_time_varargs).
-    // Hashed into compute_hash; genfiles bakes literals into kernel_args_generated.h.
+    // Metal 2.0 CTA varargs
+    // This is not the same as compile_time_args_ and is exclusively used for Metal 2.0 vararg CTA support.
     std::vector<uint32_t> compile_time_varargs_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
