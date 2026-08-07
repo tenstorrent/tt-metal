@@ -74,6 +74,31 @@ class Semaphore {
     // semaphore must then read through a path that does not invalidate.
     static constexpr bool kUseUncachedLocalView = (Scope != SemScope::DM_LOCAL_CACHED);
 
+    // DM_LOCAL_CACHED is Quasar-DM-only, and the class must say so itself -- the host's equivalent
+    // FATALs (ResolveSemaphoreScope) only cover semaphores reached through a DECLARED binding, so they
+    // do not see a hand-written `Semaphore<..., DM_LOCAL_CACHED> s(raw_id)`. Both asserts below close
+    // that raw-id back door at compile time; the token ctor was already safe via its own static_assert.
+    //
+    // Off Quasar: sem_l1_offset()'s pool branch is compiled out, so the word silently reverts to the
+    // ordinary kernel_config ring while up()/down() still emit a 32-bit AMO -- an AMO aimed at a
+    // NoC-written slot, with no pool and no seeding behind it.
+    //
+    // On Quasar TRISC: the pool is a region of the DM cache domain and the generated seeder is
+    // `#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)`, so a compute-core AMO would hit an
+    // UNSEEDED word from outside the coherence domain that makes the mechanism atomic. The host bars
+    // this for declared bindings via all_binders_are_dm(); this bars the undeclared route.
+#if !defined(ARCH_QUASAR)
+    static_assert(
+        Scope != SemScope::DM_LOCAL_CACHED,
+        "SemScope::DM_LOCAL_CACHED is a Gen2 (Quasar) mechanism -- the cached-only pool, its cache "
+        "aliases and its seeding do not exist here. Use SemScope::EXTERNAL.");
+#elif defined(COMPILE_FOR_TRISC)
+    static_assert(
+        Scope != SemScope::DM_LOCAL_CACHED,
+        "SemScope::DM_LOCAL_CACHED is reachable only from a data-movement kernel: the pool lives in the "
+        "DM cache domain and its seeder is not emitted for TRISC. Use SemScope::EXTERNAL.");
+#endif
+
     // Physical L1 offset of semaphore `id` for THIS scope. DM_LOCAL_CACHED semaphores live in
     // the dedicated cached-only pool (MEM_DM_CACHED_SEM_BASE, disjoint from the NoC-written
     // kernel_config ring by construction); every other scope uses the normal ring region
