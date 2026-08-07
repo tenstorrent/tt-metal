@@ -850,6 +850,20 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+          # ci-eval-1 (batch-1, 6 repeat batches) on models/demos/llama3_70b_galaxy.
+          # As with the b32/s507 entry below, seq_len is the *character* length of the
+          # prompt the demo resolves with, not a token count: 171 is the last repeat
+          # batch's prompt in eval_repeat_prompts_batch1.json.
+          # Measured on wh_galaxy_perf at 8baa100a684 (TTFT 727.7/730.4ms, 62.8/62.99 t/s/u).
+          - batch_size: 1
+            seq_len: 171
+            status: active
+            perf:
+              prefill_time_to_first_token: 730
+              decode_t/s/u: 62.9
+              decode_t/s: 62.9
+              prefill_time_to_first_token_tolerance: 0.3
+            accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation).
       p300x2:
