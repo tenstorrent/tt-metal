@@ -828,6 +828,174 @@ def _required_measurements(item: dict) -> list[str]:
     return values
 
 
+def _load_predeclared_waiver_policy(
+    path: str, worktree: Path, expected_base_sha: str
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Load waiver authority only from the exact checked-out base revision."""
+    candidate = Path(path)
+    try:
+        relative = (
+            candidate.relative_to(worktree) if candidate.is_absolute() else candidate
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "waiver policy must be a tracked file inside the worktree"
+        ) from exc
+    if not relative.parts or ".." in relative.parts:
+        raise ValueError("waiver policy must be a tracked file inside the worktree")
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "show",
+            f"{expected_base_sha}:{relative.as_posix()}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise ValueError("waiver policy is not present in expected_base_sha")
+    try:
+        document = json.loads(proc.stdout)
+    except ValueError as exc:
+        raise ValueError("waiver policy is not valid JSON") from exc
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema", "version", "policies"}
+        or document.get("schema") != "tt.issue-solver.verification-waiver-policy"
+        or document.get("version") != 1
+        or not isinstance(document.get("policies"), list)
+        or not document["policies"]
+    ):
+        raise ValueError("waiver policy schema is invalid")
+    policy_fields = {
+        "policy_id",
+        "approver",
+        "reason",
+        "scope",
+        "replacement",
+        "allowed_outcomes",
+    }
+    scope_fields = {"architecture", "suite", "backend", "selector"}
+    replacement_fields = {
+        *scope_fields,
+        "minimum_selected",
+        "minimum_executed",
+        "required_measurements",
+    }
+    identities = set()
+    for item in document["policies"]:
+        if not isinstance(item, dict) or set(item) != policy_fields:
+            raise ValueError("waiver policy entry schema is invalid")
+        if (
+            not isinstance(item["policy_id"], str)
+            or not item["policy_id"]
+            or item["policy_id"] in identities
+            or not isinstance(item["approver"], str)
+            or not item["approver"].strip()
+            or not isinstance(item["reason"], str)
+            or not item["reason"].strip()
+        ):
+            raise ValueError("waiver policy identity or approval is invalid")
+        identities.add(item["policy_id"])
+        if (
+            not isinstance(item["scope"], dict)
+            or set(item["scope"]) != scope_fields
+            or not isinstance(item["replacement"], dict)
+            or set(item["replacement"]) != replacement_fields
+        ):
+            raise ValueError("waiver policy scope or replacement is invalid")
+        for requirement in (item["scope"], item["replacement"]):
+            selector = requirement["selector"]
+            if (
+                requirement["architecture"] not in _VERIFICATION_ARCHES
+                or requirement["suite"] != "llk"
+                or requirement["backend"] not in {"silicon", "ttsim", "quasar", "local"}
+                or not isinstance(selector, dict)
+                or set(selector) != {"test", "test_id", "k"}
+                or not isinstance(selector["test"], str)
+                or not selector["test"]
+                or any(
+                    selector[field] is not None and not isinstance(selector[field], str)
+                    for field in ("test_id", "k")
+                )
+                or (selector["test_id"] is not None and selector["k"] is not None)
+            ):
+                raise ValueError("waiver policy requirement identity is invalid")
+        replacement = item["replacement"]
+        for field in ("minimum_selected", "minimum_executed"):
+            value = replacement[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError("waiver replacement counts must be positive")
+        measurements = replacement["required_measurements"]
+        if (
+            not isinstance(measurements, list)
+            or any(
+                value not in {"cycle_comparison", "repeatability"}
+                for value in measurements
+            )
+            or len(set(measurements)) != len(measurements)
+        ):
+            raise ValueError("waiver replacement measurements are invalid")
+        outcomes = item["allowed_outcomes"]
+        if (
+            not isinstance(outcomes, list)
+            or not outcomes
+            or any(value not in {"skipped", "xfailed"} for value in outcomes)
+            or len(set(outcomes)) != len(outcomes)
+        ):
+            raise ValueError("waiver allowed_outcomes are invalid")
+    return document["policies"], _canonical_digest(document), relative.as_posix()
+
+
+def _verify_manifest_waiver_policy(manifest: dict[str, Any], worktree: Path) -> None:
+    """Reopen base-tracked policy and prove every sealed waiver is authorized."""
+    requirements = {item["requirement_id"]: item for item in manifest["requirements"]}
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for waiver in manifest["waivers"]:
+        grouped.setdefault((waiver["policy_path"], waiver["policy_sha256"]), []).append(
+            waiver
+        )
+    for (policy_path, recorded_digest), waivers in grouped.items():
+        policies, actual_digest, actual_path = _load_predeclared_waiver_policy(
+            policy_path, worktree, manifest["expected_base_sha"]
+        )
+        if actual_digest != recorded_digest or actual_path != policy_path:
+            raise ValueError("required-verification waiver policy identity mismatch")
+        policies_by_id = {item["policy_id"]: item for item in policies}
+        for waiver in waivers:
+            policy = policies_by_id.get(waiver["policy_id"])
+            scope = requirements[waiver["scope_requirement_id"]]
+            replacement = requirements[waiver["replacement_requirement_id"]]
+            if (
+                policy is None
+                or waiver["approver"] != policy["approver"]
+                or waiver["reason"] != policy["reason"]
+                or waiver["allowed_outcomes"] != policy["allowed_outcomes"]
+                or any(
+                    scope[field] != policy["scope"][field]
+                    for field in ("architecture", "suite", "backend", "selector")
+                )
+                or any(
+                    replacement[field] != policy["replacement"][field]
+                    for field in (
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                        "minimum_selected",
+                        "minimum_executed",
+                        "required_measurements",
+                    )
+                )
+            ):
+                raise ValueError(
+                    "required-verification waiver is not policy-authorized"
+                )
+
+
 def _load_required_manifest(path: Path) -> dict[str, Any]:
     doc = json.loads(path.read_text(encoding="utf-8"))
     fields = {
@@ -879,8 +1047,6 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
         or not doc["supersedes_reason"].strip()
     ):
         raise ValueError("superseding required-verification revision is unlinked")
-    if doc.get("waivers") != []:
-        raise ValueError("agent-created verification waivers are unsupported")
     if not isinstance(doc["requirements"], list):
         raise ValueError("required-verification requirements must be an array")
     requirement_fields = {
@@ -934,6 +1100,67 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
             or len(set(measurements)) != len(measurements)
         ):
             raise ValueError("required-verification measurements are invalid")
+    if not isinstance(doc["waivers"], list):
+        raise ValueError("required-verification waivers must be an array")
+    waiver_fields = {
+        "waiver_id",
+        "policy_id",
+        "policy_sha256",
+        "policy_path",
+        "approver",
+        "reason",
+        "scope_requirement_id",
+        "replacement_requirement_id",
+        "allowed_outcomes",
+    }
+    waiver_ids = set()
+    scope_ids = set()
+    replacement_ids = set()
+    for waiver in doc["waivers"]:
+        if not isinstance(waiver, dict) or set(waiver) != waiver_fields:
+            raise ValueError("required-verification waiver schema is invalid")
+        if (
+            not isinstance(waiver["waiver_id"], str)
+            or not _SHA256_RE.fullmatch(waiver["waiver_id"])
+            or waiver["waiver_id"] in waiver_ids
+            or waiver["waiver_id"]
+            != _canonical_digest(
+                {key: value for key, value in waiver.items() if key != "waiver_id"}
+            )
+        ):
+            raise ValueError("required-verification waiver_id is invalid")
+        waiver_ids.add(waiver["waiver_id"])
+        for field in ("policy_id", "approver", "reason"):
+            if not isinstance(waiver[field], str) or not waiver[field].strip():
+                raise ValueError(f"required-verification waiver {field} is invalid")
+        if not _SHA256_RE.fullmatch(waiver["policy_sha256"] or ""):
+            raise ValueError("required-verification waiver policy digest is invalid")
+        if not isinstance(waiver["policy_path"], str) or not waiver["policy_path"]:
+            raise ValueError("required-verification waiver policy path is invalid")
+        policy_path = Path(waiver["policy_path"])
+        if policy_path.is_absolute() or ".." in policy_path.parts:
+            raise ValueError("required-verification waiver policy path is invalid")
+        scope_id = waiver["scope_requirement_id"]
+        replacement_id = waiver["replacement_requirement_id"]
+        if (
+            scope_id not in identities
+            or replacement_id not in identities
+            or scope_id == replacement_id
+            or scope_id in scope_ids
+        ):
+            raise ValueError("required-verification waiver requirement link is invalid")
+        scope_ids.add(scope_id)
+        replacement_ids.add(replacement_id)
+        outcomes = waiver["allowed_outcomes"]
+        if (
+            not isinstance(outcomes, list)
+            or not outcomes
+            or any(value not in {"skipped", "xfailed"} for value in outcomes)
+            or len(set(outcomes)) != len(outcomes)
+        ):
+            raise ValueError("required-verification waiver outcomes are invalid")
+    if scope_ids & replacement_ids:
+        raise ValueError("required-verification chained waivers are unsupported")
     return doc
 
 
@@ -1037,7 +1264,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         minimum_selected: int = 1,
         minimum_executed: int = 1,
         measurements: list[str] | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         key = (arch, suite)
         if any(
             item["architecture"] == arch
@@ -1047,18 +1274,18 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         ):
             raise ValueError(f"duplicate {suite} selector for {arch}: {selector!r}")
         counters[key] = counters.get(key, 0) + 1
-        requirements.append(
-            {
-                "requirement_id": f"{arch}:{suite}:{counters[key]}",
-                "architecture": arch,
-                "suite": suite,
-                "backend": backend,
-                "selector": selector,
-                "minimum_selected": minimum_selected,
-                "minimum_executed": minimum_executed,
-                "required_measurements": measurements or [],
-            }
-        )
+        requirement = {
+            "requirement_id": f"{arch}:{suite}:{counters[key]}",
+            "architecture": arch,
+            "suite": suite,
+            "backend": backend,
+            "selector": selector,
+            "minimum_selected": minimum_selected,
+            "minimum_executed": minimum_executed,
+            "required_measurements": measurements or [],
+        }
+        requirements.append(requirement)
+        return requirement
 
     if llk_applicable:
         source_items = functional_plan or applicable_candidates
@@ -1185,6 +1412,140 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             )
         if not args.supersedes_reason:
             raise ValueError("a superseding manifest requires --supersedes-reason")
+
+    def apply_waiver_policies(
+        policies: list[dict[str, Any]], policy_sha256: str, policy_path: str
+    ) -> list[dict[str, Any]]:
+        waivers = []
+        for policy in policies:
+            matches = [
+                requirement
+                for requirement in requirements
+                if all(
+                    requirement[field] == policy["scope"][field]
+                    for field in ("architecture", "suite", "backend", "selector")
+                )
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"waiver policy {policy['policy_id']} must match exactly one requirement"
+                )
+            scope = matches[0]
+            replacement_spec = policy["replacement"]
+            selector = replacement_spec["selector"]
+            selector_text = selector["test_id"] or selector["test"]
+            if selector["k"] is not None:
+                selector_text = f"{selector['test']} -k {shlex.quote(selector['k'])}"
+            normalized = _normalize_pytest_selector(
+                selector_text, replacement_spec["architecture"], worktree
+            )
+            if normalized != selector:
+                raise ValueError(
+                    f"waiver policy {policy['policy_id']} replacement is not normalized"
+                )
+            replacement_matches = [
+                requirement
+                for requirement in requirements
+                if all(
+                    requirement[field] == replacement_spec[field]
+                    for field in (
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                        "minimum_selected",
+                        "minimum_executed",
+                        "required_measurements",
+                    )
+                )
+            ]
+            if len(replacement_matches) > 1:
+                raise ValueError("waiver replacement requirement is ambiguous")
+            replacement = (
+                replacement_matches[0]
+                if replacement_matches
+                else add_requirement(
+                    replacement_spec["architecture"],
+                    replacement_spec["suite"],
+                    replacement_spec["backend"],
+                    replacement_spec["selector"],
+                    replacement_spec["minimum_selected"],
+                    replacement_spec["minimum_executed"],
+                    replacement_spec["required_measurements"],
+                )
+            )
+            waiver = {
+                "waiver_id": "0" * 64,
+                "policy_id": policy["policy_id"],
+                "policy_sha256": policy_sha256,
+                "policy_path": policy_path,
+                "approver": policy["approver"],
+                "reason": policy["reason"],
+                "scope_requirement_id": scope["requirement_id"],
+                "replacement_requirement_id": replacement["requirement_id"],
+                "allowed_outcomes": policy["allowed_outcomes"],
+            }
+            waiver["waiver_id"] = _canonical_digest(
+                {key: value for key, value in waiver.items() if key != "waiver_id"}
+            )
+            waivers.append(waiver)
+        return waivers
+
+    waivers: list[dict[str, Any]] = []
+    if args.waiver_policy:
+        if previous and not previous["waivers"]:
+            raise ValueError("cannot introduce a verification waiver after revision 1")
+        policies, policy_sha256, policy_path = _load_predeclared_waiver_policy(
+            args.waiver_policy, worktree, args.expected_base_sha
+        )
+        waivers = apply_waiver_policies(policies, policy_sha256, policy_path)
+        if previous and {
+            (item["policy_id"], item["policy_sha256"], item["policy_path"])
+            for item in waivers
+        } != {
+            (item["policy_id"], item["policy_sha256"], item["policy_path"])
+            for item in previous["waivers"]
+        }:
+            raise ValueError(
+                "cannot change verification waiver policy across revisions"
+            )
+    elif previous and previous["waivers"]:
+        previous_requirements = {
+            item["requirement_id"]: item for item in previous["requirements"]
+        }
+        carried_policies = []
+        for prior in previous["waivers"]:
+            scope = previous_requirements[prior["scope_requirement_id"]]
+            replacement = previous_requirements[prior["replacement_requirement_id"]]
+            carried_policies.append(
+                {
+                    "policy_id": prior["policy_id"],
+                    "approver": prior["approver"],
+                    "reason": prior["reason"],
+                    "scope": {
+                        field: scope[field]
+                        for field in ("architecture", "suite", "backend", "selector")
+                    },
+                    "replacement": {
+                        field: replacement[field]
+                        for field in (
+                            "architecture",
+                            "suite",
+                            "backend",
+                            "selector",
+                            "minimum_selected",
+                            "minimum_executed",
+                            "required_measurements",
+                        )
+                    },
+                    "allowed_outcomes": prior["allowed_outcomes"],
+                }
+            )
+        waivers = apply_waiver_policies(
+            carried_policies,
+            previous["waivers"][0]["policy_sha256"],
+            previous["waivers"][0]["policy_path"],
+        )
     revision = int(previous["revision"]) + 1 if previous else 1
     doc = {
         "schema": "tt.issue-solver.required-verification",
@@ -1197,7 +1558,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         "parent_manifest_id": previous["manifest_id"] if previous else None,
         "supersedes_reason": args.supersedes_reason or None,
         "requirements": requirements,
-        "waivers": [],
+        "waivers": waivers,
     }
     doc["manifest_id"] = _canonical_digest(
         {key: value for key, value in doc.items() if key != "manifest_id"}
@@ -1832,6 +2193,14 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
         "selected",
         "executed",
         "passed",
+        "failed",
+        "skipped",
+        "xfailed",
+        "xpassed",
+        "result_classification",
+        "execution_returncode",
+        "waived",
+        "waiver_id",
     }
     requirement_ids = set()
     for leaf in reduction["leaves"]:
@@ -1862,12 +2231,44 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
             or len(set(leaf["reason_codes"])) != len(leaf["reason_codes"])
         ):
             raise ValueError("verification reduction leaf reasons are invalid")
-        for field in ("selected", "executed", "passed"):
+        for field in (
+            "selected",
+            "executed",
+            "passed",
+            "failed",
+            "skipped",
+            "xfailed",
+            "xpassed",
+        ):
             value = leaf[field]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"verification reduction leaf {field} is invalid")
-        if leaf["passed"] > leaf["executed"] or leaf["executed"] > leaf["selected"]:
+        if (
+            leaf["executed"] != leaf["passed"] + leaf["failed"] + leaf["xpassed"]
+            or leaf["selected"] != leaf["executed"] + leaf["skipped"] + leaf["xfailed"]
+        ):
             raise ValueError("verification reduction leaf counts are inconsistent")
+        if leaf["result_classification"] is not None and (
+            not isinstance(leaf["result_classification"], str)
+            or leaf["result_classification"] not in {*_REDUCTION_PRIORITY, "timed_out"}
+        ):
+            raise ValueError("verification reduction source classification is invalid")
+        if leaf["execution_returncode"] is not None and (
+            isinstance(leaf["execution_returncode"], bool)
+            or not isinstance(leaf["execution_returncode"], int)
+        ):
+            raise ValueError("verification reduction execution returncode is invalid")
+        if not isinstance(leaf["waived"], bool):
+            raise ValueError("verification reduction waived flag is invalid")
+        if leaf["waived"]:
+            if (
+                not isinstance(leaf["waiver_id"], str)
+                or not _SHA256_RE.fullmatch(leaf["waiver_id"])
+                or leaf["classification"] != "success"
+            ):
+                raise ValueError("verification reduction waiver identity is invalid")
+        elif leaf["waiver_id"] is not None:
+            raise ValueError("verification reduction has an inactive waiver identity")
     if reduction["tests_total"] != sum(
         leaf["selected"] for leaf in reduction["leaves"]
     ) or reduction["tests_passed"] != sum(
@@ -1908,6 +2309,12 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
     """Reduce sealed leaves into deterministic suite/architecture/final state."""
     log_dir = Path(args.log_dir)
     manifest = _load_required_manifest(Path(args.manifest))
+    if manifest["waivers"]:
+        if not args.worktree:
+            raise ValueError("waived verification reduction requires --worktree")
+        _verify_manifest_waiver_policy(
+            manifest, Path(args.worktree).resolve(strict=True)
+        )
     requirements = [
         requirement
         for requirement in manifest["requirements"]
@@ -2004,7 +2411,9 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
         classification = "partial"
         reasons = []
         selected_result = None
-        selected = executed = passed = 0
+        selected = executed = passed = failed = skipped = xfailed = xpassed = 0
+        result_classification = None
+        execution_returncode = None
         if not entries:
             reasons.append("result_missing")
         elif len(entries) > 1:
@@ -2018,6 +2427,12 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
             selected = collection["selected"]
             executed = execution["executed"]
             passed = execution["passed"]
+            failed = execution["failed"]
+            skipped = execution["skipped"]
+            xfailed = execution["xfailed"]
+            xpassed = execution["xpassed"]
+            result_classification = result["classification"]
+            execution_returncode = execution["returncode"]
             mismatch_fields = []
             for field in (
                 "architecture",
@@ -2121,8 +2536,56 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                 "selected": selected,
                 "executed": executed,
                 "passed": passed,
+                "failed": failed,
+                "skipped": skipped,
+                "xfailed": xfailed,
+                "xpassed": xpassed,
+                "result_classification": result_classification,
+                "execution_returncode": execution_returncode,
+                "waived": False,
+                "waiver_id": None,
             }
         )
+
+    leaves_by_id = {leaf["requirement_id"]: leaf for leaf in leaves}
+    for waiver in manifest["waivers"]:
+        scope = leaves_by_id[waiver["scope_requirement_id"]]
+        replacement = leaves_by_id[waiver["replacement_requirement_id"]]
+        requirement = required_by_id[scope["requirement_id"]]
+        observed_outcomes = {
+            outcome
+            for outcome, count in (
+                ("skipped", scope["skipped"]),
+                ("xfailed", scope["xfailed"]),
+            )
+            if count
+        }
+        if (
+            replacement["classification"] == "success"
+            and scope["classification"] == "coverage_error"
+            and set(scope["reason_codes"])
+            <= {
+                "zero_executed",
+                "minimum_executed_not_met",
+                "required_case_not_executed",
+            }
+            and scope["result_id"] is not None
+            and scope["result_classification"]
+            not in {"infra_error", "timed_out", "candidate_failure"}
+            and scope["execution_returncode"] == 0
+            and scope["failed"] == 0
+            and scope["selected"] >= requirement["minimum_selected"]
+            and scope["executed"] + scope["skipped"] + scope["xfailed"]
+            == scope["selected"]
+            and observed_outcomes
+            and observed_outcomes <= set(waiver["allowed_outcomes"])
+        ):
+            scope["classification"] = "success"
+            # Keep the established success contract (no obstacle reason codes).
+            # Waiver use remains explicit in the sealed leaf identity below.
+            scope["reason_codes"] = []
+            scope["waived"] = True
+            scope["waiver_id"] = waiver["waiver_id"]
 
     if len(patch_digests) > 1:
         global_reasons.append("patch_digest_mismatch")
@@ -2513,6 +2976,14 @@ def _build_parser() -> argparse.ArgumentParser:
     required.add_argument("--backend", required=True, choices=["local", "ttsim"])
     required.add_argument("--supersedes-reason", default=None)
     required.add_argument(
+        "--waiver-policy",
+        default=None,
+        help=(
+            "optional policy JSON tracked in expected_base_sha; accepted only on "
+            "the first manifest revision and carried unchanged across retries"
+        ),
+    )
+    required.add_argument(
         "--performance-only",
         action="store_true",
         help="seal only explicit perf leaves when a hypothesis was refuted",
@@ -2560,6 +3031,11 @@ def _build_parser() -> argparse.ArgumentParser:
     reduce_result.add_argument("--scope", required=True, choices=["functional", "all"])
     reduce_result.add_argument("--perf-result", default=None)
     reduce_result.add_argument("--output", default=None)
+    reduce_result.add_argument(
+        "--worktree",
+        default=None,
+        help="candidate worktree used to reopen base-tracked waiver policy",
+    )
     reduce_result.set_defaults(func=cmd_reduce_verification)
 
     return p

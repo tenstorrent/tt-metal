@@ -774,6 +774,9 @@ execute_step_route_verification() {
         echo "unsupported route verification mode: $route_mode" >&2
         return 1
     fi
+    if [ -n "${CODEGEN_VERIFICATION_WAIVER_POLICY:-}" ]; then
+        manifest_args+=(--waiver-policy "$CODEGEN_VERIFICATION_WAIVER_POLICY")
+    fi
     if [ -f "$M" ]; then
         manifest_args+=(--supersedes-reason \
             "verification plan resealed after retry; debug=$(sg DEBUG_CYCLES), review=$(sg REVIEW_RETRIES), perf=$(sg PERF_RETRIES)")
@@ -938,6 +941,7 @@ PY
             --manifest "$manifest" \
             --results-dir "$_L/verification-results" \
             --scope functional \
+            --worktree "$(_wt)" \
             --perf-result "$_L/perf_result.json" \
             --output "$_L/verification_reduction.json"
         return $?
@@ -1490,6 +1494,7 @@ PY
                 --manifest "$manifest" \
                 --results-dir "$_L/verification-results" \
                 --scope all \
+                --worktree "$(_wt)" \
                 --perf-result "$_L/perf_result.json" \
                 --output "$_L/verification_reduction.json"; then
             ss OBSTACLE "verification reduction could not validate its inputs"
