@@ -701,6 +701,7 @@ PY
         rj "${common[@]}" --arch "$(sg TARGET_ARCH)" \
             --first-message "$first_msg" || return $?
     fi
+    ss SUPERVISOR_PHASE active_compute
     # The PR being updated + the solve this descends from, for the dashboard.
     if [ "$kind" = "review" ]; then
         rj metric --patch-json "$(python - "$(sg PR_NUMBER)" \
@@ -1398,6 +1399,8 @@ execute_step_deferred_message() {
 # ===========================================================================
 execute_step_write_generated_patch() {
     local _L; _L="$(_LOG)"
+    ss SUPERVISOR_PHASE finalization
+    rj metric --patch-json '{"supervisor_phase":"finalization"}' || return $?
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
     local cf cfj base fix packaged tmp_patch
