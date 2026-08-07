@@ -511,7 +511,7 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
 
                 dfb_bias.wait_front(bias_ntiles_w);
                 dfb_matmul_partials.wait_front(out_block_num_tiles);

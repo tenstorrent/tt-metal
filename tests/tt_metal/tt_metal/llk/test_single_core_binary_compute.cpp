@@ -82,7 +82,6 @@ struct SingleCoreBinaryConfig {
     CoreCoord core;
     std::string binary_op;
     bool acc_to_dest = false;
-    bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     BinaryDestReuseType dest_reuse_type = BinaryDestReuseType::SrcA;
     bool col_broadcast = false;
@@ -354,14 +353,14 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
         }
     } else {
         defines["ELTWISE_OP"] = binary_op_name_to_op_kernel.at(test_config.binary_op);
-        if (test_config.full_init) {
-            defines["FULL_INIT"] = "1";
-        }
         if (test_config.acc_to_dest) {
             defines["LOAD_BUF2_DATA"] = "1";
             defines["ACC_TO_DEST"] = "1";
         }
-        defines["ELTWISE_OP_INIT"] = defines["ELTWISE_OP"] + "_init";
+        // The op function keeps the "_tiles" token (e.g. add_tiles), but the short init drops it
+        // (add_tiles -> add_init), so derive the init name from the op kernel with "_tiles" stripped.
+        const std::string& op_kernel = defines["ELTWISE_OP"];
+        defines["ELTWISE_OP_INIT"] = op_kernel.substr(0, op_kernel.find("_tiles")) + "_init";
         if (test_config.binary_op == "mul") {
             defines["MUL_TILES_WITH_DST_ACCUM"] = "1";
         }
@@ -683,7 +682,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "add",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
@@ -704,7 +702,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "sub",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
@@ -725,7 +722,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "mul",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);

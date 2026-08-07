@@ -140,7 +140,7 @@ FORCE_INLINE void mask_tile_to_cb(
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_in0, cb_mask);
 #endif
-        mul_tiles_init(cb_in, cb_mask);
+        mul_init(cb_in, cb_mask);
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
         tile_regs_commit();
 
@@ -163,13 +163,13 @@ FORCE_INLINE void bias_add() {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
-        add_bcast_scalar_init_short(cb_intermed3, bias_cb_id);
+        add_bcast_scalar_init(cb_intermed3, bias_cb_id);
         add_tiles_bcast_scalar(cb_intermed3, bias_cb_id, 0, 0, 0);
     } else {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
-        add_bcast_rows_init_short(cb_intermed3, bias_cb_id);
+        add_bcast_rows_init(cb_intermed3, bias_cb_id);
         add_tiles_bcast_rows(cb_intermed3, bias_cb_id, 0, 0, 0);
     }
     tile_regs_commit();

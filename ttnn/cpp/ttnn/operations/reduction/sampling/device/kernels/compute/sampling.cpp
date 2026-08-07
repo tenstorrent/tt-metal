@@ -59,7 +59,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
-    sub_bcast_cols_init_short(in0_dfb, in1_dfb);
+    sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
@@ -97,7 +97,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    add_tiles_init(in0_dfb, in1_dfb);
+    add_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -128,7 +128,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, 
     DataflowBuffer out_dfb_obj(out_dfb);
 
     uint32_t num_tiles = rows * cols;
-    mul_bcast_cols_init_short(in0_dfb, in1_dfb);
+    mul_bcast_cols_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -212,7 +212,8 @@ template <
     uint32_t values_dfb_index,
     uint32_t output_ind_dfb_index,
     uint32_t tile_width,
-    bool first_call>
+    bool first_call,
+    bool stable_sort>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -255,7 +256,9 @@ void top_k() {
             transpose_tile(index_dfb_index, 1, 3);
 
             // llk_topk_sort -> inplace
-            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
+            // stable_sort: equal values keep their original (lowest) position, so the candidate the
+            // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
+            ckernel::topk_local_sort<stable_sort>(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -301,9 +304,9 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
+                ckernel::topk_merge<false, stable_sort>(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild<stable_sort>(0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -389,7 +392,7 @@ void mul_block_bcast_scalar_inplace() {
     uint32_t granularity = 1;
 
     reconfig_data_format(in0_dfb, in1_scalar_dfb);
-    mul_tiles_bcast_scalar_init_short(in0_dfb, in1_scalar_dfb);
+    mul_bcast_scalar_init(in0_dfb, in1_scalar_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_scalar_dfb_obj.wait_front(1);
 
@@ -434,6 +437,11 @@ void kernel_main() {
     constexpr uint32_t dfb_local_vals = get_compile_time_arg_val(16);
     constexpr uint32_t temp_dfb_index = get_compile_time_arg_val(17);
     constexpr uint32_t tile_width = get_compile_time_arg_val(18);
+    // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
+    // token does not depend on how the bitonic network happens to swap equal values. Set by the
+    // host only on architectures whose top-k LLK implements a stable network; elsewhere it is 0
+    // and ties keep the previous (network-order) behaviour rather than failing to compile.
+    constexpr bool stable_sort = get_compile_time_arg_val(19) == 1;
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
@@ -454,7 +462,8 @@ void kernel_main() {
         values_dfb_index,
         output_ind_dfb_index,
         tile_width,
-        true>();
+        true,
+        stable_sort>();
     constexpr uint32_t Kt = nearest32_K / tile_width;
 
     // scale temperature

@@ -145,7 +145,7 @@ void add_reduce_block(
     const uint32_t out_cb,
     const uint32_t M_rows,
     const uint32_t N_cols) {
-    add_tiles_init(own_cb, recv_cb);
+    add_init(own_cb, recv_cb);
     reconfig_data_format(own_cb, recv_cb);
     pack_reconfig_data_format(out_cb);
 
@@ -180,7 +180,7 @@ void add_transpose_block(
     constexpr uint32_t staging_cb = tt::CBIndex::c_7;
     for (uint32_t n = 0; n < N_cols; n++) {
         // Phase 1: batch add M_rows tiles for column n into staging
-        add_tiles_init(own_cb, recv_cb);
+        add_init(own_cb, recv_cb);
         reconfig_data_format(own_cb, recv_cb);
         pack_reconfig_data_format(staging_cb);
         cb_reserve_back(staging_cb, M_rows);

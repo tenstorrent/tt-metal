@@ -192,7 +192,7 @@ struct Rope {
                 // Step 2: cos_interm = input * cos (broadcast multiply)
                 // ============================================================
                 reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.in_cb);
-                mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
+                mul_bcast_rows_init(args.in_cb, args.cos_sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, j, j, j);

@@ -704,5 +704,9 @@ inline void calculate_bitonic_topk_rebuild(
     }
 }
 
+// UInt16-in-32b-DEST prepare helper: no-op on Quasar (workaround only required for WH/BH).
+// Defined so compute_kernel_api.h resolves the symbol on all architectures.
+inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
+
 }  // namespace sfpu
 }  // namespace ckernel

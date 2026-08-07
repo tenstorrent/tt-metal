@@ -192,18 +192,20 @@ void bind_indexer_score(nb::module_& mod) {
 
         Identical score semantics to ``indexer_score_dsa`` but SUBSUMES the SP all-gather: rather than the
         caller pre-gathering K, it takes this chip's LOCAL K shard ``k_local`` [B,1,sll,D] (the all-gather
-        input) plus a pre-allocated ``k`` [B,1,T,D] persistent buffer (the gather output). One program
+        input) plus a pre-allocated ``k`` persistent buffer (the gather output). In indexed-cache mode,
+        ``k_local`` may be a multi-slot ND-sharded cache and ``k`` is batch-1 scratch; only the selected slot
+        and the complete block-cyclic slabs touched by ``kv_len`` are gathered. One program
         co-schedules the ring_attention all-gather with the indexer compute so fabric transport overlaps
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
-            k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll; the gather fills
-                the remote SP shards in place (the local slab is read from k_local, not k)
+            k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
+                when cache_batch_idx is set; the gather fills remote SP shards in place
             weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
-            k_local: [B, 1, sll, D] bf16/bfp8_b tiled -- this chip's SP shard and the all-gather INPUT,
-                sll = T/sp; must match k's dtype
+            k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
+                shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
                 >= 2 (the forward and backward ring directions)
             cluster_axis: mesh axis that is the SP ring -- both the gather axis and the causality axis.
@@ -216,8 +218,10 @@ void bind_indexer_score(nb::module_& mod) {
             program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
                 head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
             compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
-            cache_batch_idx: optional int, batch slot of a shared K cache; see indexer_score_dsa
-            kv_len: optional int, valid tile-aligned key prefix in (0, T]; see indexer_score_dsa
+            cache_batch_idx: optional int selecting one k_local cache slot; only that slot is gathered into
+                k slot 0. See indexer_score_dsa.
+            kv_len: optional int, valid tile-aligned key prefix in (0, T]. With block-cyclic K, transport is
+                bounded to the complete per-rank slabs touched by this prefix.
             seq_subshard_axis: optional int, 2D SP×TP -- the (TP) mesh axis the query rows are ALSO block-cyclic
                 sub-sharded over, on top of the SP shard. The K cache stays SP-sharded + TP-replicated (the ring
                 AG still gathers along cluster_axis), so only the causal query geometry gains the tp_rank*Sq
