@@ -102,17 +102,13 @@ Detail: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). Per-cell narratives:
 | **Are the zeros failures?** | Mostly not the optimizer's — 1 of 7 verified, 4 were coverage gaps. §1. |
 | **Whose defects?** | **10 stage** (one-file skill changes, no build), **4 `ttnn-advise`** (Python, one already fixed), **3 optimizer** (C++, needs a build), plus 1 unassignable. §3. |
 
-The tooling around the optimizer is young and it shows, which is the good news. `ttnn-jit` is ten months old; of
-the ten ops cells recorded as capture blockers, **four already had handlers and one did not exist at all**. The
-skills carry the same class of defect — `advised_cores` read from a lossy summary field when the correct one sits
-beside it, `unfixable_ops` parsed and discarded, a ceiling that prices half the real opportunity at zero.
+The tooling is young and it shows, which is the good news: `ttnn-jit` is ten months old, and of the ten ops cells
+recorded as capture blockers, **four already had handlers and one did not exist**.
 
 ### 2b. The optimizer
 
-**One number carries this section.** On phi-3.5 `fuse-noadvise` — the only cell whose artefacts allow the whole
-plan to be reconstructed and run — the optimizer's placement, transcribed from its own `final_ir.mlir`, is worth
-**more than twice what the cell's own careful sweep found**, at output that is bit-identical. Its own harness, a
-fresh process per configuration:
+phi-3.5 `fuse-noadvise` is the only cell whose artefacts allow the whole plan to be reconstructed and run. Its own
+harness, fresh process per configuration:
 
 | configuration | median ms | Δ | differential PCC |
 |---|---|---|---|
@@ -122,28 +118,24 @@ fresh process per configuration:
 | the cell's own best candidate, which it discarded | 0.700120 | −13.30 % | 0.99999107 |
 | **that plan plus its advised 11-core norm** | **0.663507** | **−17.84 %** | 0.99999107 |
 
-Read rows two and three together: **−10.43 % against −4.88 %, at PCC exactly 1.0.** The correctness rule was not
-what cost this cell the difference, and neither was the optimizer. Nobody tried the plan.
+**−10.43 % against the −4.88 % that shipped, at PCC exactly 1.0.** Neither the correctness rule nor the optimizer
+cost this cell the difference. Nobody tried the plan.
 
-**Three properties make it worth building on.** It is **deterministic** — given a graph it discards the incoming
-memory configurations and re-places every op from scratch, and the same graph yields the same answer; four runs in
-**18.4 / 18.4 / 18.1 / 18.6 s**. It is therefore **cheap enough to re-run between changes**, at less than one
-harness measurement. And it **declares what it cannot place**, naming the op and the exact runtime error, which is
-an output the stage discards *(§3.28)*.
+**What holds up**
 
-**Its direction is more reliable than its numbers.** On the dominant defect class — widen a starved reduction — it
-was right in **4 of 4** cells where anyone measured it. But `LayoutScore` has no latency term at any level, and
-`getOpRuntime` exists in `TTNNOpModel.cpp` unconsulted, so it cannot rank candidates by speed. Measured
-consequence: across the three ladders that were swept its grid reached **82 %** of achievable, where a fixed
-*"closest to 16 cores"* rule with no compiler involved reached **99.4 %**. **3 of the 4 placement wins in the
-corpus are at grids it did not name** — it found the op, and the right value was a rung or two away.
+- **Deterministic and cheap.** It discards the incoming memory configurations and re-places every op; same graph,
+  same answer, in **18.4 / 18.4 / 18.1 / 18.6 s** — less than one harness measurement, so it can be re-run between
+  changes.
+- **Direction right in 4 of 4** cells on the dominant defect class, widening a starved reduction.
+- **It declares what it cannot place**, with the exact runtime error — an output the stage discards *(§3.28)*.
 
-**So the honest bound: implementing everything it said was much better than what shipped, and still not optimal.**
-The −17.84 % configuration is above its own plan; elsewhere 16 cores beat its advised 22, and 44 beat its advised
-88, bit-identically. It is a strong starting configuration and a reliable detector, not an oracle — which is
-exactly how to use it: **apply the whole plan first, then sweep the legal ladder around each op it named.** The
-first half is free. The second half is what closes the 82 %-to-99.4 % gap until the objective prices latency.
-*(§3.14, §3.27)*
+**What does not.** `LayoutScore` has no latency term at any level and `getOpRuntime` is never consulted, so it
+cannot rank by speed. Its grid reached **82 %** of achievable across the three swept ladders; a fixed *"closest to
+16 cores"* rule with no compiler reached **99.4 %**. **3 of the 4 placement wins are at grids it did not name.**
+
+**The bound.** Implementing everything it said was much better than what shipped, and still not optimal — 16 cores
+beat its advised 22, and 44 beat its advised 88, both bit-identically. It is a starting configuration, not an
+oracle: **apply the whole plan, then sweep the legal ladder around each op it named.** *(§3.14, §3.27)*
 
 ---
 
