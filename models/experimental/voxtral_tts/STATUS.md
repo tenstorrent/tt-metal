@@ -3519,9 +3519,28 @@ violating it. Same comparison, same commit, only the input changed:
 
 **On real text every single differing code is off by exactly one FSQ level out of 21** — the
 smallest difference representable, meaning the device landed *within one quantisation step* of the
-reference. These are bin-boundary flips, not errors. Every \|delta\| > 1 in this model's history
-comes from synthetic input. Random embeddings are off-manifold, where the semantic head's top
-logits are near-tied and velocities sit near FSQ boundaries.
+reference. Every \|delta\| > 1 in this model's history comes from synthetic input.
+
+**THE MECHANISM, after three controls — and it is NOT the one this section first gave.** The
+original text said random embeddings "sit near FSQ boundaries". That is false, and the controls
+that killed it also found the real cause. A code flips when
+`|implementation error| > |distance to the .5 boundary|`, so both terms had to be measured:
+
+| control | question | result |
+|---|---|---|
+| `ref_vs_ref.py` | does the **reference** disagree with itself? | **0/288 on BOTH inputs.** fp32-vs-fp64 error is ~1.3e-6 against a margin of ~0.25 — five orders of headroom. The reference never flips anything. |
+| same | are synthetic inputs nearer the boundaries? | **No.** Median margin **0.260 synthetic vs 0.253 real** — indistinguishable. The first explanation dies here. |
+| `device_err.py` | is it Block 2 / FSQ? | **No.** With `h` held FIXED, the device's pre-FSQ error is the same on both (median 0.0334 synthetic, 0.0389 real — real slightly *worse*) and flips only 2.4% / 5.2%. |
+| Block 1 divergence | is it Block 1? | **Yes.** PCC(h_dev, h_ref) **0.9865 synthetic vs 0.9999 real**, relative error **15.58% vs 0.70% — 22×** — present at step 0 from prefill alone, not accumulating. |
+
+So the chain is: **Block 1's accuracy collapses on off-manifold input** → a 22× larger error in `h`
+→ Block 2's velocity error crosses the (unchanged) FSQ margin far more often → 29.5% of codes
+flip. This is trap #12 exactly — it recorded Block 1 at PCC 0.892 on random embeddings against
+0.9994 on real — reaching the codes gate through Block 2 rather than being visible directly.
+
+The number is therefore **real, not a rounding illusion**: on synthetic input the device genuinely
+is far less accurate. What makes it useless as an accuracy figure is that *the input is not
+representative of anything the model is ever asked to do*.
 
 **3. IT PREDATES EVERY p150 CHANGE.** Bisected across all 11 fork commits in an isolated worktree:
 
