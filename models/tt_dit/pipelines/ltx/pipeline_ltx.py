@@ -814,6 +814,8 @@ class LTXPipeline:
 
         with Watchdog("vae decode"):
             video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type == "yuv":
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
             return video.numpy()
         return video
