@@ -933,6 +933,7 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
     # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
     bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 1e-3))
-    assert tt_res.to(torch.float32).abs().max().item() <= bound
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
     assert_with_pcc(golden, tt_res, pcc=0.99 if is_bfp8 else 0.999)
