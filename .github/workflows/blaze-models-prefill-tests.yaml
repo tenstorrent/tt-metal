@@ -92,8 +92,10 @@ jobs:
 
   Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # Skip when only the perf checks were requested (they run in the focused job below).
-    if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
+    # Skip when only a focused-job stage was requested: sdpa_perf and prefill_runner_kv_pcc
+    # each have their own impl invocation and no sc1 matrix entry, so running the sc1 caller
+    # for them would fail on an empty matrix. "all"/"module" still select this job.
+    if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' && needs.validate-test-type.outputs.test-type != 'prefill_runner_kv_pcc' }}
     permissions:
       id-token: write
       contents: read
