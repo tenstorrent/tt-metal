@@ -157,6 +157,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const auto arch = input_tensor.device()->arch();
     uint32_t workers_per_dir = 1;
     if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Two workers saturate a link: one cannot keep it fed, and past two they only contend on the NOC.
+        // Only tile shapes were swept past two workers, so the large-page ring exception below is untested
+        // here rather than ruled out.
         workers_per_dir = 2;
     } else if (arch == tt::ARCH::BLACKHOLE) {
         // One worker (no mux) is far worse, and past two they only contend on the NOC. The exception is a
