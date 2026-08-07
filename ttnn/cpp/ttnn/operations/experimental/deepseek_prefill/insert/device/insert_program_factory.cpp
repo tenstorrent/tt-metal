@@ -39,6 +39,12 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     // Upper bounds used for runtime asserts in the kernels.
     const uint32_t global_num_tiles = (global_rows / tt::constants::TILE_HEIGHT) * tiles_per_row;
     const uint32_t local_num_tiles = (local_rows / tt::constants::TILE_HEIGHT) * tiles_per_row;
+    // Number of experts addressable by start/counts (validate() has already
+    // enforced that the two agree). The kernels look up global_expert_id from
+    // device memory at runtime and use it to index their start/counts L1
+    // scratch pages, so they need this bound to reject an out-of-range id
+    // before it turns into an OOB L1 read.
+    const uint32_t num_experts = counts.logical_shape()[-1];
 
     // NOTE: We do NOT verify the inter-expert layout invariant
     //   start[id] + counts[id] <= start[id + 1]
@@ -132,6 +138,7 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
         tiles_per_row,
         local_num_tiles,
         num_cores,
+        num_experts,
     };
     tt::tt_metal::TensorAccessorArgs(local_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_compile_time_args);
@@ -148,6 +155,11 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
         tiles_per_row,
         global_num_tiles,
         num_cores,
+        // The writer never reads local_tensor, but it must apply the same
+        // counts clamp as the reader or the two would disagree on the tile
+        // count crossing the CB.
+        local_num_tiles,
+        num_experts,
     };
     tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_compile_time_args);
