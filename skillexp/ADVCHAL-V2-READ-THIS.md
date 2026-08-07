@@ -127,7 +127,7 @@ Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEAS
 | **What is the single biggest miss?** | The **screening order**. The harness builds candidates up chain by chain from the frozen incumbent and never applies the optimizer's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % against the −4.88 % that shipped — 3.7×** — and −10.43 % of that is **bit-identical** to the incumbent. Nobody tried it. |
 | **Did the cells follow the advice?** | **7 of 15 tried the advisor's exact value on at least one advised item**, 6 as their first candidate, and all 7 ended cleanly. **4 never tried it and recorded no reason. None applied the whole plan.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
 | **Are the zeros failures?** | Mostly not the optimizer's. Only **1 of 7 is verified by measurement** (llama-3.1-8B `exp17`, whose whole ladder was swept). **4 of the 7 are coverage gaps** — the tracer never showed the advisor those layers, so the stage produced no verdict either way. Three of those four are now unblocked and re-measured, and the fourth moved from a coverage gap to a pipeline crash: §1 and [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). |
-| **Whose defects?** | **10 in the stage**, almost all one-file changes with no build, and they account for the larger measured loss. **6 in the optimizer or its reporting**, needing tt-mlir work. The ledger is §3. |
+| **Whose defects?** | Three owners, and the ratio matters: **3 in the tt-mlir optimizer** (needing a C++ build), **4 in the `ttnn-advise`/`ttnn-jit` tooling around it** (Python — one already fixed), **10 in the stage's use of it** (one-file skill changes, no build), plus 1 that cannot yet be assigned between the first two. The stage's account for the larger measured loss. The ledger is §3. |
 
 **The surrounding tooling is new, and it shows — which is the good news.** `ttnn-jit` is ten months old and
 actively developed. Its tracer stopped eight cell/kinds early, and closing every real gap took **218 lines of
@@ -187,29 +187,48 @@ find those, and holding it responsible for them would misread the result.
 
 ---
 
-## 3. The ledger: advisor not good enough, vs stage not listening
+## 3. The ledger: three different owners, three very different costs
 
-Every defect found, sorted by **whose it is**. The split matters because the two groups go to different
-codebases and cost very different amounts to fix.
+Every defect found, sorted by **who owns it**. That split is the whole point of the section: the three groups go
+to different codebases, and only one of them needs a compiler change.
 
-*`ADV-n` / `STG-n` are IDs local to this table. The bold codes in the last column (`D1`, `C5f`, `F5`…) are
+*`OPT-n` / `TOOL-n` / `STG-n` are IDs local to this table. Bold codes in the last column (`D1`, `C5f`, `F5`…) are
 action points in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).*
 
-### Real defects in the optimizer and its reporting — tt-mlir changes
+### The tt-mlir optimizer itself — C++, needs a build
 
-Only ADV-1 and ADV-2 are defects in the placement decision itself. ADV-4 is unexplained. ADV-3, ADV-5 and ADV-6
-are the summary and API surface — the information exists, it just is not exposed usefully.
+Defects in how placement is **decided**. These are the only ones that make the advice worse.
 
-| id | defect | consequence |
-|---|---|---|
-| ADV-1 | **`LayoutScore` has no latency term at any level.** `getOpRuntime` exists in `TTNNOpModel.cpp` and is never consulted. | It cannot rank by speed at all. Everything below follows from this. → **D1** |
-| ADV-2 | **`coreCount` is level 6 of 7**, and for norms `NormalizationRules.cpp:77-104` overrides it with the *input* operand's grid volume — exactly 1 on decode shapes — so the term **cannot vary with the candidate**. | Its grid values lose when measured: **3 of the 4 placement wins are at grids it did not name** (§4) |
-| ADV-3 | **Candidate layouts are deduped by shard shape keeping the *smallest* grid, before per-op legality filters run.** | A legal sibling can be discarded and an illegal representative kept → **D3** |
-| ADV-4 | **One selection the trace cannot explain**: llama's MLP norm chose `1x22` while 32 and 64 were valid and outrank it on both documented tiebreakers. | Either the recorded score is not what is compared, or there is an unrecorded criterion → **D5** |
-| ADV-5 | **`report.json` renders a multi-range `CoreRangeSet` as its first range only**, and prints no shard shape at all. | The summary understates its own advice. *Shared blame*: the information survives intact in `final_ir.mlir`, so nothing is lost by the optimizer — only by its summary |
-| ADV-6 | **It does not emit the legal ladder**, so a challenger has to guess which core counts are even legal. | Wasted device time on illegal geometries → **D4** |
+| id | defect | consequence | fix |
+|---|---|---|---|
+| OPT-1 | **`LayoutScore` has no latency term at any level.** `getOpRuntime` exists in `TTNNOpModel.cpp` and is never consulted. | It cannot rank candidates by speed at all. **This is the root of the 82 %-vs-99.4 % gap in §2b**, and OPT-2 follows from it | **D1** |
+| OPT-2 | **`coreCount` is level 6 of 7**, and for normalizations `NormalizationRules.cpp:77-104` overrides it with the *input* operand's grid volume — exactly 1 on decode shapes — so the term **cannot vary with the candidate**. | Its grid values lose when measured: **3 of the 4 placement wins are at grids it did not name** (§4) | **D2** |
+| OPT-3 | **Candidate layouts are deduped by shard shape, keeping the *smallest* grid, before per-op legality filters run.** | A legal sibling can be discarded while an illegal representative is kept | **D3** |
 
-### The stage is not listening — skill changes, all cheap
+**That is the entire list of real optimizer defects, and OPT-1 subsumes most of it.** Give the objective a latency
+term and OPT-2 stops mattering; OPT-3 is an ordering bug in one pass.
+
+One item cannot yet be assigned:
+
+| id | defect | why it is unattributed | fix |
+|---|---|---|---|
+| OPT/TOOL-? | llama's MLP norm chose `1x22` while **32 and 64 were valid and outrank it on both of the optimizer's own documented tiebreakers**. | Either the score the trace records is not the score being compared — a reporting problem — or the beam applies a criterion it does not record — a real optimizer problem. **The trace cannot distinguish these.** Resolving it needs the pass rebuilt with the comparison logged | **D5** |
+
+### `ttnn-advise` and `ttnn-jit` around it — Python, no optimizer change
+
+The optimizer's *answers* are fine here; what reaches or leaves it is not. This is where the corpus actually lost
+the most, and it is the cheap column.
+
+| id | defect | consequence | status |
+|---|---|---|---|
+| TOOL-1 | **The direct-TTNN tracer had no handler for five ops**, so it truncated the capture before the optimizer ever saw the layer. | **The single largest limiter in the corpus**: 8 cell/kinds discarded 58–77 % of their profiled window. Nothing about it involves placement | **fixed** — 218 lines, no rebuild, 17 new candidates. [branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps), [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) |
+| TOOL-2 | **`report.json` renders a multi-range `CoreRangeSet` as its first range only**, and prints no shard shape at all. | The summary understates the optimizer's own advice — **58.3 % of advised core counts**. The optimizer loses nothing: `final_ir.mlir` carries both, intact | **C5f** — one line, on the consumer side |
+| TOOL-3 | **It does not emit the legal core-count ladder**, although the set is computable inside the pass. | A challenger has to guess which grids are even legal, and spends device time on ones that are not | **D4** |
+| TOOL-4 | **`--help` offers `--tracer interception` as the fallback "for ops not yet handled by the direct-TTNN tracer"** — and it cannot trace any HF-RoPE decoder. | Wrong advice at exactly the moment someone is stuck. TTIR has only `rotary_embedding_llama`, which needs a `trans_mat` the HF op has no equivalent for, so this cannot be fixed by porting — narrow the claim instead | doc change |
+
+### The stage's use of it — skill changes, all cheap
+
+Here the optimizer's answers arrive correct and complete, and the stage mishandles them.
 
 | id | defect | measured cost | fix |
 |---|---|---|---|
@@ -221,15 +240,21 @@ are the summary and API surface — the information exists, it just is not expos
 | STG-6 | **`agrees_with_shipped` never compares the memory space** — core count or DS-family only. | 1 of phi-3.5 `fuse-noadvise`'s 2 such rows is wrong | **C5c** |
 | STG-7 | **`pair_confidence: position` is recorded, documented as a guess, then ignored downstream.** | **23.2 % of pairings corpus-wide** are guesses that nothing discounts — enough to turn positional artefacts into apparent findings | **C5e** |
 | STG-8 | **It never re-advises**, screening every candidate against one start-of-run capture. | `ttnn-advise` costs **~18 s** — less than a single harness measurement (§3.29) | **F6** |
-| STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
+| STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture — the tracer excuse for it is gone (TOOL-1) |
 | STG-10 | **It throws away the perf report it runs.** Only 1 of 15 cells saved a before/after profile pair. | Op-level verification is impossible for 14 cells | **B0** |
 
-The two columns are not the same size of problem. **ADV-1 and ADV-2 are the one thing worth a tt-mlir build**:
-without a latency term the optimizer cannot rank by speed, which is exactly the 82 %-vs-99.4 % gap in §2b. Everything
-else on the left is reporting. **The stage's ten are almost all one-file changes with no build, and they account
-for the larger measured loss** — STG-1 alone is 3.7× on the cell where it can be measured, and STG-2 hid two of
-the corpus's three biggest wins. gemma-4-12B `exp11` is the extreme case: **52 measurements without ever applying one
-advised grid.**
+**Count the columns, because the ratio is the argument.** Three defects are in the optimizer, and OPT-1 subsumes
+most of OPT-2. Four are in the tooling around it — one of them already fixed in an afternoon of Python. Ten are the
+stage using correct output badly, and every one of those is a one-file change with no build.
+
+**And the cheap column is where the corpus actually lost.** STG-1 alone is 3.7× on the cell where it can be
+measured; STG-2 hid two of the corpus's three biggest wins; TOOL-1 discarded most of eight cell/kinds before the
+optimizer got a look. gemma-4-12B `exp11` is the extreme case — **52 measurements without ever applying one advised
+grid.** None of that is evidence about placement quality.
+
+**What the optimizer is actually accountable for is narrower than it looks:** it does not price latency, so its
+grid is a good guess rather than the best legal one. That is one real defect, it is named, and it is the gap
+between the −10.43 % its plan delivered and the −17.84 % that was there.
 
 ### Neither — outside any layout advisor's reach
 
