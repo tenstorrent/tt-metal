@@ -1429,10 +1429,12 @@ re_run_command:
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                cmd->set_write_offset.host_runtime_id != REALTIME_PROFILER_UNPROFILED_RUNTIME_ID) {
-                while (!runtime_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.host_runtime_id)) {
-                    invalidate_l1_cache();
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+                const uint32_t host_runtime_id = cmd->set_write_offset.host_runtime_id;
+                if (host_runtime_id != REALTIME_PROFILER_UNPROFILED_RUNTIME_ID) {
+                    while (!runtime_id_fifo_append(rt_profiler_msg, host_runtime_id)) {
+                        invalidate_l1_cache();
+                    }
                 }
             }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
