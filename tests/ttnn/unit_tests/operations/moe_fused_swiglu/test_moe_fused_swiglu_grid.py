@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The op on worker grids other than the one every graded number is quoted at.
+"""Correctness coverage for multiple worker-grid geometries.
 
 Everything about this op's shape is derived from (HGROUPS, KGROUPS): the hidden split across
 COLUMNS, the emb contraction split across ROWS, the reduce-scatter's column height, the h
@@ -8,10 +8,10 @@ all-gather's round count, and `cb_w_down`'s slot cycle. A grid change moves all 
 and the failure mode is not a wrong number — it is a hang, because the collectives only agree
 while every core computes the same plan.
 
-8x8 is the interesting cell: HGROUPS 8 rather than 11 changes `hn_pad` (8, not 6), the chunk count
-(2, not 3), the reduce column height, and the number of all-gather rounds. 11x10 is the device's
-full grid, which is what a caller gets by DEFAULT — so if only 11x8 were tested, the default
-configuration would be the untested one.
+8x8 is the interesting alternate cell: HGROUPS 8 rather than 11 changes `hn_pad` (8, not 6), the
+chunk count (2, not 3), the reduce column height, and the number of all-gather rounds. 11x10 is the
+full grid on the test device and exercises the operation's default geometry. 11x8 exercises a
+smaller explicit override.
 
 WHAT IS NOT TESTED HERE, and why. Grids much smaller than these do not fit L1 at any SUPPORTED
 emb: fewer cores means a larger `kr_pad` and `ec_max` per core, so a 4x2 grid needs ~7.5 MB of CBs
@@ -35,8 +35,8 @@ PCC_GATE = 0.975  # the bfp4 format floor; same gate the golden suite uses
 
 #: (hgroups, kgroups, hidden) — every combination that fits L1 at a supported emb on this device.
 GRIDS = [
-    (11, 8, 2048, "the grid every graded number is quoted at"),
-    (11, 10, 2048, "the device's FULL grid — what a caller gets by default"),
+    (11, 8, 2048, "an explicit 88-core override"),
+    (11, 10, 2048, "the full grid used by default on the test device"),
     (8, 8, 1024, "HGROUPS 8: different hn_pad, chunk count, column height and round count"),
 ]
 
@@ -112,7 +112,7 @@ def test_grid_too_small_reports_l1(device, expect_error):
     idx = torch.zeros(NUM_LOCAL_EXPERTS, dtype=torch.int32)
     idx[LOCAL_EXPERT_ID] = GLOBAL_EXPERT_ID
 
-    with expect_error((RuntimeError, ValueError), r"(?i)L1 per core|DEST budget"):
+    with expect_error((RuntimeError, ValueError), r"(?i)L1 per core|DEST (?:budget|limit)"):
         moe_fused_swiglu(
             tt_x,
             tt_w[0],

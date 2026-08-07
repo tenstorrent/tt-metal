@@ -20,7 +20,7 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import
 
 HEADER = (
     pathlib.Path(__file__).resolve().parents[5]
-    / "ttnn/ttnn/operations/moe_fused_swiglu/kernels/moe_fused_swiglu_ct_args.hpp"
+    / "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_ct_args.hpp"
 )
 
 

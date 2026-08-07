@@ -62,7 +62,7 @@ import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_geometry as pd
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
     nd_shard_n_tiles,
     weight_memory_configs,
 )
@@ -119,6 +119,7 @@ _REPORTED_KNOBS = (
     "WD_RESIDENT",
     "WD_AHEAD",
     "WD_MROW_ROUNDS",
+    "WD_MGROUPS",
     "GU_CHUNKS",
     "HACK_AHEAD",
     "XPRIO",
@@ -128,6 +129,8 @@ _REPORTED_KNOBS = (
     # not otherwise recoverable from the output — the two builds are bit-identical when both are
     # correct, so the pass line is the only place the distinction survives.
     "H_MCAST_POSTED",
+    "H_ROUND_NOC1_MASK",
+    "SCATTER_ONE_SIGNAL",
     "DEPTH_X",
     "DEPTH_H",
     "ABLATE",
@@ -151,10 +154,10 @@ def _cases():
 # ---------------------------------------------------------------------------
 # "most optimal" == the shipped defaults. Assert it instead of assuming it.
 # ---------------------------------------------------------------------------
-#: The shipped value of every tuning constant this test certifies as deterministic. The op has no
-#: environment knobs any more, so "shipped" is no longer "an empty environment" — it is these
-#: values, compared against the live module. A source edit or an in-process rebind that moved one
-#: would otherwise silently retarget the test at a configuration nobody ships.
+#: The shipped value of every tuning constant this test certifies as deterministic. Experimental
+#: A/B controls may be environment-overridden, so "shipped" is not merely an empty command line —
+#: it is these resolved values, compared against the live module. A source edit, environment
+#: override, or in-process rebind would otherwise silently retarget the test.
 _SHIPPED = {
     "M_BLOCK": 8,
     "DEPTH_X": 2,
@@ -163,10 +166,14 @@ _SHIPPED = {
     "WD_AHEAD": 1,
     "W_RESIDENT": True,
     "WD_RESIDENT": True,
+    "WD_MROW_ROUNDS": True,
+    "WD_MGROUPS": False,
     "GU_CHUNKS": 3,
     "XPRIO": True,
     "HACK_AHEAD": 2,
     "WD_SPLIT": 3,
+    "H_ROUND_NOC1_MASK": 0,
+    "SCATTER_ONE_SIGNAL": True,
     "ABLATE": "",
     "OUT_SUBBLOCK_H_GU": 1,
     "OUT_SUBBLOCK_H_DN_MAX": 4,

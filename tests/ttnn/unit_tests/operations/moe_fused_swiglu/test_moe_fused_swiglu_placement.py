@@ -20,7 +20,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu, weight_memory_configs
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import nd_shard_n_tiles
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import nd_shard_n_tiles
 
 TILE = 32
 EMB, HIDDEN, CAPACITY, COUNT = 6144, 2048, 1024, 256
@@ -96,3 +96,10 @@ def test_preferred_placement_is_a_pure_function_of_k_n_and_grid(device):
 
     wide = weight_memory_configs(device, EMB, HIDDEN, core_grid=(8, 8))
     assert str(wide[0]) != str(a[0]), "the gate/up shard width must follow the COLUMN count"
+
+
+def test_preferred_placement_defaults_to_the_full_device_grid(device):
+    grid = device.compute_with_storage_grid_size()
+    default = weight_memory_configs(device, EMB, HIDDEN)
+    explicit = weight_memory_configs(device, EMB, HIDDEN, core_grid=(int(grid.x), int(grid.y)))
+    assert [str(memory_config) for memory_config in default] == [str(memory_config) for memory_config in explicit]

@@ -14,7 +14,7 @@ tensor.
 Because the case list cannot be recovered from the profiler CSV (count lives in device memory, not
 in a tensor shape), the test writes a MANIFEST listing every dispatch in issue order to
 `MOE_SWEEP_MANIFEST`. `perf_experiments/parse_seqlen_sweep.py` zips that manifest against the CSV's
-GenericOpDeviceOperation rows sorted by GLOBAL CALL COUNT, and refuses to report if the two lengths
+moe_fused_swiglu rows sorted by GLOBAL CALL COUNT, and refuses to report if the two lengths
 disagree. Correctness is not asserted here beyond shape — that is the golden suite's job.
 """
 
@@ -27,7 +27,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
     nd_shard_n_tiles,
     weight_memory_configs,
 )

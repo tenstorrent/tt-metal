@@ -38,8 +38,8 @@ implementation and not the harness:
 
 WHERE THEY DIFFER ARCHITECTURALLY, and it shows up in the `util` denominator: `moe_fused_swiglu`
 holds all three weight sets L1-RESIDENT for the whole dispatch (see the L1 table below), so it
-reads them from DRAM once. The routed expert chunks M into at most 64 tile-rows and RE-READS the
-full weight set once per chunk (`adaptive_chunk::num_chunks`), which at capacity 5120 is 3 reads
+reads them from DRAM once. The routed expert chunks M into at most 32 tile-rows and RE-READS the
+full weight set once per chunk (`adaptive_chunk::num_chunks`), which at capacity 5120 is 5 reads
 of 24.8 MB. `read_bytes` is therefore op-aware; a shared denominator would have flattered it.
 
 K IS PINNED TO 7168 BY DEFAULT rather than sweeping 7168 and 6144, because the op axis doubled the
@@ -71,12 +71,9 @@ either `MOE_MATRIX_HIDDEN=1024` (both dtypes at the graded K) or `MOE_MATRIX_EMB
 at the graded N). Any (K, N) may be passed; a cell the op refuses SKIPS carrying the op's own byte
 numbers, so the hole is reported rather than silently dropped or mistaken for a crash.
 
-WHY THE GRID IS core_grid=(11, 8). This op's `core_grid` is (x, y) = (COLUMNS, ROWS), so the 88-core
-grid every graded number is quoted at — 8 rows of 11 — is written (11, 8). The device here reports
-`compute_with_storage_grid_size() == 11x10`, and `worker_grid` CLAMPS rather than raises, so the
-transposed spelling (8, 11) would quietly become (8, 10) = 80 cores: a different `hn_pad`, a
-different chunk count, a different reduce column height, and numbers that are not comparable to
-anything else in this directory.
+GRID SELECTION. This op's `core_grid` is (x, y) = (COLUMNS, ROWS), so 8 rows of 11 is written
+(11, 8). Omitting `core_grid` uses the complete compute-with-storage grid. This benchmark explicitly
+pins (11, 8); the transposed spelling (8, 11) is a different geometry, not an alternate spelling.
 
 WEIGHT PLACEMENT IS A CALLER'S CHOICE, NOT A KNOB, and it is worth up to 11 %. The op reads whatever
 it is handed and takes the coalesced path only when `nd_shard_n_tiles` can prove a contiguous run;
@@ -125,7 +122,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
     nd_shard_n_tiles,
     weight_memory_configs,
 )
@@ -133,8 +130,8 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import
 TILE = 32
 NUM_GLOBAL_EXPERTS, NUM_LOCAL_EXPERTS, LOCAL_EXPERT_ID, GLOBAL_EXPERT_ID = 256, 8, 3, 137
 
-#: (x, y) = (COLUMNS, ROWS). See the module docstring: 8 rows of 11 is (11, 8), and the transposed
-#: spelling would be CLAMPED to 80 cores rather than refused.
+#: (x, y) = (COLUMNS, ROWS). This benchmark explicitly pins 8 rows of 11; callers may omit the
+#: override to use the full compute-with-storage grid.
 GRID = (11, 8)
 
 HIDDEN = int(os.environ.get("MOE_MATRIX_HIDDEN", 2048))
@@ -156,10 +153,10 @@ _OPS = ("moe_fused_swiglu", "routed_expert")
 #: and not a function of the grid this file asks for. It is checked against GRID below.
 RE_GRID_X = 11
 
-#: The routed expert's CB-sized MAXIMUM chunk in tile-rows (`kMaxChunkMTiles`, = per_core_M 8 x its
+#: The routed expert's CB-sized MAXIMUM chunk in tile-rows (`kMaxChunkMTiles`, = per_core_M 4 x its
 #: GRID_Y 8). The kernel picks the real chunk from the device-side count but never exceeds this, so
 #: it is what sets how many times the weight set is re-read. See `read_bytes`.
-RE_MAX_CHUNK_TILES = 64
+RE_MAX_CHUNK_TILES = 32
 
 
 def _axis(env, default):
@@ -210,13 +207,12 @@ def re_num_chunks(count, max_chunk_tiles=RE_MAX_CHUNK_TILES):
 
     Mirrors `adaptive_chunk::num_chunks` exactly — a run of full `max_chunk_tiles` chunks then one
     tail chunk — because each chunk re-reads gate/up/down from DRAM. At the default capacity that is
-    1 for every M up to 2048 and 3 at 5120 (160 tile-rows = 64 + 64 + 32).
+    1 for every M up to 1024 and 5 at 5120 (160 tile-rows = 5 * 32).
 
-    ASSUMES the op's L1 guard did not lower the CB-sized max below `RE_MAX_CHUNK_TILES`. That guard
-    shrinks per_core_M on models bigger than this file measures (it is aimed at MiniMax-M3's 6144 x
-    3072); at K 7168 / N 2048 / bfp4 the compiled per_core_M is 8, so the max stands. On a shape
-    where it did shrink, this term would UNDER-count the weight re-reads and overstate `util` — the
-    `us` columns, which are what this file exists to produce, are unaffected either way.
+    ASSUMES the op's L1 guard did not lower the CB-sized max below `RE_MAX_CHUNK_TILES`. All three
+    bfp4 shapes in this matrix compile with per_core_M=4, so the max stands. On a larger shape where
+    the guard did shrink it, this term would UNDER-count the weight re-reads and overstate `util` —
+    the `us` columns, which are what this file exists to produce, are unaffected either way.
     """
     count_t = (count + TILE - 1) // TILE
     if count_t < 1:
@@ -231,9 +227,9 @@ def read_bytes(count, emb, hidden, w_tile, input_format, op="moe_fused_swiglu"):
     THE WEIGHT TERM IS OP-DEPENDENT, and that is the one place these two implementations are not
     reading the same bytes. `moe_fused_swiglu` keeps all three weight sets L1-RESIDENT for the whole
     dispatch, so it reads them from DRAM exactly once and the term is count-independent. The routed
-    expert chunks M to at most 64 tile-rows and re-reads the full set per chunk, so its term scales
+    expert chunks M to at most 32 tile-rows and re-reads the full set per chunk, so its term scales
     with `re_num_chunks`. Sharing one denominator would have quietly credited it with a utilisation
-    it never achieved at M 5120, where it reads 3x24.8 MB rather than 24.8.
+    it never achieved at M 5120, where it reads 5x24.8 MB rather than 24.8.
 
     Either way the term follows the weight dtype's tile size, which is why `w_tile` is a parameter —
     a denominator left at bfp4's 576 B would overstate a bfp8 run's utilisation by ~1.8x. The

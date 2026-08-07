@@ -28,7 +28,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
     nd_shard_n_tiles,
     weight_memory_configs,
 )

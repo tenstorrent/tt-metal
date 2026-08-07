@@ -148,8 +148,20 @@ def test_non_resident_wdown_over_multiple_m_blocks(device):
     here is chosen to span four (count 1024 at M_BLOCK 8 = 32 tile-rows), and the dtype is chosen
     so the fallback actually fires.
     """
-    emb, hidden, capacity, count = 6144, 2048, 1024, 1024
-    blk = geo.Blocking(11, 8, emb, hidden, capacity // TILE, w_tile=ttnn.tile_size(ttnn.bfloat8_b), x_stick=24 * 64)
+    # The BF16 scratch alias now saves enough L1 for the old emb=6144 cell to remain resident.
+    # emb=7168 still resolves to the genuine depth-3 fallback. Use tiled BFP8 activation here:
+    # the BF16-RM staging buffers make this already-tight BFP8-weight program miss physical L1 by
+    # 384 bytes, whereas tiled input covers the same W_down protocol with 56 KB of headroom.
+    emb, hidden, capacity, count = 7168, 2048, 1024, 1024
+    blk = geo.Blocking(
+        11,
+        8,
+        emb,
+        hidden,
+        capacity // TILE,
+        w_tile=ttnn.tile_size(ttnn.bfloat8_b),
+        x_stick=ttnn.tile_size(ttnn.bfloat8_b),
+    )
     assert not blk.wd_resident, "this shape was chosen because residency should FALL BACK here"
     assert blk.max_m_blocks > 1, "and because it spans more than one M-block"
 
@@ -164,7 +176,7 @@ def test_non_resident_wdown_over_multiple_m_blocks(device):
     idx[LOCAL_EXPERT_ID] = GLOBAL_EXPERT_ID
 
     out = moe_fused_swiglu(
-        d(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        d(x, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
         *[d(w, ttnn.bfloat8_b, ttnn.TILE_LAYOUT) for w in (wg, wu, wd)],
         d(counts, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
         d(idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
