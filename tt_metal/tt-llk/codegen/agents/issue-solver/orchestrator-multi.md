@@ -104,9 +104,12 @@ execute_step_combine_verification_results
 execute_step_aggregate_results
 ```
 
-The combiner retains each tester's nested suite result and writes the
-dashboard-compatible verdict and counters to `arch_results.<arch>`. For
-`both`, it combines the suites independently for each architecture:
+For production runs, the combiner retains each tester's nested suite result and
+writes the dashboard-compatible verdict and counters to
+`arch_results.<arch>`. Audit runs instead derive every architecture, suite, and
+aggregate count from the current manifest's structured result leaves; an
+agent-authored suite summary is not reducer input. For `both`, it combines the
+suites independently for each architecture:
 
 - any suite failure makes that architecture fail;
 - at least one `SUCCESS` with no failure makes it successful;
@@ -176,6 +179,12 @@ execute_step_write_generated_patch
 execute_step_finalize_run
 execute_step_copy_artifacts
 ```
+
+On the audit lane, the finalizer first reduces all current functional and
+performance leaves. Missing evidence, mixed patch digests, or a required
+measurement that was not actually recorded changes a requested success to
+failed. A successful final write additionally requires the reducer token to
+match the current manifest and the packaged Git diff.
 
 `execute_step_combined_status` derives:
 

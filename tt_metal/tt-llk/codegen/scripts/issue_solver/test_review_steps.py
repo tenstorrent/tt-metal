@@ -17,6 +17,7 @@ Covers the two helpers a review round cannot be correct without:
   that prevents zero or malformed test counts from becoming success.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -349,7 +350,7 @@ def test_route_rejects_a_missing_selector_before_execution(tmp_path, worktree):
 
 
 # ── execute_step_combine_verification_results ────────────────────────────────
-def _combine_case(tmp_path, worktree, suite_results, route="llk"):
+def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
     log_dir = tmp_path / "combine-log"
     log_dir.mkdir()
     state = {
@@ -357,6 +358,49 @@ def _combine_case(tmp_path, worktree, suite_results, route="llk"):
         "VERIFY_ROUTE": route,
         "TARGET_ARCHES_JSON": ["blackhole"],
     }
+    if audit:
+        suites = ("llk", "metal") if route == "both" else (route,)
+        requirements = [
+            {
+                "requirement_id": f"blackhole:{suite}:1",
+                "architecture": "blackhole",
+                "suite": suite,
+                "backend": "silicon",
+                "selector": {
+                    "test": "test_reduce.py" if suite == "llk" else "LLK.Reduce",
+                    "test_id": None,
+                    "k": None,
+                },
+                "minimum_selected": 1,
+                "minimum_executed": 1,
+                "required_measurements": [],
+            }
+            for suite in suites
+        ]
+        manifest = {
+            "schema": "tt.issue-solver.required-verification",
+            "version": 1,
+            "manifest_id": "0" * 64,
+            "run_id": "run-1",
+            "attempt_id": "attempt-001",
+            "expected_base_sha": "a" * 40,
+            "revision": 1,
+            "parent_manifest_id": None,
+            "supersedes_reason": None,
+            "requirements": requirements,
+            "waivers": [],
+        }
+        payload = json.dumps(
+            {key: value for key, value in manifest.items() if key != "manifest_id"},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+        manifest["manifest_id"] = hashlib.sha256(payload).hexdigest()
+        manifest_path = log_dir / "required_verification_manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        state["REQUIRED_VERIFICATION_MANIFEST"] = str(manifest_path)
     (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
     llk = worktree / "tt_metal" / "tt-llk"
     (llk / ".codegen_run_state.json").write_text(
@@ -366,6 +410,7 @@ def _combine_case(tmp_path, worktree, suite_results, route="llk"):
         json.dumps(
             {
                 "run_id": "run-1",
+                "runner_pool": "audit" if audit else "prod",
                 "arch_results": {"blackhole": {"suite_results": suite_results}},
             }
         ),
@@ -490,6 +535,71 @@ def test_combine_preserves_valid_candidate_failure(tmp_path, worktree):
     assert combined["verdict"] == "TESTS_FAILED"
     assert combined["tests_total"] == 1
     assert combined["tests_passed"] == 0
+
+
+def test_audit_combine_ignores_agent_summary_without_sealed_results(tmp_path, worktree):
+    result, run = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 99,
+                "tests_passed": 99,
+            }
+        },
+        audit=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = run["arch_results"]["blackhole"]
+    assert combined["verdict"] == "ENV_ERROR"
+    assert combined["tests_total"] == 0
+    assert "result_missing" in combined["obstacle"]
+    assert run["verification_reduction"]["classification"] == "partial"
+
+
+def test_audit_finalize_downgrades_agent_requested_success(tmp_path, worktree):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+        audit=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    log_dir = tmp_path / "combine-log"
+    state = json.loads((log_dir / "state.json").read_text())
+    state.update(
+        {
+            "RUN_MODE": "single",
+            "ISSUE_NUMBER": "1",
+            "TARGET_ARCH": "blackhole",
+            "COMPILATION_ATTEMPTS": 0,
+            "DEBUG_CYCLES": 0,
+            "TESTS_TOTAL": 0,
+            "TESTS_PASSED": 0,
+            "CHANGED_FILES_JSON": [],
+        }
+    )
+    (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    llk = worktree / "tt_metal" / "tt-llk"
+    finalized = _bash(
+        "execute_step_mark_status success; execute_step_finalize_run", llk
+    )
+    assert finalized.returncode == 0, finalized.stdout + finalized.stderr
+    run = json.loads((log_dir / "run.json").read_text())
+    assert run["status"] == "failed"
+    assert run["final_result"] == "test_failure"
+    assert run["final_message"] == "audit failed: verification reduction is partial"
+    assert "rejected success: partial" in run["obstacle"]
 
 
 # ── execute_step_record_review_dispositions ───────────────────────────────────

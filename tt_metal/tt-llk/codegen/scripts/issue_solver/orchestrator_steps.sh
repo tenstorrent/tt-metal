@@ -918,10 +918,30 @@ execute_step_advance_metal_test() {
 # ===========================================================================
 execute_step_combine_verification_results() {
     local _L; _L="$(_LOG)"
-    local route arches patch
+    local route arches patch pool manifest
     route="$(sg VERIFY_ROUTE)"
     arches="$(sg TARGET_ARCHES_JSON)"
     case "$route" in llk|metal|both) ;; *) echo "cannot combine VERIFY_ROUTE=$route" >&2; return 1 ;; esac
+
+    pool="$(python - "$_L/run.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("runner_pool") or "prod")
+PY
+)" || return 1
+    if [ "$pool" = audit ]; then
+        manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
+        [ -f "$manifest" ] || {
+            echo "audit verification manifest is missing: ${manifest:-unset}" >&2
+            return 1
+        }
+        rj reduce-verification \
+            --manifest "$manifest" \
+            --results-dir "$_L/verification-results" \
+            --scope functional \
+            --perf-result "$_L/perf_result.json" \
+            --output "$_L/verification_reduction.json"
+        return $?
+    fi
 
     patch="$(python - "$_L/run.json" "$arches" "$route" <<'PY'
 import json
@@ -1452,8 +1472,43 @@ execute_step_write_generated_patch() {
 # ===========================================================================
 execute_step_finalize_run() {
     local _L; _L="$(_LOG)"
-    local S="$_ORCH_SCRIPTS" mode num status fr ss_state end
+    local S="$_ORCH_SCRIPTS" mode num status fr ss_state end pool manifest reduction_class
     mode="$(sg RUN_MODE)"; num="$(sg ISSUE_NUMBER)"
+
+    pool="$(python - "$_L/run.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("runner_pool") or "prod")
+PY
+)" || return 1
+    if [ "$pool" = audit ]; then
+        manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
+        if [ ! -f "$manifest" ]; then
+            ss OBSTACLE "audit verification manifest is missing"
+            ss FINAL_MESSAGE "audit failed: required-verification manifest is missing"
+            execute_step_mark_status failed test_failure
+        elif ! rj reduce-verification \
+                --manifest "$manifest" \
+                --results-dir "$_L/verification-results" \
+                --scope all \
+                --perf-result "$_L/perf_result.json" \
+                --output "$_L/verification_reduction.json"; then
+            ss OBSTACLE "verification reduction could not validate its inputs"
+            ss FINAL_MESSAGE "audit failed: verification reduction inputs are invalid"
+            execute_step_mark_status failed test_failure
+        else
+            reduction_class="$(python - "$_L/verification_reduction.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("classification") or "invalid")
+PY
+)" || reduction_class=invalid
+            if [ "$(sg STATUS)" = success ] && [ "$reduction_class" != success ]; then
+                ss OBSTACLE "verification reduction rejected success: ${reduction_class}"
+                ss FINAL_MESSAGE "audit failed: verification reduction is ${reduction_class}"
+                execute_step_mark_status failed test_failure
+            fi
+        fi
+    fi
+
     status="$(sg STATUS)"; fr="$(sg FINAL_RESULT)"; ss_state="$(sg SOLVER_STATE)"
     end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local fmsg; fmsg="$(sg FINAL_MESSAGE)"
@@ -1520,6 +1575,7 @@ PY
 )"
 
     rj finalize --end-time "$end" --status "$status" --final-result "$fr" \
+        --worktree "$(_wt)" \
         --solver-state "$ss_state" --final-message "$fmsg" --patch-json "$patch" || return $?
     refresh_cost
     echo "finalized: status=$status final_result=$fr"

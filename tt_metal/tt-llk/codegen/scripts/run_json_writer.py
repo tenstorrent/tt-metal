@@ -37,6 +37,8 @@ Subcommands:
                     Normalize and seal the run's immutable verification contract.
     verification-result
                     Write a strict v2 result from collection/JUnit/artifact evidence.
+    reduce-verification
+                    Reduce sealed v2 results into deterministic run evidence.
     finalize        Close out the last step_history entry, set end_time, flip
                     status to a terminal value, merge in any remaining summary
                     fields passed via --patch-json.
@@ -62,6 +64,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -466,6 +469,80 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     doc = _load(log_dir)
     now = args.end_time or _utcnow()
 
+    # Audit runs are the initial fail-closed lane. A caller cannot promote an
+    # audit attempt merely by patching run.json: success must be authorized by
+    # the current sealed manifest, reduction, and exact packaged candidate.
+    if args.status == "success" and doc.get("runner_pool") == "audit":
+        manifest_path = log_dir / "required_verification_manifest.json"
+        reduction_path = log_dir / "verification_reduction.json"
+        if not manifest_path.is_file():
+            raise ValueError("audit success requires a required-verification manifest")
+        if not reduction_path.is_file():
+            raise ValueError("audit success requires a verification reduction")
+        manifest = _load_required_manifest(manifest_path)
+        reduction = _load_verification_reduction(reduction_path)
+        if doc.get("run_id") != manifest["run_id"]:
+            raise ValueError("audit success manifest does not belong to this run")
+        for field in ("run_id", "attempt_id", "manifest_id", "expected_base_sha"):
+            if reduction[field] != manifest[field]:
+                raise ValueError(f"audit success reduction {field} mismatch")
+        if (
+            reduction["scope"] != "all"
+            or reduction["classification"] != "success"
+            or reduction["reason_codes"]
+            or len(reduction["leaves"]) != len(manifest["requirements"])
+            or any(
+                leaf["classification"] != "success" or leaf["result_id"] is None
+                for leaf in reduction["leaves"]
+            )
+            or reduction["patch_sha256"] is None
+            or reduction["success_token"] is None
+        ):
+            raise ValueError("audit success reduction is not complete and successful")
+        expected_token = _canonical_digest(
+            {
+                "schema": "tt.issue-solver.verification-success-token",
+                "version": 1,
+                "reduction_id": reduction["reduction_id"],
+                "manifest_id": manifest["manifest_id"],
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "patch_sha256": reduction["patch_sha256"],
+            }
+        )
+        if reduction["success_token"] != expected_token:
+            raise ValueError("audit success token is invalid")
+        if not args.worktree:
+            raise ValueError("audit success requires the packaged worktree")
+        worktree = Path(args.worktree).resolve()
+        head = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        if not _SHA40_RE.fullmatch(head):
+            raise ValueError("audit success worktree HEAD is invalid")
+        candidate = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                manifest["expected_base_sha"],
+                head,
+                "--",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        ).stdout
+        if hashlib.sha256(candidate).hexdigest() != reduction["patch_sha256"]:
+            raise ValueError(
+                "audit success candidate patch differs from verified patch"
+            )
+
     history = doc.setdefault("step_history", [])
     if history and history[-1].get("result") == "in_progress":
         last = history[-1]
@@ -753,8 +830,22 @@ def _required_measurements(item: dict) -> list[str]:
 
 def _load_required_manifest(path: Path) -> dict[str, Any]:
     doc = json.loads(path.read_text(encoding="utf-8"))
+    fields = {
+        "schema",
+        "version",
+        "manifest_id",
+        "run_id",
+        "attempt_id",
+        "expected_base_sha",
+        "revision",
+        "parent_manifest_id",
+        "supersedes_reason",
+        "requirements",
+        "waivers",
+    }
     if (
         not isinstance(doc, dict)
+        or set(doc) != fields
         or doc.get("schema") != "tt.issue-solver.required-verification"
         or doc.get("version") != 1
         or doc.get("manifest_id")
@@ -763,8 +854,86 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
         )
     ):
         raise ValueError(f"invalid required-verification manifest: {path}")
+    if not isinstance(doc["run_id"], str) or not doc["run_id"]:
+        raise ValueError("required-verification run_id must be nonempty")
+    if not re.fullmatch(r"attempt-\d{3,}", doc["attempt_id"] or ""):
+        raise ValueError("required-verification attempt_id is invalid")
+    if not _SHA40_RE.fullmatch(doc["expected_base_sha"] or ""):
+        raise ValueError("required-verification expected_base_sha is invalid")
+    if (
+        isinstance(doc["revision"], bool)
+        or not isinstance(doc["revision"], int)
+        or doc["revision"] < 1
+    ):
+        raise ValueError("required-verification revision must be positive")
+    if doc["revision"] == 1:
+        if (
+            doc["parent_manifest_id"] is not None
+            or doc["supersedes_reason"] is not None
+        ):
+            raise ValueError("first required-verification revision cannot supersede")
+    elif (
+        not isinstance(doc["parent_manifest_id"], str)
+        or not _SHA256_RE.fullmatch(doc["parent_manifest_id"])
+        or not isinstance(doc["supersedes_reason"], str)
+        or not doc["supersedes_reason"].strip()
+    ):
+        raise ValueError("superseding required-verification revision is unlinked")
     if doc.get("waivers") != []:
         raise ValueError("agent-created verification waivers are unsupported")
+    if not isinstance(doc["requirements"], list):
+        raise ValueError("required-verification requirements must be an array")
+    requirement_fields = {
+        "requirement_id",
+        "architecture",
+        "suite",
+        "backend",
+        "selector",
+        "minimum_selected",
+        "minimum_executed",
+        "required_measurements",
+    }
+    identities = set()
+    for requirement in doc["requirements"]:
+        if not isinstance(requirement, dict) or set(requirement) != requirement_fields:
+            raise ValueError("required-verification requirement schema is invalid")
+        identity = requirement["requirement_id"]
+        if not isinstance(identity, str) or not identity or identity in identities:
+            raise ValueError("required-verification requirement_id is invalid")
+        identities.add(identity)
+        if requirement["architecture"] not in _VERIFICATION_ARCHES:
+            raise ValueError("required-verification architecture is invalid")
+        if requirement["suite"] not in {"llk", "metal", "perf"}:
+            raise ValueError("required-verification suite is invalid")
+        if requirement["backend"] not in {"silicon", "ttsim", "quasar", "local"}:
+            raise ValueError("required-verification backend is invalid")
+        selector = requirement["selector"]
+        if (
+            not isinstance(selector, dict)
+            or set(selector) != {"test", "test_id", "k"}
+            or not isinstance(selector["test"], str)
+            or not selector["test"]
+            or any(
+                selector[field] is not None and not isinstance(selector[field], str)
+                for field in ("test_id", "k")
+            )
+            or (selector["test_id"] is not None and selector["k"] is not None)
+        ):
+            raise ValueError("required-verification selector is invalid")
+        for field in ("minimum_selected", "minimum_executed"):
+            value = requirement[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"required-verification {field} must be positive")
+        measurements = requirement["required_measurements"]
+        if (
+            not isinstance(measurements, list)
+            or any(
+                value not in {"cycle_comparison", "repeatability"}
+                for value in measurements
+            )
+            or len(set(measurements)) != len(measurements)
+        ):
+            raise ValueError("required-verification measurements are invalid")
     return doc
 
 
@@ -1200,6 +1369,43 @@ def _load_local_manifest(path: Path, artifact_root: Path) -> dict[str, Any]:
     return manifest
 
 
+def _classify_verification(
+    collection: dict[str, int], execution: dict[str, Any]
+) -> tuple[str, list[str]]:
+    markers = execution["infrastructure_markers"]
+    collection_nonzero = collection["returncode"] != 0 and not (
+        collection["returncode"] == 5 and collection["selected"] == 0
+    )
+    if execution["timed_out"]:
+        return "timed_out", ["execution_timed_out"]
+    if collection_nonzero or collection["errors"] or markers:
+        reasons = []
+        if collection_nonzero:
+            reasons.append("collection_nonzero_exit")
+        if collection["errors"]:
+            reasons.append("collection_error")
+        reasons.extend(markers)
+        return "infra_error", list(dict.fromkeys(reasons))
+    if collection["selected"] == 0:
+        return "coverage_error", ["zero_selected"]
+    if execution["executed"] == 0:
+        return "coverage_error", ["zero_executed"]
+    if (
+        execution["returncode"] == 0
+        and execution["failed"] == 0
+        and execution["xpassed"] == 0
+        and execution["passed"] == execution["executed"]
+    ):
+        return "success", []
+    if execution["returncode"] == 1 and execution["failed"] > 0:
+        return "candidate_failure", ["test_failure"]
+    if execution["returncode"] == 0:
+        return "candidate_failure", ["outcome_count_mismatch"]
+    if execution["signal"] is not None:
+        return "infra_error", ["execution_signalled"]
+    return "infra_error", ["execution_nonzero_exit"]
+
+
 def cmd_verification_result(args: argparse.Namespace) -> int:
     collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
     expected_collection = {
@@ -1289,39 +1495,7 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
     ):
         raise ValueError("signal number does not match the execution return code")
 
-    collection_nonzero = normalized_collection["returncode"] != 0 and not (
-        normalized_collection["returncode"] == 5
-        and normalized_collection["selected"] == 0
-    )
-    if execution["timed_out"]:
-        classification, reasons = "timed_out", ["execution_timed_out"]
-    elif collection_nonzero or normalized_collection["errors"] or marker_codes:
-        reasons = []
-        if collection_nonzero:
-            reasons.append("collection_nonzero_exit")
-        if normalized_collection["errors"]:
-            reasons.append("collection_error")
-        reasons.extend(marker_codes)
-        classification, reasons = "infra_error", list(dict.fromkeys(reasons))
-    elif normalized_collection["selected"] == 0:
-        classification, reasons = "coverage_error", ["zero_selected"]
-    elif execution["executed"] == 0:
-        classification, reasons = "coverage_error", ["zero_executed"]
-    elif (
-        execution["returncode"] == 0
-        and execution["failed"] == 0
-        and execution["xpassed"] == 0
-        and execution["passed"] == execution["executed"]
-    ):
-        classification, reasons = "success", []
-    elif execution["returncode"] == 1 and execution["failed"] > 0:
-        classification, reasons = "candidate_failure", ["test_failure"]
-    elif execution["returncode"] == 0:
-        classification, reasons = "candidate_failure", ["outcome_count_mismatch"]
-    elif signal_number is not None:
-        classification, reasons = "infra_error", ["execution_signalled"]
-    else:
-        classification, reasons = "infra_error", ["execution_nonzero_exit"]
+    classification, reasons = _classify_verification(normalized_collection, execution)
 
     for field, pattern in (
         ("expected_base_sha", _SHA40_RE),
@@ -1380,6 +1554,728 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "infra_error": 3,
         "timed_out": 5,
     }[classification]
+
+
+def _load_verification_result(path: Path) -> dict[str, Any]:
+    result = json.loads(path.read_text(encoding="utf-8"))
+    fields = {
+        "schema",
+        "version",
+        "result_id",
+        "requirement_id",
+        "run_id",
+        "attempt_id",
+        "job_id",
+        "architecture",
+        "suite",
+        "backend",
+        "selector",
+        "provenance",
+        "collection",
+        "execution",
+        "classification",
+        "reason_codes",
+    }
+    if (
+        not isinstance(result, dict)
+        or set(result) != fields
+        or result["schema"] != "tt.issue-solver.verification-result"
+        or result["version"] != 2
+        or result["result_id"]
+        != _canonical_digest(
+            {key: value for key, value in result.items() if key != "result_id"}
+        )
+    ):
+        raise ValueError("verification result does not match the exact v2 schema")
+    for field in (
+        "result_id",
+        "requirement_id",
+        "run_id",
+        "attempt_id",
+        "job_id",
+        "architecture",
+        "suite",
+        "backend",
+    ):
+        if not isinstance(result[field], str) or not result[field]:
+            raise ValueError(f"verification result {field} must be nonempty")
+    if not _SHA256_RE.fullmatch(result["result_id"]):
+        raise ValueError("verification result result_id is invalid")
+    selector = result["selector"]
+    if (
+        not isinstance(selector, dict)
+        or set(selector) != {"test", "test_id", "k"}
+        or not isinstance(selector["test"], str)
+        or not selector["test"]
+        or any(
+            selector[field] is not None and not isinstance(selector[field], str)
+            for field in ("test_id", "k")
+        )
+        or (selector["test_id"] is not None and selector["k"] is not None)
+    ):
+        raise ValueError("verification result selector is invalid")
+    provenance = result["provenance"]
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "expected_base_sha",
+        "actual_base_sha",
+        "patch_sha256",
+        "manifest_id",
+        "artifact_set_sha256",
+        "executed_artifact_sha256",
+    }:
+        raise ValueError("verification result provenance is invalid")
+    for field in ("expected_base_sha", "actual_base_sha"):
+        if not isinstance(provenance[field], str) or not _SHA40_RE.fullmatch(
+            provenance[field]
+        ):
+            raise ValueError(f"verification result provenance.{field} is invalid")
+    for field in (
+        "patch_sha256",
+        "manifest_id",
+        "artifact_set_sha256",
+        "executed_artifact_sha256",
+    ):
+        if not isinstance(provenance[field], str) or not _SHA256_RE.fullmatch(
+            provenance[field]
+        ):
+            raise ValueError(f"verification result provenance.{field} is invalid")
+    collection = result["collection"]
+    if not isinstance(collection, dict) or set(collection) != {
+        "selected",
+        "collected",
+        "errors",
+        "returncode",
+    }:
+        raise ValueError("verification result collection is invalid")
+    for field in ("selected", "collected", "errors", "returncode"):
+        value = collection[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or (field != "returncode" and value < 0)
+        ):
+            raise ValueError(f"verification result collection.{field} is invalid")
+    if collection["selected"] > collection["collected"]:
+        raise ValueError("verification result selected exceeds collected")
+    execution = result["execution"]
+    count_fields = {
+        "executed",
+        "passed",
+        "failed",
+        "skipped",
+        "xfailed",
+        "xpassed",
+    }
+    if not isinstance(execution, dict) or set(execution) != {
+        "ran",
+        *count_fields,
+        "returncode",
+        "signal",
+        "timed_out",
+        "infrastructure_markers",
+    }:
+        raise ValueError("verification result execution is invalid")
+    for field in count_fields:
+        value = execution[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"verification result execution.{field} is invalid")
+    if isinstance(execution["returncode"], bool) or not isinstance(
+        execution["returncode"], int
+    ):
+        raise ValueError("verification result execution.returncode is invalid")
+    if not isinstance(execution["ran"], bool) or not isinstance(
+        execution["timed_out"], bool
+    ):
+        raise ValueError("verification result execution flags are invalid")
+    signal_number = execution["signal"]
+    if signal_number is not None and (
+        isinstance(signal_number, bool)
+        or not isinstance(signal_number, int)
+        or signal_number < 1
+        or execution["returncode"] not in (-signal_number, 128 + signal_number)
+    ):
+        raise ValueError("verification result execution.signal is invalid")
+    markers = execution["infrastructure_markers"]
+    if (
+        not isinstance(markers, list)
+        or any(not isinstance(value, str) or not value for value in markers)
+        or len(set(markers)) != len(markers)
+    ):
+        raise ValueError("verification result infrastructure markers are invalid")
+    if execution["ran"] != (execution["executed"] > 0):
+        raise ValueError("verification result ran flag contradicts executed count")
+    if execution["executed"] != (
+        execution["passed"] + execution["failed"] + execution["xpassed"]
+    ):
+        raise ValueError("verification result executed count identity failed")
+    if (
+        execution["executed"] + execution["skipped"] + execution["xfailed"]
+        > collection["selected"]
+    ):
+        raise ValueError("verification result outcomes exceed selected count")
+    classification, reasons = _classify_verification(collection, execution)
+    if result["classification"] != classification or result["reason_codes"] != reasons:
+        raise ValueError("verification result classification contradicts evidence")
+    return result
+
+
+_REDUCTION_PRIORITY = {
+    "success": 0,
+    "partial": 1,
+    "candidate_failure": 2,
+    "coverage_error": 3,
+    "infra_error": 4,
+}
+
+
+def _reduction_verdict(classification: str) -> str:
+    if classification == "success":
+        return "SUCCESS"
+    if classification in {"coverage_error", "candidate_failure"}:
+        return "TESTS_FAILED"
+    return "ENV_ERROR"
+
+
+def _load_perf_measurements(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.is_file():
+        return {}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _load_verification_reduction(path: Path) -> dict[str, Any]:
+    reduction = json.loads(path.read_text(encoding="utf-8"))
+    fields = {
+        "schema",
+        "version",
+        "reduction_id",
+        "scope",
+        "manifest_id",
+        "run_id",
+        "attempt_id",
+        "expected_base_sha",
+        "patch_sha256",
+        "classification",
+        "reason_codes",
+        "leaves",
+        "excluded_results",
+        "architecture_results",
+        "tests_total",
+        "tests_passed",
+        "success_token",
+    }
+    if (
+        not isinstance(reduction, dict)
+        or set(reduction) != fields
+        or reduction["schema"] != "tt.issue-solver.verification-reduction"
+        or reduction["version"] != 1
+        or reduction["reduction_id"]
+        != _canonical_digest(
+            {
+                key: value
+                for key, value in reduction.items()
+                if key not in {"reduction_id", "success_token"}
+            }
+        )
+    ):
+        raise ValueError("verification reduction does not match the exact v1 schema")
+    if reduction["scope"] not in {"functional", "all"}:
+        raise ValueError("verification reduction scope is invalid")
+    if reduction["classification"] not in _REDUCTION_PRIORITY:
+        raise ValueError("verification reduction classification is invalid")
+    for field, pattern in (
+        ("reduction_id", _SHA256_RE),
+        ("manifest_id", _SHA256_RE),
+        ("expected_base_sha", _SHA40_RE),
+    ):
+        if not isinstance(reduction[field], str) or not pattern.fullmatch(
+            reduction[field]
+        ):
+            raise ValueError(f"verification reduction {field} is invalid")
+    for field in ("run_id", "attempt_id"):
+        if not isinstance(reduction[field], str) or not reduction[field]:
+            raise ValueError(f"verification reduction {field} is invalid")
+    for field in ("patch_sha256", "success_token"):
+        value = reduction[field]
+        if value is not None and (
+            not isinstance(value, str) or not _SHA256_RE.fullmatch(value)
+        ):
+            raise ValueError(f"verification reduction {field} is invalid")
+    if (
+        not isinstance(reduction["reason_codes"], list)
+        or any(
+            not isinstance(value, str) or not value
+            for value in reduction["reason_codes"]
+        )
+        or len(set(reduction["reason_codes"])) != len(reduction["reason_codes"])
+        or not isinstance(reduction["leaves"], list)
+        or not isinstance(reduction["excluded_results"], list)
+        or not isinstance(reduction["architecture_results"], dict)
+    ):
+        raise ValueError("verification reduction aggregate fields are invalid")
+    for field in ("tests_total", "tests_passed"):
+        value = reduction[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"verification reduction {field} is invalid")
+    if reduction["tests_passed"] > reduction["tests_total"]:
+        raise ValueError("verification reduction passed count exceeds total")
+    leaf_fields = {
+        "requirement_id",
+        "architecture",
+        "suite",
+        "result_id",
+        "classification",
+        "reason_codes",
+        "selected",
+        "executed",
+        "passed",
+    }
+    requirement_ids = set()
+    for leaf in reduction["leaves"]:
+        if not isinstance(leaf, dict) or set(leaf) != leaf_fields:
+            raise ValueError("verification reduction leaf schema is invalid")
+        identity = leaf["requirement_id"]
+        if not isinstance(identity, str) or not identity or identity in requirement_ids:
+            raise ValueError("verification reduction leaf identity is invalid")
+        requirement_ids.add(identity)
+        if (
+            not isinstance(leaf["architecture"], str)
+            or not leaf["architecture"]
+            or leaf["suite"] not in {"llk", "metal", "perf"}
+            or leaf["classification"] not in _REDUCTION_PRIORITY
+        ):
+            raise ValueError("verification reduction leaf contract is invalid")
+        if leaf["result_id"] is not None and (
+            not isinstance(leaf["result_id"], str)
+            or not _SHA256_RE.fullmatch(leaf["result_id"])
+        ):
+            raise ValueError("verification reduction leaf result_id is invalid")
+        if (
+            not isinstance(leaf["reason_codes"], list)
+            or any(
+                not isinstance(value, str) or not value
+                for value in leaf["reason_codes"]
+            )
+            or len(set(leaf["reason_codes"])) != len(leaf["reason_codes"])
+        ):
+            raise ValueError("verification reduction leaf reasons are invalid")
+        for field in ("selected", "executed", "passed"):
+            value = leaf[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"verification reduction leaf {field} is invalid")
+        if leaf["passed"] > leaf["executed"] or leaf["executed"] > leaf["selected"]:
+            raise ValueError("verification reduction leaf counts are inconsistent")
+    if reduction["tests_total"] != sum(
+        leaf["selected"] for leaf in reduction["leaves"]
+    ) or reduction["tests_passed"] != sum(
+        leaf["passed"] for leaf in reduction["leaves"]
+    ):
+        raise ValueError("verification reduction aggregate counts are inconsistent")
+    for excluded in reduction["excluded_results"]:
+        if (
+            not isinstance(excluded, dict)
+            or set(excluded) != {"result_id", "path", "reason"}
+            or not isinstance(excluded["result_id"], str)
+            or not _SHA256_RE.fullmatch(excluded["result_id"])
+            or not isinstance(excluded["path"], str)
+            or not excluded["path"]
+            or not isinstance(excluded["reason"], str)
+            or not excluded["reason"]
+        ):
+            raise ValueError("verification reduction excluded result is invalid")
+    if reduction["classification"] == "success" and (
+        not reduction["leaves"]
+        or reduction["reason_codes"]
+        or any(
+            leaf["classification"] != "success" or leaf["result_id"] is None
+            for leaf in reduction["leaves"]
+        )
+    ):
+        raise ValueError("successful verification reduction is internally inconsistent")
+    if reduction["success_token"] is not None and (
+        reduction["scope"] != "all"
+        or reduction["classification"] != "success"
+        or reduction["patch_sha256"] is None
+    ):
+        raise ValueError("verification reduction success token is unauthorized")
+    return reduction
+
+
+def cmd_reduce_verification(args: argparse.Namespace) -> int:
+    """Reduce sealed leaves into deterministic suite/architecture/final state."""
+    log_dir = Path(args.log_dir)
+    manifest = _load_required_manifest(Path(args.manifest))
+    requirements = [
+        requirement
+        for requirement in manifest["requirements"]
+        if args.scope == "all" or requirement["suite"] in {"llk", "metal"}
+    ]
+    all_required_by_id = {
+        requirement["requirement_id"]: requirement
+        for requirement in manifest["requirements"]
+    }
+    required_by_id = {
+        requirement["requirement_id"]: requirement for requirement in requirements
+    }
+    results_dir = Path(args.results_dir)
+    parsed: dict[str, dict[str, Any]] = {}
+    excluded = []
+    global_reasons = []
+    if results_dir.exists():
+        for path in sorted(results_dir.rglob("*.json")):
+            relative_path = path.relative_to(results_dir).as_posix()
+            try:
+                result = _load_verification_result(path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                global_reasons.append(f"malformed_result:{relative_path}:{exc}")
+                continue
+            result_id = result["result_id"]
+            if result_id in parsed:
+                excluded.append(
+                    {
+                        "result_id": result_id,
+                        "path": relative_path,
+                        "reason": "duplicate_result_copy",
+                    }
+                )
+                continue
+            parsed[result_id] = {"result": result, "path": relative_path}
+
+    current: dict[str, list[dict[str, Any]]] = {
+        identity: [] for identity in required_by_id
+    }
+    for result_id, entry in parsed.items():
+        result = entry["result"]
+        if (
+            result["run_id"] != manifest["run_id"]
+            or result["attempt_id"] != manifest["attempt_id"]
+        ):
+            excluded.append(
+                {
+                    "result_id": result_id,
+                    "path": str(entry["path"]),
+                    "reason": "superseded_or_foreign_attempt",
+                }
+            )
+            continue
+        identity = result["requirement_id"]
+        if identity not in required_by_id:
+            if identity in all_required_by_id:
+                excluded.append(
+                    {
+                        "result_id": result_id,
+                        "path": str(entry["path"]),
+                        "reason": "out_of_scope_for_reduction",
+                    }
+                )
+            else:
+                global_reasons.append(f"unknown_requirement:{identity}")
+            continue
+        current[identity].append(entry)
+
+    latest_perf = _load_perf_measurements(
+        Path(args.perf_result) if args.perf_result else None
+    )
+    perf_by_arch: dict[str, dict[str, Any]] = {}
+    if _run_json_path(log_dir).is_file():
+        run_evidence = _load(log_dir)
+        top_level_perf = run_evidence.get("perf")
+        if isinstance(top_level_perf, dict) and isinstance(
+            top_level_perf.get("arch"), str
+        ):
+            perf_by_arch[top_level_perf["arch"]] = top_level_perf
+        for architecture, arch_result in (
+            run_evidence.get("arch_results") or {}
+        ).items():
+            if isinstance(arch_result, dict) and isinstance(
+                arch_result.get("perf"), dict
+            ):
+                perf_by_arch[architecture] = arch_result["perf"]
+    if isinstance(latest_perf.get("arch"), str):
+        perf_by_arch[latest_perf["arch"]] = latest_perf
+    leaves = []
+    patch_digests = set()
+    for requirement in requirements:
+        identity = requirement["requirement_id"]
+        entries = current[identity]
+        classification = "partial"
+        reasons = []
+        selected_result = None
+        selected = executed = passed = 0
+        if not entries:
+            reasons.append("result_missing")
+        elif len(entries) > 1:
+            classification = "infra_error"
+            reasons.append("duplicate_current_result")
+        else:
+            selected_result = entries[0]["result"]
+            result = selected_result
+            collection = result["collection"]
+            execution = result["execution"]
+            selected = collection["selected"]
+            executed = execution["executed"]
+            passed = execution["passed"]
+            mismatch_fields = []
+            for field in (
+                "architecture",
+                "suite",
+                "backend",
+                "selector",
+            ):
+                if result[field] != requirement[field]:
+                    mismatch_fields.append(field)
+            if (
+                result["provenance"]["expected_base_sha"]
+                != manifest["expected_base_sha"]
+            ):
+                mismatch_fields.append("expected_base_sha")
+            if result["provenance"]["actual_base_sha"] != manifest["expected_base_sha"]:
+                mismatch_fields.append("actual_base_sha")
+            if (
+                result["provenance"]["artifact_set_sha256"]
+                != result["provenance"]["executed_artifact_sha256"]
+            ):
+                mismatch_fields.append("executed_artifact_sha256")
+            if mismatch_fields:
+                classification = "infra_error"
+                reasons.extend(
+                    f"identity_mismatch:{field}" for field in mismatch_fields
+                )
+            elif result["classification"] == "timed_out":
+                classification = "infra_error"
+                reasons.append("execution_timed_out")
+            elif result["classification"] == "infra_error":
+                classification = "infra_error"
+                reasons.extend(result["reason_codes"])
+            elif selected == 0:
+                classification = "coverage_error"
+                reasons.append("zero_selected")
+            elif executed == 0:
+                classification = "coverage_error"
+                reasons.append("zero_executed")
+            elif selected < requirement["minimum_selected"]:
+                classification = "coverage_error"
+                reasons.append("minimum_selected_not_met")
+            elif executed < requirement["minimum_executed"]:
+                classification = "coverage_error"
+                reasons.append("minimum_executed_not_met")
+            elif (
+                execution["executed"] + execution["skipped"] + execution["xfailed"]
+                != selected
+            ):
+                classification = "coverage_error"
+                reasons.append("execution_outcome_count_incomplete")
+            elif execution["skipped"] or execution["xfailed"]:
+                classification = "coverage_error"
+                reasons.append("required_case_not_executed")
+            else:
+                classification = result["classification"]
+                reasons.extend(result["reason_codes"])
+            patch_digests.add(result["provenance"]["patch_sha256"])
+
+        if classification == "success" and requirement["required_measurements"]:
+            perf = perf_by_arch.get(requirement["architecture"], {})
+            if (
+                perf.get("outcome") != "PERF_OK"
+                or perf.get("measured") is not True
+                or perf.get("arch") != requirement["architecture"]
+                or perf.get("test") != requirement["selector"]["test"]
+                or perf.get("base_commit") != manifest["expected_base_sha"]
+                or perf.get("run_id") != manifest["run_id"]
+                or perf.get("attempt_id") != manifest["attempt_id"]
+                or perf.get("requirement_id") != identity
+                or perf.get("patch_sha256")
+                != selected_result["provenance"]["patch_sha256"]
+            ):
+                classification = "coverage_error"
+                reasons.append("required_measurement_result_missing_or_invalid")
+            measurements = perf.get("measurements") or {}
+            for measurement in requirement["required_measurements"]:
+                evidence = measurements.get(measurement)
+                if (
+                    not isinstance(evidence, dict)
+                    or evidence.get("measured") is not True
+                ):
+                    classification = "coverage_error"
+                    reasons.append(f"required_measurement_missing:{measurement}")
+                    continue
+                if measurement == "repeatability" and (
+                    isinstance(evidence.get("executions"), bool)
+                    or not isinstance(evidence.get("executions"), int)
+                    or evidence["executions"] < requirement["minimum_executed"]
+                ):
+                    classification = "coverage_error"
+                    reasons.append("repeatability_execution_count_not_met")
+
+        leaves.append(
+            {
+                "requirement_id": identity,
+                "architecture": requirement["architecture"],
+                "suite": requirement["suite"],
+                "result_id": selected_result["result_id"] if selected_result else None,
+                "classification": classification,
+                "reason_codes": list(dict.fromkeys(reasons)),
+                "selected": selected,
+                "executed": executed,
+                "passed": passed,
+            }
+        )
+
+    if len(patch_digests) > 1:
+        global_reasons.append("patch_digest_mismatch")
+    if not leaves:
+        classification = "partial"
+        global_reasons.append("no_requirements_in_scope")
+    elif global_reasons:
+        classification = "infra_error"
+    elif all(leaf["classification"] == "success" for leaf in leaves):
+        classification = "success"
+    else:
+        classification = max(
+            (leaf["classification"] for leaf in leaves),
+            key=lambda value: _REDUCTION_PRIORITY[value],
+        )
+    reason_codes = list(dict.fromkeys(global_reasons))
+    reason_codes.extend(
+        f"{leaf['requirement_id']}:{reason}"
+        for leaf in leaves
+        for reason in leaf["reason_codes"]
+    )
+    reason_codes = list(dict.fromkeys(reason_codes))
+
+    architecture_results: dict[str, Any] = {}
+    for architecture in sorted({item["architecture"] for item in requirements}):
+        arch_leaves = [item for item in leaves if item["architecture"] == architecture]
+        suites = {}
+        for suite in sorted({item["suite"] for item in arch_leaves}):
+            suite_leaves = [item for item in arch_leaves if item["suite"] == suite]
+            suite_classification = max(
+                (item["classification"] for item in suite_leaves),
+                key=lambda value: _REDUCTION_PRIORITY[value],
+            )
+            suite_reasons = [
+                f"{item['requirement_id']}:{reason}"
+                for item in suite_leaves
+                for reason in item["reason_codes"]
+            ]
+            suites[suite] = {
+                "status": (
+                    "done"
+                    if all(item["result_id"] for item in suite_leaves)
+                    else "missing"
+                ),
+                "verdict": _reduction_verdict(suite_classification),
+                "classification": suite_classification,
+                "tests_total": sum(item["selected"] for item in suite_leaves),
+                "tests_passed": sum(item["passed"] for item in suite_leaves),
+                "result_ids": [
+                    item["result_id"] for item in suite_leaves if item["result_id"]
+                ],
+                "obstacle": "; ".join(suite_reasons) or None,
+            }
+        arch_classification = max(
+            (item["classification"] for item in arch_leaves),
+            key=lambda value: _REDUCTION_PRIORITY[value],
+        )
+        architecture_results[architecture] = {
+            "status": (
+                "done" if all(item["result_id"] for item in arch_leaves) else "missing"
+            ),
+            "verdict": _reduction_verdict(arch_classification),
+            "classification": arch_classification,
+            "tests_total": sum(item["selected"] for item in arch_leaves),
+            "tests_passed": sum(item["passed"] for item in arch_leaves),
+            "suite_results": suites,
+            "obstacle": "; ".join(
+                f"{item['requirement_id']}:{reason}"
+                for item in arch_leaves
+                for reason in item["reason_codes"]
+            )
+            or None,
+        }
+
+    if global_reasons:
+        global_obstacle = "; ".join(global_reasons)
+        for architecture in architecture_results.values():
+            architecture["verdict"] = "ENV_ERROR"
+            architecture["classification"] = "infra_error"
+            architecture["obstacle"] = "; ".join(
+                value for value in (global_obstacle, architecture["obstacle"]) if value
+            )
+
+    reduction = {
+        "schema": "tt.issue-solver.verification-reduction",
+        "version": 1,
+        "reduction_id": "0" * 64,
+        "scope": args.scope,
+        "manifest_id": manifest["manifest_id"],
+        "run_id": manifest["run_id"],
+        "attempt_id": manifest["attempt_id"],
+        "expected_base_sha": manifest["expected_base_sha"],
+        "patch_sha256": next(iter(patch_digests)) if len(patch_digests) == 1 else None,
+        "classification": classification,
+        "reason_codes": reason_codes,
+        "leaves": leaves,
+        "excluded_results": excluded,
+        "architecture_results": architecture_results,
+        "tests_total": sum(item["selected"] for item in leaves),
+        "tests_passed": sum(item["passed"] for item in leaves),
+        "success_token": None,
+    }
+    reduction["reduction_id"] = _canonical_digest(
+        {
+            key: value
+            for key, value in reduction.items()
+            if key not in {"reduction_id", "success_token"}
+        }
+    )
+    if args.scope == "all" and classification == "success" and patch_digests:
+        reduction["success_token"] = _canonical_digest(
+            {
+                "schema": "tt.issue-solver.verification-success-token",
+                "version": 1,
+                "reduction_id": reduction["reduction_id"],
+                "manifest_id": manifest["manifest_id"],
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "patch_sha256": reduction["patch_sha256"],
+            }
+        )
+
+    output = (
+        Path(args.output) if args.output else log_dir / "verification_reduction.json"
+    )
+    retained = log_dir / "verification_reductions" / f"{reduction['reduction_id']}.json"
+    if not retained.exists():
+        _atomic_write(retained.parent, reduction, destination=retained)
+    _atomic_write(output.parent, reduction, destination=output)
+    if _run_json_path(log_dir).is_file():
+        run = _load(log_dir)
+        patch = {
+            "arch_results": architecture_results,
+            "tests_total": reduction["tests_total"],
+            "tests_passed": reduction["tests_passed"],
+            "verification_reduction": {
+                "reduction_id": reduction["reduction_id"],
+                "manifest_id": reduction["manifest_id"],
+                "scope": reduction["scope"],
+                "classification": reduction["classification"],
+                "reason_codes": reduction["reason_codes"],
+                "success_token": reduction["success_token"],
+            },
+        }
+        _deep_merge(run, patch)
+        _atomic_write(log_dir, run)
+    print(
+        f"verification-reduction: {args.scope} {classification} "
+        f"({len(leaves)} leaves) -> {output}"
+    )
+    # A completed reduction is successful command execution. Test failures
+    # remain data in the reduction and are handled by the orchestrator/finalizer.
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -1583,6 +2479,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON object merged into the doc at finalize time",
     )
+    fz.add_argument(
+        "--worktree",
+        default=None,
+        help="Packaged worktree used to validate an audit success patch",
+    )
     fz.set_defaults(func=cmd_finalize)
 
     manifest = sub.add_parser(
@@ -1648,6 +2549,18 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--timed-out", action="store_true")
     result.add_argument("--infrastructure-code", action="append", default=[])
     result.set_defaults(func=cmd_verification_result)
+
+    reduce_result = sub.add_parser(
+        "reduce-verification",
+        help="Reduce sealed result leaves into deterministic run evidence",
+    )
+    _add_common(reduce_result)
+    reduce_result.add_argument("--manifest", required=True)
+    reduce_result.add_argument("--results-dir", required=True)
+    reduce_result.add_argument("--scope", required=True, choices=["functional", "all"])
+    reduce_result.add_argument("--perf-result", default=None)
+    reduce_result.add_argument("--output", default=None)
+    reduce_result.set_defaults(func=cmd_reduce_verification)
 
     return p
 

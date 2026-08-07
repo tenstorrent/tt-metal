@@ -211,26 +211,28 @@ These are queue transport limitations, not replacements for the mandatory
 local build gate above.
 
 ```bash
-QUEUE_ARCHES=()
 for arch in "${ARCHES[@]}"; do
-  [ "$arch" = quasar ] || QUEUE_ARCHES+=("$arch")
-done
-ARCHES_CSV="$(IFS=,; echo "${QUEUE_ARCHES[*]}")"
-set +e
-if [ -n "$ARCHES_CSV" ]; then
-  $HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
+  [ "$arch" = quasar ] && continue
+  # Resolve this architecture's one sealed metal leaf before dispatch and set
+  # CODEGEN_RUN_ID/CODEGEN_ATTEMPT_ID/CODEGEN_REQUIREMENT_ID from it.
+  mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+  RESULT_JSON_OUT="$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json"
+  set +e
+  $HW_TEST_DISPATCH_CMD --kind metal --arch "$arch" \
     --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
     --worktree "$WORKTREE_DIR" \
     --base "$(sg GIT_COMMIT)" \
-    --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+    --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-${arch}" \
+    --result-json-out "$RESULT_JSON_OUT" \
     --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
   dispatch_exit=${PIPESTATUS[0]}
-fi
-set -e
+  set -e
+  # Record this architecture's marker/result before dispatching the next leaf.
+done
 ```
 
-Require exactly one final `HW_TEST_RESULT arch=<arch>` marker for each
-queued Blackhole/Wormhole architecture and record its `job` value:
+Require exactly one final `HW_TEST_RESULT arch=<arch>` marker for each queued
+Blackhole/Wormhole invocation and record its `job` value:
 
 | Marker | Verdict |
 |---|---|

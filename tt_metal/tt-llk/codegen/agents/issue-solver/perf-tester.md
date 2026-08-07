@@ -81,9 +81,26 @@ Every result includes:
   "test": "perf_<module>.py or null",
   "filter": "pytest -k expression or null",
   "base_commit": "<sha>",
+  "run_id": "<sealed run id>",
+  "attempt_id": "<sealed attempt id>",
+  "requirement_id": "<sealed perf requirement id>",
+  "patch_sha256": "<current structured result patch digest>",
+  "measurements": {
+    "cycle_comparison": {"measured": true},
+    "repeatability": {"measured": true, "executions": 3}
+  },
   "reason": "concise reason or null"
 }
 ```
+
+Use `null` for the four sealed identity/patch fields when no perf leaf exists.
+
+Include only measurements actually performed. A sealed `repeatability`
+requirement means rerunning the fixed-tree selector for at least the leaf's
+`minimum_executed` count; one current/baseline comparison cannot satisfy it.
+After the fixed-tree run writes its structured result, copy the four identity
+and patch fields above from that result/manifest exactly; do not derive or
+invent a second patch identity for the measurement document.
 
 Successful comparisons also retain the evaluator's metric, deltas, worst
 variant, thread breakdown, baseline/current artifact paths, and queue job IDs
@@ -162,12 +179,16 @@ Require `BASE_COMMIT` to resolve as a commit. A missing or invalid base is
 For direct silicon, define the runner once and use it for both trees:
 
 ```bash
-run_perf_local() {  # $1=tt-llk root, $2=log directory
-  local tree="$1" run_log="$2"
+run_perf_local() {  # $1=tt-llk root, $2=log directory, $3=current|baseline
+  local tree="$1" run_log="$2" role="$3"
   local args=(run --worktree "$tree" --arch "$TARGET_ARCH" \
     --test "$PERF_TEST" --maxfail 0 --log-dir "$run_log")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
-  bash "$RUNNER" "${args[@]}"
+  if [ "$role" = current ] && [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
+    mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+    args+=(--result-json-out "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json")
+  fi
+  CODEGEN_VERIFICATION_SUITE=perf bash "$RUNNER" "${args[@]}"
 }
 ```
 
@@ -182,6 +203,10 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
     --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-perf-${TARGET_ARCH}-${role}" \
     --timeout 1800 --artifact-out "$destination")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
+  if [ "$role" = current ] && [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
+    mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+    args+=(--result-json-out "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json")
+  fi
   $HW_TEST_DISPATCH_CMD "${args[@]}" 2>&1 | tee -a "$run_log"
   local rc=${PIPESTATUS[0]}
   return "$rc"
@@ -222,7 +247,7 @@ mkdir -p "$CURRENT_LOG_DIR"
 rm -f -- "$CURRENT_SOURCE"
 
 set +e
-run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR"
+run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR" current
 CURRENT_EXIT=$?
 set -e
 ```
@@ -285,7 +310,7 @@ else
     ln -s "$LLK_ROOT/tests/sfpi" "$BASE_LLK/tests/sfpi"
   BASELINE_SOURCE="$BASE_LLK/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
   set +e
-  run_perf_local "$BASE_LLK" "$BASELINE_LOG_DIR"
+  run_perf_local "$BASE_LLK" "$BASELINE_LOG_DIR" baseline
   BASELINE_EXIT=$?
   set -e
 fi

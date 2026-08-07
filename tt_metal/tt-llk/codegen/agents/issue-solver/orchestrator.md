@@ -204,9 +204,13 @@ execute_step_combine_verification_results
 execute_step_aggregate_results
 ```
 
-The combiner writes the compatibility verdict and counters at
-`arch_results.<arch>` while preserving each tester's result under
-`suite_results`. For `both`, the combined functional outcome is:
+For production runs, the combiner writes the compatibility verdict and counters
+at `arch_results.<arch>` while preserving each tester's result under
+`suite_results`. Audit runs instead ignore agent-authored summaries and reduce
+the current manifest's structured leaves from
+`${LOG_DIR}/verification-results/<attempt>/`. A missing, duplicate, malformed,
+foreign, zero-count, identity-mismatched, artifact-mismatched, or incomplete
+leaf cannot become `SUCCESS`. For `both`, the combined functional outcome is:
 
 - failing if either suite fails;
 - `SUCCESS` if at least one suite passes and the other is non-failing;
@@ -317,6 +321,12 @@ execute_step_write_generated_patch
 execute_step_finalize_run
 execute_step_copy_artifacts
 ```
+
+On the audit lane, `execute_step_finalize_run` first performs the `all`-scope
+reduction. It changes a requested success to failed when any sealed functional
+or performance leaf is not successful. The final writer then requires the
+reducer's success token and independently hashes the packaged worktree diff
+against the verified patch digest. Do not create or patch that token manually.
 
 If `OBSTACLE` is already nonempty, preserve it across
 `execute_step_deferred_message`; that helper may clear an obstacle when
