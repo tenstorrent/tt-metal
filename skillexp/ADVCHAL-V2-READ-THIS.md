@@ -1,8 +1,15 @@
 # advchal-v2 — read this one file
 
-**What was measured.** Stage 02b (`$advisor-challenger`) ran on **15 decoder cells** to answer one question:
-how much of a decoder's speed can the shard advisor be credited with, on a decoder already optimised without
-it? Every number below is from the cells' own artefacts or from my re-measurements on the same hardware.
+**The question.** Can `$shard-advise` contribute meaningfully to decode performance, and how much? Stage 02b
+(`$advisor-challenger`) ran on **15 decoder cells** to find out — each one a decoder already optimised *without*
+the advisor, so that anything it adds is a real gain and not a re-derivation of work already done.
+
+**How that was answered, and why the numbers read low.** By strict attribution: freeze the incoming decoder as
+the control, never re-tune it, and count only what the advisor's directions add on top. That is a deliberately
+conservative accounting — **but attribution was the method, not the question.** In several places the stage's own
+accounting undercounts the contribution, and where I could measure the difference this file gives the measured
+figure and says which is which. Every number below is from the cells' own artefacts or from my re-measurements on
+the same hardware.
 
 **This file is the few-minute version.** The evidence — 29 findings and the method — is in
 [`FINDINGS`](ADVCHAL-V2-FINDINGS.md); **`§`-references below point there** unless they say "of this file". What the

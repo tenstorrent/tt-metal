@@ -22,6 +22,14 @@ this file was split out of READ-THIS.
    across cells) and the **band** (floor × layer count — a model gain smaller than its band isn't
    established).
 
+**What this method is for, and what it is not.** The question the stage exists to answer is *can the advisor
+contribute meaningfully to performance, and how much*. Strict attribution — freeze the control, count only the
+delta — is how it gets a trustworthy answer, not the answer itself. It is deliberately conservative, and it
+undercounts in at least three known ways: the ceiling prices in-chain re-grids at **0.000 µs** (§3.6), the
+accounting records the one direction the advisor reliably gets right as `kept: 0` (§3.14), and nothing ever
+applies the advised plan as written (§3.27). Read a cell's delta as *what this procedure credited*, and the
+`reachable` figures as *what was there* — [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §2 gives both side by side.
+
 ---
 
 
