@@ -92,6 +92,15 @@ void kernel_main() {
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
     const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
 
+    // Number of tile-rows in this device's cos/sin shard -- the bound on the shard row any tile may be
+    // rotated by (see the clamp at the cos/sin index derivation below). The host validates
+    // `cos_shape == sin_shape`, so cos_Ht == sin_Ht in practice; take the min anyway so a single bound
+    // is sound for BOTH the cos and the sin page id even if that invariant is ever relaxed.
+    constexpr uint32_t rope_row_bound = cos_Ht < sin_Ht ? cos_Ht : sin_Ht;
+    // Last valid shard row. Guarded against an empty shard the same way the divisors above are guarded,
+    // so the clamp can never underflow to 0xffffffff.
+    constexpr uint32_t rope_row_last = rope_row_bound == 0 ? 0 : rope_row_bound - 1;
+
     constexpr uint32_t onetile = 1;
 
     const auto s0 = TensorAccessor(tensor::input);
@@ -146,7 +155,25 @@ void kernel_main() {
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 // Offset the cos/sin source index by update_idxt: the input local tile `seq_tile`
                 // is rotated by the value at shard row (update_idxt + seq_tile).
-                const uint32_t rope_seq_tile = update_idxt + seq_tile;
+                //
+                // Clamp that row to the shard. On the SCALAR path the host bound-checks
+                // kv_actual_global against the cos/sin shard height (validate_runtime_args), so this
+                // clamp never fires. On the METADATA path kv_actual_global lives in a device tensor and
+                // is read on-device, so the host cannot check it and update_idxt -- hence this row -- is
+                // unbounded here: an over-large kv_actual_global otherwise turns into a page id past the
+                // end of the cos/sin shard, i.e. a read of unrelated DRAM (silently wrong rotation) or
+                // of a non-existent address.
+                //
+                // Clamping to the LAST valid row rather than skipping the tile is deliberate: the
+                // reads below are lock-stepped with fixed dfb_cos/dfb_sin reserve_back/push_back counts
+                // (Wt per row, or my_cos_sin_tiles up front) that compute consumes unconditionally, so
+                // dropping a read would desynchronize the CB handshake and hang. The clamp keeps the
+                // NoC-read and CB push/pop counts identical and is a no-op for every in-range input, so
+                // valid results stay bit-identical; only the already-invalid inputs change, from an
+                // out-of-range access into a benign in-shard read.
+                ASSERT(update_idxt + seq_tile < rope_row_bound);
+                const uint32_t rope_seq_tile_raw = update_idxt + seq_tile;
+                const uint32_t rope_seq_tile = rope_seq_tile_raw < rope_row_bound ? rope_seq_tile_raw : rope_row_last;
                 uint32_t cos_curr_idx;
                 uint32_t sin_curr_idx;
                 if constexpr (freq_per_head) {
