@@ -146,12 +146,46 @@ ladder above 22.
 
 ### 3.5 Tracer coverage decides more than placement does
 
-**What "the tracer" is.** `ttnn-advise` builds its graph by tracing the model's Python `decode` function —
-that trace is the *capture* step, and it is the only thing the advisor ever sees. Some ops are **terminal** in
-it: `ttnn.copy` on mutable state, `ttnn.sparse_matmul`, `softplus`, `recurrent_state_update`. When the trace
-reaches one, it stops there, and everything downstream is absent from the graph. The advisor then declares those
-ops in `report.json`'s `uncapturable` field, and the reconciliation books the profiled cost it cannot pair as
-`untraced`.
+**What "the tracer" is.** `ttnn-advise` builds its graph by tracing the model's Python `decode` function. That
+trace is the *capture* step, and the graph it produces is the only thing the advisor ever sees. Certain ops are
+**terminal** in it — `ttnn.copy` on mutable state, `ttnn.sparse_matmul`, `softplus`, `recurrent_state_update`.
+When the trace reaches one it stops there, and everything downstream is absent from the graph.
+
+**"The advisor never saw it" means the ops are missing from its IR, not that the reconciliation failed to match
+them.** Checked directly on qwen B's `linear_attention`, which is the worst case in the corpus. Its
+`final_ir.mlir` contains **21 ops** — and 11 of those are `to_memory_config` conversions the advisor inserted
+itself, so about ten real ones:
+
+| in the advisor's IR | count |
+|---|---|
+| `to_memory_config` *(inserted by the advisor)* | 11 |
+| `linear` | 3 |
+| `rms_norm`, `reshape`, `add` | 2 each |
+| `multiply` | 1 |
+
+The profile of the same window has **90 device rows**, and the advisor had a counterpart for **8** of them. The
+other 56 `untraced` rows are ops that ran and are simply not in the IR:
+
+| device op absent from the IR | count | µs |
+|---|---|---|
+| **`Matmul`** | 2 | **3,435.9** |
+| `Permute` | 6 | 1,965.4 |
+| `BinaryNg` | 18 | 1,943.8 |
+| `Slice` | 8 | 1,595.2 |
+| `Typecast` | 4 | 449.6 |
+| `Unary` | 7 | 267.6 |
+| `Reduce` | 3 | 195.8 |
+| `Transpose` | 4 | 160.2 |
+| `Concat` | 3 | 29.4 |
+| `LayerNorm` | 1 | 10.9 |
+
+**Two matmuls worth 3.4 ms are among them** — real compute, not bookkeeping. `report.json` declares the cause in
+its own `uncapturable` field: `ttnn.copy`, `softplus`, `recurrent_state_update`, scoped as *"stateful gated-delta
+token mixer; the surrounding shipped residual/norm/MLP envelope is captured"*.
+
+*(A caveat the tool states itself: `untraced` normally "conflates 'terminal in the tracer' with 'ran but the
+advisor never placed it'", so an untraced row is not by itself proof of absence. Here it was checked against the
+IR op-by-op, so for this cell it is.)*
 
 | model | unreachable | cause |
 |---|---|---|
