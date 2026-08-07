@@ -56,10 +56,16 @@ void kernel_main() {
         CircularBuffer padding_config_cb(cb_padding_config);
         padding_config_cb.reserve_back(1);
         const uint32_t padding_config_l1_addr = padding_config_cb.get_write_ptr();
+        // Size the read from the accessor's aligned page size, NOT padding_config_cb.get_tile_size():
+        // get_tile_size() is derived from the CB data format (UInt32 32x32 = 4096 B) and has nothing to
+        // do with how this CB was sized. The program factory allocates exactly 1 page of
+        // padding_config_buffer->aligned_page_size() (an 8 B [num_real_tokens, pad_side] row), which is
+        // the same value the accessor carries via its compile-time TensorAccessorArgs, so using the tile
+        // size overflows the CB by ~4 KB of L1 (caught by watcher).
         noc.async_read(
             padding_config_accessor,
             padding_config_cb,
-            padding_config_cb.get_tile_size(),
+            padding_config_accessor.get_aligned_page_size(),
             {.page_id = 0},
             {.offset_bytes = 0});
         noc.async_read_barrier();
