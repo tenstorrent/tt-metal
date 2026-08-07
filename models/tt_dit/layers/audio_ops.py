@@ -571,6 +571,11 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         return _run(path, None, piece, chunk)
 
     def _run_chunks(path: str, chunk: int):
+        # The reassembly below is a last-dim concat, which is lossy in fp32 unless the row is a
+        # multiple of the 64B buffer alignment -- see the note in `_pad_channels_to_aligned`. The
+        # callers only ever pass chunk in (128, 64, 32), so this holds; assert it rather than let a
+        # future chunk size silently truncate the mantissa to TF32.
+        assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
         parts = []
         for start in range(0, C, chunk):
             piece = ttnn.slice(x_BTC, [0, 0, start], [B, T_pad, start + chunk])
@@ -933,15 +938,21 @@ def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: 
 
 
 def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, channel_align: int = 32) -> ttnn.Tensor:
-    """Pad C up to ``aligned_channels(C, channel_align)`` with zeros. No-op if aligned."""
+    """Pad C up to ``aligned_channels(C, channel_align)`` with zeros. No-op if aligned.
+
+    Uses ``ttnn.pad`` rather than a concat against a zero tensor. `ttnn.concat` on the last dim is
+    lossy in fp32 when the row is not a multiple of the buffer alignment (64B on Blackhole): it falls
+    back to ``build_non_aligned_last_dim_concat``, which round-trips through ``ttnn.transpose``, and
+    fp32 ROW_MAJOR transpose truncates the mantissa to TF32 (``x & 0xFFFFE000``). That silently
+    corrupted every C=8 and C=24 call here -- exactly the audio tail. `pad` avoids the fallback
+    entirely, and measures exact at every width and 4-30x faster besides.
+    See audio_perf/pad_channels_audit.py and audio_perf/transpose_tf32.py.
+    """
     B, T, C = x_BTC.shape
     aligned = aligned_channels(C, channel_align)
     if aligned == C:
         return x_BTC
-    pad_c = aligned - C
-    dtype = x_BTC.get_dtype()
-    zeros = _persistent_zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-    return ttnn.concat([x_BTC, zeros], dim=2)
+    return ttnn.pad(x_BTC, [(0, 0), (0, 0), (0, aligned - C)], value=0.0)
 
 
 def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1729,7 +1740,12 @@ class SnakeBeta(Module):
         cached = self._ab_folded.get(fold)
         if cached is None:
             a, b = self._ab_shard
-            cached = (ttnn.concat([a] * fold, dim=2), ttnn.concat([b] * fold, dim=2))
+            # ttnn.repeat, not a last-dim concat: alpha/beta are (1, 1, C) fp32, and concat on the
+            # last dim truncates the mantissa to TF32 whenever the row is not a multiple of the 64B
+            # buffer alignment (see `_pad_channels_to_aligned`). Folding only happens for C <= 128,
+            # so C=8 and C=24 were corrupting the snake parameters in every band that folds.
+            shape = ttnn.Shape([1, 1, fold])
+            cached = (ttnn.repeat(a, shape), ttnn.repeat(b, shape))
             self._ab_folded[fold] = cached
         return cached
 

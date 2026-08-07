@@ -335,6 +335,45 @@ def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("channels", [8, 16, 24, 32])
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_channel_padding_is_bit_exact(mesh_device, channels):
+    """Channel padding must not perturb the data it pads. It used to, at C=8 and C=24.
+
+    `_pad_channels_to_aligned` built the padded tensor with ``ttnn.concat(..., dim=2)``. In fp32 that
+    is lossy whenever the row length is not a multiple of the buffer alignment (64 B on Blackhole):
+    `build_non_aligned_last_dim_concat` routes such cases through a ``ttnn.transpose(-2,-1)`` round
+    trip, and fp32 ROW_MAJOR transpose truncates the mantissa to TF32, returning ``x & 0xFFFFE000``.
+    C=8 (32 B row) and C=24 (96 B) hit it; C=16 (64 B) and C=32 (128 B) did not.
+
+    The gate is bit-exactness against CPU rather than a tolerance, because a padding op has no licence
+    to change a single bit. C=16 and C=32 are included so the test still covers the aligned path if
+    the implementation changes again.
+
+    Note why `test_decode` never caught this despite scoring against the CPU reference: at ~1e-03 the
+    truncation sits far below the end-to-end error, which passes at 42.9 dB against a 28 dB gate. A
+    tolerance wide enough for the whole decode cannot see a single lossy data-movement op, so ops
+    whose contract is exactness need their own bit-exact gates.
+    """
+    from ....layers.audio_ops import _pad_channels_to_aligned, aligned_channels
+
+    torch.manual_seed(0)
+    x = torch.randn(2, 1024, channels) * 0.3
+    x_device = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    actual = ttnn.to_torch(_pad_channels_to_aligned(x_device, mesh_device, channel_align=32)).float()
+
+    padded = aligned_channels(channels, 32)
+    expected = torch.zeros(2, 1024, padded)
+    expected[:, :, :channels] = x
+    assert tuple(actual.shape) == tuple(expected.shape), f"{tuple(actual.shape)} != {tuple(expected.shape)}"
+    maxdiff = float((actual - expected).abs().max())
+    assert torch.equal(actual, expected), (
+        f"channel padding at C={channels} is not bit-exact (maxdiff {maxdiff:.3e}). If this is "
+        f"~1e-03, the padding is going through a last-dim fp32 concat again and losing 13 mantissa "
+        f"bits to TF32; use ttnn.pad, which is both exact and faster."
+    )
+
+
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize(
     ("in_channels", "out_channels", "kernel", "dilation", "padding_mode"),
