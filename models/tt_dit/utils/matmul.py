@@ -256,11 +256,7 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
-    # Optional explicit reduce-scatter worker count. When None (default) it is derived from the
-    # RS-zone geometry below. Set it to pin the value to an op-test-tuned count so the model and
-    # the ccl op test (tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py)
-    # agree exactly -- the geometry derivation and the op test's explicit num_workers_per_link do
-    # not otherwise match (e.g. LTX ff2: derived 5 vs op-test-validated 3).
+    # Optional explicit reduce-scatter worker count
     num_workers_per_link: int | None = None
 
     def get_params(self, core_grid, num_links):
@@ -295,11 +291,7 @@ fused_mmrs_configs = {
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
-        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]. (12,8)=96-core MM grid
-        # with op-test-tuned b756 blocking: 7x5x6 tiles (224/160/192 elem), subblock 1x3, chunk=1,
-        # RS workers on rows 8-9. num_workers_per_link pinned to 3 (geometry would derive 5) to match
-        # ltx_ff2_4864_4096_4096_x12_y8_b756 in
-        # tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py.
+        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
 }
@@ -371,16 +363,7 @@ def register_fused_mmrs_configs(configs: dict) -> None:
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
 
 
-# =====================================================================
-# Fabric-bound all-gather-matmul (strided AGMM) configs
-# =====================================================================
-# The optimized fabric-bound op ``ttnn.experimental.strided_all_gather_minimal_matmul_async``
-# partitions the worker grid: the matmul runs on ``mm_core_grid`` (the lower rows) and the
-# strided all-gather workers run on the rows starting at ``ag_core_grid_offset`` (which must
-# start at ``mm_core_grid.y`` to keep the two regions disjoint). Only shapes registered here
-# take the fabric path; everything else falls through to the current
-# ``all_gather_minimal_matmul_async`` op. This is the seam for the eventual 3-path
-# (fabric / dram / compute) router.
+# ===================================================================== Fabric-bound all-gather-matmul
 class FabricAGMMConfig(NamedTuple):
     mm_core_grid: ttnn.CoreCoord
     ag_core_grid_offset: tuple
@@ -393,42 +376,16 @@ class FabricAGMMConfig(NamedTuple):
     num_buffers_per_channel: int
 
 
-# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(K, N, chunks)``. K is the full (gathered)
-# contraction dim, N the per-TP-device output width, chunks the output-split count. M (the per-SP-
-# device sequence length) is intentionally NOT part of the key: the tuned block sizes are
-# M-independent across every LTX entry, and the model's real M for the audio/kv rows differs from
-# the video-seq proxy the op test sweeps -- keying on M would stop those shapes from ever matching.
-# Seeded from the LTX stage-1/stage-2 video + audio blocks on the Blackhole galaxy 12x10 grid.
+# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(K, N, chunks)``
 fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
     ttnn.CoreCoord(12, 10): {
-        # (K, N, chunks) -> FabricAGMMConfig(mm_core_grid, ag_core_grid_offset,
-        #                                    M_block, K_block, N_block, sub_h, sub_w, num_w/link, num_buf/chan)
-        # video to_q (cross) / to_out(plain) / to_out addcmul: N = video_dim/tp = 1024.
-        # DEVICE-VALIDATED: stage-2 video block, 3x StridedAllGatherMinimalMatmulAsync, PCC pass.
+        # (K, N, chunks) -> FabricAGMMConfig
         (4096, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
-        # ---------------------------------------------------------------------------------------
-        # Remaining uncommented shapes from test_strided_all_gather_minimal_matmul_ltx_configs.
-        # Block shapes below MIRROR that op test exactly (it is the tuning source of truth) --
-        # (M_block, K_block, N_block, subblock_h, subblock_w). Validate on device via that test.
-        # ---------------------------------------------------------------------------------------
-        # video to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile).
+        # --------------------------------------------------------------------------------------- Remaining
         (4096, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
-        # audio to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile).
-        # DISABLED under global IN0_SUB_CHUNKS=2 banding: audio seq is tiny (AUDIO_N/sp = 1 M-tile),
-        # so last_m_block_tiles=1 < in0_sub_chunks=2 -> the banded path hard-asserts
-        # (minimal_matmul_fabric_bound_program_factory.cpp:522). Audio M=1 tile is also perf-negligible
-        # and can't overlap-band regardless, so keep it on the old op. Re-enable only once in0_sub_chunks
-        # is a per-config field (set to 1 for audio) rather than a global env var.
-        # (2048, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
-        # audio_to_video_attn.to_q (a2v cross): K = video_dim = 4096, N = audio_dim/tp = 512 (16 tiles).
-        # transpose grid -> N across grid.y=8 => 2 tiles/core. N_block MUST be 2 (subblock_w=2) so
-        # N_blocks_per_core = ceil(2/2) = 1; N_block=1 gives 2 blocks/core -> split-write DEADLOCK
-        # (device-confirmed hang at "Waiting for op"). This differs from the op test's stale value.
+        # audio to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile)
         (4096, 512, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 2, 2, 2, 3, 8),
-        # audio a_kv (chunks=1 in the op test): K = audio_dim = 2048, N = 1024. Inert in-model (real
-        # to_kv is chunks=2 -> old op). Also DISABLED for the same reason as the audio gate above:
-        # in-model audio M = AUDIO_N/sp = 1 tile, which can't band under global IN0_SUB_CHUNKS=2.
-        # (2048, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
+        # audio a_kv (chunks=1 in the op test): K = audio_dim = 2048, N = 1024
     },
 }
 

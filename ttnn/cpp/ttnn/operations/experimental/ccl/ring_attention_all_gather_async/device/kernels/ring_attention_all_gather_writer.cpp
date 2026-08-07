@@ -294,12 +294,7 @@ void kernel_main() {
         }
     }
 
-    // On an even ring the terminal relayed slice (its receiver's diametric shard, N/2 hops away on
-    // both links) would otherwise traverse its final hop on one link while the other idles. Relay its
-    // first half on direction 0 and its second half on direction 1 so both links share that hop;
-    // direction 1 gains one relay to carry the second half. Gated on ring geometry only so the paired
-    // reader and the SDPA op receiver make the identical decision without shape info; a single-packet
-    // range degenerates to first_half_pages == 0 (direction 0 relays nothing).
+    // On an even ring the terminal relayed slice
     const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         writes_expected++;
@@ -343,9 +338,7 @@ void kernel_main() {
                 tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
 
-            // Packet-aligned midpoint of this input's per-batch-head page range. On the split slice
-            // direction 0 relays [start, mid) and direction 1 relays [mid, end); the skipped half's
-            // cursor still advances so cb_output pops match the pages the paired reader pushed.
+            // Packet-aligned midpoint of this input's per-batch-head page range
             const uint32_t total_pages = tiles_to_read - input_tile_id_start[input_idx];
             const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
             const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
