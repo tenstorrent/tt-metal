@@ -319,6 +319,25 @@ def test_multimodal_demo_text(
         prefill_time_ms = (prefill_end - prefill_start) * 1000
         logger.info(f"Prefill time: {prefill_time_ms:.2f} ms")
 
+        # Clean console summary (no image-token dump) for demos / PR screenshots.
+        print("\n" + "=" * 64)
+        print("LFM2.5-VL-1.6B multimodal demo (N300)")
+        print("=" * 64)
+        print(f"Prefill time: {prefill_time_ms:.2f} ms")
+        print(f"Generated tokens: {int((position_id[0] + 1 - prefill_lens[0]).item())}")
         for user_id in range(max_batch_size):
             text = tokenizer.decode(tokens[user_id, : position_id[user_id] + 2].tolist())
             logger.info(f"User {user_id} full text: {text}")
+            if "<|im_start|>assistant" in text:
+                assistant = text.split("<|im_start|>assistant", 1)[1]
+                assistant = assistant.split("<|im_end|>", 1)[0].strip()
+            else:
+                assistant = text.strip()
+            content = dialogs[user_id][-1].content
+            if isinstance(content, list):
+                prompt = next((p for p in content if isinstance(p, str)), "[image]")
+            else:
+                prompt = str(content)
+            print(f"\nUser {user_id} prompt: {prompt}")
+            print(f"Assistant:\n{assistant if assistant else '(empty)'}")
+        print("=" * 64 + "\n")
