@@ -240,6 +240,10 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // Only used by Metal 2.0.
+    // Metal 2.0's vararg CTAs does not reuse the legacy CTA infrastructure.
+    const std::vector<uint32_t>& get_compile_time_varargs() const override { return compile_time_varargs_; }
+    void set_compile_time_varargs(std::vector<uint32_t> varargs) { compile_time_varargs_ = std::move(varargs); }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
@@ -336,6 +340,9 @@ protected:
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
+    // Metal 2.0 user compile-time varargs (set post-construction via set_compile_time_varargs).
+    // Hashed into compute_hash; genfiles bakes literals into kernel_args_generated.h.
+    std::vector<uint32_t> compile_time_varargs_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

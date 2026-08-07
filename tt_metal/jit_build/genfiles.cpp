@@ -275,9 +275,16 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Metal 2.0 user compile-time varargs: baked as literals below (separate from positional
+    // KERNEL_COMPILE_TIME_ARGS, which TensorBindings / legacy CreateKernel still use).
+    const std::vector<uint32_t>& cta_varargs = settings.get_compile_time_varargs();
+    const uint32_t cta_vararg_size = static_cast<uint32_t>(cta_varargs.size());
+
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
+               "#include <array>\n"
+               "#include \"api/compile_time_args.h\"\n"
                "#include \"experimental/kernel_args.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
@@ -312,7 +319,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         content << "}  // namespace args\n\n";
     }
 
-    // Vararg helpers — always emitted.
+    // Runtime / common-runtime vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
@@ -324,6 +331,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+
+    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
+    // Values are baked as literals (same spirit as named CtaVal); not read from
+    // KERNEL_COMPILE_TIME_ARGS. Three accessors:
+    //   1. get_compile_time_varargs() — constexpr std::array of the baked words
+    //   2. get_compile_time_vararg<idx>() — template index (static_assert bounds)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
+    std::string cta_vararg_literals;
+    if (!cta_varargs.empty()) {
+        // e.g. {1, 2, 3} → "1u, 2u, 3u"
+        auto cta_vararg_u_literals =
+            cta_varargs | std::views::transform([](uint32_t v) { return fmt::format("{}u", v); });
+        cta_vararg_literals = fmt::format("{}", fmt::join(cta_vararg_u_literals, ", "));
+    }
+    content << fmt::format(
+        R"(
+// Compile-time varargs (Metal 2.0; baked literals — not KERNEL_COMPILE_TIME_ARGS)
+FORCE_INLINE constexpr std::array<uint32_t, {0}u> get_compile_time_varargs() {{
+    return std::array<uint32_t, {0}u>{{{{{1}}}}};
+}}
+template <uint32_t idx>
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
+    static_assert(idx < {0}u, "Compile-time vararg index out of range");
+    return get_compile_time_varargs()[idx];
+}}
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
+    return get_compile_time_varargs()[idx];
+}}
+)",
+        cta_vararg_size,
+        cta_vararg_literals);
 
     write_file(path, content.str());
 }

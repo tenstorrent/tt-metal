@@ -20,8 +20,14 @@ FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
 #define KERNEL_COMPILE_TIME_ARGS
 #endif
 
+// Positional CTAs for pre-metal 2.0 kernels / TensorBinding static CTAs.
+// Metal 2.0 CTA varargs are NOT EXPOSED through this array.
+// Metal 2.0 user should use: get_compile_time_varargs() / get_compile_time_vararg() instead.
 constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
 
+// Index into positional CTAs for pre-metal 2.0 kernels / TensorBinding static CTAs.
+// Metal 2.0 CTA varargs are NOT EXPOSED through this array.
+// Metal 2.0 user should use: get_compile_time_varargs() / get_compile_time_vararg() instead.
 template <uint32_t Idx>
 constexpr uint32_t get_ct_arg() {
     static_assert(Idx < kernel_compile_time_args.size(), "Index out of range");

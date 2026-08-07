@@ -4138,13 +4138,12 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 }
 
 // ============================================================================
-// Compile-time varargs — mock-device JIT smoke
+// Compile-time varargs — mock-device bake & JIT smoke
 // ============================================================================
 //
 // Host: KernelAdvancedOptions::compile_time_varargs (values fixed at ProgramSpec time).
-// Kernel: get_compile_time_vararg(idx), 0-based into the CTA-vararg section.
-// Compile-only on mock Wormhole — the static_assert fires at JIT time if the value is wrong
-// or the helper/offset plumbing is broken. No silicon, no dispatch.
+// Kernel: get_compile_time_vararg* — literals baked into kernel_args_generated.h (Metal 2.0).
+// Separate from positional KERNEL_COMPILE_TIME_ARGS (TensorBinding DSpec / legacy CreateKernel).
 
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     NodeCoord node{0, 0};
@@ -4153,6 +4152,7 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
+    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
 }
 )"};
@@ -4166,6 +4166,94 @@ void kernel_main() {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// CTA varargs must not share KERNEL_COMPILE_TIME_ARGS with TensorBinding payloads.
+// Verifies independence: binding cta_offset stays 0; positional compile_args are binding-only;
+// baked get_compile_time_vararg* and TensorAccessor still both work.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIndependentOfTensorBindingCTAs) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kVararg0 = 0xCAFEBABEu;
+    constexpr uint32_t kVararg1 = 0xDEADBEEFu;
+    const std::vector<uint32_t> cta_varargs = {kVararg0, kVararg1};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
+    // Binding CTA_OFFSET stays 0 (varargs are not a positional prefix).
+    static_assert(tensor::input_ta_t::args_t::is_dram);
+    TensorAccessor accessor(tensor::input_ta);
+    auto noc_addr = accessor.get_noc_addr(0);
+    (void)noc_addr;
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_with_tensor_binding";
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::DRAM)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].cta_offset, 0u)
+        << "TensorBinding CTA payload must start at 0; user CTA varargs are not a positional prefix";
+
+    const auto compile_args = kernel->compile_time_args();
+    ASSERT_FALSE(compile_args.empty()) << "positional CTAs should hold the binding args_config word";
+    EXPECT_THAT(kernel->get_compile_time_varargs(), ::testing::ElementsAreArray(cta_varargs));
+    const auto args_config =
+        tensor_accessor::ArgsConfig(static_cast<tensor_accessor::ArgsConfig::Underlying>(compile_args[0]));
+    EXPECT_TRUE(args_config.test(tensor_accessor::ArgConfig::IsDram))
+        << "positional compile_args[0] must be the tensor args_config, not a CTA vararg";
+
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargsProducesDifferentKernelHash) {
+    auto make_program = [this](std::vector<uint32_t> varargs) {
+        NodeCoord node{0, 0};
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.advanced_options.compile_time_varargs = std::move(varargs);
+        ProgramSpec spec;
+        spec.name = "cta_varargs_hash";
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+        return MakeProgramFromSpec(*mesh_device_, spec);
+    };
+
+    Program prog_a = make_program({0x11112222u, 0x33334444u});
+    Program prog_b = make_program({0xAAAABBBBu, 0xCCCCDDDDu});
+    EXPECT_NE(
+        prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+TEST_F(ProgramSpecTestGen1, IdenticalCompileTimeVarargsProducesIdenticalKernelHash) {
+    auto make_program = [this] {
+        NodeCoord node{0, 0};
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu};
+        ProgramSpec spec;
+        spec.name = "cta_varargs_hash_ident";
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+        return MakeProgramFromSpec(*mesh_device_, spec);
+    };
+
+    Program prog_a = make_program();
+    Program prog_b = make_program();
+    EXPECT_EQ(
+        prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 
 // ============================================================================
