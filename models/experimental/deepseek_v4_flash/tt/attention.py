@@ -7,7 +7,6 @@ from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sh
 from .layers import (
     BatchedLinearDecode,
     DeepSeekV4RMSNorm,
-    Linear,
     LinearDecode,
     _rms_norm_unweighted,
     make_shared_decode_gcb,
@@ -403,6 +402,9 @@ class DeepSeekV4HCACompressor:
         rope_dim: int,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        num_prefetch_slabs: int = 1,
+        prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
         self.rope_dim = rope_dim
@@ -411,11 +413,16 @@ class DeepSeekV4HCACompressor:
         self.head_dim = config.head_dim
         self.compress_rate = config.compress_rates["heavily_compressed_attention"]
         cache = _as_cache(cache)
-        self.kv_proj = Linear(
-            weights["compressor.kv_proj.weight"], device, cache.file("compressor.kv_proj"), dtype=weight_dtype
-        )
-        self.gate_proj = Linear(
-            weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
+        self.kv_proj, self.gate_proj = _compressor_projections(
+            "heavily_compressed_attention",
+            config,
+            weights,
+            device,
+            cache,
+            weight_dtype,
+            use_prefetcher,
+            num_prefetch_slabs,
+            prefetch_buffers,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
@@ -428,9 +435,25 @@ class DeepSeekV4HCACompressor:
             cache_file_name=cache.file("compressor.position_bias"),
         )
 
+    def prefetch_weights(self):
+        """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
+
+        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB.
+        """
+        self.kv_proj.fetch_weights()
+        self.gate_proj.fetch_weights()
+
     def _project(self, hidden: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, Dh]`` each."""
-        return self.kv_proj(hidden), self.gate_proj(hidden)
+        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, Dh]`` each.
+
+        ``LinearDecode`` leaves its result width-sharded over the cores it reduced onto, while
+        the callers reshape these and reshard them height-wise for the cache write, so hand
+        back the DRAM-interleaved form they expect (as ``_o_proj`` does for o_b_proj).
+        """
+        return (
+            ttnn.to_memory_config(self.kv_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.gate_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+        )
 
     def _pool_window(
         self, win_kv: ttnn.Tensor, win_gate: ttnn.Tensor, cos_row: ttnn.Tensor, sin_row: ttnn.Tensor
@@ -508,6 +531,9 @@ class DeepSeekV4CSACompressor:
         rope_dim: int,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        num_prefetch_slabs: int = 1,
+        prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
         self.rope_dim = rope_dim
@@ -516,11 +542,16 @@ class DeepSeekV4CSACompressor:
         self.head_dim = config.head_dim
         self.compress_rate = config.compress_rates["compressed_sparse_attention"]
         cache = _as_cache(cache)
-        self.kv_proj = Linear(
-            weights["compressor.kv_proj.weight"], device, cache.file("compressor.kv_proj"), dtype=weight_dtype
-        )
-        self.gate_proj = Linear(
-            weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
+        self.kv_proj, self.gate_proj = _compressor_projections(
+            "compressed_sparse_attention",
+            config,
+            weights,
+            device,
+            cache,
+            weight_dtype,
+            use_prefetcher,
+            num_prefetch_slabs,
+            prefetch_buffers,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
@@ -532,9 +563,24 @@ class DeepSeekV4CSACompressor:
             cache_file_name=cache.file("compressor.position_bias"),
         )
 
+    def prefetch_weights(self):
+        """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
+
+        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB.
+        """
+        self.kv_proj.fetch_weights()
+        self.gate_proj.fetch_weights()
+
     def _project(self, hidden: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, 2*Dh]`` each."""
-        return self.kv_proj(hidden), self.gate_proj(hidden)
+        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, 2*Dh]`` each.
+
+        DRAM-interleaved for the same reason as
+        :meth:`DeepSeekV4HCACompressor._project`.
+        """
+        return (
+            ttnn.to_memory_config(self.kv_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.gate_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+        )
 
     def _pool_window(
         self,
@@ -633,10 +679,94 @@ _DECODE_PROJ_LAYOUTS = {
     "o_b_proj": {"K": 8192, "N": 4096},
 }
 
-# q_b_proj and o_b_proj have byte-identical slabs, so they can share one GCB. q_a_proj and
-# kv_proj are much smaller and each take their own, because a GCB whose page size changes
-# between transfers hangs (see ``make_shared_decode_gcb``).
-_DECODE_PROJ_GCB_GROUPS = (("q_b_proj", "o_b_proj"), ("q_a_proj",), ("kv_proj",))
+# The compressor's two projections (``kv_proj`` then ``gate_proj``, both consuming the block's
+# ``hidden``) are the same shape as each other, so one GCB serves the pair. That shape depends
+# on the layer's compressor kind -- HCA projects each token to ``Dh``, CSA to ``2*Dh`` for its
+# Ca/Cb pair -- so the two kinds cannot share with each other. Keyed by layer type.
+_COMPRESSOR_PROJ_LAYOUTS = {
+    "heavily_compressed_attention": {
+        "K": 4096,
+        "N": 512,
+        "partial_width_sharded": True,
+        "k_blocks": 4,
+        "n_blocks": 16,
+    },
+    "compressed_sparse_attention": {
+        "K": 4096,
+        "N": 1024,
+        "partial_width_sharded": True,
+        "k_blocks": 2,
+        "n_blocks": 32,
+    },
+}
+
+_ALL_DECODE_LAYOUTS = {**_DECODE_PROJ_LAYOUTS, **_COMPRESSOR_PROJ_LAYOUTS}
+
+# Which weights share a GCB. Grouped by slab size, because a GCB whose page size changes between
+# transfers hangs (see ``make_shared_decode_gcb``) -- and grouped as tightly as that allows,
+# because the count is capped well below what L1 would bear: each GCB also takes a fixed ~176 B
+# of the DRISC senders' 1 KB state zone, so a device runs out of room at six.
+#
+# The compressor layouts come out byte-identical to a block projection (HCA to kv_proj, CSA to
+# q_a_proj), so they ride along instead of taking buffers of their own. That extends the FIFO
+# ordering contract across the block/compressor boundary, which holds because the compressor
+# runs unconditionally -- only its *pooling* is conditional -- and always after the projection
+# it shares with: ``_qkv`` runs q_a and kv before ``decode`` reaches the compressor, which is
+# also the order :meth:`DeepSeekV4Attention.prefetch_weights` queues them in.
+_DECODE_PROJ_GCB_GROUPS = (
+    ("q_b_proj", "o_b_proj"),
+    ("q_a_proj", "compressed_sparse_attention"),
+    ("kv_proj", "heavily_compressed_attention"),
+)
+
+
+def _compressor_projections(
+    layer_type: str,
+    config,
+    weights: dict,
+    device: ttnn.MeshDevice,
+    cache: WeightCache,
+    weight_dtype: ttnn.DataType,
+    use_prefetcher: bool,
+    num_prefetch_slabs: int,
+    prefetch_buffers: Optional[dict],
+):
+    """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
+
+    Shared by the two compressor kinds, which differ only in the projected width. Under the
+    prefetcher the pair streams through the GCB keyed to ``layer_type`` -- which the block
+    projection of the same slab size also uses -- so they must be queued in the order
+    :meth:`DeepSeekV4HCACompressor._project` runs them, kv before gate, and after that
+    projection's own weight.
+
+    The layout is a hardcoded constant (as for the block projections), so check it against the
+    config here -- a stale ``K``/``N`` would otherwise reach the device as a silently
+    mis-sharded weight rather than an error.
+    """
+    layout = _COMPRESSOR_PROJ_LAYOUTS[layer_type]
+    feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
+    if (layout["K"], layout["N"]) != (config.hidden_size, feat):
+        raise ValueError(
+            f"the {layer_type} compressor layout is fixed at K={layout['K']}, N={layout['N']} but this config "
+            f"wants K={config.hidden_size}, N={feat}"
+        )
+    if use_prefetcher and prefetch_buffers is None:
+        prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs)
+    prefetch = {"use_prefetcher": use_prefetcher}
+    if use_prefetcher:
+        prefetch["global_cb"] = prefetch_buffers[layer_type]
+
+    def projection(name):
+        return LinearDecode(
+            weights[f"compressor.{name}.weight"],
+            device,
+            cache.file(f"compressor.{name}"),
+            dtype=weight_dtype,
+            **layout,
+            **prefetch,
+        )
+
+    return projection("kv_proj"), projection("gate_proj")
 
 
 def make_attention_prefetch_buffers(
@@ -644,9 +774,11 @@ def make_attention_prefetch_buffers(
 ) -> dict:
     """The GCBs attention blocks prefetch their projection weights through.
 
-    Returns a ``{projection name: GlobalCircularBuffer}`` mapping to hand to
-    :class:`DeepSeekV4Attention` as ``prefetch_buffers``. Three buffers back the four
-    projections, since two of them have matching slab sizes and can share.
+    Returns a mapping to hand to :class:`DeepSeekV4Attention` as ``prefetch_buffers``, keyed by
+    projection name for the block's own four and by layer type for the compressors. Three
+    buffers back all of them (see ``_DECODE_PROJ_GCB_GROUPS`` for the grouping), which matters
+    beyond L1: each GCB also consumes a fixed slice of a small DRISC state zone that only fits
+    about six per device.
 
     Build this **once per device and pass it to every layer on that device**. A GCB is a
     permanent L1 allocation, so per-layer buffers do not scale: at bf4 one block's worth is
@@ -662,7 +794,7 @@ def make_attention_prefetch_buffers(
     buffers = {}
     for group in _DECODE_PROJ_GCB_GROUPS:
         global_cb = make_shared_decode_gcb(
-            device, [_DECODE_PROJ_LAYOUTS[name] for name in group], weight_dtype, num_slabs=num_prefetch_slabs
+            device, [_ALL_DECODE_LAYOUTS[name] for name in group], weight_dtype, num_slabs=num_prefetch_slabs
         )
         for name in group:
             buffers[name] = global_cb
@@ -679,8 +811,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     because the rotary embedding is owned by the surrounding model in the
     reference, not by the attention block.
 
-    ``use_prefetcher=True`` switches the four decode projections (q_a, q_b, kv, o_b) onto
-    DRISC-prefetched weights: each keeps its weight DRAM ND-sharded and has the tensor
+    ``use_prefetcher=True`` switches the four decode projections (q_a, q_b, kv, o_b), plus the
+    compressor's kv/gate pair on the layers that have one, onto DRISC-prefetched weights: each
+    keeps its weight DRAM ND-sharded and has the tensor
     prefetcher push it into the matmul's in1 buffer, instead of copying DRAM -> L1 before
     every call. Two things come with it:
 
@@ -692,7 +825,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     * A GCB is a permanent L1 allocation, not a transient staging copy. Pass
       ``prefetch_buffers`` from :func:`make_attention_prefetch_buffers` so one set is shared
       by every layer on the device: left to build its own, each block costs ~342 KB per
-      receiver core, which does not scale past a handful of layers.
+      receiver core plus a slice of a DRISC state zone that only fits about six GCBs, neither
+      of which scales past a handful of layers.
     """
 
     def __init__(
@@ -743,9 +877,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.kv_proj = projection("kv_proj")
         self.o_b_proj = projection("o_b_proj")
         self._prefetch_order = list(_DECODE_PROJ_LAYOUTS)
-        # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
-        # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
-        # self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
         self.q_a_norm = DeepSeekV4RMSNorm(
             weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
         )
@@ -808,7 +939,18 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         compressor_cls = _COMPRESSORS.get(self.layer_type)
         print(f"Attn with {compressor_cls} compressor at layer {self.layer_idx}. {self.layer_type}")
         self.compressor = (
-            compressor_cls(config, weights, device, self.rot, self.rope_dim, cache=cache, weight_dtype=weight_dtype)
+            compressor_cls(
+                config,
+                weights,
+                device,
+                self.rot,
+                self.rope_dim,
+                cache=cache,
+                weight_dtype=weight_dtype,
+                use_prefetcher=use_prefetcher,
+                num_prefetch_slabs=num_prefetch_slabs,
+                prefetch_buffers=prefetch_buffers,
+            )
             if compressor_cls is not None
             else None
         )
@@ -825,9 +967,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         the class docstring), and every queued request must be consumed by a matching
         ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
 
-        The four share one GCB, so they are queued in ``decode``'s call order. Nothing checks
-        this: a projection whose matmul runs out of turn pops its own page size off the head of
-        another weight's slab, which is wrong results rather than an error.
+        Projections that share a GCB share one FIFO, so they are queued in ``decode``'s call
+        order. Nothing checks this: a projection whose matmul runs out of turn pops its own page
+        size off the head of another weight's slab, which is wrong results rather than an error.
         """
         for name in self._prefetch_order:
             proj = getattr(self, name)
@@ -836,6 +978,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 # alongside the others.
                 continue
             proj.fetch_weights()
+        if self.compressor is not None:
+            # Last, because the compressor shares a buffer with whichever projection matches its
+            # slab size (kv_proj for HCA, q_a_proj for CSA) and ``decode`` runs both of those, in
+            # ``_qkv``, before it reaches the compressor.
+            self.compressor.prefetch_weights()
 
     def _sdpa_decode(
         self,

@@ -498,8 +498,18 @@ class LinearDecode(DeepSeekV4Module):
         DRAM-core path, off the command queue, while earlier ops still occupy the workers.
         ``block_count`` is 1 in every mode -- a receiver's whole slab is one GCB page,
         because the compute kernel indexes in1 tiles by absolute position within it.
+
+        ``capture_into_trace`` is what makes this work under traced decode. A request is a
+        host-side write to the DRISC senders, not a command-queue op, so a trace would not
+        record it: capture would push weights that the captured (non-executing) matmuls never
+        drain, and every replay would then wait on credits nobody posts. With the flag set, a
+        request issued while the current queue is mid-capture is recorded against that trace
+        and re-sent on each ``execute_trace`` instead. Outside capture it is sent immediately
+        as before, so this is unconditional.
         """
-        ttnn.experimental.queue_tensor_prefetcher_request(self.device, [(self.weight, 1)], global_cb=self.global_cb)
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            self.device, [(self.weight, 1)], global_cb=self.global_cb, capture_into_trace=True
+        )
         self.prefetch_queued = True
 
     def fetch_weights(self):
@@ -544,11 +554,12 @@ class LinearDecode(DeepSeekV4Module):
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
                 # of its validation while building the program -- so a rejected call leaves
-                # slabs queued that nothing will ever drain. The caller's device sync then
-                # blocks forever and the real error is never reported. Retiring the senders
-                # here keeps the failure an exception; stop is a no-op if no prefetcher is
-                # running, so the caller's own stop still behaves.
-                ttnn.experimental.stop_tensor_prefetcher(self.device)
+                # slabs queued that nothing will ever drain. A clean stop cannot retire that:
+                # its sentinel queues behind the orphaned request, so the kernel blocks on a
+                # full GCB and never reaches it. Force-stopping abandons the kernels, which
+                # keeps the failure an exception instead of a hang; stop is a no-op if no
+                # prefetcher is running, so the caller's own stop still behaves.
+                ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
         if self.l1_weights is None or not self.l1_weights.is_allocated():
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
