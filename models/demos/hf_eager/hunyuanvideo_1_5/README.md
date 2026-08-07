@@ -27,7 +27,7 @@ image tokens out via a per-key additive attention bias, so it matches the refere
   | task | tier | denoise | **e2e** | vs baseline |
   |---|---|---|---|---|
   | **i2v** | 480p | 1:20 (1.60 s/it) | **3:33** | −32% denoise, −33% e2e |
-  | **i2v** | 720p | 3:56 (4.72 s/it) | 8:11 | −23% denoise *(e2e measured before the cache/writeout work; expect ~6:30)* |
+  | **i2v** | 720p | 3:54 (4.68 s/it) | **6:40** | −24% denoise, −29% e2e |
 
   The 480p row is a full 121f/50-step run with `HY_DIT_SKIP_PARTS_STUBS=1
   HY_VAE_WEIGHT_CACHE=1 HY_FAST_WRITEOUT=1 HY_SAVE_GIF=0
@@ -37,6 +37,11 @@ image tokens out via a per-key additive attention bias, so it matches the refere
   disk per configuration. Phase split of the 3:33 run: generate 93.7s (denoise
   80s + VAE), DiT weight upload 69.4s, text encode 10.2s, checkpoint load 2.8s,
   writeout 1.1s, VAE weight upload 0.8s (cached).
+
+  720p phase split of the 6:40 run: generate 261.2s (denoise 234s + VAE), DiT
+  weight upload 66.0s, VAE weight upload 19.0s, text encode 10.3s, writeout 3.1s,
+  checkpoint load 2.8s. That run pointed at a fresh VAE cache directory so it paid
+  the cold populate; a warm 720p run saves a further ~18s.
 
   t2v was not re-measured: only the two i2v checkpoints are in the local HF
   cache, so the t2v rows above remain at their original measurement.
