@@ -49,11 +49,13 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -162,6 +164,24 @@ void write_persisted_write_counter(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->get_devices()[0]->id());
 }
 
+// Mirrors connection_handoff in edm_fabric_worker_adapters.hpp, which cannot be included here (it is
+// device code). Keep these in sync with COUNTER_BITS there.
+constexpr uint32_t kHandoffCounterBits = 24;
+constexpr uint32_t kHandoffCounterMask = (1u << kHandoffCounterBits) - 1;
+
+// Add `delta` to the handoff word's counter field, leaving the slot-index field untouched.
+//
+// Plain `handoff + delta` is wrong: the counter occupies bits [23:0], so an add that overflows it
+// carries into the slot byte (and a subtract that underflows borrows from it), silently moving the
+// producer's cursor. That would make the test fail for a reason unrelated to what it checks. The
+// window is narrow -- only the last few counter values before 2^24 -- but it is reachable and depends
+// on how much traffic the channel has already carried, so it must not be left to chance.
+uint32_t perturb_handoff_counter(uint32_t handoff, int32_t delta) {
+    const uint32_t slot_field = handoff & ~kHandoffCounterMask;
+    const uint32_t counter_field = (handoff + static_cast<uint32_t>(delta)) & kHandoffCounterMask;
+    return slot_field | counter_field;
+}
+
 // Host-side mirror of prng_next in tt_fabric_traffic_gen.hpp.
 uint32_t prng_next(uint32_t n) {
     uint32_t x = n;
@@ -254,16 +274,6 @@ std::vector<bool> run_unicast_transfer_and_check(
 
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
-
-    std::vector<uint32_t> received;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
-        receiver_logical_core,
-        target_address,
-        num_packets * payload_size_bytes,
-        received,
-        CoreType::WORKER);
 
     // tt_fabric_1d_tx.cpp advances the seed once per packet, then fill_packet_data() writes
     // `seed + k` into the last word of every 16B chunk of the payload. Checking the first marker word
@@ -271,13 +281,55 @@ std::vector<bool> run_unicast_transfer_and_check(
     constexpr uint32_t kMarkerWordOffset = (PACKET_WORD_SIZE_BYTES / sizeof(uint32_t)) - 1;
     const uint32_t payload_words = payload_size_bytes / sizeof(uint32_t);
 
+    // The sender program completing does NOT mean the data has landed.
+    //   - The source router acks the connection teardown without draining the channel
+    //     (teardown_worker_connection in tt_fabric_utils.h just marks the connection unused and bumps
+    //     the worker's teardown semaphore), so packets can still be staged in sender channel 0 when
+    //     the sender kernel exits.
+    //   - Cluster::l1_barrier is only driver_->l1_membar(), a host-side membar for host-issued L1
+    //     access. It says nothing about in-flight NOC or ethernet traffic between devices.
+    // So poll the destination window until every packet has arrived, bounded by a deadline. On a
+    // healthy transfer this exits on the first read; on a genuine regression it costs the timeout and
+    // then reports exactly which packets are missing -- deliberately not a device-side polling
+    // receiver, which would turn a real failure into a hang.
+    constexpr auto kDeliveryTimeout = std::chrono::seconds(5);
+    const auto deadline = std::chrono::steady_clock::now() + kDeliveryTimeout;
+
     std::vector<bool> packet_ok(num_packets, false);
-    uint32_t seed = time_seed;
-    for (uint32_t packet = 0; packet < num_packets; ++packet) {
-        seed = prng_next(seed);
-        const uint32_t word_idx = (packet * payload_words) + kMarkerWordOffset;
-        TT_FATAL(word_idx < received.size(), "Readback too short");
-        packet_ok[packet] = (received[word_idx] == seed);
+    uint32_t missing = 0;
+    for (;;) {
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
+        std::vector<uint32_t> received;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            receiver_device->get_devices()[0],
+            receiver_logical_core,
+            target_address,
+            num_packets * payload_size_bytes,
+            received,
+            CoreType::WORKER);
+
+        missing = 0;
+        uint32_t seed = time_seed;
+        for (uint32_t packet = 0; packet < num_packets; ++packet) {
+            seed = prng_next(seed);
+            const uint32_t word_idx = (packet * payload_words) + kMarkerWordOffset;
+            TT_FATAL(word_idx < received.size(), "Readback too short");
+            packet_ok[packet] = (received[word_idx] == seed);
+            missing += packet_ok[packet] ? 0u : 1u;
+        }
+
+        if (missing == 0 || std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (missing != 0) {
+        log_info(
+            tt::LogTest,
+            "{} of {} packets still missing after waiting {} s for delivery",
+            missing,
+            num_packets,
+            std::chrono::duration_cast<std::chrono::seconds>(kDeliveryTimeout).count());
     }
     return packet_ok;
 }
@@ -375,12 +427,14 @@ TEST_F(Fabric2DFixture, WorkerInjectionSlotCursorSurvivesWriteCounterWrap) {
     // The channel is idle here: the worker closed its connection, so the persisted counter is the
     // authoritative producer position and no one will overwrite it before the next open().
     const uint32_t counter_before = read_persisted_write_counter(sender_device, channel);
-    write_persisted_write_counter(sender_device, channel, counter_before + wrap_skew);
+    const uint32_t counter_perturbed = perturb_handoff_counter(counter_before, static_cast<int32_t>(wrap_skew));
+    write_persisted_write_counter(sender_device, channel, counter_perturbed);
     log_info(
         tt::LogTest,
-        "Persisted write counter {} -> {} (emulating the 2^32 wrap)",
+        "Persisted handoff word 0x{:08x} -> 0x{:08x} (counter field +{}, emulating the 2^32 wrap)",
         counter_before,
-        counter_before + wrap_skew);
+        counter_perturbed,
+        wrap_skew);
 
     // Phase 2: identical transfer across the perturbed connection.
     const auto phase2 = run_unicast_transfer_and_check(
@@ -389,7 +443,8 @@ TEST_F(Fabric2DFixture, WorkerInjectionSlotCursorSurvivesWriteCounterWrap) {
     // Re-align the persisted counter with the router's cursor so the rest of the suite is unaffected.
     if (wrap_skew != 0) {
         const uint32_t counter_after = read_persisted_write_counter(sender_device, channel);
-        write_persisted_write_counter(sender_device, channel, counter_after - wrap_skew);
+        write_persisted_write_counter(
+            sender_device, channel, perturb_handoff_counter(counter_after, -static_cast<int32_t>(wrap_skew)));
     }
 
     const uint32_t missing = count_missing(phase2);
