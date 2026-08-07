@@ -194,13 +194,16 @@ steps:
     continue-on-error: true
     run: docker exec portdev ccache -sv || true
 
-  # ttnn imports graphviz via ttnn.graph, which the dev image's system Python does not carry, so
-  # the harness needs tt-metal's own virtualenv rather than whatever python3 is on PATH.
-  - name: Create the Python environment
-    timeout-minutes: 30
+  # The dev image already carries a working environment with ttnn and torch; `create_venv.sh`
+  # refuses to run because it will not clobber the existing /opt/venv, and it is not needed. The
+  # one real gap is graphviz, which `ttnn.graph` imports unconditionally at `import ttnn`.
+  # Everything the harness needs is asserted here rather than discovered later, so a missing
+  # dependency fails this step instead of surfacing as a mysterious `blocked` verdict.
+  - name: Prepare the Python environment
+    timeout-minutes: 15
     run: |
-      docker exec portdev ./create_venv.sh
-      docker exec portdev ./python_env/bin/python3 -c 'import ttnn, graphviz; print("ttnn imports OK")'
+      docker exec portdev python3 -m pip install --quiet graphviz pyyaml
+      docker exec portdev python3 -c 'import ttnn, torch, yaml, graphviz; print("harness imports OK")'
 
   # Informational, and deliberately non-fatal: the ported leg is still an empty stub here, so this
   # is expected to report a failing verdict. Its value is proving the harness and the card work
@@ -208,7 +211,7 @@ steps:
   - name: Native baseline
     continue-on-error: true
     run: |
-      docker exec portdev ./python_env/bin/python3 .github/scripts/port/gate.py \
+      docker exec portdev python3 .github/scripts/port/gate.py \
         --op "${{ inputs.op || 'pad' }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
         --category "${{ inputs.category || 'data_movement' }}" --band performance --repo /work \
         --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] || '24' }}" --skip-write-check || true
@@ -247,7 +250,7 @@ mcp-scripts:
         correctness|performance|both) BAND="$INPUT_BAND" ;;
         *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
       esac
-      docker exec portdev ./python_env/bin/python3 .github/scripts/port/gate.py \
+      docker exec portdev python3 .github/scripts/port/gate.py \
         --op "$PORT_OP" --manifest "$PORT_MANIFEST" --category "$PORT_CATEGORY" \
         --band "$BAND" --repo /work --base-sha "$PORT_BASE_SHA" --limit "$PORT_LIMIT"
 
