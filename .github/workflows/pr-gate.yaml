@@ -142,7 +142,7 @@ jobs:
       build-ttnn-import-artifact: true
       publish-artifact: false
       publish-package: true
-      tracy: false
+      tracy: true
       skip-tt-train: false
       # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
       # so git describe still yields a real version. Depth stays at the default.
