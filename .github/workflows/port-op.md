@@ -119,12 +119,19 @@ steps:
   # One container for the whole run, holding the toolchain, the runtime and the card. Keeping it
   # alive across steps is what makes the agent's rebuilds incremental: the build tree, the local
   # ccache and the CMake configure all persist between tool calls.
+  #
+  # `--network host` is load-bearing, not tidiness. The remote ccache lives at a Kubernetes service
+  # name (`garage.garage.svc.cluster.local`) that resolves on the runner host; a container on the
+  # default bridge network does not reliably inherit that resolution, every object misses, and the
+  # build goes from minutes to over an hour. Sharing the host network namespace gives the container
+  # exactly the DNS and routing the host has.
   - name: Start the toolchain container
     run: |
       docker pull "${{ inputs['docker-image'] || 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest' }}"
       docker run -d --name portdev \
         --device /dev/tenstorrent \
         --group-add 1457 \
+        --network host \
         -v "${{ github.workspace }}/docker-job:/work" \
         -v "${{ github.workspace }}/codegen:/codegen" \
         -v /dev/hugepages-1G:/dev/hugepages-1G \
