@@ -130,12 +130,25 @@ intermediates, so the Halo/Slice/Concat/Untilize scaffolding is never issued. Re
 ops are called, in any combination, has now been measured four ways and moves nothing, and the path to
 60 ms is arithmetically forced: from ~6955 ops to a few hundred.
 
-*Pricing Step 2a is still open.* `fuse_saving.py` tries to price folding the activation into the conv
-(what 2a buys) using the scalar activation seam that already works, so no plumbing is needed to get the
-number. Its current output is **not trustworthy**: the fused conv measures *faster than the plain conv*
-(9.645 vs 13.707 ms at s5 C16), which is not physical and means setting `activation` also changes the
-program or sharding path chosen, so the two arms are not comparable. Fix that before believing the
-147 ms it reports -- hold the conv config identical between arms and vary only the activation.
+*Step 2a is now priced, and it is small* (`fuse_saving.py`). Folding the activation into the conv, using
+the scalar seam that already works so no plumbing is needed to measure it:
+
+    case        conv     fused  separate   saving   x127 bands
+    s5 C16     0.982     1.021     1.258    0.237     30.1 ms
+    s6 C8      0.987     0.974     1.085    0.111     14.1 ms
+
+**~20-30 ms, about 2 % of the decode** -- not the 169 ms the profile attributes to Ternary + Tilize.
+relu is a weaker proxy than snake (1.1 ms a call in the profile against ~0.24 ms here), so the real
+number could be several times larger, but that is extrapolation. Even optimistically Step 2a is
+single-digit percent. **It is worth doing for its own sake and as the proving ground for per-channel
+state riding the conv, but it is not a step toward 5x** -- so do not let its six-plus-file cost be
+justified by the 5x. The order of magnitude has to come from deleting the ~45 scaffolding ops per band,
+which only the full band op does.
+
+(An earlier version of that harness reported 147 ms and had the fused conv beating the plain conv by
+30 %, which is impossible. Cause: the raw weight tensor was passed every call, so conv1d re-prepared
+weights each time -- 93 % of the measured 13.707 ms -- asymmetrically between arms. Prepare once and
+reuse; there is now a guard that fails the case if fused beats plain by >5 %.)
 
 
 One op per `Activation1d` band, implementing the decomposition already proven exact in
