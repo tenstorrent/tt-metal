@@ -274,9 +274,11 @@ class TtJanusProImageAttention(LightweightModule):
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            # DRAM rather than L1, unlike the two ops above: `wo` reads this as a matmul in0,
-            # where an L1 source forces a mcast fan-out instead of a per-core parallel read.
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # L1, like q/k/v and SDPA's output above, even though `wo` reads this as a matmul in0.
+            # The in0 penalty this file records elsewhere comes from a *sharded* source, which makes
+            # every core multicast its own piece; an interleaved L1 source under an explicit 2D
+            # config just puts the read nearer. Measured -0.7 us per `wo` instance.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
 

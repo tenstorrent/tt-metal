@@ -46,6 +46,7 @@ class TtJanusProVisionModel(LightweightModule):
             image_size=self.image_size,
             patch_size=self.patch_size,
             hidden_dim=self.width,
+            configuration=configuration,
             bias=True,
         )
 

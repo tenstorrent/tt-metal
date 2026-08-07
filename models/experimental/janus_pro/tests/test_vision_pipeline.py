@@ -141,6 +141,7 @@ def test_janus_vision_piecewise(
         image_size=model_args.vision_chunk_size,
         patch_size=model_args.vision_patch_size,
         hidden_dim=model_args.vision_dim,
+        configuration=model_args,
         bias=True,
     )
     with torch.no_grad():

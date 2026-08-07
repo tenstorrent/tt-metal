@@ -75,6 +75,9 @@ class ModelArgs(TTModelArgs):
     # 4 rather than a swept optimum: it must equal the width in tiles of the shard ln_2 hands over,
     # which is what lets c_fc read its in0 in place instead of behind an unshard.
     VISION_C_FC_IN0_BLOCK_W = 4
+    # Unlike the four above, this one is not swept -- it divides the patch's 24 K-tiles and the
+    # projection runs once per image, so the sweep would cost more than it could return.
+    VISION_PATCH_EMBED_IN0_BLOCK_W = 4
 
     # Below this the explicit config was not measured against ttnn's derivation.
     _VISION_MIN_CONFIGURED_CORES = 24
@@ -113,6 +116,21 @@ class ModelArgs(TTModelArgs):
             per_core_N=per_core_N,
             transpose_mcast=False,
             fused_activation=fused_activation,
+        )
+
+    def vision_patch_embed_program_config(self, batch_size, seq_len):
+        """The patch projection, or None to leave the derivation to ttnn.
+
+        Its grid and per-core block come out equal to `vision_norm_shard_configs` for the same
+        shape, so the output is already the shard `ln_1` reads -- no reshard sits between them.
+        K is the folded patch: one kernel window across every input channel.
+        """
+        return self._vision_body_matmul_config(
+            batch_size,
+            seq_len,
+            self.vision_patch_size**2 * self.vision_in_channels,
+            self.vision_dim,
+            self.VISION_PATCH_EMBED_IN0_BLOCK_W,
         )
 
     def vision_qkv_program_config(self, batch_size, seq_len):

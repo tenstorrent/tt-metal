@@ -42,12 +42,18 @@ class TtJanusProConv2dPatch(LightweightModule):
         kernel_size: int,
         stride: int,
         bias,
+        program_config=None,
+        out_memory_config=None,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.out_channels = out_channels
+        # With a config the projection writes the block shard `ln_1` reads, and the bias rides
+        # inside; without one ttnn derives a grid that cannot carry a shard spec.
+        self.program_config = program_config
+        self.out_memory_config = out_memory_config
         self.kernel_size = kernel_size
         self.stride = stride
 
@@ -118,8 +124,19 @@ class TtJanusProConv2dPatch(LightweightModule):
         Does not free ``patches``: on the traced path that tensor is the persistent input
         buffer and has to outlive every replay.
         """
-        # The bias is a separate add. Folding it in was never evaluated here -- unlike the
-        # transformer body, this linear runs once per image, so an op saved is not measurable.
+        if self.program_config is not None:
+            return ttnn.linear(
+                patches,
+                self._linear_weight,
+                bias=self.bias,
+                dtype=self.dtype,
+                memory_config=self.out_memory_config,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.program_config,
+            )
+
+        # The bias is a separate add on this path: without a program config the output cannot be
+        # sharded, and a fused bias buys nothing the add does not already do.
         out = ttnn.linear(
             patches,
             self._linear_weight,

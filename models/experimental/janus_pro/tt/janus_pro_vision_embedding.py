@@ -27,6 +27,7 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         image_size,
         patch_size,
         hidden_dim,
+        configuration=None,
         bias=True,
     ):
         super().__init__()
@@ -41,6 +42,16 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         self.position_ids = ttnn.arange(0, self.num_positions, 1, dtype=ttnn.uint32, device=self.mesh_device)
         self.position_ids = ttnn.reshape(self.position_ids, (1, -1))
 
+        # The projection writes `ln_1`'s block shard directly, so neither the position add below
+        # nor the first block has to reshard. Interleaved instead when the shape has no 2D config,
+        # or when a caller builds this module standalone and passes no configuration.
+        program_config = configuration and configuration.vision_patch_embed_program_config(1, self.num_patches)
+        self.out_memory_config = (
+            configuration.vision_norm_shard_configs(self.num_patches, hidden_dim)[0]
+            if program_config is not None
+            else None
+        )
+
         self.patch_embed = TtJanusProConv2dPatch(
             mesh_device=mesh_device,
             state_dict=state_dict,
@@ -50,6 +61,8 @@ class TtJanusProVisionEmbeddings(LightweightModule):
             kernel_size=patch_size,
             stride=patch_size,
             bias=bias,
+            program_config=program_config,
+            out_memory_config=self.out_memory_config,
         )
 
         # Positional embedding
@@ -66,12 +79,16 @@ class TtJanusProVisionEmbeddings(LightweightModule):
 
         # position_ids is a fixed arange, so the embedding lookup is constant — precompute it once.
         self.positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
+        if self.out_memory_config is not None:
+            # Resharded once here rather than per forward: position ids are a fixed arange, so
+            # this tensor is a constant and the add wants it in the projection's layout.
+            self.positional_embeddings = ttnn.to_memory_config(self.positional_embeddings, self.out_memory_config)
 
     def _add_position(self, patch_embeddings: ttnn.Tensor) -> ttnn.Tensor:
         # patch_embeddings: [1, B, num_patches, hidden_dim]
         batch_size = patch_embeddings.shape[1]
         patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
-        return ttnn.add(patch_embeddings, self.positional_embeddings)
+        return ttnn.add(patch_embeddings, self.positional_embeddings, memory_config=self.out_memory_config)
 
     def forward(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """

@@ -62,6 +62,7 @@ def test_vision_embedding_integration(
         image_size=image_size,
         patch_size=patch_size,
         hidden_dim=hidden_dim,
+        configuration=model_args,
         bias=True,
     )
 
