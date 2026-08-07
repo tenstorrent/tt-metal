@@ -201,6 +201,12 @@ two ops are **47.4 %** of the window on their own (241.506 + 148.461 µs of 822.
 concrete: not a crash, but half a layer the optimizer declines to reason about — while still placing the router
 and tail around it, which is the reason to trace it anyway.
 
+**Applied to gemma-4-26B too, and there no handler was needed.** Its capture called `_DECODER._dense_mlp(...)`
+where `decode_forward` runs a dual tail — dense MLP *and* router *and* routed experts. Restoring the second branch
+(12 lines mirroring `decode_forward`) takes full attention from **58.51 % to 3.86 %** untraced and sliding from
+**64.70 % to 4.17 %**, with two new screenable candidates worth **70.8 µs/model** each. Full table:
+[`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §2.
+
 ### How hard was it, really
 
 **Easy, and for reasons that will not generalise evenly.** What made it a transcription rather than a design task:

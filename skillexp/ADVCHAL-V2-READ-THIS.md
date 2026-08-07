@@ -39,7 +39,7 @@ answers come out differently.
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. |
 | **What is the single biggest miss?** | The **screening order**. It builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
 | **Did it follow the advice?** | **7 of 15 cells tried the advisor's exact value on at least one advised item** — 6 as their first candidate — and all 7 ended cleanly, shipping it or measuring a regression against it. **4 never tried it and recorded no reason. None applied the whole advised plan.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly not the advisor's. Only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **3 are coverage gaps** — the tracer cannot reach those layers, so the advisor never saw them and this stage produced no verdict either way. The rest are asserted or partial — graded in §2 below. |
+| **Are the zeros failures?** | Mostly not the advisor's. Only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **3 are coverage gaps** — all three now fixed at the tracer, see [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) — the tracer cannot reach those layers, so the advisor never saw them and this stage produced no verdict either way. The rest are asserted or partial — graded in §2 below. |
 | **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds. The ledger is §3. |
 
 ### 1b. Is `ttnn-advise` a promising thing to build a stage on?
@@ -213,11 +213,13 @@ ladder beat.
 | opportunity | scale | whose |
 |---|---|---|
 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 % of its decode time**, 14× every shipped win combined | the decoder's shape choice — a 4-element conv window on the 32-wide tile axis |
-| qwen's untraced token mixer | the kind is **97 %** of decode time; **≈62 %** of the model is in ops the tracer cannot capture (`ttnn.copy`, `softplus`, `recurrent_state_update`) | tt-mlir `ttnn-jit` tracer coverage |
-| ~~`ttnn.sparse_matmul` tracer support~~ | **done** — 42 lines in `ttnn-jit`; north-mini onA's `untraced` 77.15 % → 14.39 %, ceiling 0.66× → 10.09× floor. Still open for gemma-4-26B (58–65 % of its window) | tt-mlir `ttnn-jit`, not tt-metal |
+| qwen's untraced token mixer | the kind is **97 %** of decode time and **≈62 %** of the model. **The tracer gap is closed** — 4 fixes (`ttnn.copy`, `softplus`, `TracedTensor.__getitem__`, `repeat_interleave`) and the full 71-op mixer traces. A pipeline crash now blocks it instead, unattributed | was `ttnn-jit`; now needs a debug build |
+| ~~`ttnn.sparse_matmul` tracer support~~ | **done, 4 cell/kinds** — 42 lines in `ttnn-jit`. north-mini onA 77.15 % → 14.39 % untraced (ceiling 0.66× → 10.09× floor), gemma-4-26B onA 58.5 % → 3.9 % and 64.7 % → 4.2 %. **4 new candidates ≈200 µs/model** | tt-mlir `ttnn-jit`, not tt-metal |
 | sharded GQA SDPA output | blocks two cells' top candidate *and* a 2.6 ms/model wrong-op fix | tt-metal kernel |
 
-Itemised with evidence: [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §8. What to change:
+Every one of these audited for whether it is real and what fixing it costs — with four of them fixed and
+re-measured: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). Itemised with evidence:
+[`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §8. What to change:
 [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).
 
 ---

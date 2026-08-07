@@ -652,7 +652,36 @@ explicit handlers **plus** the 54-op `supported_ops.py` allowlist it reaches via
   fallback in `--help`.
 - **neither has 2:** `paged_fused_update_cache`, `ones_like` — the only genuinely new shape logic needed.
 
-**Evidence:** [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The port, and what it bought".
+**Applied to four cell/kinds, all measured against the cell's own window with a verified control:**
+
+| cell / kind | untraced | ceiling vs floor | resolvable |
+|---|---|---|---|
+| north-mini onA, full MoE | 77.15 % → **14.39 %** | 0.66× → **10.09×** | 0 → **2** |
+| north-mini onA, sliding MoE | 76.62 % → **15.47 %** | 0.12× → 0.67× | 0 → 0 |
+| gemma-4-26B onA, full | 58.51 % → **3.86 %** | 1.70× → 3.29× | 0 → 0 |
+| gemma-4-26B onA, sliding | 64.70 % → **4.17 %** | 4.08× → **13.74×** | 2 → **4** |
+
+gemma needed no new handler — only its capture stopped substituting `_dense_mlp` for the routed path.
+
+**Evidence:** [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) — every blocker in the corpus, classed and where
+cheap, fixed. Also [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The port, and what it bought".
+
+## D7b. Close the remaining tracer gaps — 4 done, 5 cheap ones left ⭐⭐
+
+**Done and traced:** `ttnn.copy` (identity alias — no dialect op exists or is needed), `ttnn.softplus`
+(decomposed to `log(exp(x)+1)`; the dialect has no standalone op, only a `UnaryOpType` enum case for matmul fused
+activations), **`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :n]` killed qwen's trace with
+`'TracedTensor' object is not subscriptable`), and `ttnn.repeat_interleave`.
+
+**Left, all cheap:** `paged_fused_update_cache` is literally two `paged_update_cache` calls and both the dialect
+op and its handler exist; `ones_like` → `ttnn.ones` at the input shape (done, oracle-tested, unused so far);
+`pow`/`pow_tensor` have `TTNN_PowTensorOp`/`TTNN_PowScalarOp`; `rearrange` decomposes to `permute` + `reshape`;
+`rotary_embedding_hf` needs porting *into* the interception tracer or the `--help` fallback claim needs dropping.
+
+**And one label to delete: `ttnn.recurrent_state_update` does not exist.** It appears in two of the cell's own
+artefacts and nowhere else — not in TTNN, not in `ttnn`, not in the model. The state write is a `ttnn.copy`
+(`optimized_decoder.py:1274`). A `uncapturable.ops` entry should be validated against `getattr(ttnn, name)` before
+it is written.
 
 ## D7a. A missing-op autofix skill is feasible, because the verifier is a spec and the oracle is cheap ⭐⭐
 
