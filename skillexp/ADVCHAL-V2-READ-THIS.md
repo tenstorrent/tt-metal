@@ -924,6 +924,19 @@ the matmul item gets dropped *with a measurement behind the decision* — which 
 
 ---
 
+**Methodology note on §3.27–§3.28.** Those measurements apply each cell's *committed* advice — captured once
+against the frozen incumbent — to a decoder I had progressively modified. I re-ran `ttnn-advise` on the diverged
+graphs to check whether that invalidates them: **the advice is byte-identical across all four graphs**, because
+the advisor discards the input's memory configs and re-places everything, so it responds to graph *topology* and
+not to the memory-config changes I made. My control run also reproduces the cell's committed advice exactly, so
+the advisor is deterministic at pin `618cd4e75d`. **`ttnn-advise` costs ~18 s end to end** (18.4/18.4/18.1/18.6 s
+measured) — less than one harness measurement, so there is no cost argument for screening against a single
+start-of-run capture. Separately: the capture **monkey-patches `_decode_rope`** with a DRAM-staging stand-in,
+so the advisor never sees the cell's real RoPE. Full accounting in
+[`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §12, and it is action **F6**.
+
+---
+
 ## 4. What makes a model advisor-compatible
 
 Ranked by how much it actually decided outcomes.

@@ -793,6 +793,10 @@ phi FN is the measured counterfactual.
 5. ablate one advised item at a time. an item whose REMOVAL is faster is a finding about the advisor;
    an item that changes nothing gets dropped with a measurement behind the decision
 6. build up from the incumbent only for what apply_all could not reach
+7. re-advise after any change that adds, removes or reorders ops. **`ttnn-advise` costs ~18 s end to end**
+   (measured 4x: 18.4 / 18.4 / 18.1 / 18.6 s, device open + capture + trace + pipeline + artefacts), which is
+   less than one harness measurement. Pure memory-config changes leave the advice byte-identical -- the advisor
+   discards input memory configs and re-places everything -- but that is a property of the change, not a rule
 ```
 
 **Why it is strictly better, not just different:**
@@ -808,6 +812,35 @@ phi FN is the measured counterfactual.
   the same order of magnitude.
 
 - **Evidence:** [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7–§9.
+
+### F6. Re-advise between applied changes — it costs ~18 s ⭐
+
+**Measured.** `ttnn-advise` end to end — device open, the cell's capture script, the trace, the full pipeline,
+artefact write — took **18.4 s / 18.4 s / 18.1 s / 18.6 s** on four runs. The cells' own
+`shard_advise/*/pipeline.log` brackets the pipeline portion at **~14 s**. **A single harness measurement (≥10
+warm-ups + 5 blocks of ≥50 traced replays) costs more than that**; the cells' measurement timestamps sit 15–60 s
+apart.
+
+**So there is no cost argument for working from one capture.** The stage captures once, at the start, and every
+candidate afterwards is screened against advice for a graph that no longer exists.
+
+**When it actually matters:** the advisor **discards the input's memory configs and re-places everything**, so it
+responds to *topology* — ops added, removed, reordered — and is blind to memory-config and program-config
+changes. I verified this: applying the advised rope, then the advised 11-core norm, then the advised `gate_up`
+DS matmul, and re-advising after each, gives **byte-identical advice all four times** (`ops[]`, `unfixable_ops`,
+`total_ops`, `final_choices`). A change that alters topology — a fused RoPE kernel, a different concat-heads op,
+removing a conversion — would not be invariant, and there the stale advice is genuinely wrong.
+
+**Recommendation:** re-advise after any topology-changing step, and record the capture's provenance per
+candidate. At 18 s it is cheaper than being wrong.
+
+**Related, and worth fixing:** the capture template **monkey-patches `_decode_rope`** with a hand-written
+DRAM-staging stand-in — *"the direct advisor tracer cannot query a symbolic tensor's runtime memory_config()"*.
+So the advisor never sees the cell's real RoPE, and a rope-side change cannot reach the capture at all. The
+advice for that region is advice for a substitute method. Worth either fixing the tracer limitation or recording
+the substitution in `report.json` so a reader knows which regions of the advice are second-hand.
+
+- **Evidence:** [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §12.
 
 ### F1. Hold the incumbent constant when comparing arms
 

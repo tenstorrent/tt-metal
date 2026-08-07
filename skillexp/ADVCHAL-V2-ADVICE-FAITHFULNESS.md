@@ -11,6 +11,16 @@ tried, was it tried first, and is every deviation proved?
 
 ---
 
+> **Read §12 before quoting the numbers in §7, §10 or §11.** Those measurements apply each cell's *committed*
+> advice — captured once against the frozen incumbent — to a decoder I had already modified. I then re-ran
+> `ttnn-advise` on the diverged graphs to check whether that mattered: **the advice is byte-identical across all
+> four graphs**, because the advisor discards input memory configs and re-places everything, so it responds to
+> topology and not to the memory-config changes I made. The replay is therefore equivalent to fresh advice *for
+> these changes*. §12 also records that re-advising costs **~18 s**, and that the capture does not trace the
+> cell's real RoPE.
+
+---
+
 ## 1. First: the advised core count was misreported to every cell
 
 Before any cell can be judged on faithfulness, the advice it was *shown* has to be established.
@@ -323,6 +333,9 @@ same harness — apply-all gives 3.7× what building up gave.
 5. ablate: remove one advised item at a time. an item whose removal makes it FASTER is a real finding
    about the advisor; an item that changes nothing gets dropped with a measurement behind it (§10)
 6. build up from the incumbent only for what apply_all could not reach
+7. after any change that adds, removes or reorders ops, RE-ADVISE -- it costs ~18 s, less than the
+   measurement you are about to take. Pure memory-config changes leave the advice identical (§12), but
+   you cannot know which kind you made without checking
 ```
 
 This inverts the failure mode. Today a cell that does nothing lands at "no_change" and passes its gate; under
@@ -463,3 +476,93 @@ hit the same wall independently.
 
 → new action **C5g**. And it revises the premise of the `dram_resident` bucket: for an unfixable op, "the
 advisor placed it in DRAM" is not a disagreement to screen.
+
+---
+
+## 12. Methodology: I replayed stale advice — and then checked whether that mattered
+
+**What §7–§11 actually did, stated plainly.** I took each cell's **committed** advice — `report.json` and
+`final_ir.mlir`, captured once against the frozen incumbent — and applied it to a decoder I had already
+modified. By the time I measured `rope advised + norm 11 + gate_up`, the graph had three of my changes on it and
+the advice was still the one computed for the untouched incumbent. **That is not the same as re-running the
+advisor per configuration and using fresh advice**, and on its own it makes those numbers estimates rather than
+results.
+
+**So I re-ran the advisor.** Four `ttnn-advise` runs on the diverged graphs, using a copy of the cell's own
+capture script extended to construct the decoder with the knobs applied:
+
+| graph captured | advice identical to the incumbent's? | wall clock |
+|---|---|---|
+| the frozen incumbent (control) | — | **18.4 s** |
+| after the advised rope | **yes, byte-identical** | **18.4 s** |
+| after the advised rope + the advised 11-core norm | **yes, byte-identical** | **18.1 s** |
+| after rope + norm + the advised `gate_up` matmul | **yes, byte-identical** | **18.6 s** |
+
+Compared field by field: `ops[]` (35 entries, op and layout), `unfixable_ops`, `total_ops` (39),
+`final_choices` (36) — all identical across all four.
+
+**Why it comes out identical, and this is the part that generalises:** the advisor **discards the input's memory
+configs and re-places everything from scratch**. It is sensitive to graph *topology* — ops added, removed or
+reordered — and blind to the memory configs and program configs it is handed. **Every change I made was a
+memory-config or program-config change**, so the topology it traced was the same graph each time, and it
+returned the same plan. **The replay was therefore equivalent to fresh advice for these particular changes.**
+
+That is a property of *these* changes, not a general licence. A change that adds or removes ops — a fused RoPE
+kernel, a different concat-heads op, dropping a conversion — **would** change the topology, and the replayed
+advice would then be stale in a way that matters.
+
+### Cross-check: the advisor is deterministic and my environment matches the cell's
+
+My control run reproduces the cell's committed advice **exactly** — `ops[]` and `unfixable_ops` identical,
+`total_ops` 39, `final_choices` 36. The only difference in `final_ir.mlir` is the `#system_desc` header: my run
+enumerated 1 device, the cell's enumerated 4. No placement differs. So the advisor is deterministic at pin
+`618cd4e75d`, and nothing in these numbers is an environment artefact.
+
+### How fast is `ttnn-advise`? ~18 seconds, end to end
+
+Four measured runs: **18.4 s, 18.4 s, 18.1 s, 18.6 s** wall clock, each covering device open, the capture
+script, the trace, the full pipeline and artefact write. The cell's own `shard_advise/dense/pipeline.log`
+brackets the pipeline portion at **~14 s** (06:50:16 → 06:50:29).
+
+**That is cheaper than a single harness measurement.** One measurement is ≥10 warm-up replays plus 5 timed
+blocks of ≥50 traced replays, and the cells' own logs show them 15–60 s apart. **So there is no cost argument
+for replaying stale advice**: re-advising after each applied change costs less than the measurement you are
+about to take. That belongs in the F5 loop — not because the advice usually changes (here it never did), but
+because you cannot know that without checking, and checking is nearly free.
+
+### A provenance limit found while doing this: the capture does not trace the cell's RoPE
+
+The capture template **monkey-patches `_decode_rope`** before tracing:
+
+```python
+def capture_decode_rope(self, query, key, current_positions, *, use_long_rope):
+    ...
+    query = self._apply_rope(ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG), cos, sin)
+    key   = self._apply_rope(ttnn.to_memory_config(key,   ttnn.DRAM_MEMORY_CONFIG), cos, sin)
+    return (ttnn.to_memory_config(query, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG),
+            ttnn.to_memory_config(key,   ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG))
+_DECODER._decode_rope = MethodType(capture_decode_rope, _DECODER)
+```
+
+with the stated reason: *"The direct advisor tracer cannot query a symbolic tensor's runtime
+memory_config()."* So **the advisor never sees the cell's real RoPE implementation — it sees a hand-written
+stand-in that always stages through DRAM.**
+
+Two consequences, both worth knowing:
+
+1. The rope advice is advice **for the stand-in**. It happens to have the incumbent's shape, so it is the right
+   advice for the cell's starting point — and §7 shows it is a good plan. But its provenance is a substitute
+   method, not the shipped code.
+2. **A rope-side change can never reach the capture**, so re-advising after one is a no-op *by construction*,
+   independently of the topology-invariance above. My rows 2–4 in the table are unaffected for the norm and
+   matmul changes; for the rope change the identity is guaranteed rather than measured.
+
+### What is still an estimate
+
+- The **timings** in §7 and §10 are measurements of those configurations, not estimates.
+- What is **not** established: whether an advisor that priced latency (D1), or one that saw a
+  topology-changed graph, would advise differently. And I did not sweep the *order* in which items are stacked.
+- The **per-cell §9 table** is analysis from artefacts, not measurement, for every cell except phi FN.
+
+**Artefacts:** `~/skillexp-logs/exp-readvise/` — four `report.json`/`final_ir.mlir` pairs with logs, and
+`capture_diverged.py`, the capture variant that constructs the decoder with the knobs applied.
