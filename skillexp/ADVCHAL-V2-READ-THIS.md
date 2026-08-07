@@ -69,7 +69,9 @@ each side:
 - Its per-op hit rate over the 118 measured rows is **49 %** — though that population is dominated by boundary
   candidates and structurally excludes the direction it gets right, so it understates the advisor. *(§3.14)*
 - **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside
-  it — **≈62 % of one model's decode time** sits in ops its tracer cannot capture. *(§3.5)*
+  it — **≈62 % of one model's decode time** sat in ops its tracer could not capture. Every real gap is now fixed
+  in `ttnn-jit`, and re-capturing eight cell/kinds surfaces **17 candidates the corpus never counted**. *(§3.5,
+  [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md))*
 - The corpus's **largest single cost**, 191 ms/model, is a graph-shape choice **no layout advisor could reach**.
   *(§3.18–3.19)*
 
@@ -135,7 +137,7 @@ different weight. Only one of the seven is verified by measurement:
 | llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
 | phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
 | qwen3.6-27B B | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stops inside it — **63.5 % of that layer is `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect |
-| north-mini onA | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one (42 lines, no rebuild) takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the screening ceiling from 0.66× the noise floor to **10.09×** — **two candidates worth ~62 µs/model** that did not exist before. §3.5 |
+| north-mini onA | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the ceiling from 0.66× the noise floor to **10.09×** — **2 candidates worth 61.9 µs/model** that did not exist before. §3.5 |
 | north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
 | qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
 
@@ -188,7 +190,7 @@ biggest wins. gemma-4-12B is the extreme case: **52 measurements without ever ap
 
 ### Neither — outside any layout advisor's reach
 
-The corpus's **largest** numbers are in neither column: `retilize` at 191 ms/model, the ≈62 % of qwen that its tracer cannot capture,
+The corpus's **largest** numbers are in neither column: `retilize` at 191 ms/model, the ≈62 % of qwen its tracer could not capture at the pin,
 `sparse_matmul` coverage, and the sharded-GQA kernel gap. They are itemised in §4, and they belong to the decoder
 and to tt-metal — a layout advisor could not reach any of them.
 
@@ -214,7 +216,7 @@ ladder beat.
 |---|---|---|
 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 % of its decode time**, 14× every shipped win combined | the decoder's shape choice — a 4-element conv window on the 32-wide tile axis |
 | qwen's untraced token mixer | the kind is **97 %** of decode time and **≈62 %** of the model. **The tracer gap is closed** — 4 fixes (`ttnn.copy`, `softplus`, `TracedTensor.__getitem__`, `repeat_interleave`) and the full 71-op mixer traces. A pipeline crash now blocks it instead, unattributed | was `ttnn-jit`; now needs a debug build |
-| ~~tracer coverage gaps~~ | **all five real ones fixed** — 218 lines in `ttnn-jit`, no rebuild. 8 cell/kinds went from 58–77 % untraced to 4–21 %. **17 new candidates**, the largest being north-mini B's 11 worth **632 µs/model** | tt-mlir `ttnn-jit`, not tt-metal |
+| ~~tracer coverage gaps~~ | **all five real ones fixed** — 218 lines in `ttnn-jit`, no rebuild, on [`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps). 8 cell/kinds went from 58–77 % untraced to 4–21 %. **17 new candidates**, the largest being north-mini B's 11 worth **632 µs/model** | tt-mlir `ttnn-jit`, not tt-metal |
 | sharded GQA SDPA output | blocks two cells' top candidate *and* a 2.6 ms/model wrong-op fix | tt-metal kernel |
 
 Every one of these audited for whether it is real and what fixing it costs — with four of them fixed and

@@ -9,6 +9,9 @@ Two real blockers were never named at all. Every real one is now fixed — 218 l
 tracers, no rebuild — and coverage on eight cell/kinds went from 58–77 % untraced to 4–21 %. One cell that
 published a flat zero now has **11 screenable candidates worth 632 µs/model**.
 
+**The code is on a tt-mlir branch:** [`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps) — one commit,
+`756e134a1b`, based on the corpus's own advisor pin `618cd4e75d`. Two files, 218 insertions, pure Python, no rebuild.
+
 Method: re-capture each cell with the handler added, then re-run `reconcile.py` against **the cell's own profile
 window and incumbent**, with the shipped report re-run through the identical command as a verified control. Where
 the control did not reproduce the cell's published numbers, the comparison is not shown.
@@ -260,6 +263,11 @@ that is how a capture starts lying.
   still cannot screen, because their harness noise floor exceeds the ceiling. That is a different defect, already
   filed as STG-5 / I5.
 
-**Artefacts:** `ttnn-jit-tracer-gap-handlers.patch` (both tracers, 176 insertions, no rebuild),
-`advchal-v2-nm-sparse-ported-{report,reconciliation}.json`. The tracer changes are **not** committed to tt-mlir —
-they are working-tree edits plus a live copy in the container venv, with `.orig-618cd4e` backups beside each.
+**Artefacts.** The tracer work is committed and pushed:
+[`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps) @ `756e134a1b`, from `618cd4e75d`.
+`ttnn-jit-tracer-gap-handlers.patch` in this directory is the same diff. Reconciliations:
+`advchal-v2-nm-sparse-ported-*`, `advchal-v2-nm-B-{full,sliding}-moe-*`, `advchal-v2-gemma26-{full,sliding}-moe-*`.
+
+**What is not in the branch:** the capture-script edits that let each cell reach its own MoE tail. Those are
+per-cell (gemma's dual MLP tail, north-mini B's and FN's truncated returns, qwen's token mixer) and belong with the
+cells, not with `ttnn-jit`. Each is described where it is measured, above.

@@ -71,9 +71,12 @@ be a stopping condition on its own.
 
 ## I4a. Coverage beats placement
 
-Every structural zero in this corpus is a tracer-coverage zero, and the biggest one hides **97 %** of a
-model's decode time behind a single unhandled op. Placement work on the visible 3 % cannot compete with making
-the ≈62 % of it that the tracer cannot capture visible. Coverage is the highest-leverage investment available.
+Every structural zero in this corpus is a tracer-coverage zero. Placement work on the visible remainder cannot
+compete with making the invisible part visible, and the corpus proves it twice over: qwen's `linear_attention`
+kind is **97 %** of its model decode time with ≈62 % of the model behind unhandled ops, and north-mini B — which
+published a flat zero — gained **11 screenable candidates worth 632 µs/model** from two handlers, more than every
+shipped win in the corpus combined. Coverage is the highest-leverage investment available, and it is cheap: all
+five real gaps closed in 218 lines of Python with no rebuild ([tt-mlir branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps)).
 
 ## I5. A per-process protocol cannot control a cross-process effect
 
@@ -616,7 +619,10 @@ applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
 
-## D7. `ttnn-jit` — port `sparse_matmul` into the direct-TTNN tracer ⭐⭐⭐ done and measured; 42 lines, no rebuild
+## D7. `ttnn-jit` — close the direct-TTNN tracer's coverage gaps ⭐⭐⭐ done, measured, and pushed
+
+**Shipped as [`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps) @ `756e134a1b`**, one commit from the
+corpus's own advisor pin `618cd4e75d`. Two files, 218 insertions, pure Python, no rebuild.
 
 Not the optimizer — `tt-mlir/tools/ttnn-jit/_src/ttnn_emit_tracer.py`. **One missing handler cost north-mini's
 sparse-MoE cell 63 points of coverage and both of its screenable candidates.**
@@ -851,7 +857,7 @@ each, so it is a known gap. With them added the category split is usable directl
 
 **Everything else tt-metal-side is a recommendation only, not expected to ship:** tiled-input variants of the
 conv/recurrent composites; sharded output for GQA SDPA (gates two cells' top candidate *and* the
-`concatenate_heads` fix); `ttnn.sparse_matmul` and mutable-state `ttnn.copy` tracer support.
+`concatenate_heads` fix). `ttnn.sparse_matmul` and mutable-state `ttnn.copy` tracer support are **done** — they were `ttnn-jit`, not tt-metal (https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps).
 
 ## F. Experiment design (for the next corpus)
 

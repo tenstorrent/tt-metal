@@ -162,13 +162,18 @@ interception tracer:
 |---|---|---|
 | **interception reaches, emit did not** | 4 | **`sparse_matmul`**, and `pow` / `pow_tensor` / `rearrange` (allowlisted, so `_unhandled` stubs) |
 | **emit reaches, interception does not** | 9 | `arange`, `fill_cache`, `logical_and`, `mul`, `pad`, `rotary_embedding`, **`rotary_embedding_hf`**, `scaled_dot_product_attention_decode`, `zeros` |
-| **neither** | 2 | `paged_fused_update_cache`, `ones_like` |
+| **neither** | 2 | `paged_fused_update_cache`, `ones_like` — **both since handled**; the fused op is literally `(cache1, in1, cache2, in2, …)`, so it emits two `paged_update_cache` ops |
 
 So for north-mini's sparse-MoE decode, **`sparse_matmul` was the only missing piece** — router (`topk`, `scatter`,
 `zeros_like`, `sigmoid`), experts, and the MoE tail were all already covered by the emit tracer. And the
 documented fallback fails for a narrower reason than a coverage deficit: `--tracer interception` is offered "for
 ops not yet handled by the direct-TTNN tracer", but `rotary_embedding_hf` is neither allowlisted nor hand-written
-there, so it dies on RoPE before reaching the sparse tail. One missing handler each way.
+there, so it dies on RoPE before reaching the sparse tail.
+
+**And that one cannot be fixed by porting.** TTIR has only `rotary_embedding_llama`, which requires a `trans_mat`
+operand the HF op has no equivalent for; fabricating one would inject a tensor the advisor then places. So the
+interception tracer cannot serve as the fallback for any HF-RoPE decoder, and the honest fix is to narrow the
+`--help` claim rather than honour it.
 
 ### The port, and what it bought
 

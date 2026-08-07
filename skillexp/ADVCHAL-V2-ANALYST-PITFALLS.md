@@ -30,7 +30,7 @@ the artefact when the artefact is one file away.
 
 | I claimed | what was true | how it was caught |
 |---|---|---|
-| The capture template's *"`ttnn.sparse_matmul` is terminal in the tracer"* must be stale, since a `sparse_matmul` handler exists at `interception_tracer.py:546` and its `patch_ttnn` installs it | **There are two tracers in `ttnn-jit` and I read the wrong one.** `shard_advisor.py:191` uses `ttnn_emit_tracer.trace_ttnn`, which has no `sparse_matmul` coverage. The template was **correct** | Re-running the capture and reading the *traceback frames*, which name the tracer actually in use |
+| The capture template's *"`ttnn.sparse_matmul` is terminal in the tracer"* must be stale, since a `sparse_matmul` handler exists at `interception_tracer.py:546` and its `patch_ttnn` installs it | **There are two tracers in `ttnn-jit` and I read the wrong one.** `shard_advisor.py:191` uses `ttnn_emit_tracer.trace_ttnn`, which has no `sparse_matmul` coverage. The template was **correct** *(and the gap has since been closed — the port was one handler)* | Re-running the capture and reading the *traceback frames*, which name the tracer actually in use |
 
 **The check:** when a component has two implementations of the same role, find out which one runs before
 concluding anything from reading either. A traceback names it in one line; source-reading does not.
@@ -164,7 +164,7 @@ Being explicit, so nobody inherits these as facts.
 | "What applying everything would have meant" for 14 of the 15 cells | **Analysis from artefacts, not measurement.** Only phi FN was measured |
 | Whether the remaining unapplied advised items (qkv `linear`, `o_proj`, MLP `multiply`, cos/sin embeddings) change phi FN's total | **Expectation, not measurement** — the one matmul I did apply was neutral, so I expect little, and say so |
 | Whether the advisor would advise differently with a latency term, or on a topology-changed graph | Untested |
-| north-mini onA's sparse MoE tail | Untraceable, so never advised on — its headroom is unknown, not zero |
+| ~~north-mini onA's sparse MoE tail~~ | **SETTLED.** Traceable since `sparse_matmul` got a handler: `untraced` 77.15 % → 14.39 %, two candidates worth 61.9 µs/model. [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) |
 | qwen FN's `linear_attention` kind | Declared tracer-unreachable, so no reconciliation exists. It very likely carries the same ~191 ms/model `retilize` cost qwen B does, **unmeasured** |
 
 ---

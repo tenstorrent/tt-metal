@@ -151,9 +151,13 @@ before tracing, six never trace the model's own `decode_forward`. That is its ow
 [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md).
 
 **What "the tracer" is.** `ttnn-advise` builds its graph by tracing the model's Python `decode` function. That
-trace is the *capture* step, and the graph it produces is the only thing the advisor ever sees. Certain ops are
-**terminal** in it — `ttnn.copy` on mutable state, `ttnn.sparse_matmul`, `softplus`, `recurrent_state_update`.
-When the trace reaches one it stops there, and everything downstream is absent from the graph.
+trace is the *capture* step, and the graph it produces is the only thing the advisor ever sees. When the trace
+reaches an op with no handler it stops there, and everything downstream is absent from the graph.
+
+At the pin, the ops that stopped this corpus were `ttnn.sparse_matmul`, `paged_fused_update_cache`,
+`ttnn.ones_like`, `ttnn.copy` and `ttnn.softplus` — **all five since handled**
+([tt-mlir branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps)). `ttnn.recurrent_state_update`, which two cells also named, **does not exist**; the state
+write is a `ttnn.copy`. Full accounting: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md).
 
 **"The advisor never saw it" means the ops are missing from its IR, not that the reconciliation failed to match
 them.** Checked directly on qwen B's `linear_attention`, which is the worst case in the corpus. Its
@@ -185,7 +189,8 @@ other 56 `untraced` rows are ops that ran and are simply not in the IR:
 
 **Two matmuls worth 3.4 ms are among them** — real compute, not bookkeeping. `report.json` declares the cause in
 its own `uncapturable` field: `ttnn.copy`, `softplus`, `recurrent_state_update`, scoped as *"stateful gated-delta
-token mixer; the surrounding shipped residual/norm/MLP envelope is captured"*.
+token mixer; the surrounding shipped residual/norm/MLP envelope is captured"*. Two of those three are real and
+now handled; the third does not exist. Handling them was not sufficient — see the end of this section.
 
 *(A caveat the tool states itself: `untraced` normally "conflates 'terminal in the tracer' with 'ran but the
 advisor never placed it'", so an untraced row is not by itself proof of absence. Here it was checked against the
@@ -272,7 +277,8 @@ kinds carry **no MLP placement advice at all**, where gemma's do. Its untraced s
 partly a consequence of that choice rather than of the terminal.
 
 **What this says about the stage, not the cell:** four cells hitting one documented terminal produced four
-different capture scopes, and nothing in the skill or the gate compares them. The recipe belongs in the skill,
+different capture scopes — from 37 ops down to north-mini FN's, which returned `query` and stopped before
+attention — and nothing in the skill or the gate compares them. The recipe belongs in the skill,
 and the reconciliation should record *how much of the layer the capture even attempted* so that a 14-op capture
 and a 30-op capture of the same op count are not read as the same evidence.
 
@@ -286,10 +292,19 @@ and a 30-op capture of the same op count are not read as the same evidence.
 Every structural zero in the corpus is a tracer-coverage zero. qwen's linear layers cost ~13× a full layer,
 and that kind is **97 % of its model decode time**. But the trace stops *inside* the layer, not before it: of
 qwen B's 15,833 µs `linear_attention` window, **63.5 % is `untraced`** (the gated-delta token mixer — `ttnn.copy`,
-`softplus`, `recurrent_state_update`), while the surrounding residual/norm/MLP envelope **is** captured —
+`softplus`, and a `recurrent_state_update` that turns out not to exist), while the surrounding residual/norm/MLP
+envelope **is** captured —
 boundary 30.9 %, disagreements 2.7 %, agreement 2.9 %. So the advisor saw about **36 %** of it, and **≈62 % of
-qwen B's model decode time sits in ops the tracer could not capture**. **This is a `$shard-advise`/tt-mlir
-coverage problem, not a placement problem.**
+qwen B's model decode time sat in ops the tracer could not capture at the pin**. **This is a
+`$shard-advise`/`ttnn-jit` coverage problem, not a placement problem.**
+
+**Since resolved at the tracer, and the failure moved.** Four gaps, not three: `ttnn.copy` (identity alias — no
+dialect op exists or is needed), `ttnn.softplus` (no standalone dialect op, so `log(exp(x)+1)`),
+**`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :key_width]` killed the trace) and
+`ttnn.repeat_interleave`. With all four the full **71-op** mixer traces. What blocks qwen now is a native abort
+inside `mlir::PassManager::run`, which is **not** a coverage gap and is not yet attributed — the traced module
+verifies and `ttmlir-opt --ttnn-to-ttnn-l1-advisor` accepts it. So read the ≈62 % as *reachable, pending one
+pipeline crash*, not as unreachable. [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5.
 
 **And one of them was a single missing handler.** `ttnn.sparse_matmul` was the only op on north-mini's sparse-MoE
 decode path that the direct-TTNN tracer could not emit — router (`topk`, `scatter`, `zeros_like`, `sigmoid`),
@@ -349,7 +364,7 @@ strictly more, and the op is ≥2 % of the layer window**:
 | gemma-4-26B onA | `rms_norm` 1→88c, 44.7 µs, 2.5 % | shipped −12.98 %/layer |
 | **gemma-4-26B B** | `rms_norm` 1→88c, 44.5 µs, 3.7 % | **never screened — a −12.44 %/layer win was there** |
 | north-mini FN | `rms_norm` 1→22c, 26.1 µs, 5.0 % | shipped −10.37 %/layer |
-| north-mini onA | `rms_norm` 1→22c, 26.1 µs, 3.2 % | could not screen (untraceable) |
+| north-mini onA | `rms_norm` 1→22c, 26.1 µs, 3.2 % | could not screen at the pin; the MoE tail is traceable now |
 | phi-3.5 FN | `rms_norm` 1→11c, 44.5 µs, 6.1 % | measured −13.4 %, discarded on the oracle |
 | *the other 9 cells* | *none* | **no double-digit layer win in any of them** |
 
@@ -1177,8 +1192,8 @@ gives 0.807535 → 0.663507 ms/layer × 32 layers (§3.27). The corpus total mov
 | # | opportunity | scale | kind of fix |
 |---|---|---|---|
 | 1 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 %** | **decoder**: get the 4-element conv window off the 32-wide tile axis (circular buffer) — §3.19 |
-| 2 | qwen's untraced linear attention | the kind is **97 %** of decode time; **≈62 %** of the model is in ops the tracer cannot capture | tt-metal: tracer support for mutable-state `ttnn.copy` |
-| 3 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
+| 2 | qwen's untraced linear attention | the kind is **97 %** of decode time; **≈62 %** of the model was in ops the tracer could not capture. **Tracer side fixed**; a pipeline abort blocks it now | tt-mlir `ttnn-jit` (done), then attribute the abort |
+| 3 | ~~`ttnn.sparse_matmul` tracer support~~ | **done** — unblocked north-mini onA *and* B, and gemma-4-26B's 58–65 % windows. 8 cell/kinds re-captured, 17 new candidates | tt-mlir `ttnn-jit`, **not** tt-metal |
 | 4 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model, 3.9× what that cell shipped | tt-metal (sharded GQA SDPA output) then a decoder change |
 | 5 | phi FN's discarded combined candidate | **+8.5 pp** on that cell | stage: absolute oracle at the model's own bar |
 | 6 | **screen the advisor's plan as candidate #1, then ablate** | **3.7× on the one cell measured** (§3.27) | stage: F5 |
