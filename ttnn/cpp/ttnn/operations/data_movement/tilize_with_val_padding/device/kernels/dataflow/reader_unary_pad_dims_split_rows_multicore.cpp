@@ -40,9 +40,14 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_blocks; i++) {
             dfb_in0.reserve_back(num_tiles_per_row);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-            // pad the tile by reading values from zero buffer in L1
-            dataflow_kernel_lib::fill_l1_range<elem_size>(
-                l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
+            const uint32_t pad_bytes = padded_X_size << 5;  // "<< 5" = "* tile_height"
+            if (pad_value == 0) {
+                // Fast path: zero-fill via NOC read from the zero source instead of scalar stores.
+                noc.async_write_zeros(dfb_in0, pad_bytes);
+                noc.write_zeros_l1_barrier();
+            } else {
+                dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, pad_bytes, pad_value);
+            }
             dfb_in0.push_back(num_tiles_per_row);
         }
     };
@@ -53,6 +58,7 @@ void kernel_main() {
 
         dfb_in0.reserve_back(num_tiles_per_row * has_rows);
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+        const uint32_t entry_base = l1_write_addr;
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
@@ -74,12 +80,21 @@ void kernel_main() {
                 {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
                 {.offset_bytes = 0});
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-            dataflow_kernel_lib::fill_l1_range<elem_size>(
-                start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+            const uint32_t col_pad_addr = start_of_row_l1_write_addr + unpadded_X_size;
+            if (pad_value == 0) {
+                noc.async_write_zeros(dfb_in0, size_of_padding_columns, {.offset_bytes = col_pad_addr - entry_base});
+            } else {
+                dataflow_kernel_lib::fill_l1_range<elem_size>(col_pad_addr, size_of_padding_columns, pad_value);
+            }
             l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
         }
 
-        dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+        const uint32_t row_pad_bytes = padding_rows * padded_X_size;
+        if (pad_value == 0) {
+            noc.async_write_zeros(dfb_in0, row_pad_bytes, {.offset_bytes = l1_write_addr - entry_base});
+        } else {
+            dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, row_pad_bytes, pad_value);
+        }
         noc.async_read_barrier();
         dfb_in0.push_back(num_tiles_per_row * has_rows);
     };

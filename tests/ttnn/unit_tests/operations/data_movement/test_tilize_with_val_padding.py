@@ -71,6 +71,26 @@ params += [
     )
 ]
 
+# pad_value == 0.0 exercises the NOC async_write_zeros fast path in the row-major
+# tilize_with_val_padding reader kernels (as opposed to the scalar fill_l1_range
+# store loop used for non-zero pad values). Cover both the single-core and
+# multicore reader kernels, since they hit different fast-path call sites.
+params += [
+    pytest.param(
+        [[1, 1, 50, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_shape": [1, 1, 64, 64],
+            "pad_value": 0.0,
+            "use_multicore": use_multicore,
+        },
+    )
+    for use_multicore in (False, True)
+]
+
 
 @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
@@ -79,6 +99,7 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
 
     output_tensor_shape = tilize_with_val_padding_args["output_tensor_shape"]
     pad_value = tilize_with_val_padding_args["pad_value"]
+    use_multicore = tilize_with_val_padding_args.get("use_multicore", True)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -88,7 +109,11 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
         memory_config=tilize_with_val_padding_args["input_mem_config"][0],
     )
     tt_output = ttnn.tilize_with_val_padding(
-        tt_input, output_tensor_shape, pad_value, memory_config=tilize_with_val_padding_args["output_mem_config"]
+        tt_input,
+        output_tensor_shape,
+        pad_value,
+        memory_config=tilize_with_val_padding_args["output_mem_config"],
+        use_multicore=use_multicore,
     )
     torch_output = tt_output.cpu().to_torch_with_padded_shape()
 
