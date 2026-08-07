@@ -780,6 +780,33 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
+    """Regression for tt-metal#52371: B=1 dense token-map stride in FullLocal mode."""
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=1,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+    )
+
+
 # Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
