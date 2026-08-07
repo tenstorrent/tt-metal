@@ -1,24 +1,22 @@
 # advchal-v2 — read this one file
 
-Stage 02b (`$advisor-challenger`) ran `$shard-advise` on **15 decoder cells**. Each cell began from a decoder
-already hand-optimised without the advisor, so whatever the advisor adds is a real gain rather than a
-re-derivation.
+Stage 02b (`$advisor-challenger`) ran `$shard-advise` on **15 decoder cells**. Each began from a decoder already
+hand-optimised without the advisor, so anything it adds is a real gain rather than a re-derivation.
 
-Eight cells shipped a gain; seven returned zero. That looks like a modest result, and most of this file is about
-why it is not a measurement of the compiler.
+**Two cells gained over 10 %, six gained between 0.4 and 9 %, and seven gained nothing measurable.**
 
-Three things happened instead. **No cell applied the optimizer's plan as written** — on the one cell where that
-could be measured afterwards, the plan was worth twice what the cell shipped, at bit-identical output. **On nine
-cell/kinds the optimizer was never shown the layer**, because the capture tracer stopped at an op it had no handler
-for. And **the metric that decides which candidates reach hardware prices the optimizer's most reliable
-recommendation at `0.000 µs`**, so it usually went unmeasured.
+The zeros are mostly not the optimizer's:
 
-None of those are placement defects, and all three are cheap. The tracer side was fixed during this analysis to
-check that: about 230 lines of Python, no rebuild, and 17 screenable candidates appeared that the corpus had never
-counted.
+- On **nine cell/kinds it was never shown the layer** — the capture tracer stopped at an op it had no handler for.
+- **No cell applied its plan as written.** Where that could be measured afterwards, the plan was worth **twice**
+  what the cell shipped, at bit-identical output.
+- The metric that decides which candidates reach hardware prices its most reliable recommendation at `0.000 µs`.
 
-The optimizer does have one real defect. Its objective carries no latency term, so the core grid it names is a good
-guess rather than the best legal one — which is the gap between the **−10.43 %** its plan delivered on one cell and
+All three are cheap. The tracer was fixed here to check that — **~230 lines of Python, no rebuild, and 17
+screenable candidates appeared that the corpus had never counted.**
+
+The optimizer's own defect is narrower: its objective carries no latency term, so the core grid it names is a good
+guess rather than the best legal one. That is the gap between the **−10.43 %** its plan delivered on one cell and
 the **−17.84 %** available on the same decoder.
 
 **Three things are named separately throughout, because they fail differently and are fixed in different places:**
@@ -27,23 +25,28 @@ is the tool that captures a graph, runs that pipeline and writes the report; **t
 screens the result on hardware.
 
 Everything here comes from the cells' own artefacts or from re-measurements on the same hardware. `§3.x` points
-into [`FINDINGS`](ADVCHAL-V2-FINDINGS.md); plain `§1`–`§5` are sections here. The 39 claims corrected along the way
-are in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md), each with the check that would have caught it.
+into [`FINDINGS`](ADVCHAL-V2-FINDINGS.md); plain `§1`–`§5` are sections here. The 39 claims corrected along the
+way are in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md), each with the check that would have caught it.
 
 ---
 
 ## 1. The results
 
-**13,601 µs/model shipped**, across 8 of 15 cells.
+| shipped gain | cells |
+|---|---|
+| **over 10 %** | **2** |
+| 5–10 % | 2 |
+| 1–5 % | 3 |
+| under 1 % | 1 |
+| inside its own noise band | 1 |
+| **nothing at all** | **6** |
 
-The second number to know is **21,368 µs**, and it is easy to misread. It is **not a ceiling.** It is the sum of
-better configurations that were found by going back and measuring — on **6 of the 15 cells**, using nothing but
-the advisor's own directions on the same decoders. The other nine were never probed. So it says *"at least this
-much was available"*, and the **64 %** credited figure derived from it is a floor on the loss, not an estimate of
-it.
+**6 of the 15 were probed afterwards for a better configuration, and 5 had one** — three of those beating what
+shipped by more than 10 percentage points. Only llama-3.1-8B was swept and found to have nothing. The other nine
+were never probed, so every corpus-level total below is a floor.
 
-One row per cell. `control` lists every layer kind the cell measured, one per line; elsewhere a second line is a
-second *scope*, not a second kind.
+`control` lists every layer kind the cell measured, one per line; elsewhere a second line is a second *scope*, not
+a second kind.
 
 | model | arm | control ms/layer | shipped | result | better configuration found later |
 |---|---|---|---|---|---|
