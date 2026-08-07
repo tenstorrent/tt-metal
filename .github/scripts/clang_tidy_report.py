@@ -3,13 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Turn clang-tidy's exported --export-fixes YAML into a legible violation report.
 
-The clang-tidy-reusable workflow runs an analysis build that spans ~100k lines of
-ninja/ccache noise, and clang-tidy's own diagnostic text never appears there (it's
-suppressed by the ctcache wrapper). The only record of what actually failed is the
-per-translation-unit YAML fix files under .build/clang-tidy/fixes/. This script is
-the single source of truth for turning those into something a human (or the GitHub
-UI) can read: a plain-text list, a Markdown table for the step summary, and
-``::error`` workflow commands so violations show up as annotations on the PR diff.
+clang-tidy's own diagnostic text does print during the "Analyze code with clang-tidy"
+step, but that step is ~5000 lines of ninja build output and the diagnostics land
+wherever their translation unit happened to finish, often right at the tail behind
+thousands of "[N/M] Building/Linking ..." lines — and that step is green regardless
+(it always exits 0 by design, so -k0 keeps exporting fixes for every TU). The
+structured, not-buried record of what failed is the per-translation-unit YAML fix
+files under .build/clang-tidy/fixes/. This script turns those into something a
+human (or the GitHub UI) can read without spelunking: a plain-text list, a
+Markdown table for the step summary, and ``::error`` workflow commands so
+violations show up as annotations on the PR diff.
 
 Usage:
     clang_tidy_report.py <fixes-dir> --format count
@@ -65,6 +68,9 @@ def parse_fixes_dir(fixes_dir: str, repo_root: str | None = None) -> list[Violat
             with open(yaml_path, encoding="utf-8") as f:
                 doc = yaml.safe_load(f)
         except (OSError, yaml.YAMLError) as e:
+            # stderr, deliberately: --format count is captured via `$(...)` by the workflow,
+            # and stdout must stay pure numeric there. A warning on stdout would get folded
+            # into that captured value and corrupt the CLANG_TIDY_VIOLATIONS env var.
             print(f"::warning::clang_tidy_report: skipping unparseable {yaml_path}: {e}", file=sys.stderr)
             continue
         if not doc or not isinstance(doc.get("Diagnostics"), list):
@@ -245,6 +251,21 @@ Diagnostics:
             self._write(tmp, "bad.yaml", "not: valid: yaml: [")
             violations = parse_fixes_dir(tmp)
             self.assertEqual(violations, [])
+
+    def test_count_mode_stdout_stays_numeric_despite_parse_warning(self):
+        # Regression: the workflow captures --format count via `$(...)`, so a parse
+        # warning must land on stderr, not stdout, or it corrupts CLANG_TIDY_VIOLATIONS.
+        import contextlib
+        import io
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "bad.yaml", "not: valid: yaml: [")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                main([tmp, "--format", "count"])
+            self.assertEqual(out.getvalue().strip(), "0")
+            self.assertIn("::warning::", err.getvalue())
 
     def test_no_yaml_files_is_empty(self):
         import tempfile

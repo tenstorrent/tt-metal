@@ -376,8 +376,8 @@ jobs:
             FIXES_DIR=".build/clang-tidy/fixes"
             REPORT=".github/scripts/clang_tidy_report.py"
             # Re-print the violation list here (not just the count) so this failing
-            # step is self-contained — no digging through the analyze step's 100k+
-            # line build log to find out what actually broke.
+            # step is self-contained — no digging through the analyze step's ~5000-line
+            # (green, by design) build log to find out what actually broke.
             python3 "$REPORT" "$FIXES_DIR" --format list --repo-root "$(pwd)"
             echo ""
             # One ::error annotation per violation, so they show up on the PR diff /
