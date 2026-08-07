@@ -27,38 +27,56 @@ def _make_input(shape, dtype):
 
 
 _DEMOTED = [
+    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 64, 96], {"dims": [3, 2, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 64, 96], {"dims": [3, 2, 0, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 64, 96], {"dims": [3, 2, 1, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 64, 96], {"dims": [3, 2, 1, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 96, 128], {"dims": [0, 2, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 96, 128], {"dims": [2, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([3, 64, 96], {"dims": [0, 2, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([3, 64, 96], {"dims": [2, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([64, 96], {"dims": [1, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([96, 64], {"dims": [1, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _DEMOTED_IDS = [
+    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|bfloat16|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|float32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|int32|row_major",
     "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|bfloat16|row_major",
     "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|float32|row_major",
     "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|int32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|bfloat16|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|float32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|int32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|bfloat16|row_major",
+    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|float32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|int32|row_major",
+    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|bfloat16|row_major",
+    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|float32|row_major",
+    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|int32|row_major",
+    "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|bfloat16|row_major",
     "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|float32|row_major",
     "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|int32|row_major",
-    "[2, 3, 64, 96]|dims=[3, 2, 0, 1]|float32|row_major",
-    "[2, 3, 64, 96]|dims=[3, 2, 0, 1]|int32|row_major",
-    "[2, 3, 64, 96]|dims=[3, 2, 1, 0]|float32|row_major",
-    "[2, 3, 64, 96]|dims=[3, 2, 1, 0]|int32|row_major",
-    "[2, 96, 128]|dims=[0, 2, 1]|float32|row_major",
-    "[2, 96, 128]|dims=[2, 0, 1]|float32|row_major",
-    "[3, 64, 96]|dims=[0, 2, 1]|float32|row_major",
-    "[3, 64, 96]|dims=[2, 0, 1]|float32|row_major",
-    "[64, 96]|dims=[1, 0]|float32|row_major",
-    "[96, 64]|dims=[1, 0]|float32|row_major",
+    "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|bfloat16|row_major",
+    "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|float32|row_major",
+    "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|int32|row_major",
+    "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|bfloat16|row_major",
+    "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|float32|row_major",
+    "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|int32|row_major",
 ]
 
 
@@ -75,10 +93,10 @@ def test_permute_codegen_demotion(device, shape, kwargs, dtype, layout):
 
 
 _CACHE_HIT = [
-    ([64, 96], {"dims": [1, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [1, 2, 0, 3, 4]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _CACHE_HIT_IDS = [
-    "[64, 96]|dims=[1, 0]|bfloat16|row_major",
+    "[1, 2, 3, 64, 96]|dims=[1, 2, 0, 3, 4]|bfloat16|row_major",
 ]
 
 
@@ -98,7 +116,7 @@ def test_permute_codegen_program_cache_hit(device, shape, kwargs, dtype, layout)
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
-_SELECTOR_CASE = ([64, 96], {"dims": [1, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+_SELECTOR_CASE = ([1, 2, 3, 64, 96], {"dims": [1, 2, 0, 3, 4]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.parametrize("selector", ["", "Codegen", "codgen", "default"])

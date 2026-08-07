@@ -23,7 +23,8 @@ bool supported_by_codegen(
     const std::optional<MemoryConfig>& output_mem_config);
 
 // Perf-only routing gate, consulted by the "auto" selector alone (never by validate or a forced
-// "codegen" call). Structural mechanisms measured on device, not an enumerated regression list.
+// "codegen" call). Demotes the blocked path as a whole -- any permutation that moves the last axis
+// -- because it measures at parity with native; only the row-invariant path is routed here.
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims);
 
 enum class ImplementationSelector { Auto, Native, Codegen };
