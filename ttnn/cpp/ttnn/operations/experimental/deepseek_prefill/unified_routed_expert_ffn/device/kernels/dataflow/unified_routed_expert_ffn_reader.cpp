@@ -562,13 +562,17 @@ void kernel_main() {
                 // linked=true keeps the multicast path RESERVED so the in0_valid
                 // sem multicast below travels the SAME path and is delivered
                 // AFTER the data at every receiver. With linked=false the path is
-                // released and the (posted) valid-sem multicast can overtake the
-                // bulk data multicast at a receiver under NoC contention (heavy
-                // fabric load) -> the receiver observes in0_valid, pushes
-                // cb_in0_x, and compute reads STALE x from L1 -> wrong gate/up
-                // matmul output for that core (rare, timing-dependent). A write
-                // barrier does NOT fix this on Blackhole (multicast writes are
-                // posted; no completion ack). Mirrors the phase-4 activated mcast.
+                // released and the valid-sem multicast can overtake the bulk data
+                // multicast at a receiver under NoC contention (heavy fabric
+                // load) -> the receiver observes in0_valid, pushes cb_in0_x, and
+                // compute reads STALE x from L1 -> wrong gate/up matmul output
+                // for that core (rare, timing-dependent). The async_writes_flushed()
+                // below is NOT sufficient on its own: it only waits for the data
+                // to DEPART this core's NIU, not to land at the receivers. A full
+                // async_write_barrier() would order it (these multicasts are
+                // non-posted writes, so completion IS acked), but costs a
+                // completion round-trip per K-block; path-linking is the cheap
+                // ordering and mirrors the phase-4 activated mcast / canonical matmul.
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(block_start),
@@ -671,18 +675,20 @@ void kernel_main() {
                 if (in1_num_receivers > 0) {
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                     // The LAST in1 data multicast before the in1_valid sem must
-                    // be linked=true so the (posted) valid-sem multicast travels
-                    // the SAME reserved path and lands AFTER the data at every
-                    // receiver. Otherwise, under NoC contention (heavy fabric
-                    // load), the valid sem can overtake the weight data -> the
-                    // receiver pushes cb_in1_{gate,up} and compute reads STALE
-                    // weights -> wrong matmul output (rare, timing-dependent;
-                    // a flush/barrier does not fix posted multicast writes on
-                    // Blackhole). Mirrors the phase-4 activated mcast. When `up`
-                    // is mcast (LEGACY/UP_SPLIT) it is the last write, so gate
-                    // links into it and up holds the path for the sem; in the
-                    // retired UP_WRITER_MCAST mode (no up mcast) gate is last and
-                    // holds the path itself.
+                    // be linked=true so the valid-sem multicast travels the SAME
+                    // reserved path and lands AFTER the data at every receiver.
+                    // Otherwise, under NoC contention (heavy fabric load), the
+                    // valid sem can overtake the weight data -> the receiver
+                    // pushes cb_in1_{gate,up} and compute reads STALE weights ->
+                    // wrong matmul output (rare, timing-dependent). The
+                    // async_writes_flushed() below only waits for departure from
+                    // this core's NIU, not for arrival at the receivers, so it
+                    // does not provide this ordering by itself. Mirrors the
+                    // phase-4 activated mcast. When `up` is mcast
+                    // (LEGACY/UP_SPLIT) it is the last write, so gate links into
+                    // it and up holds the path for the sem; in the retired
+                    // UP_WRITER_MCAST mode (no up mcast) gate is last and holds
+                    // the path itself.
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(gate_block_start),
                         MulticastEndpoint{},
@@ -884,15 +890,18 @@ void kernel_main() {
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the (posted) valid-sem multicast can
-                // overtake the bulk data multicast at a receiver -> the receiver
-                // observes act_valid, pushes cb_in0_down_full, and compute reads
-                // stale L1 -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). A write barrier does NOT fix this
-                // on Blackhole (multicast writes are posted; no completion ack to
-                // wait on) — only path-linking orders the sem behind the data.
-                // Mirrors the canonical matmul in0 sender
-                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
+                // the path is released and the valid-sem multicast can overtake
+                // the bulk data multicast at a receiver -> the receiver observes
+                // act_valid, pushes cb_in0_down_full, and compute reads stale L1
+                // -> that core's whole down-matmul output block is wrong
+                // (run-to-run nondeterministic). The async_writes_flushed() below
+                // does NOT provide this ordering: it only waits for the data to
+                // DEPART this core's NIU, not to land at the receivers. A full
+                // async_write_barrier() would (these multicasts are non-posted
+                // writes and are acked on completion), but at the cost of a
+                // completion round-trip per K-block on the critical path;
+                // path-linking gets the ordering for free. Mirrors the canonical
+                // matmul in0 sender (reader_bmm_tile_layout_in0_sender_padding.cpp).
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         CoreLocalMem<uint32_t>(src_l1),
@@ -931,8 +940,24 @@ void kernel_main() {
         }
     }  // end chunk loop
 
-    // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
-    // is a posted atomic; without an explicit barrier it can still be in
-    // flight at kernel exit, leading to timing-dependent corruption.
+    // Drain BOTH outstanding-transaction classes on the mcast NoC before the
+    // kernel returns. They are tracked by SEPARATE hardware counters, so one
+    // barrier does not cover the other:
+    //
+    //  * async_write_barrier -> ncrisc_noc_nonposted_writes_flushed. Covers the
+    //    data multicasts above AND every Semaphore<>::set_multicast: the latter
+    //    is a 4-byte NON-POSTED WRITE (noc_semaphore_set_multicast passes
+    //    posted=false through ncrisc_noc_fast_write_any_len), not an atomic, and
+    //    Noc::async_write_multicast static_asserts that POSTED is unsupported.
+    //    The in-loop async_writes_flushed() calls only wait for DEPARTURE from
+    //    this core's NIU, never for arrival, so writes can still be in flight
+    //    here. These land on get_semaphore() addresses, which live inside the
+    //    kernel-config ring buffer below kernel .text — a late landing after
+    //    program teardown corrupts the NEXT program's kernel .text.
+    //  * async_atomic_barrier -> ncrisc_noc_nonposted_atomics_flushed. Covers the
+    //    Semaphore<>::up() increments (in0/in1/act ready sems) issued by receivers.
+    //
+    // Mirrors the exit barrier in unified_routed_expert_ffn_writer.cpp.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }
