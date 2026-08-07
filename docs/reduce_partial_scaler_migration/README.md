@@ -50,8 +50,8 @@ support), not a migration. Those eight are documented and deliberately left alon
 | Step | Scope | Doc |
 |---|---|---|
 | 1 | `moreh_sum_h`, `moreh_mean_h` | [step-1-moreh-sum-mean.md](step-1-moreh-sum-mean.md) |
-| 2 | `moreh_softmax_*`, `moreh_softmax_backward_*` | pending |
-| 3 | layernorm readers | pending |
+| 2 | `moreh_softmax_*` (small variants) | [step-2-moreh-softmax.md](step-2-moreh-softmax.md) |
+| 3 | layernorm readers | [step-3-layernorm-readers.md](step-3-layernorm-readers.md) |
 | 4 | `numeric.h` off direct `reduce_tile` | pending |
 | 5 | remaining direct `reduce_tile` callers | pending |
 | 6 | perf comparison vs `main` | pending |
