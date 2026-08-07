@@ -851,9 +851,9 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
             gate (ttnn.Tensor): the gate input tensor.
             up (ttnn.Tensor): the up input tensor.
             beta1 (float): the softcap beta applied to the gate half. Must be non-zero.
+            beta2 (float): the softcap beta applied to the up half. Must be non-zero.
 
         Keyword args:
-            beta2 (float, optional): the softcap beta applied to the up half. When `None`, up is left untransformed. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -884,8 +884,8 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
         nb::arg("gate"),
         nb::arg("up"),
         nb::arg("beta1"),
+        nb::arg("beta2"),
         nb::kw_only(),
-        nb::arg("beta2") = nb::none(),
         nb::arg("memory_config") = nb::none());
 }
 
@@ -2090,8 +2090,8 @@ void py_module(nb::module_& mod) {
 
     detail::bind_situ_glu<"situ_glu">(
         mod,
-        R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors. When :attr:`beta2` is `None`, the up half is left untransformed.)doc",
-        R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \verb|up|_i)doc",
+        R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
         &ttnn::situ_glu);
 
     detail::bind_binary_composite<"nextafter">(

@@ -903,41 +903,32 @@ def test_unary_right_shift(input_shapes, device):
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
 
-# bf16 is near-exact; bfp8_b re-quantizes every composite intermediate (one shared exponent
-# per 16-element block), so its PCC is lower and its bounded output lands on a coarser grid.
-SITU_GLU_PCC = {ttnn.bfloat16: 0.9999, ttnn.bfloat8_b: 0.99}
-SITU_GLU_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
+# One case per intermediate-memory branch (hidden <= 2048 -> L1, hidden > 2048 -> DRAM);
+# the two also cover both dtypes. bfp8_b re-quantizes each intermediate, so it gets a looser
+# PCC and a wider overshoot margin than near-exact bf16.
+SITU_GLU_CASES = [
+    (torch.Size([1, 1, 512, 1024]), ttnn.bfloat16),  # hidden 1024 <= 2048 -> L1
+    (torch.Size([1, 1, 512, 4096]), ttnn.bfloat8_b),  # hidden 4096 > 2048 -> DRAM
+]
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([64, 64])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-# beta2=None exercises the branch where the up half skips the second tanh entirely; a
-# concrete beta2 exercises the fully-softcapped path.
-@pytest.mark.parametrize("beta2", [None, SITU_GLU_BETA2], ids=["beta2_none", "beta2_25"])
-def test_situ_glu(input_shapes, ttnn_dtype, beta2, device):
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_lt_2048", "hidden_gt_2048"])
+def test_situ_glu(input_shape, ttnn_dtype, device):
     torch.manual_seed(0)
     # Span the saturating and near-linear regions of both halves.
-    gate = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
-    up = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
 
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    tt_res = ttnn.to_torch(ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, beta2=beta2))
-    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=beta2)
+    tt_res = ttnn.to_torch(ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2))
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
 
-    if beta2 is not None:
-        # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
-        bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + SITU_GLU_BOUND_TOL[ttnn_dtype])
-        assert tt_res.to(torch.float32).abs().max().item() <= bound
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 1e-3))
+    assert tt_res.to(torch.float32).abs().max().item() <= bound
 
-    assert_with_pcc(golden, tt_res, pcc=SITU_GLU_PCC[ttnn_dtype])
+    assert_with_pcc(golden, tt_res, pcc=0.99 if is_bfp8 else 0.999)

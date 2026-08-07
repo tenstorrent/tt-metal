@@ -33,13 +33,12 @@ IN_DTYPES = {
 OUT_PAGE_BYTES = TILE_ELEMS * 2  # op rounds its result to bf16
 
 
-def situ_glu_reference(gate, up, cap_up):
+def situ_glu_reference(gate, up):
     g = gate.to(torch.float32)
     u = up.to(torch.float32)
     situ_a = BETA_GATE * torch.tanh(g / BETA_GATE) * torch.sigmoid(g)
-    if cap_up:
-        u = BETA_UP * torch.tanh(u / BETA_UP)
-    return situ_a * u
+    up_half = BETA_UP * torch.tanh(u / BETA_UP)
+    return situ_a * up_half
 
 
 def _coverage_inputs(num_tiles, seed=0):
@@ -53,7 +52,7 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[perm].to(torch.bfloat16), up[perm].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up):
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -119,7 +118,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up):
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles, int(fp32_dest), int(cap_up)],
+            compile_time_args=[num_tiles, int(fp32_dest)],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
@@ -133,23 +132,21 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up):
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-@pytest.mark.parametrize("cap_up", [True, False], ids=["beta2_25", "beta2_none"])
-def test_situ_glu_sfpu(device, in_name, fp32_dest, cap_up):
+def test_situ_glu_sfpu(device, in_name, fp32_dest):
     in_dtype, page_bytes = IN_DTYPES[in_name]
     num_tiles = 8
     gate_t, up_t = _coverage_inputs(num_tiles)
 
-    golden = situ_glu_reference(gate_t, up_t, cap_up)
-    actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up)
+    golden = situ_glu_reference(gate_t, up_t)
+    actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest)
 
-    if cap_up:
-        # |situ_a| <= beta_gate, |up_half| <= beta_up -> |result| <= their product.
-        bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if in_name == "bfp8_b" else 1e-3))
-        assert actual.to(torch.float32).abs().max().item() <= bound
+    # |situ_a| <= beta_gate, |up_half| <= beta_up -> |result| <= their product.
+    bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if in_name == "bfp8_b" else 1e-3))
+    assert actual.to(torch.float32).abs().max().item() <= bound
 
     g = golden.to(torch.float32)
     a = actual.to(torch.float32)
-    logger.info(f"{in_name} fp32_dst={fp32_dest} cap_up={cap_up}: max abs err {(a - g).abs().max().item():.4e}")
+    logger.info(f"{in_name} fp32_dst={fp32_dest}: max abs err {(a - g).abs().max().item():.4e}")
 
     pcc = 0.99 if in_name == "bfp8_b" else 0.999
     assert_with_pcc(g, a, pcc=pcc)

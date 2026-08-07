@@ -9,8 +9,7 @@
 //
 // Formula (Moonshot Kimi K3):
 //   situ_a  = beta_gate * tanh(gate / beta_gate) * sigmoid(gate)
-//   up_half = beta_up   * tanh(up   / beta_up)                 if Config::cap_up
-//           = up                                               otherwise
+//   up_half = beta_up   * tanh(up   / beta_up)
 //   result  = situ_a * up_half
 //
 // gate and up are pinned in dst simultaneously, so the whole activation runs in
@@ -40,7 +39,6 @@ namespace ckernel::sfpu {
 struct SituGluConfigKimi {
     static constexpr float beta_gate = 4.0f;
     static constexpr float beta_up = 25.0f;
-    static constexpr bool cap_up = true;
 };
 
 // Newton reciprocal carrying its 2.0 as a literal. The stock sfpu_reciprocal_iter
@@ -98,11 +96,8 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
         sfpi::vFloat situ_a =
             (_sfpu_tanh_polynomial_(gate * inv_beta_gate) * beta_gate) * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(gate);
 
-        // up half: softcapped by beta_up when requested, otherwise passed through.
-        sfpi::vFloat up_half = up;
-        if constexpr (Config::cap_up) {
-            up_half = _sfpu_tanh_polynomial_(up * inv_beta_up) * beta_up;
-        }
+        // up half: beta_up * tanh(up / beta_up).
+        sfpi::vFloat up_half = _sfpu_tanh_polynomial_(up * inv_beta_up) * beta_up;
 
         sfpi::vFloat result = situ_a * up_half;
         if constexpr (!is_fp32_dest_acc_en) {
