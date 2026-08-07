@@ -557,7 +557,7 @@ public:
         const uint32_t vc =
             has_flag(opts, NocOptions::CUSTOM_VC) ? static_cast<uint32_t>(noc_opts.vc) : NOC_UNICAST_WRITE_VC;
         // Inline dword write: 4-byte immediate value, no L1 source buffer.
-        RECORD_NOC_EVENT_WITH_ADDR_DEBUG_ONLY(
+        RECORD_NOC_EVENT_WITH_ADDR(
             NocEventType::WRITE_INLINE, 0, dst_addr, 4, vc, has_flag(opts, NocOptions::POSTED), noc_id_);
         DEBUG_SANITIZE_NOC_ADDR(noc_id_, dst_addr, 4);
         DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id_, dst_addr, 4);
