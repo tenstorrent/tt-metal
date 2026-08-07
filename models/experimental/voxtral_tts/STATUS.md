@@ -3680,6 +3680,49 @@ be nearly free — **and it is simply unsupported.** bf16 is already the best ca
 utterances do not degrade RTF, and the KV cache is nowhere near being a bottleneck — 213 MB/frame
 at pos 2000 is 0.58 ms of a 17.8 ms step.
 
+### 6.57 — fp32 cache is unreachable, and bf16 decode weights cost 29% for nothing
+
+Two closing tests on the precision question. Both negative, both for reasons worth keeping.
+
+**fp32 KV CACHE VIA A HAND-ROLLED DECODE ATTENTION.** §6.56 showed the cache is the one place a
+precision gain would reach every frame, would cost ~0.8% in bandwidth, and is blocked only by
+`sdpa_decode` refusing the dtype. So: replace that op with `q@kᵀ → scale → softmax → @v`, which has
+no dtype restriction.
+
+| arm | ms/step | vs ships | cache MB |
+|---|---|---|---|
+| `sdpa_decode` (ships) | 17.83 | — | 109 |
+| hand-rolled, bf16 cache | 96.58 | **+78.75 (5.4×)** | 109 |
+| hand-rolled, fp32 cache | 797.55 | **+779.7 (44.7×)** | 218 |
+
+**THE PRIOR WAS WRONG BY 9×** and the reason matters more than the result. It was recorded before
+running: "5 extra ops × ~68 µs × 26 layers ≈ +8.8 ms". The real cost was +78.75. §6.45's ~68 µs
+figure is the floor for a **small** op, and these are not small — the hand-rolled path materialises
+`repeat_interleave` to `[1,32,P,128]` for K and V in every layer, which `sdpa_decode` never does
+because it handles GQA natively. That expansion is precisely what `[gpt-13]` and `[flow-11]` exist
+to avoid, and it is a bandwidth cost, not a launch cost. **Do not apply the op-count model to ops
+that materialise tensors.**
+
+So the fp32 cache costs ~1% if the op supported it and 4470% if you route around it. Closed.
+
+**bf16 WEIGHTS THROUGH THE WHOLE DECODE**, teacher-forced on real frames against the fp32
+reference:
+
+| decode weights | ms/step | vs ships | min PCC | mean worst-sample |
+|---|---|---|---|---|
+| BFP8 FF+attn, w2 bf16 (**ships**) | 17.18 | — | 0.999741 | 0.95% |
+| bf16 FF, BFP8 attn | 20.17 | +2.99 | 0.999762 | 0.88% |
+| bf16 everything | 22.12 | **+4.94** | 0.999814 | **0.96%** |
+
+Worst-sample goes 0.95% → 0.88% → **0.96%** — non-monotonic, i.e. noise. **+29% for no measurable
+accuracy.** §6.16 chose this ladder on the N150 for speed; it holds here for accuracy reasons too.
+
+**THE UNIFIED RESULT OF §6.55 / §6.56 / §6.57: Block 1's ~0.9% worst-sample error is not
+weight-precision-limited at either prefill or decode.** Raising weight precision buys nothing at
+either end, in both cases non-monotonically. The residual is activation precision and
+accumulation — and the one place that could be attacked, the KV cache, is closed by op support.
+**Treat Block 1's weight precision as settled and stop re-opening it.**
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
