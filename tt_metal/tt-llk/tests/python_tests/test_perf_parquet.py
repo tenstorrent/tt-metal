@@ -139,7 +139,9 @@ def test_run_batch_compacts_multiple_tests():
 
 def test_run_batch_rejects_missing_mandatory_provenance():
     prov = dict(_RUN_PROV, commit_sha=None)
-    with pytest.raises(ValueError, match="commit_sha"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="commit_sha"
+    ):
         build_run_batch({"perf_a": _output_row()}, **prov)
 
 
@@ -215,7 +217,9 @@ def test_convert_strict_raises_on_unknown_column(tmp_path):
     p = _write_csv(tmp_path, "perf_x.csv", df)
     out = tmp_path / "out.parquet"
 
-    with pytest.raises(ValueError, match="made_up_col"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="made_up_col"
+    ):
         convert_csvs_to_parquet([p], out, **_RUN_PROV)
     assert not out.exists()  # nothing written on a lossy conversion
 
@@ -226,7 +230,9 @@ def test_convert_strict_raises_on_bad_value(tmp_path):
     p = _write_csv(tmp_path, "perf_x.csv", df)
     out = tmp_path / "out.parquet"
 
-    with pytest.raises(ValueError, match="value_bits"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="value_bits"
+    ):
         convert_csvs_to_parquet([p], out, **_RUN_PROV)
     assert not out.exists()
 
