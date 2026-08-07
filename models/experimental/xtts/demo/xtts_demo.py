@@ -249,7 +249,7 @@ def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed
     try:
         tt = TtXtts(device, sd, ref_decoder_full)
         spk_wav_tt = ttnn.from_torch(
-            spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+            spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
         )
         if args.seed is not None:
             # distinct-but-reproducible-ish seed per take (ttnn sampling isn't bit-exact across
