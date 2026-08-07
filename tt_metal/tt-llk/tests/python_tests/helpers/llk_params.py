@@ -113,6 +113,9 @@ class MathOperation(Enum):
     I0 = OpSpec("i0", MathOpType.SFPU_UNARY)
     Rdiv = OpSpec("rdiv", MathOpType.SFPU_UNARY)
     Clamp = OpSpec("clamp", MathOpType.SFPU_UNARY)
+    # Column-wise cumulative sum of a whole tile (not element-wise; needs a
+    # whole-tensor golden and runs under VectorMode::RC_custom).
+    Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
     Tanhshrink = OpSpec("tanhshrink", MathOpType.SFPU_UNARY)
     Floor = OpSpec("floor", MathOpType.SFPU_UNARY)

@@ -410,6 +410,23 @@ def prepare_trig_inputs(
     return (lo + u * (hi - lo)).to(torch_format)
 
 
+def prepare_cumsum_inputs(
+    src_A: torch.Tensor,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into [-1, 1] for the column-wise cumulative sum.
+
+    A column total is a chain of up to 32 adds, so the magnitude ceiling must leave room
+    for 32x growth: |x| <= 1 keeps every partial sum inside +-32, comfortably inside
+    Float16's range, and keeps the stimulus away from the subnormal magnitudes the SFPU
+    MAD datapath flushes to zero. Both signs are covered so the chain sees cancellation
+    as well as growth.
+    """
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+    return (-1.0 + 2.0 * u).to(format_dict[input_format])
+
+
 def prepare_unary_inputs(
     mathop: MathOperation,
     src_A: torch.Tensor,
@@ -422,6 +439,8 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
+    if mathop == MathOperation.Cumsum:
+        return prepare_cumsum_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
@@ -655,6 +674,12 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
+    # tile) whose running total lives in LREG4-7 between calls. Swept at [32, 32] only —
+    # one tile per call with first=true, which zeroes that carry. Covering the cross-tile
+    # carry (first=false) requires the shared C++ source to thread `first = (i == 0)`
+    # through its tile loop, so it is a follow-on.
+    OpConfig(MathOperation.Cumsum, ([32, 32],), DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
@@ -805,8 +830,8 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt,
-    square, typecast, and the six compare-to-zero modes), validated against the
-    UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
+    square, cumsum, typecast, and the six compare-to-zero modes), validated against
+    the UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
     (
