@@ -28,6 +28,25 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
 }
 
 /**
+ * @brief Release a stale SrcB bank to the Unpackers so a following DEST_TO_SRCB dest-reuse gates on the current unpack.
+ *
+ * A COL/SCALAR-broadcast eltwise binary ends its MOP with CLR_A (keeps SrcB), leaving SrcB[MatrixUnit.SrcBBank]
+ * MatrixUnit-owned. A subsequent binary_dest_reuse_tiles<..., DEST_TO_SRCB> then finds move_d2b_fixed_face's first
+ * STALLWAIT(SRCB_VLD) pre-satisfied by that stale ownership, so MOVD2B races the reuse-unpack's SET_DVALID/ZEROSRC
+ * (tt-metal #46523). SETRWC CLR_B releases the stale bank to the Unpackers and advances MatrixUnit.SrcBBank so it
+ * re-aligns with the reuse-unpack, restoring the SRCB_VLD wait's dependence on the current unpack.
+ *
+ * @note Call on the MATH thread after a SrcB-keeping producer op and before _llk_math_eltwise_binary_with_dest_reuse_init_.
+ * @note The CLR_B bank-pointer advance is UNCONDITIONAL: valid only when the SrcB entry is stale (MatrixUnit-owned).
+ *       On a clean (Unpacker-owned, aligned) entry the advance misaligns the pointers and DEADLOCKS the SRCB_VLD wait.
+ *       @ref clear_bank_valid.
+ */
+inline void _llk_math_reset_srcb_bank_valid_()
+{
+    clear_bank_valid<Srcs::SrcB>();
+}
+
+/**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, and programs FP32 dest
