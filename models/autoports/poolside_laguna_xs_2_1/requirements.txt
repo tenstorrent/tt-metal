@@ -1,0 +1,22 @@
+# Serving env for Laguna-XS-2.1 on vLLM. Installed by setup_vllm.sh; see
+# doc/vllm_integration/serve_vllm.md for the runbook.
+#
+# Not a plain `pip install -r` target: vLLM must be built from sdist with
+# VLLM_TARGET_DEVICE=empty (the PyPI wheel is CUDA), and the install needs
+# --override overrides.txt. setup_vllm.sh reads the pins from here and applies
+# both. Bump versions here, not in the script.
+
+# ttnn 0.74.0 is the release cut from the v0.74.0-dev line this checkout sits on
+# (newest reachable tag: v0.74.0-dev20260622). Ships cp312 manylinux wheels, so
+# no tt-metal build is needed. Declares numpy<2 + loguru only — no torch pin, so
+# it coexists with vLLM's torch==2.11.0. Carries the SDPA sliding_window_size
+# arg the Laguna decoders require (tt/optimized_decoder.py, multichip_decoder.py,
+# functional_decoder.py).
+ttnn==0.74.0
+
+# The TT plugin is only tested against 0.24.0 (vllm-tt-plugin README) and it
+# monkeypatches upstream internals, so this pin is load-bearing, not cosmetic.
+vllm==0.24.0
+
+# Public plugin: provides the `tt` platform + EXTRA_MODELS_DIR model registration.
+vllm-tt-plugin @ git+https://github.com/tenstorrent/vllm-tt-plugin@main

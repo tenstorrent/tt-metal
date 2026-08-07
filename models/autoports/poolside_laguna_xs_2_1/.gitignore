@@ -55,3 +55,6 @@ doc/vllm_integration/prefill_fast_validate/
 doc/vllm_integration/sweep_vllm.tsv
 doc/vllm_integration/reset_batch_probe.tsv
 doc/datatype_sweep/experts_bfp8.json
+
+# self-contained vLLM serving env built by setup_vllm.sh (multi-GB; never committed)
+.venv/

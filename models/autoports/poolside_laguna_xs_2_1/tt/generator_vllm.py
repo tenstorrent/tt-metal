@@ -104,8 +104,8 @@ class LagunaForCausalLM:
     # full-cache path (single KV group). NOTE (2026-08-06): on STOCK vLLM 0.24.0 the hybrid multi-group KV
     # manager needs per-group budgets, but the plugin sizes a SINGLE num_gpu_blocks_override → the
     # sufficiency check rejects 131072 (needs ~20 GiB per the 10 full layers vs the single-override budget).
-    # The fork served UNIFORM (1 group), where a single override works. So set TT_LAGUNA_HYBRID_KV=0 for the
-    # fork-free 0.24.0 stack until the plugin sizes hybrid per-group. Default True preserves prior behavior.
+    # A UNIFORM (1 group) layout is what a single override can size, so set TT_LAGUNA_HYBRID_KV=0 on the
+    # stock 0.24.0 stack until the plugin sizes hybrid per-group. Default True preserves prior behavior.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("TT_LAGUNA_HYBRID_KV", "1") == "1"
 
     def __init__(self, generator: LagunaGenerator, mesh_device, max_batch_size: int, max_model_len: int):

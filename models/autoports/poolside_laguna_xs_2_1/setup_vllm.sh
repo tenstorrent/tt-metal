@@ -1,0 +1,139 @@
+#!/bin/bash
+# Build the self-contained vLLM serving env for Laguna-XS-2.1: stock vLLM 0.24.0 + the public
+# tenstorrent/vllm-tt-plugin + this model's vllm_ext, on a PyPI ttnn wheel (no tt-metal build).
+#   Setup:  ./setup_vllm.sh            (into ./.venv; --force to rebuild from scratch)
+#   Serve:  ./serve_vllm.sh            (runs this automatically if the env is missing)
+# Pins live in requirements.txt; the numpy/opencv overrides live in overrides.txt.
+set -euo pipefail
+
+MODEL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$MODEL_DIR/../../.." && pwd)
+VLLM_ENV="${VLLM_ENV:-$MODEL_DIR/.venv}"
+PYTORCH_CPU_INDEX="${PYTORCH_CPU_INDEX:-https://download.pytorch.org/whl/cpu}"
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+
+# Pins are read from requirements.txt so there is one place to bump them.
+req() { grep -m1 "^$1" "$MODEL_DIR/requirements.txt" | sed 's/[[:space:]]*#.*//'; }
+TTNN_PIN=$(req 'ttnn==')
+VLLM_PIN=$(req 'vllm==')
+PLUGIN_PIN=$(req 'vllm-tt-plugin @')
+for p in "$TTNN_PIN" "$VLLM_PIN" "$PLUGIN_PIN"; do
+  [ -n "$p" ] || { echo "ERROR: could not read pins from $MODEL_DIR/requirements.txt"; exit 1; }
+done
+
+echo "=============================================================================="
+echo " Laguna-XS-2.1 vLLM env -> $VLLM_ENV"
+echo "   $TTNN_PIN | $VLLM_PIN"
+echo " First run takes ~30-45 min: vLLM is built from sdist (the PyPI wheel is CUDA)."
+echo " Re-runs on an existing env are quick. Serving is a separate ~10 min boot."
+echo "=============================================================================="
+
+# ---- uv -----------------------------------------------------------------------------------
+# uv, not pip: the numpy<2 (ttnn) vs opencv>=4.13 (vLLM) conflict needs --override, which pip
+# has no equivalent for. Bootstrap with the repo's pinned installer.
+if ! command -v uv >/dev/null 2>&1; then
+  echo "==> [0/6] installing uv (repo-pinned)"
+  bash "$REPO_ROOT/scripts/install-uv.sh"
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v uv >/dev/null 2>&1 || { echo "ERROR: uv still not on PATH after install"; exit 1; }
+fi
+
+# ---- venv ---------------------------------------------------------------------------------
+# Python 3.12: the ttnn wheels are cp312 (no stable-ABI tag), so the minor version must match.
+if [ "$FORCE" = 1 ] && [ -e "$VLLM_ENV" ]; then
+  echo "==> [1/6] --force: removing $VLLM_ENV"
+  rm -rf "$VLLM_ENV"
+fi
+if [ -x "$VLLM_ENV/bin/python" ]; then
+  echo "==> [1/6] reusing existing env $VLLM_ENV (--force to rebuild)"
+else
+  echo "==> [1/6] creating venv $VLLM_ENV (python 3.12)"
+  uv python install 3.12 >/dev/null 2>&1 || true
+  uv venv --python 3.12 "$VLLM_ENV"
+fi
+PY="$VLLM_ENV/bin/python"
+
+echo "==> [2/6] $TTNN_PIN (manylinux wheel; no tt-metal build required)"
+uv pip install --python "$PY" "$TTNN_PIN"
+
+echo "==> [3/6] $VLLM_PIN from sdist (VLLM_TARGET_DEVICE=empty, CPU torch) — the slow step"
+# The CPU torch index is required: without it vLLM's torch==2.11.0 resolves to the default CUDA
+# build and drags in ~4 GB of nvidia-*-cu13 wheels. There is no NVIDIA device here and the
+# validated env is torch 2.11.0+cpu. --index-strategy unsafe-best-match lets uv consider the
+# extra index for a package that also exists on PyPI (same pattern as the repo's create_venv.sh).
+VLLM_TARGET_DEVICE=empty uv pip install --python "$PY" --no-binary vllm \
+  --extra-index-url "$PYTORCH_CPU_INDEX" --index-strategy unsafe-best-match \
+  --override "$MODEL_DIR/overrides.txt" "$VLLM_PIN"
+# transformers>=5.12 imports torchaudio if it is merely installed, and the wheel pulled in
+# alongside CPU torch is unloadable.
+uv pip uninstall --python "$PY" torchaudio >/dev/null 2>&1 || true
+
+echo "==> [4/6] public vllm-tt-plugin (tt platform + EXTRA_MODELS_DIR registration)"
+uv pip install --python "$PY" "$PLUGIN_PIN"
+
+echo "==> [5/6] this model's vllm_ext (newline-tolerant poolside_v1 tool-parser override)"
+uv pip install --python "$PY" -e "$MODEL_DIR/vllm_ext"
+
+# ---- verify -------------------------------------------------------------------------------
+echo "==> [6/6] verifying the env"
+PYTHONPATH="$REPO_ROOT" "$PY" - <<'EOF'
+
+import ttnn, vllm, vllm_tt_plugin
+
+# vLLM must be the stock install, not a vLLM checkout vendored inside a tt-metal tree.
+assert "/tt-metal/vllm" not in vllm.__file__, f"vllm resolves into a tt-metal tree: {vllm.__file__}"
+print("  vllm", vllm.__version__)
+print("  ttnn", getattr(ttnn, "__version__", "(no __version__)"), "->", ttnn.__file__)
+print("  plugin", vllm_tt_plugin.__file__)
+
+# CPU torch, not the CUDA default: there is no NVIDIA device here, and the CUDA build drags in
+# ~4 GB of nvidia-*-cu13 wheels. Catches a dropped --extra-index-url.
+import torch
+assert torch.__version__.endswith("+cpu"), f"expected CPU torch, got {torch.__version__}"
+print("  torch", torch.__version__)
+
+# The Laguna decoders pass sliding_window_size to three SDPA entry points (30 of 40 layers are
+# sliding-window). These are nanobind functions, so inspect.signature() cannot see their named
+# args — the signature is embedded in __doc__, which is what we check.
+missing = [
+    name
+    for name in (
+        "scaled_dot_product_attention",
+        "chunked_scaled_dot_product_attention",
+        "paged_scaled_dot_product_attention_decode",
+    )
+    if "sliding_window_size" not in (getattr(ttnn.transformer, name).__doc__ or "")
+]
+assert not missing, (
+    "this ttnn build's "
+    + ", ".join(missing)
+    + " does not accept sliding_window_size, which the sliding-window layers require.\n"
+    "  No released ttnn wheel supports it on the chunked op — see serve_vllm.md '§1 ttnn'."
+)
+print("  ttnn SDPA sliding_window_size: present on all three entry points")
+
+# What EXTRA_MODELS_DIR will resolve at serve time (needs PYTHONPATH=<repo root>).
+from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM  # noqa: F401
+print("  generator_vllm: importable")
+
+# The stock poolside_v1 tool parser misses this checkpoint's newline-free <tool_call> grammar,
+# so `auto` tool-calling silently returns finish_reason=stop unless vllm_ext wins registration.
+from vllm.plugins import load_general_plugins; load_general_plugins()
+from vllm.tool_parsers import ToolParserManager as M
+mod = M.get_tool_parser("poolside_v1").__module__
+assert mod == "laguna_vllm_ext", f"poolside_v1 override NOT active (resolved to {mod})"
+print("  poolside_v1 override active ->", mod)
+EOF
+
+# Weights are gated; a missing snapshot only shows up ~10 min into a boot otherwise.
+HF_HUB="${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}/hub}"
+if [ ! -d "$HF_HUB/models--poolside--Laguna-XS-2.1" ]; then
+  echo
+  echo "NOTE: poolside/Laguna-XS-2.1 is not in $HF_HUB."
+  echo "      It is a gated repo (~63 GB): run 'huggingface-cli login', then serving will fetch it."
+fi
+
+echo
+echo "DONE. Env ready at $VLLM_ENV"
+echo "Serve with:  $MODEL_DIR/serve_vllm.sh"

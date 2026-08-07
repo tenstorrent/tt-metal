@@ -83,10 +83,11 @@ seconds).
 
 ## Docs
 
-- **`doc/vllm_integration/serve_forkfree.md`** — the canonical serve runbook for the fork-free stack (stock
-  vLLM 0.24.0 + public `vllm-tt-plugin` + `vllm_ext`); one-time env build + per-run launch. Scripts:
-  `doc/vllm_integration/scripts/setup_forkfree.sh` (env) and `serve_forkfree.sh` (launch/teardown).
-- **`vllm_ext/README.md`** — the fork-free tt-metal delta (EXTRA_MODELS_DIR bundle + poolside_v1 tool-parser
-  override) and why plugin > fork.
+- **`doc/vllm_integration/serve_vllm.md`** — the canonical serve runbook (stock vLLM 0.24.0 + public
+  `vllm-tt-plugin` + `vllm_ext`, on a PyPI `ttnn` wheel — no tt-metal build needed). Scripts:
+  `setup_vllm.sh` (builds `.venv/` from `requirements.txt`) and `serve_vllm.sh` (launch/teardown,
+  runs setup itself if the env is missing).
+- **`vllm_ext/README.md`** — the tt-metal-side delta (EXTRA_MODELS_DIR bundle + poolside_v1 tool-parser
+  override) and why a plugin beats a vLLM fork.
 - **`doc/context_contract.json`** — machine-readable capability contract.
 - **`doc/vllm_integration/pool_agent_getting_started.md`** — running the `pool` coding agent against the endpoint.

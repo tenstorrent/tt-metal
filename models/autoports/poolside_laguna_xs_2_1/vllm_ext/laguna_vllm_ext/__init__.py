@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""tt-metal-owned vLLM general plugin for Laguna-XS-2.1 on the fork-free stack
+"""tt-metal-owned vLLM general plugin for Laguna-XS-2.1
 (stock vLLM 0.24.0 + public vllm-tt-plugin).
 
 Registered via the ``vllm.general_plugins`` entry point (see pyproject.toml), so vLLM imports and calls
@@ -53,20 +53,14 @@ except Exception:  # pragma: no cover - defensive: never break plugin loading
 
 def register() -> None:
     if not _IMPORT_OK:
-        logger.warning(
-            "laguna_vllm_ext: poolside_v1 tool parser unavailable; override NOT installed"
-        )
+        logger.warning("laguna_vllm_ext: poolside_v1 tool parser unavailable; override NOT installed")
         return
     try:
         from vllm.tool_parsers import ToolParserManager
 
         # Immediate/eager registration (module=...): stores the class object directly in
         # ToolParserManager.tool_parsers, which get_tool_parser() resolves before the stock lazy entry.
-        ToolParserManager.register_module(
-            "poolside_v1", module=PoolsideV1LagunaToolParser
-        )
-        logger.info(
-            "laguna_vllm_ext: registered newline-tolerant poolside_v1 tool parser override"
-        )
+        ToolParserManager.register_module("poolside_v1", module=PoolsideV1LagunaToolParser)
+        logger.info("laguna_vllm_ext: registered newline-tolerant poolside_v1 tool parser override")
     except Exception:
         logger.exception("laguna_vllm_ext: failed to register poolside_v1 override")
