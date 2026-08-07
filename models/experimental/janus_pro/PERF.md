@@ -402,7 +402,7 @@ figure against its 0.95 gate. The per-stage breakdowns are in
 | 23 | `ln_1` + `qkv` | sharding | [ln_1's shard fed to qkv in place](perf_reports/23-ln1-shard-into-qkv.md) | -0.109 ms | 10.089 | 320 | 0.973980 | ShardedToInterleaved 72 inst / 0.528 ms, and the two grids already matched |
 | 24 | `ln_2` + `c_fc` | sharding | [ln_2's shard fed to c_fc in place](perf_reports/24-ln2-shard-into-cfc.md) | -0.073 ms | 10.016 | 296 | 0.966490 | same census, remaining 48 unshards |
 | 25 | aligner | fusion | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.033 ms | 9.983 | 295 | 0.966489 | the last standalone Unary, 1 inst / 0.124 ms at 1.2% |
-| 26 | MLP `c_fc` | sharding | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | **9.841** | 295 | 0.966489 | per-RISC split: BRISC at 99-100% of every matmul, and c_fc's was the only unsharded output |
+| 26 | MLP `c_fc` | sharding | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | 9.841 | 295 | 0.966489 | per-RISC split: BRISC at 99-100% of every matmul, and c_fc's was the only unsharded output |
 | 27 | attn heads | memcfg | [q/k/v written into L1](perf_reports/27-qkv-heads-output-l1.md) | -0.342 ms | 9.499 | 295 | 0.966489 | pure data movement, and SDPA reads all three straight back |
 | 28 | SDPA | memcfg | [SDPA's output written into L1](perf_reports/28-sdpa-output-l1.md) | -0.098 ms | **9.401** | 295 | 0.966489 | same shape; `nlp_concat_heads` is its only consumer |
 
@@ -418,7 +418,7 @@ the total drop, and seven of the 24 steps moved PCC *up*.
 | [`perf_reports/NN-*.md`](perf_reports/) | one per change-log row, linked from the Change column: that stage's explanation next to its own per-op and per-matmul breakdown |
 | [`perf_reports/DEAD_ENDS.md`](perf_reports/DEAD_ENDS.md) | levers measured that did not pay, and one that **did** — the largest win found anywhere here — deliberately absent because it breaks an accuracy gate |
 | [`perf_reports/PROFILER_NOTES.md`](perf_reports/PROFILER_NOTES.md) | three ways `tt-perf-report` and the per-RISC counters mislead on this tower, which ops are structurally closed, and what the profiling did *not* establish |
-| [`perf_reports/OPTIMIZED_OP_LIST.md`](perf_reports/OPTIMIZED_OP_LIST.md) | every device op of one replay at 9.841 ms (stage 26), as `tt-perf-report` prints it |
+| [`perf_reports/OPTIMIZED_OP_LIST.md`](perf_reports/OPTIMIZED_OP_LIST.md) | every device op of one replay at 9.401 ms, as `tt-perf-report` prints it |
 | [`perf_reports/README.md`](perf_reports/README.md) | how a stage report is produced and regenerated |
 
 Read `DEAD_ENDS.md` before trying anything on this tower. It is the cheapest way to avoid
