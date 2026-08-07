@@ -17,6 +17,10 @@
 #
 # Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
+# Wrapper flags below are position-independent: they may appear before or after the test path and
+# may be interleaved with pytest args. Everything the wrapper does not recognize (the test path,
+# -k/-m filters, ::nodeids, ...) is forwarded to pytest verbatim, in the order given.
+#
 # Options:
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
 #                    sanitization), lightweight ebreak asserts, and auto-triage
@@ -160,6 +164,15 @@ JIT_SERVER_DISABLED=false
 # Defensive: the server-enable bit must never leak into the real run / inline path from the ambient
 # environment. precompile_warm is the ONLY place that turns it on, scoped to the warm-pass subprocess.
 unset TT_METAL_JIT_SERVER_ENABLE
+
+# Wrapper flags are POSITION-INDEPENDENT: they may appear anywhere in argv, before or after the
+# test path, interleaved with pytest args. Anything the wrapper does not recognize is collected
+# verbatim (in order) into PYTEST_ARGS and forwarded to pytest untouched.
+# This loop used to `break` at the first unrecognized argument, which made position silently
+# significant: a `--dev` / `--run-all` / `--profile` written after the test path was forwarded to
+# pytest, which has no such option, so the run died with a generic "usage error" that blamed the
+# path — and `--run-all` in that position also failed to disable -x.
+PYTEST_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -196,6 +209,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --precompile-workers)
+            if [[ $# -lt 2 ]]; then
+                echo "SAFE_PYTEST_ERROR: --precompile-workers requires an integer argument"
+                exit 3
+            fi
             PRECOMPILE_WORKERS="$2"
             shift 2
             ;;
@@ -221,7 +238,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            break
+            PYTEST_ARGS+=("$1")
+            shift
             ;;
     esac
 done
@@ -244,17 +262,36 @@ if [[ "$SIM_MODE" == true && -z "$SIM_WORKERS" ]]; then
 fi
 
 # --- Argument validation ---
-if [[ $# -eq 0 ]]; then
+if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
     echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
-TEST_PATH="$1"
+# Best-effort test path, used ONLY for the device-timing record and log lines: the first pytest arg
+# that is neither an option nor the value of a value-taking option. Informational by construction —
+# the pytest command lines below forward PYTEST_ARGS verbatim, so a mis-detection here can never
+# change which tests run. (Previously TEST_PATH was literally $1 and was spliced back into the
+# command, so `-k` written before the path became the "test path".)
+TEST_PATH=""
+_skip_next=false
+for _arg in "${PYTEST_ARGS[@]}"; do
+    if [[ "$_skip_next" == true ]]; then _skip_next=false; continue; fi
+    case "$_arg" in
+        # Separated-value options: the NEXT token is their value, not a path.
+        -k|-m|-n|-p|-c|-o|-W|--deselect|--ignore|--rootdir|--junitxml|--maxfail|--timeout|--log-level)
+            _skip_next=true; continue ;;
+        -*) continue ;;
+    esac
+    TEST_PATH="$_arg"
+    break
+done
+if [[ -z "$TEST_PATH" ]]; then
+    echo "SAFE_PYTEST_ERROR: No test path found in: $(printf '%q ' "${PYTEST_ARGS[@]}")" >&2
+    echo "SAFE_PYTEST_ERROR: pass a file, directory or ::nodeid — a bare filter (e.g. only -k) would collect the whole repo" >&2
+    exit 3
+fi
 TT_TIMING_TEST_PATH="$TEST_PATH"
-shift
-# Remaining args are extra pytest args — the precompile collect must use the SAME selection.
-EXTRA_ARGS=("$@")
 
 # Precompile is ON by default for every run (no breadth heuristic) — see the PRECOMPILE default
 # above. --no-precompile forces inline; tt-probe is the always-inline path for tight iteration.
@@ -307,7 +344,7 @@ precompile_warm() {
     # gives real buffer addresses so address-baked kernels (pool/move/conv) warm too. ccache state is
     # INHERITED (untouched) so it matches the real run below — a mismatch would silently miss the warm cache.
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
-    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: $(printf '%q ' "${PYTEST_ARGS[@]}")" >&2
     t0=$(date +%s)
     # Under --profile the real run executes inside `python -m tracy`, which sets
     # TT_METAL_DEVICE_PROFILER=1 in the child env. That flag moves the kernel build_key, so a warm pass
@@ -325,7 +362,7 @@ precompile_warm() {
     env "${SRV_ENV[@]}" "${PROF_ENV[@]}" \
         UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
         LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
-        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
+        pytest "${PYTEST_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
     TT_TIMING_PRECOMPILE_S=$((t1-t0))
@@ -596,7 +633,40 @@ emit_missing_ttexalens_warning() {
 }
 trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 
-echo "SAFE_PYTEST: pytest ${TEST_PATH} $*"
+# --- Build the pytest command ---
+# Wrapper-injected options go FIRST and the user's args LAST, verbatim and contiguous. Both halves
+# of that ordering are load-bearing:
+#   * Nothing may be spliced INTO the user's args. -x used to be inserted straight after the test
+#     path, so `-k` written before the path became the "test path" and -x landed where the filter
+#     expression belonged: `pytest -k -x '<expr>' <path>` -> "argument -k: expected one argument".
+#   * User args last means an explicit `--maxfail=N` still wins over our -x, as it did before.
+# pytest options are order-independent, so leading -x / -n behave exactly as trailing ones did.
+#
+# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
+#   as a child and post-processes results into ops_perf_results*.csv on pass or
+#   fail. Its exit-code masking is handled at the result check below.
+if [[ "$PROFILE_MODE" == true ]]; then
+    PYTEST_CMD=(python -m tracy -r -m pytest)
+else
+    PYTEST_CMD=(pytest)
+fi
+# -x: stop on first failure (avoids running tests after a hang bricks the device)
+# --run-all: skip -x to get full pass/fail counts (for eval scoring)
+if [[ "$FAIL_FAST" == true ]]; then
+    PYTEST_CMD+=(-x)
+fi
+# Sim parallelism via pytest-xdist. Each worker dlopens its own libttsim;
+# DRAM is MAP_PRIVATE per-process so workers don't interfere. Skip when
+# workers=1 to avoid xdist setup overhead.
+if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
+    PYTEST_CMD+=(-n "$SIM_WORKERS")
+fi
+PYTEST_CMD+=("${PYTEST_ARGS[@]}")
+
+# Echo the EXACT command, shell-quoted (printf %q). The old line interpolated "$*", which drops all
+# quoting: `-k "a or b"` printed as `-k a or b`, so readers concluded the expression had been
+# word-split even on runs where it was passed through intact.
+echo "SAFE_PYTEST: $(printf '%q ' "${PYTEST_CMD[@]}")"
 echo "========================================"
 
 # --- Mark device dirty before running tests (hardware only) ---
@@ -608,26 +678,6 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 
 # --- Run pytest ---
-# -x: stop on first failure (avoids running tests after a hang bricks the device)
-# --run-all: skip -x to get full pass/fail counts (for eval scoring)
-# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
-#   as a child and post-processes results into ops_perf_results*.csv on pass or
-#   fail. Its exit-code masking is handled at the result check below.
-if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
-else
-    PYTEST_CMD=(pytest "${TEST_PATH}")
-fi
-if [[ "$FAIL_FAST" == true ]]; then
-    PYTEST_CMD+=(-x)
-fi
-# Sim parallelism via pytest-xdist. Each worker dlopens its own libttsim;
-# DRAM is MAP_PRIVATE per-process so workers don't interfere. Skip when
-# workers=1 to avoid xdist setup overhead.
-if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
-    PYTEST_CMD+=(-n "$SIM_WORKERS")
-fi
-PYTEST_CMD+=("$@")
 
 # Snapshot the newest CSV now, so emit_profiler_csv can tell this run's report
 # from a pre-existing one afterward.
