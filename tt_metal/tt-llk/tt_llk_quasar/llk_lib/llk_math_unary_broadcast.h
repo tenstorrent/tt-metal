@@ -12,6 +12,14 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+// Row count moved per MOVB2D in this file's MOPs. The FPU moves ELTWISE_MATH_ROWS rows per MOV
+// (8 on Quasar, 4 on 4row_arch's 4-row FPU). A hardcoded MOV_8_ROWS on 4row_arch does NOT write 8
+// contiguous dest rows — it scatters a write-2-skip-2 pattern (the same 4-row-FPU signature seen
+// in matmul), leaving half the tile zeroed. Use the native width and let the MOP inner loop
+// (num_rows / ELTWISE_MATH_ROWS) emit twice as many MOVs on 4row_arch; the dest/srcB addr_mod
+// increments stay at ELTWISE_MATH_ROWS so writes are contiguous. Quasar is byte-identical.
+constexpr std::uint32_t MOVB2D_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+
 /**
  * @file llk_math_unary_broadcast.h
  * @brief Math addrmods, MOP, and per-tile run for unary eltwise with scalar, row, or column broadcast.
@@ -185,10 +193,11 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         const std::uint32_t bcast_row     = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
         constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
 
+        // MOV width is MOVB2D_MOV_ROWS (MOV_4_ROWS on 4row_arch, MOV_8_ROWS on Quasar) to match the
+        // ELTWISE_MATH_ROWS-based dest stride (ADDR_MOD_0) and inner-loop count; a raw MOV_8_ROWS on
+        // 4row_arch would move 8 rows against a 4-row stride and corrupt DestSync.Full (TEN-4797).
         const auto bcast_instr = [bcast_col, bcast_row](std::uint8_t addr_mod)
-        {
-            return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, bcast_row /* dst_addr */);
-        }; // adding 1 to dst_addr enables row broadcast
+        { return TT_OP_MOVB2D(0, 0, addr_mod, MOVB2D_MOV_ROWS, bcast_col, bcast_row /* dst_addr */); }; // adding 1 to dst_addr enables row broadcast
 
         ckernel_template temp(outer, inner, bcast_instr(ADDR_MOD_0));
         temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));

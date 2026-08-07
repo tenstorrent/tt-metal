@@ -27,10 +27,12 @@ template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop, const std::uint32_t num_rows_per_move_instrn)
 {
-    // Divide number of rows by how many rows are output per fpu instruction
-    // Each FPU instruction moves 8 rows at a time
+    // Divide number of rows by how many rows are output per fpu instruction.
+    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch's 4-row FPU); the MOV
+    // width MUST match num_rows_per_move_instrn (the dest addr_mod stride + inner-loop divisor), or
+    // each MOV writes fewer rows than the stride advances and leaves periodic gaps.
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
-    const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;
+    const std::uint32_t mov_rows_instn = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
 
@@ -118,11 +120,13 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
     {
         if constexpr (IS_32b_DEST_EN)
         {
-            return ELTWISE_MATH_ROWS; // always 8 for quasar
+            return ELTWISE_MATH_ROWS; // 8 on Quasar, 4 on 4row_arch
         }
         else
         {
-            return 8;
+            // 16-bit MOV path: must equal the MOV width (mov_rows_instn) so the dest stride and
+            // inner-loop count match how many rows each MOV actually writes. 8 on Quasar, 4 on 4row_arch.
+            return ELTWISE_MATH_ROWS;
         }
     }();
 

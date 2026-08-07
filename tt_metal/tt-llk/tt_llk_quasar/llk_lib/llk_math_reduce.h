@@ -169,7 +169,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
     const std::uint32_t MOP_INNER_LOOP = (tensor_shape.total_num_faces() >= 2) ? (tensor_shape.total_num_faces() >> 1) : tensor_shape.total_num_faces();
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS           = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr std::uint32_t replay_buf_len      = 2 + (RUN_FID_LOOPS ? 2 * NUM_FIDELITY_PHASES : 0);
+    constexpr std::uint32_t replay_buf_len = 2 + (RUN_FID_LOOPS ? 2 * NUM_FIDELITY_PHASES : 0);
 
     load_replay_buf(
         0,
@@ -264,9 +264,15 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
         replay_buf_len += NUM_FIDELITY_PHASES + 1U;
     }
 
-    if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
+    // Each ELWADDDI accumulates ELTWISE_MATH_ROWS rows (8 on Quasar, 4 on 4row_arch's 4-row FPU), so a face of
+    // face_r_dim rows needs face_r_dim / ELTWISE_MATH_ROWS of them; the base count above already includes the
+    // first, so add the rest. Tiny tiles (face_r_dim <= ELTWISE_MATH_ROWS) add none — only the first
+    // densely-packed rows matter. Must stay in lockstep with the ELWADDDI loop in the replay body below.
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "reduce row supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
+    const std::uint32_t num_face_elwadddi = tensor_shape.face_r_dim / ELTWISE_MATH_ROWS;
+    if (num_face_elwadddi > 1U)
     {
-        replay_buf_len++;
+        replay_buf_len += (num_face_elwadddi - 1U);
     }
 
     const std::uint32_t tail_len = 1U + (tensor_shape.total_num_faces() == NUM_FACES ? 1U : 0U);
@@ -314,12 +320,18 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             // on row not column
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
 
-            // Copy transposed rows in SrcB from [32 - 47] to dest rows [0 - 16]
+            // Copy transposed rows in SrcB from [32 - 47] to dest rows [0 - 16].
+            // Each ELWADDDI accumulates ELTWISE_MATH_ROWS rows (ADDR_MOD_1 steps dest/srcb by that),
+            // so 16 / ELTWISE_MATH_ROWS are needed: 2 on Quasar (8-row), 4 on 4row_arch (4-row FPU).
             TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
             TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
 
-            // For tiny-tiles, only the first 8 rows matter as they are the densely packed ones. We can skip the second copy in this case.
-            if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
+            // Accumulate the remaining rows of the face: ELTWISE_MATH_ROWS per ELWADDDI, face_r_dim / ELTWISE_MATH_ROWS
+            // total (the first was emitted above). For tiny tiles (face_r_dim <= ELTWISE_MATH_ROWS) this is zero — only
+            // the first densely-packed rows matter. 4row_arch's 4-row FPU emits more ELWADDDIs than Quasar's 8-row.
+            // Count MUST match num_face_elwadddi used for replay_buf_len above.
+            const std::uint32_t num_face_elwadddi = tensor_shape.face_r_dim / ELTWISE_MATH_ROWS;
+            for (std::uint32_t i = 1U; i < num_face_elwadddi; i++)
             {
                 TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
             }
@@ -333,8 +345,8 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
         });
 
-    const std::uint32_t replay           = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
-    const std::uint32_t dest_inc_32      = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
+    const std::uint32_t replay      = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
+    const std::uint32_t dest_inc_32 = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, dest_inc_32);
     temp.set_last_inner_loop_instr(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD));
@@ -364,8 +376,11 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    const std::uint32_t replay_buf_len =
-        6 + tensor_shape.total_num_faces() - 1 + (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
+    // The B->A copy below uses MOVB2A, ELTWISE_MATH_ROWS rows per instruction: 2 MOVB2A on Quasar
+    // (8-row), 4 on 4row_arch (4-row FPU) -> +2 instructions on 4row_arch.
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "reduce scalar supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
+    const std::uint32_t replay_buf_len = 6 + ((ELTWISE_MATH_ROWS == 4) ? 2 : 0) + tensor_shape.total_num_faces() - 1 +
+                                         (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
@@ -407,9 +422,20 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
             // Following will move 1x16 pool result to SrcB to be transposed into 16 rows
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, scratch_dst_addr);
 
-            // copy over all 16 rows from B to A
-            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
+            // copy over all 16 rows from B to A (MOVB2A moves ELTWISE_MATH_ROWS rows each: 2x8 on
+            // Quasar, 4x4 on 4row_arch).
+            if constexpr (ELTWISE_MATH_ROWS == 8)
+            {
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
+            }
+            else // ELTWISE_MATH_ROWS == 4 (4row_arch)
+            {
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 4);
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 12);
+            }
 
             // zero out scratch in dest
             TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);

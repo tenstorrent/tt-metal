@@ -710,9 +710,7 @@ def quantize_input_to_unpack_format(
     if input_format == DataFormat.Bfp8_b:
         return _bfp8b_to_float16b(operand)
     if input_format is not None and input_format.is_mx_format():
-        if all_mx_formats or input_format == DataFormat.MxFp4:
-            return quantize_mx_tensor_chunked(operand, input_format)
-        return operand
+        return quantize_mx_tensor_chunked(operand, input_format)
     return operand
 
 

@@ -94,30 +94,31 @@ inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
     }
 
     // MVMUL does D = B*A
-
-    // Inner Loop --> 32/8 = 4 times for the full 32x16 face
-    // DEST -- 8 rows are calculated each time
-    // SRCB -- 8 rows are needed
+    //
+    // The FPU advances ELTWISE_MATH_ROWS dest rows per MVMUL (8 on Quasar, 4 on 4row_arch), so the
+    // in-face SrcB/Dest step is ELTWISE_MATH_ROWS, not a hardcoded 8. A 16-row face is therefore
+    // covered by 16 / ELTWISE_MATH_ROWS MVMULs (Quasar: 2, 4row_arch: 4) — see the MOP below.
     // SRCA -- full 16x16 gets used -- hardware will pair cols of A with rows of B
-    // D[8,16] = B[8,16] * A[16,16]
+    constexpr std::uint32_t row_incr = ELTWISE_MATH_ROWS;
+
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 8, .clr = 0, .cr = 0},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
+        .srcb = {.incr = row_incr, .clr = 0, .cr = 0},
+        .dest = {.incr = row_incr, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_0);
 
     addr_mod_t {
         .srca = {.incr = 16, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 1},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
+        .dest = {.incr = row_incr, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_1);
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 1},
         .srcb = {.incr = 32, .clr = 0, .cr = 1},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
+        .dest = {.incr = row_incr, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_2);
 
@@ -203,7 +204,8 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
 template <bool ENABLE_2X_FORMAT>
 inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
 {
-    return ENABLE_2X_FORMAT ? (8 - 1) : (16 - 1);
+    constexpr std::uint32_t ops_per_face   = 16 / ELTWISE_MATH_ROWS;
+    return ENABLE_2X_FORMAT ? (8 - 1) : (8 * ops_per_face - 1);
 }
 
 /**
@@ -248,6 +250,11 @@ inline void _llk_math_matmul_load_replay_()
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
+    // Each MVMUL covers ELTWISE_MATH_ROWS dest rows (8 Quasar, 4 4row_arch), so a 16-row face needs
+    // ops_per_face MVMULs (Quasar: 2, 4row_arch: 4). The non-2x replay is 8 face-pairs of ops_per_face
+    // MVMULs, minus the final one supplied by matmul_op/matmul_op_last out of the MOP.
+    static_assert(16 % ELTWISE_MATH_ROWS == 0, "ELTWISE_MATH_ROWS must divide the 16-row face");
+    constexpr std::uint32_t ops_per_face   = 16 / ELTWISE_MATH_ROWS;
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     if constexpr (ENABLE_2X_FORMAT)
@@ -276,28 +283,42 @@ inline void _llk_math_matmul_load_replay_()
     }
     else
     {
+        // Same B/A face-pair traversal as the original 16-MVMUL Quasar replay, but each pair now
+        // emits ops_per_face MVMULs (Quasar: 2, 4row_arch: 4): (ops_per_face-1) in-face steps via
+        // ADDR_MOD_0 (srca=srca, srcb+=row_incr, dest+=row_incr) followed by the face-transition
+        // addr_mod. The last MVMUL of the final pair (B3A3) is supplied by matmul_op/matmul_op_last.
         load_replay_buf<0, replay_buf_len>(
             // Lambda function to load reply buffer
             []
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8  // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0,    srcb=32,  dest+=8  // A1 -> A2 if transposed
+                // (ops_per_face - 1) in-face steps. ADDR_MOD_0 is a literal so the .ttinsn
+                // immediate-operand ("n") constraint is satisfied even though the *count*
+                // (ops_per_face) is parametric — only the loop bound is runtime, never the op.
+                const auto in_face_steps = []
+                {
+                    for (std::uint32_t i = 0; i < ops_per_face - 1; ++i)
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // srca=srca, srcb+=row_incr, dest+=row_incr
+                    }
+                };
 
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8,  dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1 // srca=32/16,srcb=16,  dest=0  // A1 -> A2 && srca=16 if transposed
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 -> srca+=16/32, srcb=0,  dest+=row_incr (srca+=32 if transposed)
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 -> srca=0,      srcb=32, dest+=row_incr
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 -> srca+=16/32, srcb=0,  dest+=row_incr
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1 -> srca=32/16,  srcb=16, dest=0
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 -> srca+=16,    srcb=16, dest+=row_incr
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 -> srca=32,     srcb=48, dest+=row_incr
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 -> srca+=16,    srcb=0,  dest+=row_incr
 
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32,   srcb=48,  dest+=8
-
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
+                // B3A3 in-face steps; the final MVMUL comes from matmul_op / matmul_op_last (MOP tail).
+                in_face_steps();
             });
     }
 }

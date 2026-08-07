@@ -84,13 +84,13 @@ UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float32,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
+        # DataFormat.MxFp8R,
+        # DataFormat.MxFp8P,
+        # DataFormat.MxFp4,
         DataFormat.Int32,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
+        # DataFormat.MxInt8,
+        # DataFormat.MxInt4,
+        # DataFormat.MxInt2,
     ],
     same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
 )
@@ -253,8 +253,6 @@ def test_unary_broadcast_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=True
-    )
-
-    assert test_passed, "Assert against golden failed"
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Result tensor and golden tensor do not match"

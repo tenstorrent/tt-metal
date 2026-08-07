@@ -25,6 +25,8 @@ VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Int16,
     DataFormat.MxFp4_2x_A,
     DataFormat.MxFp4_2x_B,
+    DataFormat.Int8_2x,
+    DataFormat.UInt8_2x,
 ]
 
 VALID_QUASAR_DEST_REG_FORMATS = [
@@ -116,6 +118,10 @@ def is_format_combination_outlier(
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
+    # Int8_2x/UInt8_2x are 4row_arch-only, but the 4row_arch target builds run on the
+    # Quasar-arch emulator, so they are gated on QUASAR here.
+    DataFormat.Int8_2x: ChipArchitecture.QUASAR,
+    DataFormat.UInt8_2x: ChipArchitecture.QUASAR,
 }
 
 
@@ -173,6 +179,16 @@ def infer_unpack_out(
             DataFormat.MxFp4_2x_A,
             DataFormat.MxFp4_2x_B,
         ]:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
+            )
+        if (
+            input_format == DataFormat.Int8
+            and register_format_hint != DataFormat.Int8_2x
+        ) or (
+            input_format == DataFormat.UInt8
+            and register_format_hint != DataFormat.UInt8_2x
+        ):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -353,6 +369,10 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
         return DataFormat.Float16
     if unpack_out == DataFormat.MxFp4_2x_B:
         return DataFormat.Float16_b
+    if unpack_out == DataFormat.Int8_2x:
+        return DataFormat.Int8
+    if unpack_out == DataFormat.UInt8_2x:
+        return DataFormat.UInt8
     return unpack_out
 
 
