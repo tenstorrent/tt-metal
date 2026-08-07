@@ -71,11 +71,7 @@ class TestParseMissingConnections(unittest.TestCase):
         channels = [c for c in conns if c[0] == "channel"]
         self.assertEqual(len(ports), 4)
         self.assertEqual(len(channels), 3)
-        wrapped = [
-            c
-            for c in channels
-            if c[1][3] == "7" and c[2][3] == "7" and c[1][1] == "1" and c[2][1] == "3"
-        ]
+        wrapped = [c for c in channels if c[1][3] == "7" and c[2][3] == "7" and c[1][1] == "1" and c[2][1] == "3"]
         self.assertEqual(len(wrapped), 1)
         port_types = {c[1][2] for c in ports} | {c[2][2] for c in ports}
         self.assertIn("TRACE", port_types)
