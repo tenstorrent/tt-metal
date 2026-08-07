@@ -165,7 +165,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache GLM52_MLA_REF_CACHE=/tmp/glm_5_2_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
     # Sparse MLA (V3.2 + GLM-5.2) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
