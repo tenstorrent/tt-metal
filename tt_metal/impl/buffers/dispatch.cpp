@@ -41,17 +41,7 @@
 
 namespace tt::tt_metal::buffer_dispatch {
 
-// Per-core-allocated L1 buffers give each core an INDEPENDENT shard address;
-// Buffer::address() is only cores[0]'s address. Host data movement must target
-// the same per-core address the kernel reads via
-// experimental_per_core_buffer_address(core), otherwise relocated cores get
-// their data written/read at the wrong offset.
-inline DeviceAddr per_core_shard_base_address(const Buffer& buffer, const CoreCoord& core) {
-    if (experimental::per_core_allocation::is_per_core_allocation(buffer)) {
-        return experimental::per_core_allocation::get_per_core_address(buffer, core);
-    }
-    return buffer.address();
-}
+using experimental::per_core_allocation::get_shard_base_address;
 
 // ====== Utility Functions for Writes ======
 
@@ -357,7 +347,7 @@ public:
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
         this->core_page_mapping_it = core_page_mapping.begin();
-        this->address = per_core_shard_base_address(*this->buffer, core) +
+        this->address = get_shard_base_address(*this->buffer, core) +
                         core_page_mapping.device_start_page * this->buffer->aligned_page_size();
         if (this->buffer->is_dram()) {
             this->address += this->buffer->device()->allocator()->get_bank_offset(
@@ -721,7 +711,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Calculate base destination address for this core
     uint32_t dst_base_address =
-        per_core_shard_base_address(buffer, core) + (core_page_mapping.device_start_page * buffer.aligned_page_size());
+        get_shard_base_address(buffer, core) + (core_page_mapping.device_start_page * buffer.aligned_page_size());
     if (buffer.is_dram()) {
         dst_base_address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
@@ -1258,7 +1248,7 @@ bool write_to_device_buffer(
                         for (const BufferCorePageMapping& core_page_mapping :
                              buffer_page_mapping->core_page_mappings[core_id]) {
                             // Check destination L1 address alignment
-                            uint32_t dst_address = per_core_shard_base_address(buffer, cores[core_id]) +
+                            uint32_t dst_address = get_shard_base_address(buffer, cores[core_id]) +
                                                    (core_page_mapping.device_start_page * buffer.aligned_page_size());
                             if (buffer.is_dram()) {
                                 dst_address += buffer.device()->allocator()->get_bank_offset(
@@ -1559,7 +1549,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
-    auto address = per_core_shard_base_address(buffer, core);
+    auto address = get_shard_base_address(buffer, core);
 
     if (buffer.is_dram()) {
         address += buffer.device()->allocator()->get_bank_offset(

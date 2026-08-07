@@ -7,7 +7,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
@@ -67,6 +66,12 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
+
+    nb::enum_<tt::tt_fabric::FabricType>(mod, "FabricType", nb::is_arithmetic())
+        .value("MESH", tt::tt_fabric::FabricType::MESH)
+        .value("TORUS_X", tt::tt_fabric::FabricType::TORUS_X)
+        .value("TORUS_Y", tt::tt_fabric::FabricType::TORUS_Y)
+        .value("TORUS_XY", tt::tt_fabric::FabricType::TORUS_XY);
 
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricReliabilityMode>(mod, "FabricReliabilityMode", R"(
@@ -330,6 +335,15 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
         R"(
             Returns the maximum fabric packet payload size in bytes.
+        )");
+
+    mod.def(
+        "get_all_mgd_fabric_types",
+        &tt::tt_fabric::get_all_mgd_fabric_types,
+        R"(
+            Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
+            the active mesh graph descriptor. Callers can map these to a FabricConfig to match
+            the wired topology (RING/LINE) instead of inferring it from process count.
         )");
 
     mod.def(

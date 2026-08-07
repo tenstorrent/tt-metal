@@ -228,7 +228,7 @@ void kernel_main() {
     // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
     // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
     // in the trailing batch keep their sentinel expert index, so expert_dispatch_table[sentinel] == -1
-    // drops them — making a coarse ceil(real/32) batch bound safe.
+    // drops them — making a coarse ceil(real/32) batch bound safe
     uint32_t effective_total_batches = total_batches;
 #ifdef HAS_PADDING_CONFIG
     {

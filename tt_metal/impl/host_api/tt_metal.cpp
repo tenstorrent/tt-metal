@@ -554,16 +554,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-// Per-core-allocated L1 buffers give each core an INDEPENDENT shard address;
-// buffer.address() is only cores[0]'s address. Slow-dispatch host data movement
-// must target the same per-core address the kernel reads via
-// experimental_per_core_buffer_address(core).
-inline DeviceAddr per_core_or_uniform_base(const Buffer& buffer, const CoreCoord& logical_core) {
-    if (experimental::per_core_allocation::is_per_core_allocation(buffer)) {
-        return experimental::per_core_allocation::get_per_core_address(buffer, logical_core);
-    }
-    return buffer.address();
-}
+using experimental::per_core_allocation::get_shard_base_address;
 
 void WriteToDeviceSharded(
     Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
@@ -604,7 +595,7 @@ void WriteToDeviceSharded(
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             if (buffer.is_l1()) {
-                auto absolute_address = per_core_or_uniform_base(buffer, core) + bank_offset +
+                auto absolute_address = get_shard_base_address(buffer, core) + bank_offset +
                                         (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
@@ -796,7 +787,7 @@ void read_pages_to_host_helper(
         auto logical_core = dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id);
         auto core_coordinates = device->worker_core_from_logical_core(logical_core);
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = per_core_or_uniform_base(dev_buffer, logical_core) + bank_offset +
+        auto absolute_address = get_shard_base_address(dev_buffer, logical_core) + bank_offset +
                                 (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
