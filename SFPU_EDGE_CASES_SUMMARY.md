@@ -142,14 +142,47 @@ with 270 xfails.
 ## What Phases 2–4 found
 
 Nine ops, none of it previously measured, because the random sweep lands near these points and
-never on them:
+never on them. All of it is cross-checked against
+[tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), which splits the
+results cleanly into "documented" and "still open". Everything stays xfailed either way — the
+test's job is to notice a divergence, not to judge it — but only the second group is worth a
+kernel-side look.
+
+### Documented hardware behaviour
+
+**The sign of a zero *result* is lost on Wormhole, and this is specified.** `div(0, -x)`,
+`fmod`/`remainder` with a negative divisor, and `xlogy(0, tiny)` all return `+0.0` where IEEE
+gives `-0.0`. Every one of those ops is built on `SFPMAD`, and:
+
+> Wormhole — "If the output (before rounding) is denormal or negative zero, it'll be flushed to
+> **positive** zero." — `WormholeB0/TensixTile/TensixCoprocessor/SFPMAD.md`
+>
+> Blackhole — "If the output (after rounding) is denormal, it'll be flushed to **sign-preserved**
+> zero." — `BlackholeA0/TensixTile/TensixCoprocessor/SFPMAD.md`
+
+Blackhole's page lists "improved edge-case handling of NaNs and of negative zero" among its
+upgrades over Wormhole. So this is a documented Wormhole limitation that Blackhole is documented
+to fix — which is why these are **non-strict** xfails: they should report XPASS on Blackhole
+rather than failing the suite.
+
+**`sign(-0.0)` and `heaviside(-0.0)` are outside the primitive's documented contract.**
+`SFPSETCC`, which those kernels compare with, is specified only:
+
+> "Provided that `VC` is neither negative zero nor any kind of NaN: set per-lane flags based on
+> `VC < 0` or `VC != 0` or `VC >= 0` or `VC == 0`" — `VectorUnit.md`, identically on both arches
+
+The golden follows torch and IEEE-1985 and is right about the mathematics; the hardware was
+never promised to agree at `-0.0`. Worth knowing that this caveat persists on Blackhole, so
+unlike the `SFPMAD` group it is not an arch-generation issue.
+
+### Still open — not explained by the ISA
 
 | Finding | Ops |
 |---|---|
-| **The SFPU does not preserve the sign of zero.** One cause, seven ops, two suites. `signbit(-0.0)` returns 0 where the kernel's own docstring promises 1; `sign(-0.0)` returns −1 where torch gives 0; `heaviside(-0.0)` returns 0 where `-0.0 == 0` makes it 0.5; `div(0, -x)`, `fmod`/`remainder` with a negative divisor, and `xlogy(0, tiny)` all return `+0.0`. IEEE-1985 makes the golden right in every case, and `-0.0` is *delivered* correctly — verified host-side — so this is the device path. | `signbit`, `sign`, `heaviside`, `div`, `fmod`, `remainder`, `xlogy` |
-| **`0/0` and `x%0` return `inf`, not `nan`.** Specifically the indeterminate form: the finite poles agree exactly and every ±inf lines up. | `div`, `fmod`, `remainder`, `xlogy` |
-| **`0**0` returns 0** where C, torch and the golden give 1. | `pow` |
-| **`RsqrtCompat(0)` saturates to `1.7014118e38`** instead of returning `inf`, on all 8 combinations — while plain `Rsqrt` over the same probe does not diverge. Two implementations of one function disagreeing at their shared pole. | `RsqrtCompat` |
+| **`signbit(-0.0)` returns 0** where the kernel's own docstring promises 1 ("logical-shift the fp32 bit pattern right by 31 … incl. `-0.0`"). Unlike `sign`/`heaviside` this op claims to read the sign bit *directly*, so either the claim or the implementation is wrong — a kernel-contract bug rather than a hardware one. `-0.0` is delivered correctly, verified host-side. | `signbit` |
+| **`0/0` and `x%0` return `inf`, not `nan`.** `SFPMAD` states "if any input is NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual IEEE754 rules", which makes `0 × inf` a NaN — so this is the kernels' own reciprocal composition, not the multiply. Specifically the indeterminate form: the finite poles agree exactly and every ±inf lines up. | `div`, `fmod`, `remainder`, `xlogy` |
+| **`0**0` returns 0** where C, torch and the golden give 1. `pow` evaluates `exp(b·ln a)`, so a composition artifact. | `pow` |
+| **`RsqrtCompat(0)` saturates to `1.7014118e38`** (`0x7F000000`) instead of returning `inf`, on all 8 combinations — while plain `Rsqrt` over the same probe does not diverge. Two implementations of one function disagreeing at their shared pole, with nothing in the ISA prescribing either answer. | `RsqrtCompat` |
 | **`Erfinv(±1)` saturates** rather than returning ±inf, on the fp32-dest combinations only. | `erfinv` |
 
 Two smaller results worth keeping:
