@@ -2910,9 +2910,15 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             semaphore_binding.semaphore_spec_name,
             id);
         // The host-resolved physical scope (ResolveSemaphoreScope) is baked into the kernel via the
-        // emitted SemaphoreBindingToken<id, scope> token, so the kernel picks the mechanism through CTAD.
+        // emitted SemaphoreBindingToken<id, scope, read_only> token, so the kernel picks the mechanism
+        // through CTAD. read_only carries the declared AccessType so an OBSERVE binding cannot compile
+        // a mutator -- the census EXCLUDES OBSERVE bindings from the writer count, so that promise has
+        // to be enforced rather than trusted.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
-        out.emplace(semaphore_binding.accessor_name, tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope});
+        const bool read_only = semaphore_binding.access_type == KernelSpec::SemaphoreBinding::AccessType::OBSERVE;
+        out.emplace(
+            semaphore_binding.accessor_name,
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, read_only});
     }
     return out;
 }

@@ -423,6 +423,12 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
+        // As in relay_unicast: the gate is on the DESTINATION. Relay reads *this and writes dst_sem.
+        static_assert(
+            !DstReadOnly,
+            "relay_multicast() writes the DESTINATION semaphore on every core in the region, but that "
+            "binding is declared AccessType::OBSERVE. Relabel the destination binding SET. (A "
+            "read-only SOURCE is fine -- relay only reads this semaphore.)");
         static_assert(
             Scope != SemScope::DM_LOCAL_CACHED,
             "relay_multicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");

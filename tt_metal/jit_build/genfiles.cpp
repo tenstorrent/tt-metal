@@ -145,10 +145,13 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint16_t id;
         SemScope scope;
+        bool read_only;
     };
     vector<SemEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id, SemScope scope) { sem_entries.push_back({name, id, scope}); });
+        [&sem_entries](const string& name, uint16_t id, SemScope scope, bool read_only) {
+            sem_entries.push_back({name, id, scope, read_only});
+        });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Does this kernel bind a DM_LOCAL_CACHED semaphore? Those live in the dedicated cached-only
@@ -280,7 +283,8 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "namespace sem {\n";
             for (const auto& entry : sem_entries) {
                 content << "constexpr ::SemaphoreBindingToken<" << entry.id << "u, static_cast<::SemScope>("
-                        << static_cast<int>(entry.scope) << ")> " << entry.name << "{};\n";
+                        << static_cast<int>(entry.scope) << "), " << (entry.read_only ? "true" : "false") << "> "
+                        << entry.name << "{};\n";
             }
             if (has_cached_sem) {
                 // DM_LOCAL_CACHED semaphores live in a dedicated cached-only pool that the

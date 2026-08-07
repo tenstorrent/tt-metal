@@ -105,7 +105,8 @@ public:
     virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope)>) const {}
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, bool read_only)>)
+        const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace

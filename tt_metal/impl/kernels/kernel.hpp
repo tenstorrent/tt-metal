@@ -93,14 +93,18 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> logical DFB ids
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: semaphore accessor handle -> {semaphore id, host-baked physical scope}.
-// The scope is resolved by the host (ResolveSemaphoreScope) and baked into the kernel via the
-// emitted SemaphoreBindingToken<id, scope> token so the kernel's Semaphore picks the mechanism via CTAD.
+// Metal 2.0: semaphore accessor handle -> {semaphore id, host-baked physical scope, access rights}.
+// The scope is resolved by the host (ResolveSemaphoreScope) and baked into the kernel via the emitted
+// SemaphoreBindingToken<id, scope, read_only> token so the kernel's Semaphore picks the mechanism via
+// CTAD. read_only carries KernelSpec::SemaphoreBinding::access_type == OBSERVE, which makes every
+// Semaphore mutator fail to compile for that binding -- the host relies on an OBSERVE binding not
+// writing (it is excluded from the writer census), so the promise is enforced rather than trusted.
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
+    bool read_only = false;
 };
-// Metal 2.0: semaphore accessor names -> {semaphore id, scope}
+// Metal 2.0: semaphore accessor names -> {semaphore id, scope, read_only}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
@@ -235,7 +239,8 @@ public:
     void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope)>) const override;
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, bool read_only)>)
+        const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
