@@ -500,7 +500,42 @@ section is measured unless explicitly marked otherwise.
   which relieves the exact constraint causing these OOMs *and* removes the
   45-50% redundant compute.
 
-### VAE spatial sharding: scaffolded but unwired
+### VAE spatial sharding: IMPLEMENTED and working, blocked only by DRAM
+
+- **Correction to an earlier entry in this report.** Spatial sharding is not
+  "scaffolded but unwired" and is not a refactor waiting to be written. It is
+  fully implemented behind **`HY_VAE_HW_SHARD=1`**, which self-derives an 8x4
+  H/W `VaeHWParallelConfig` and its own `CCLManager` from the mesh. Device-side
+  neighbour-pad (halo) exchange already exists in `CausalConv3d`
+  (`ccl_manager.neighbor_pad_persistent_buffer`,
+  `get_np_ping_pong_semaphore`, `canonicalize_replicated_shard_edges`), and all
+  nine decoder classes carry `parallel_config`/`ccl_manager` plumbing --
+  36 CCL references in `tt/vae_decoder.py`. The earlier assessment came from
+  reading `tt/vae_spatial.py`'s docstring instead of the decoder itself.
+- **It works.** 480p i2v 13 frames with `HY_VAE_HW_SHARD=1` passes.
+- **It cannot run at 121 frames**, for a memory reason rather than a functional
+  one: `Out of Memory ... bank size 4,272,341,376 B (allocated 4,242,684,416 B,
+  free 29,656,960 B)`. DRAM is **99.3% consumed by the resident DiT**, and the
+  allocation that fails is only 101 MB.
+- Output versus the tiled path at 13f: **frame PCC 0.99897280**, max absolute
+  pixel difference 95, mean 1.17. Not identical, and that is expected: the tiled
+  path blends overlapping regions on host (averaging two independently decoded
+  copies of every overlap pixel) while the sharded path computes each pixel once
+  through halo exchange. The sharded result is plausibly the more accurate of
+  the two; deciding that needs a host-VAE reference, which has not been run.
+- **The unlock is freeing the DiT before VAE decode**, not writing the sharded
+  path. VAE decode is the last stage of a one-shot generation, so the DiT is not
+  needed again, and the prepared-weight cache makes a reload cheap (~4s) if a
+  served path ever wants one. No deallocation path exists today: the only
+  `release_*` call in `tt/pipeline.py` is `release_trace`, and even the 720p
+  transformer swap does not free the 480p weights.
+- Expected payoff once unblocked: the tiled path decodes 1.81x the image area at
+  480p and 1.99x at 720p (overlap 0.25, 45 and 112 tiles, 2 and 4 rounds), so
+  45-50% of VAE decode is redundant overlap or edge padding. Against ~40s of
+  decode that is ~18-20s. Unmeasured at 121f -- the sharded path has never run
+  at that length.
+
+### VAE spatial sharding: original assessment (superseded above)
 
 - `tt/vae_spatial.py` provides a complete, property-tested toolkit
   (`SpatialShardPlan`, `host_shard_with_halo`, `stitch_host_shards`,
