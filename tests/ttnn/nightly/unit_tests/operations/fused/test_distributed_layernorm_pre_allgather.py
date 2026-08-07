@@ -1053,3 +1053,83 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
         f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
         f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
     )
+
+
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
+@pytest.mark.parametrize("use_residual", [False, True])
+@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
+def test_layernorm_pre_all_gather_non_welford_fp32_precision(
+    device, inp_shape, use_residual, fast_and_approximate_mode
+):
+    """Non-Welford Float32 pre_all_gather vs fp64 reference for both SFPU and FPU paths."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(inp_shape, dtype=torch.float32)
+    torch_residual = torch.randn(inp_shape, dtype=torch.float32) if use_residual else None
+    combined = torch_input + torch_residual if use_residual else torch_input
+    ref_sumx2 = combined.to(torch.float64).pow(2).sum(dim=-1)
+    ref_sumx = combined.to(torch.float64).sum(dim=-1)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_inp = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    residual_kwargs = {}
+    if use_residual:
+        residual_kwargs["residual_input_tensor"] = ttnn.from_torch(
+            torch_residual,
+            dtype=ttnn.float32,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    actual = ttnn.to_torch(
+        ttnn_layer_norm_pre_all_gather(
+            tt_inp,
+            dtype=ttnn.float32,
+            compute_kernel_config=kernel_config,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            **residual_kwargs,
+        )
+    )
+    # Non-Welford layout: col 0 = sum(x^2), col 32 = sum(x).
+    tt_sumx2 = actual[..., 0].to(torch.float64).squeeze(-1)
+    tt_sumx = actual[..., 32].to(torch.float64).squeeze(-1)
+
+    # SFPU Accurate gets tight thresholds; FPU/TF32 is lossy so tolerances are looser.
+    if fast_and_approximate_mode:
+        rtol, atol, frob, pcc = 2e-3, 0.75, 2e-3, 0.99999
+    else:
+        rtol, atol, frob, pcc = 1e-5, 1e-5, 1e-5, 0.99999
+
+    for ref, out in ((ref_sumx2, tt_sumx2), (ref_sumx, tt_sumx)):
+        assert_numeric_metrics(ref, out, rtol=rtol, atol=atol, frobenius_threshold=frob, pcc_threshold=pcc)
+
+
+@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
+def test_layernorm_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc(device, inp_shape, expect_error):
+    """fp32 in without fp32_dest_acc_en would silently truncate in the unpacker, so it is a hard
+    error rather than a quiet fallback."""
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    tt_inp = ttnn.from_torch(
+        torch.randn(inp_shape, dtype=torch.float32),
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        ttnn_layer_norm_pre_all_gather(tt_inp, dtype=ttnn.float32, compute_kernel_config=kernel_config)
