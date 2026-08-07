@@ -700,13 +700,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
-        // Sparse-frames extension (all three or none). Enables windowed block-sparse
-        // attention pattern inside the ring op via a compact uint8 [1,1,nf_padded,nf_padded]
-        // sparse_frame_mask table + host-computed active_ring_iter_mask.
         nb::arg("tokens_per_frame") = nb::none(),
         nb::arg("num_frames_padded") = nb::none(),
-        // Packed bits, row-major: bit `q*num_frames_padded + k` = 1 iff Q frame q attends K frame k.
-        // At most 32 uint32 words (num_frames_padded <= 32). Empty vector = sparse-frames disabled.
         nb::arg("sparse_frame_mask") = std::vector<uint32_t>{});
 
     const auto* const ring_mla_doc = R"doc(

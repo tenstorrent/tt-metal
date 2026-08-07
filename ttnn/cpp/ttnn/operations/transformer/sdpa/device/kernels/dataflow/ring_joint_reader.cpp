@@ -388,7 +388,7 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // Sparse-frames packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words, so the read is
+    // Packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words, so the read is
     // unconditional here. Later use is gated on the sparse_frames_enabled compile-time flag.
     // Must match exactly so sender and receiver make identical skip decisions in the chain.
     uint32_t sparse_frame_mask_words[32];
@@ -674,7 +674,7 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
-    // Sparse-frames: detect a shard whose Q frames are ALL padding, i.e. no q_frame
+    // Sparse computation: detect a shard whose Q frames are ALL padding, i.e. no q_frame
     // attends any k_frame. The per-k_chunk aggregate skip below would then push ZERO chunks for the
     // whole device — but the skip sits above k_chain.forward and cb_k.push_back, so it also strands
     // the head-chain multicast and the ring balance every other device depends on. For such
@@ -898,7 +898,7 @@ void kernel_main() {
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
-            // Sparse-frames: an ACTIVE ring iter can have EVERY k_chunk shard-aggregate-skipped (no
+            // Sparse computation: an ACTIVE ring iter can have EVERY k_chunk shard-aggregate-skipped (no
             // q_frame in this shard attends any of this iter's k-frames), so the in-loop first_k_for_q
             // push never fires — yet compute's zero-work fast path still pops cb_q_in. Push Q up front
             // here so cb_q_in stays balanced; suppress the in-loop push.
@@ -1117,8 +1117,6 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                // Under sparse-frames this is suppressed (first_k_for_q pre-set false); Q was hoisted
-                // above so all-skipped active iters still push Q.
                 if (first_k_for_q && need_q_read) {
                     push_q();
                 }

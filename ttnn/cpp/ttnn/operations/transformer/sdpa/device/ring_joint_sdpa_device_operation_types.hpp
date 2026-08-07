@@ -40,7 +40,7 @@ struct RingJointSDPAParams {
     uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
 
-    // Sparse-frames extension (windowed / block-sparse attention). All three set together or
+    // Sparse computation (windowed / block-sparse attention). All three set together or
     // all unset. `tokens_per_frame` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is
     // the (sp-aligned) frame count, must divide ring_size and be <= 32. The `sparse_frame_mask`
     // is a bitpacked row-major representation of the [num_frames_padded, num_frames_padded] allow-table: bit

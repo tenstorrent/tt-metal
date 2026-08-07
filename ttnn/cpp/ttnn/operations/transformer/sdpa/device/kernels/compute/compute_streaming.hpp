@@ -2306,7 +2306,7 @@ void sdpa_ring_v2(
     const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
 
-    // Sparse-frames: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
+    // Sparse computation: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
     // all padding attends no k_frame, so the reader disables its aggregate skip and forwards/pushes
     // every k_chunk (full data-movement participation, like dense). Compute must then DRAIN every
     // pushed chunk rather than consult the (all-zero) aggregate — otherwise it would leave reader's
@@ -2462,7 +2462,7 @@ void sdpa_ring_v2(
         return false;
     };
 
-    // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed for this Q chunk. Reader
+    // Sparse computation: this (q_frame, k_frame) pair is disallowed for this Q chunk. Reader
     // uses a SHARD-AGGREGATE decision (skips only when NO q_frame in the shard attends the
     // k_frame — required for head/batch/gqa chain sync across cores handling different q_chunks
     // with different allow rows). So the reader may have PUSHED K/V for a chunk this specific
@@ -2562,7 +2562,7 @@ void sdpa_ring_v2(
         // Note: this scan does NOT drain CBs (reader hasn't pushed yet); it only mirrors the
         // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
         //
-        // Sparse-frames: q_frame is uniform within a Q chunk when the pattern is enabled (host
+        // Sparse computation: q_frame is uniform within a Q chunk when the pattern is enabled (host
         // asserts tiles_per_frame % Sq_chunk_t == 0, so no Q chunk straddles a frame). Chunks
         // may be smaller than a frame; the integer division below still maps every chunk to
         // exactly one q_frame. Computed once here and reused inline.
@@ -2603,11 +2603,10 @@ void sdpa_ring_v2(
             per_q_valid_kv++;
         }
 
-        // Sparse-frames zero-work-iter fast path: this Q chunk has no processed K chunks in
+        // Sparse computation zero-work-iter fast path: this Q chunk has no processed K chunks in
         // THIS ring iter (either a padded / all-drained Q frame across all iters, or a real Q
         // frame whose allowed K frames don't land in this iter). We MUST still drain the K/V
-        // that the reader pushed for this Q chunk (reader has no sparse-frames logic — it
-        // pushes every non-OOB chunk). But we CANNOT enter the accumulator machinery: the
+        // that the reader pushed for this Q chunk but we CANNOT enter the accumulator machinery: the
         // restore_from_staging branch below assumes staging CBs were populated, and the post-
         // loop q_prev.max pop would desync CBs that nothing was written to. Doing everything
         // inline here and continuing bypasses the entire acc_state state machine for this

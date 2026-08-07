@@ -377,7 +377,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Sparse-frames extension (windowed / block-sparse pattern): tokens_per_frame + num_frames_padded + a
+    // Sparse computation (windowed / block-sparse pattern): tokens_per_frame + num_frames_padded + a
     // bit-packed uint32 vector `sparse_frame_mask` describe the frame-block-sparse pattern the
     // kernel applies. Constraints:
     //   * sparse_frame_mask is required, bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.
@@ -396,29 +396,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     if (args.has_sparse_frames()) {
         const uint32_t fsl = args.tokens_per_frame.value();
         const uint32_t nf_pad = args.num_frames_padded.value();
-        TT_FATAL(!args.is_causal, "sparse-frames windowed path is incompatible with is_causal");
-        // `is_chunked` proper is derived later in this function; compute it locally here so the
-        // sparse-frames block can precede the dtype/shape checks that also use it.
-        TT_FATAL(!tensor_args.is_chunked(), "sparse-frames path does not support chunked-prefill");
-        TT_FATAL(!args.has_kv_pad_rotation(), "sparse-frames path does not support kv-pad rotation");
+        TT_FATAL(!args.is_causal, "Block sparse computation path is incompatible with is_causal");
+        TT_FATAL(!tensor_args.is_chunked(), "Block sparse computation path does not support chunked-prefill");
+        TT_FATAL(!args.has_kv_pad_rotation(), "Block sparse computation path does not support kv-pad rotation");
         TT_FATAL(
             fsl % tt::constants::TILE_HEIGHT == 0,
             "tokens_per_frame ({}) must be a multiple of TILE_HEIGHT ({})",
             fsl,
             tt::constants::TILE_HEIGHT);
-        // SDPAProgramConfig.q_chunk_size / k_chunk_size are in TOKENS (see how the program factory
-        // converts them via `/ TILE_HEIGHT` at ring_joint_sdpa_program_factory.cpp:349). The
-        // sparse-frames path requires each chunk to sit inside one frame — equivalently, chunk
-        // size (tokens) must divide tokens_per_frame (tokens). The compute kernel derives
-        // q_frame/k_frame via integer division of the chunk's start-tile by tiles_per_frame so any divisor works.
+        // The sparse computation path requires each chunk to sit inside one frame — equivalently, chunk
+        // size must divide tokens_per_frame. The compute kernel derives q_frame/k_frame via integer division
+        // of the chunk's start-tile by tiles_per_frame.
         TT_FATAL(
             args.get_q_chunk_size() > 0 && fsl % args.get_q_chunk_size() == 0,
-            "sparse-frames requires q_chunk_size ({}) tokens to divide tokens_per_frame ({}) tokens",
+            "Sparse computation requires q_chunk_size ({}) tokens to divide tokens_per_frame ({}) tokens",
             args.get_q_chunk_size(),
             fsl);
         TT_FATAL(
             args.get_k_chunk_size() > 0 && fsl % args.get_k_chunk_size() == 0,
-            "sparse-frames requires k_chunk_size ({}) tokens to divide tokens_per_frame ({}) tokens",
+            "Sparse computation requires k_chunk_size ({}) tokens to divide tokens_per_frame ({}) tokens",
             args.get_k_chunk_size(),
             fsl);
         TT_FATAL(
@@ -432,7 +428,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.ring_size);
         TT_FATAL(
             static_cast<std::size_t>(nf_pad) * fsl >= args.logical_n,
-            "sparse-frames: num_frames_padded * tokens_per_frame ({}) must be >= logical_n ({})",
+            "num_frames_padded * tokens_per_frame ({}) must be >= logical_n ({})",
             static_cast<std::size_t>(nf_pad) * fsl,
             args.logical_n);
         // Packed size: ceil(nf_pad*nf_pad / 32) words.
@@ -1125,7 +1121,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::vector<uint32_t> sparse_frame_mask) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
-    // Sparse-frames extension: all three or none.
     const bool sparse_frames =
         tokens_per_frame.has_value() || num_frames_padded.has_value() || !sparse_frame_mask.empty();
     if (sparse_frames) {
@@ -1134,11 +1129,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "tokens_per_frame / num_frames_padded / sparse_frame_mask must all be set together (windowed sparse ring "
             "path)");
     }
-    // Sparse-frames (windowed frame-block) and sliding_window are distinct ring data paths
-    // (full-ring all-gather + chains vs neighbor-halo), so they cannot be combined.
     TT_FATAL(
         !(sparse_frames && sliding_window_size.value_or(0) > 0),
-        "sparse-frames (tokens_per_frame/sparse_frame_mask) and sliding_window_size are mutually exclusive");
+        "Sparse computation and sliding-window masking are mutually exclusive");
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);

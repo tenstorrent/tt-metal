@@ -485,7 +485,7 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // Sparse-frames runtime args. The host always pushes the 32 packed sparse_frame_mask words
+    // The host always pushes the 32 packed sparse_frame_mask words
     // regardless of whether sparse is enabled. The writer does not consult
     // sparse_frame_mask directly (it uses the precomputed q_work_bitmap below), so skip past the 32 words
     // rather than reading them into an unused array — but the index must still advance so
@@ -517,7 +517,7 @@ void kernel_main() {
     constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
     constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
 
-    // Sparse-frames extension. The writer needs its own sparse-awareness to skip its per-iter save/restore
+    // The writer needs its own sparse-awareness to skip its per-iter save/restore
     // protocol on ring iters where a given Q chunk has zero attended K chunks — otherwise compute's zero-work
     // fast path (which skips consuming cb_prev_out and skips pushing cb_out) leaves the writer stuck on
     // cb_reserve_back (restore-side) or cb_wait_front (save-side).

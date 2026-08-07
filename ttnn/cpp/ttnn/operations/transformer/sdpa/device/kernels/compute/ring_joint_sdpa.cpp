@@ -86,14 +86,8 @@ void kernel_main() {
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
-    // Sparse-frames extension (windowed / block-sparse pattern). All three set together at the host or all
-    // zero (feature disabled). Slots placed immediately after the 25-entry CB block, i.e. at
-    // cb_arg_offset + 25/26/27 = 79/80/81 (cb_arg_offset == 54; last CB slot is cb_attention_sink at +24).
-    // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
-    // division (host requires tiles_per_frame % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
-    // chunk straddles a frame boundary; chunk sizes may be smaller than the frame to fit L1) and
-    // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed sparse_frame_mask
-    // bitmap in runtime args 11..(11+31).
+    // Sparse computation (windowed / block-sparse pattern).
+    // All three set together at the host or all zero (feature disabled).
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(79) == 1;
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(80);
     constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(81);
@@ -153,7 +147,7 @@ void kernel_main() {
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
-    // Sparse-frames packed sparse_frame_mask bitmap (32 uint32 words). Runtime-arg slots so the same
+    // Packed sparse_frame_mask bitmap (32 uint32 words). Runtime-arg slots so the same
     // kernel binary handles any windowed pattern that fits (nf_padded <= 32 -> at most 32 * 32
     // = 1024 bits). Only read when sparse_frames_enabled; when disabled the host passes zeros.
     uint32_t sparse_frame_mask_words[32];
@@ -219,7 +213,7 @@ void kernel_main() {
     // few frames).
     static_assert(
         !(sparse_frames_enabled && use_attention_sink),
-        "sparse-frames and attention-sink cannot both be enabled on the ring-joint SDPA path");
+        "Sparse computation and attention-sink cannot both be enabled on the ring-joint SDPA path");
 
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_derived(cb_kv_pad_derived);
@@ -277,7 +271,7 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
 
-    // Sparse-frames per-device q_frame offset — maps this device's local q_chunks to their GLOBAL
+    // Sparse computation per-device q_frame offset — maps this device's local q_chunks to their GLOBAL
     // q_frame indices for sparse_frame_mask lookup. Q is SP-sharded across `ring_size` devices, and
     // sparse_frame_mask is a broadcast global table indexed by GLOBAL q_frame; without this offset, every
     // device would look up sparse_frame_mask row 0. Used by sdpa_ring_v2's per-chunk try_skip decisions.
