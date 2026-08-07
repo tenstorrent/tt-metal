@@ -23,7 +23,7 @@
 # STABLE_ABI, and the engine image is py3.10. On 24.04 (py3.12) the mig-client selector
 # resolves to an empty stage, so a 24.04 build proves nothing about this path.
 
-name: "Build release-models Image On Dispatch"
+name: "Build prefill-worker image"
 
 on:
   workflow_dispatch:
