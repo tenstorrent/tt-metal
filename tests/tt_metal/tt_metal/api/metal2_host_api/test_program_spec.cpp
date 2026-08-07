@@ -4134,12 +4134,15 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 }
 
 // ============================================================================
-// Compile-time varargs — mock-device bake & JIT smoke
+// Compile-time varargs (Metal 2.0)
 // ============================================================================
 //
-// Host: KernelAdvancedOptions::compile_time_varargs (values fixed at ProgramSpec time).
-// Kernel: get_compile_time_vararg* — literals baked into kernel_args_generated.h (Metal 2.0).
-// Separate from positional KERNEL_COMPILE_TIME_ARGS (TensorBinding DSpec / legacy CreateKernel).
+// KernelAdvancedOptions::compile_time_varargs values are fixed at ProgramSpec time and baked into
+// kernel_args_generated.h as literals, which is what makes a static_assert in the kernel source a
+// usable assertion here: if a value did not reach the kernel, the JIT compile fails.
+//
+// These tests compile on a MOCK Wormhole device (no silicon, no dispatch) via
+// detail::CompileProgram, so they cover the host -> genfiles -> RISC-V compile path only.
 
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     NodeCoord node{0, 0};
@@ -4164,9 +4167,9 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
-// CTA varargs must not share KERNEL_COMPILE_TIME_ARGS with TensorBinding payloads.
-// Verifies independence: binding cta_offset stays 0; positional compile_args are binding-only;
-// baked get_compile_time_vararg* and TensorAccessor still both work.
+// Varargs must not share KERNEL_COMPILE_TIME_ARGS with TensorBinding payloads: the binding's
+// cta_offset stays 0, the positional compile_args hold binding words only, and the baked varargs
+// and the TensorAccessor both still work.
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIndependentOfTensorBindingCTAs) {
     NodeCoord node{0, 0};
     constexpr uint32_t kVararg0 = 0xCAFEBABEu;
@@ -4178,7 +4181,7 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIndependentOfTensorBindingCTAs) {
 void kernel_main() {
     static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
-    // Binding CTA_OFFSET stays 0 (varargs are not a positional prefix).
+    // The binding's CTAs still decode from index 0: varargs were not prepended to them.
     static_assert(tensor::input_ta_t::args_t::is_dram);
     TensorAccessor accessor(tensor::input_ta);
     auto noc_addr = accessor.get_noc_addr(0);

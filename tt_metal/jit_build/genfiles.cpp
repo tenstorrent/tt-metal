@@ -275,8 +275,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // Metal 2.0 user compile-time varargs: baked as literals below (separate from positional
-    // KERNEL_COMPILE_TIME_ARGS, which TensorBindings / legacy CreateKernel still use).
+    // Metal 2.0 compile-time varargs: baked as literals below, not into KERNEL_COMPILE_TIME_ARGS
+    // (which TensorBindings and legacy CreateKernel still use).
     const std::vector<uint32_t>& cta_varargs = settings.get_compile_time_varargs();
     const uint32_t cta_vararg_size = static_cast<uint32_t>(cta_varargs.size());
 
@@ -332,12 +332,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
 
-    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
-    // Values are baked as literals (same spirit as named CtaVal); not read from
-    // KERNEL_COMPILE_TIME_ARGS. Three accessors:
-    //   1. get_compile_time_varargs() — constexpr std::array of the baked words
-    //   2. get_compile_time_vararg<idx>() — template index (static_assert bounds)
-    //   3. get_compile_time_vararg(idx) — function-parameter index
+    // Compile-time vararg helpers — always emitted, like the runtime ones above. Unlike those,
+    // the values are baked in as literals (same spirit as the named CtaVal above) rather than
+    // read out of a buffer at runtime. A kernel with no varargs gets a zero-length array, so any
+    // get_compile_time_vararg<idx>() call fails its static_assert.
     std::string cta_vararg_literals;
     if (!cta_varargs.empty()) {
         // e.g. {1, 2, 3} → "1u, 2u, 3u"

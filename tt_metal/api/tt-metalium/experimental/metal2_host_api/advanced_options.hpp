@@ -61,7 +61,9 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Compile time varargs
     //--------------------------------
-    // Values of the varargs for the kernel.
+    // Vararg values, fixed here at ProgramSpec time and baked into the kernel binary as literals.
+    // Read them in the kernel via get_compile_time_vararg<i>() / get_compile_time_varargs().
+    // The values are part of the kernel's cache key: each distinct set is a separate compile.
     std::vector<uint32_t> compile_time_varargs;
 
     //--------------------------------

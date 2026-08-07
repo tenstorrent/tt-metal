@@ -620,7 +620,9 @@ uint64_t Kernel::compute_hash() const {
     ////////////////////////////////////////////////////////////
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
-    // Metal 2.0's vararg CTAs does not reuse the legacy CTA infrastructure.
+    // Metal 2.0 compile-time varargs are baked into the generated header rather than into
+    // compile_time_args_, so they need their own hash contribution. Size first, to avoid the
+    // [a, b] vs [ab] collision against the positional CTAs hashed just above.
     hasher.update(static_cast<uint64_t>(this->compile_time_varargs_.size()));
     hasher.update(this->compile_time_varargs_.begin(), this->compile_time_varargs_.end());
     hasher.update(this->config_hash());

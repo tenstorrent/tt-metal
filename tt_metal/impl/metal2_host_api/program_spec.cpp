@@ -2390,8 +2390,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
-                                      // (currently, this is the only Metal 2.0 use of positional CTAs,
-                                      // CTA varargs are piped in separately)
+                                      // (still the only Metal 2.0 use of positional CTAs; compile-time
+                                      // varargs bypass this buffer entirely)
     KernelCrtaLayout crta_layout;
 };
 
@@ -3133,7 +3133,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
-        // Metal 2.0 path for injecting compile time varargs.
+        // Same post-construction pattern: the vararg values are baked into the kernel's generated
+        // header and are part of its cache key, so they must be set before the kernel is compiled.
         kernel->set_compile_time_varargs(kernel_spec.advanced_options.compile_time_varargs);
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
