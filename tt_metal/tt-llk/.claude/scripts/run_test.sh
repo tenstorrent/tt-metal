@@ -487,10 +487,51 @@ _build_target() {
 _collect_tests() {
   local collection_log="${EVIDENCE_DIR}/collection.log"
   rm -f "$COLLECTION_JSON" "$collection_log"
-  ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
-      --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
-      >"$collection_log" 2>&1
-  local rc=$?
+  local rc
+  if grep -Fq -- '"--codegen-collection-json"' \
+      "${WORKTREE}/tests/python_tests/conftest.py"; then
+    ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
+        --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
+        >"$collection_log" 2>&1
+    rc=$?
+  else
+    # Historical bases predate the structured collection option. Keep their
+    # existing producer-mode collection path (which skips device setup), then
+    # normalize its exact node IDs into the same strict result schema.
+    ( CHIP_ARCH="$ARCH" pytest --collect-only -q --compile-producer \
+        "${TARGET[@]}" ) >"$collection_log" 2>&1
+    rc=$?
+    python3 - "$COLLECTION_JSON" "$collection_log" "$rc" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+destination = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace").splitlines()
+returncode = int(sys.argv[3])
+selected = sum(
+    1
+    for line in lines
+    if "::" in line and not line.lstrip().startswith(("=", "WARNING"))
+)
+record = {
+    "schema": "tt.issue-solver.pytest-collection",
+    "version": 1,
+    "selected": selected,
+    "collected": selected,
+    "errors": int(returncode in (1, 2, 3, 4)),
+    "returncode": returncode,
+}
+destination.parent.mkdir(parents=True, exist_ok=True)
+temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+temporary.write_text(
+    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+os.replace(temporary, destination)
+PY
+  fi
   cat "$collection_log" >&2
   [[ -f "$COLLECTION_JSON" ]] || {
     echo "ERROR: pytest collection produced no structured result" >&2

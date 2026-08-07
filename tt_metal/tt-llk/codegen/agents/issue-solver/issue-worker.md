@@ -263,9 +263,13 @@ files, checks, and plan path.
 
 The Test Strategy is executable input, not explanatory prose. Keep explanations
 in surrounding fields; each `test` value must be one exact selector accepted by
-`run_test.sh`. List a performance module as its own regression entry whenever
-the issue explicitly requires measurement, even if later evidence refutes the
-primary hypothesis. Do not add waivers to the plan after observing a failure.
+`run_test.sh`. Each architecture/suite/selector tuple may appear only once
+across `reproduction_tests` and `regression_tests`; when the same performance
+test provides both kinds of evidence, keep its single entry under
+`regression_tests`. List a performance module as its own regression entry
+whenever the issue explicitly requires measurement, even if later evidence
+refutes the primary hypothesis. Do not add waivers to the plan after observing
+a failure.
 
 `HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before
 returning it, keep every Plan Artifact section above, including an executable
