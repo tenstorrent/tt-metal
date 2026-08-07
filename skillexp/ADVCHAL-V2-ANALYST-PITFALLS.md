@@ -1,15 +1,18 @@
-# What this analysis got wrong — read before doing the next one
+# Mistakes made in this analysis, and since corrected
 
-Every claim in this corpus that I published as fact and later had to retract, downgrade or re-derive. It is here
-because **the error patterns repeat**, and a future analyst hitting the same artefacts will be tempted the same
-way. Each entry says what I claimed, what was true, how it was caught, and **the check that would have caught it
-first** — that last column is the point of the file.
+Every claim that was published as fact during this work and later had to be retracted, downgraded or re-derived.
+**All of them are already fixed in the other documents** — this is the record of what went wrong and how it was
+caught, not a list of outstanding errors.
 
-Nothing here is a defect in the stage or the advisor. Those are in
-[`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3. This is a defect list for the *analysis*.
+It is worth keeping because **the error patterns repeat.** Anyone working from the same artefacts will be tempted
+the same way. Each entry gives what was claimed, what was true, how it was caught, and **the check that would
+have caught it first**; that last column is what makes the file useful.
 
-**Count: 7 patterns, 30 individual corrections.** Roughly 5 of ~30 recommendations I made were refuted by my
-own follow-up measurements. Treat that as the base rate.
+None of this is a defect in the stage or the advisor — those are in
+[`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3. This is about the analysis.
+
+**7 patterns, 30 corrections.** Roughly 5 of ~30 recommendations made here were later refuted by follow-up
+measurement — a useful base rate to hold in mind.
 
 ---
 
