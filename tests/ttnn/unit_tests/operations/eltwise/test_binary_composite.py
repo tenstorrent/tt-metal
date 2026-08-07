@@ -16,6 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, asser
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
+from models.common.utility_functions import is_blackhole
 
 
 def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
@@ -894,3 +895,50 @@ def test_unary_right_shift(input_shapes, device):
 
         pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
+
+
+# Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * up, with up optionally
+# softcapped by beta2. Kimi K3 uses beta1 4 (gate half) and beta2 25 (up half). Blackhole only,
+# since it builds on the softcap SFPU op.
+SITU_GLU_BETA1 = 4.0
+SITU_GLU_BETA2 = 25.0
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+# beta2=None exercises the branch where the up half skips the second tanh entirely; a
+# concrete beta2 exercises the fully-softcapped path.
+@pytest.mark.parametrize("beta2", [None, SITU_GLU_BETA2], ids=["beta2_none", "beta2_25"])
+def test_situ_glu(input_shapes, torch_dtype, ttnn_dtype, beta2, device):
+    torch.manual_seed(0)
+    # Span the saturating and near-linear regions of both halves.
+    gate = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-30.0, 30.0)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_res = ttnn.to_torch(ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, beta2=beta2))
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=beta2)
+
+    if beta2 is not None:
+        # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+        bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + 1e-3)
+        assert tt_res.to(torch.float32).abs().max().item() <= bound
+
+    assert_with_pcc(golden, tt_res, pcc=0.9999)

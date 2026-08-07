@@ -59,6 +59,19 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
+            // ckernel_sfpu_softcap.h and the SfpuType registration it needs exist only
+            // under hw/ckernels/blackhole. Without this the kernel reaches JIT and
+            // dies on a missing header, which points nowhere useful.
+            TT_FATAL(
+                input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+                "Unary: SOFTCAP is implemented for Blackhole only, got arch {}",
+                input_tensor.device()->arch());
+            break;
+        }
+    }
+
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

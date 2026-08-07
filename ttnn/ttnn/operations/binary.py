@@ -246,6 +246,20 @@ def _golden_function_hypot(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.hypot, golden_function=_golden_function_hypot)
 
 
+def _golden_function_situ_glu(gate, up, *args, beta1, beta2=None, **kwargs):
+    import torch
+
+    g = gate.to(torch.float32)
+    u = up.to(torch.float32)
+    situ_a = beta1 * torch.tanh(g / beta1) * torch.sigmoid(g)
+    if beta2 is not None:
+        u = beta2 * torch.tanh(u / beta2)
+    return (situ_a * u).to(gate.dtype)
+
+
+ttnn.attach_golden_function(ttnn.situ_glu, golden_function=_golden_function_situ_glu)
+
+
 def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
