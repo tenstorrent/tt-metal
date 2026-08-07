@@ -4,6 +4,10 @@
 how much of a decoder's speed can the shard advisor be credited with, on a decoder already optimised
 without it?
 
+**If you read one thing, read §2b** — every defect found, split by whether it is the *advisor not being good
+enough* or the *stage not listening to it*. The two need different fixes at very different cost, and today's pass
+moved three items from the first column to the second.
+
 **The short answer.** The advisor's value is the size of the *placement defect it happens to find* — mostly
 one class of defect, a reduction stuck on too few cores. Where that defect exists it is worth 6–13 % per
 layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one.
@@ -16,8 +20,9 @@ layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned o
 3. One cell **built a candidate, shipped it disabled, and never screened it** — it is worth **26× more than
    what that cell did ship**.
 
-**Total left on the table from placement: ≈ 8.0 ms/model across four cells**, all identifiable by a **one-line
-static check that needs no device time** (§3.8).
+**Total left on the table from placement: ≈ 9.2 ms/model across four cells**, all identifiable from the
+advisor's own per-op output by a **one-line static check that needs no device time** (§3.8) — though in three of
+the four the *winning grid* is not the one the advisor named, only the op is (§8a).
 
 4. **The screening order itself is the biggest single defect.** The skill screens chain-by-chain, building up
    from the incumbent. On the one cell where the counterfactual is measured, **applying the advisor's placement
@@ -70,6 +75,73 @@ summaries. Facts are sourced; where something is my inference it says so.
 
 ---
 
+## Start here if you read an earlier version — the 2026-08-07 revision
+
+This pass answered one question — *"was the advisor's advice actually followed, and would following it have been
+better?"* — and in answering it corrected two of my own published findings. If you read this file before, these
+are the deltas that matter.
+
+### A. I retracted my "the advisor gave an unrunnable layout" finding. The error was mine.
+
+I had reported that the advised `l1/height_sharded/32x1` for phi's RoPE could not run, and escalated it to a
+*tt-mlir ↔ tt-metal validation gap*. **Withdrawn in full.** The advisor specified shard **(32,64)** —
+tile-aligned — on **32** cores; I had probed **(32,48)**, a shape it never specified, and had sharded a `concat`
+output whose inputs I left interleaved. An isolated single-op test of the advisor's real config passes on every
+op, including the `concat` I called impossible. → §3.23
+
+### B. `report.json` understates the advised core count on 58.3 % of ops — and that inflates the disagreement
+
+`cores=(x0,y0)-(x1,y1)` prints only the **first range** of a multi-range `CoreRangeSet`; `reconcile.py:194`
+parses it. The `AxB` grid string beside it is correct (validated 49/49 against three decision traces).
+**59 of 334 `chain` rows stop being disagreements once corrected — 1,908 of 5,547 chain µs, 34.4 %.** So the
+"how much was followed" figure is **16.2 %**, not 10.6 %. Two phi cells had recorded themselves as *overriding*
+the advisor while agreeing with it. → §3.23b
+
+### C. The advisor already reports what it cannot place, and the stage screens it anyway
+
+`report.json`'s `unfixable_ops` names each unplaceable op with the exact runtime `TT_FATAL`, obtained by
+querying tt-metal's own constraint machinery. `reconcile.py` reads the field only to annotate the `untraced`
+bucket, so **54 declarations corpus-wide, 41 still presented as screenable advice**. Cells then spend device
+time rediscovering errors the advisor handed them in writing. → §3.28
+
+### D. The big result: the screening ORDER is the largest single defect
+
+The skill screens chain by chain, building up from the incumbent. On phi FN — the one cell with the artefacts to
+settle it — applying the advisor's placement instead:
+
+| configuration | ms/layer | Δ | differential PCC |
+|---|---|---|---|
+| incumbent | 0.807535 | — | — |
+| **what the cell shipped** | 0.768104 | **−4.88 %** | **1.0** |
+| **rope as advised** | 0.723320 | **−10.43 %** | **1.0** |
+| **rope as advised + the advised 11-core norm** | **0.663507** | **−17.84 %** | 0.99999107 |
+
+**3.7× what it shipped**, strict non-overlap throughout — and **−10.43 % of it is bit-identical to the
+incumbent**, so no correctness rule blocked it. It was never tried. The advised matmul placement, applied on
+top, is neutral (E27), so this is essentially the whole available win from phi FN's advised plan. → §3.27, F5
+
+### E. Faithfulness across the corpus, and the methodology limit
+
+**7 of 15 cells tried the advisor's exact advice; 6 of those first, and all 7 ended cleanly** — they shipped it
+or recorded a measured regression. **4 never tried it with no reason recorded**, all deviating the same way:
+keep the advisor's L1 placement, drop its sharding. gemma-4-12B ran **52 measurements without applying one
+advised grid**. → §3.26
+
+**A methodology caveat, tested rather than asserted.** §3.27's measurements replay each cell's *committed*
+advice onto a decoder I had modified. I re-ran `ttnn-advise` on the diverged graphs: **the advice is
+byte-identical across all four**, because the advisor discards input memory configs and re-places everything —
+it responds to topology, not to the memory-config changes I made. **`ttnn-advise` costs ~18 s**, less than one
+harness measurement, so there is no cost argument for screening against a single start-of-run capture. Also
+found: the capture **monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. → §3.29
+
+### What did NOT change
+
+The corpus's headline results stand: the oracle contradiction (§3.1), the two attribution channels (§3.9), the
+`retilize` 191 ms/model finding (§3.18–3.19), the wrong-op defect in gemma-4-12B (§3.16), and the conclusion
+that the advisor is a defect detector whose largest costs lie outside its reach.
+
+---
+
 ## 1. The method in six lines
 
 1. **Freeze** the incoming decoder as the control — never re-tuned.
@@ -113,6 +185,56 @@ hardware difference.
 could not see the layer), **1 geometry wall**, **1 unseparable from its own noise floor**.
 
 Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
+
+---
+
+## 2b. The ledger: advisor not good enough, vs stage not listening
+
+The single most useful reframing to come out of this corpus. Every defect found, sorted by **whose it is** —
+because the fixes go to different places and cost wildly different amounts. Today's pass moved three items from
+the left column to the right.
+
+### The advisor is genuinely not good enough — tt-mlir changes
+
+| # | defect | evidence | consequence |
+|---|---|---|---|
+| A1 | **`LayoutScore` has no latency term at any level.** `getOpRuntime` exists in `TTNNOpModel.cpp` and is never consulted. | source at pin `618cd4e75d`; §3.3 | It cannot rank by speed at all. Everything below follows from this. → **D1** |
+| A2 | **`coreCount` is level 6 of 7**, and for norms `NormalizationRules.cpp:77-104` overrides it with the *input* operand's grid volume — exactly 1 on decode shapes — so the term **cannot vary with the candidate**. | source; decision traces, §3.3 | Its grid values lose when measured: **3 of the 4 placement wins are at grids it did not name** (§8a) |
+| A3 | **Candidate layouts are deduped by shard shape keeping the *smallest* grid, before per-op legality filters run.** | `LegalTensorLayoutAnalysis.cpp:128-225` | A legal sibling can be discarded and an illegal representative kept → **D3** |
+| A4 | **One selection the trace cannot explain**: llama's MLP norm chose `1x22` while 32 and 64 were valid and outrank it on both documented tiebreakers. | §3.3, decision trace | Either the recorded score is not what is compared, or there is an unrecorded criterion → **D5** |
+| A5 | **`report.json` renders a multi-range `CoreRangeSet` as its first range only**, and prints no shard shape at all. | §3.23b | The summary understates its own advice. *Shared blame*: the information survives intact in `final_ir.mlir`, so nothing is lost by the optimizer — only by its summary |
+| A6 | **It does not emit the legal ladder**, so a challenger has to guess which core counts are even legal. | §3.4 | Wasted device time on illegal geometries → **D4** |
+
+### The stage is not listening to it — skill changes, all cheap
+
+| # | defect | measured cost | fix |
+|---|---|---|---|
+| B1 | **It never applies the advisor's plan as a candidate.** Screens chain by chain, building up from the incumbent. | **3.7× on the one cell where the counterfactual is measurable** — −17.84 % available vs −4.88 % shipped, ≈1.43 ms/model on phi FN alone (§3.27) | **F5** — apply_all first, then ablate |
+| B2 | **The screening ceiling prices only boundary conversions**, so an in-chain re-grid is worth `0.000 µs`. | **60 % of the disagreed-on cost filed `below_threshold` and never measured.** Two of the three biggest wins in the corpus came from cells whose ceiling said `0` / `not_measurable` and which recorded **0 kept chains** | **D0** |
+| B3 | **`advised_cores` is parsed from the lossy `cores=` field** when the correct grid string sits beside it. | **58.3 % of advised core counts wrong; 34.4 % of the "disagreement" is phantom.** Two phi cells recorded themselves as *overriding* the advisor while agreeing with it | **C5f** — one line |
+| B4 | **`unfixable_ops` is ignored.** The advisor names each unplaceable op with the exact runtime `TT_FATAL`; `reconcile.py` reads the field only to annotate the `untraced` bucket. | **54 declarations, 41 screened anyway.** Cells burn measurements rediscovering errors handed to them in writing | **C5g** |
+| B5 | **The oracle rule rejects anything that moves PCC at all**, implemented as a differential bar ≈1.0. | Discarded a −13.3 % candidate at PCC 0.9999911 that is *more accurate than what shipped* (§3.1). And note §3.27: **−10.43 % was available at PCC exactly 1.0**, so even the strict rule permitted more than shipped | stage: absolute oracle at the model's own bar |
+| B6 | **`agrees_with_shipped` never compares the memory space** — core count or DS-family only. | 1 of phi FN's 2 such rows is wrong | **C5c** |
+| B7 | **`pair_confidence: position` is recorded, documented as a guess, then ignored downstream.** | **23.2 % of pairings corpus-wide**; it misled this analysis into reading 7 guesses as findings | **C5e** |
+| B8 | **It never re-advises**, screening every candidate against one start-of-run capture. | `ttnn-advise` costs **~18 s** — less than a single harness measurement (§3.29) | **F6** |
+| B9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
+| B10 | **It throws away the perf report it runs.** Only 1 of 15 cells saved a before/after profile pair. | Op-level verification is impossible for 14 cells | **B0** |
+
+**The asymmetry is the point.** The advisor's defects are real but need tt-mlir builds. **The stage's defects are
+almost all one-file, no-build changes, and they account for the larger measured loss** — B1 alone is 3.7× on the
+cell where it can be measured, and B2 hid two of the corpus's three biggest wins. gemma-4-12B is the extreme
+case: **52 measurements without ever applying one advised grid.**
+
+### Neither — outside any layout advisor's reach
+
+Recorded so nobody files these against the advisor. These are the corpus's **largest** numbers.
+
+| opportunity | scale | whose |
+|---|---|---|
+| `retilize` on qwen's conv chain | **191 ms/model, 24.4 %** | the decoder's shape choice — §3.18–3.19 |
+| qwen's untraced linear attention | **97 %** of its decode time never advised on | tt-metal tracer coverage |
+| `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
+| sharded GQA SDPA output | blocks two cells' top candidate *and* the gemma-4-12B wrong-op fix | tt-metal kernel |
 
 ---
 
@@ -929,7 +1051,9 @@ the matmul item gets dropped *with a measurement behind the decision* — which 
 
 ---
 
-**Methodology note on §3.27–§3.28.** Those measurements apply each cell's *committed* advice — captured once
+### 3.29 The advisor is topology-sensitive and memory-config-blind — which is why replaying its advice is valid, and re-advising is cheap
+
+**Methodology, tested rather than asserted.** §3.27–§3.28 apply each cell's *committed* advice — captured once
 against the frozen incumbent — to a decoder I had progressively modified. I re-ran `ttnn-advise` on the diverged
 graphs to check whether that invalidates them: **the advice is byte-identical across all four graphs**, because
 the advisor discards the input's memory configs and re-places everything, so it responds to graph *topology* and
@@ -1048,12 +1172,38 @@ fastest — and the whole win is usually just the first step off one core.**
 
 ## 8. Still on the table
 
-**From the advisor: essentially nothing new.** After matmuls are ruled out (§3.17) and
-`nlp_create_qkv_heads_decode` is shown to be a batch artefact (§3.15), the actionable `chain` pool is 5,067 µs
+**From the advisor, as new op classes: essentially nothing.** After matmuls are ruled out (§3.17) and
+`nlp_create_qkv_heads_decode` is shown to be a batch artefact (§3.15) — and note it is *also* one of the phantom
+disagreements of §3.23b, advised 32 and shipped 32 in every cell — the actionable `chain` pool is 5,067 µs
 corpus-wide: `rms_norm` 26.6 % (the proven class), then `multiply` 9.0 %, `add` 4.8 %, `slice_static` 3.1 %,
 `rotary_embedding` 2.7 %, `concat` 2.0 % — all small.
 
-**Outside the advisor: a great deal, and bigger.** Ranked by scale:
+### 8a. Placement wins the advisor's data located — ≈9.2 ms/model
+
+**This is the "≈9.2 ms still on the table from placement" in the opening summary, itemised.** All four were
+found from the advisor's own per-op output, using the static check in §3.8. But *located by the advisor* and
+*equal to what the advisor recommended* are different things, and only one of the four is both:
+
+| # | cell | winning knob | advised value | µs/model | was the winning value the advice? |
+|---|---|---|---|---|---|
+| 1 | **phi-3.5 FN** | rope as advised + `norm_cores=11` | rope L1 + **11** | **−4,609** | **yes — pure advice-following** |
+| 2 | gemma-4-26B B | `RESIDUAL_SHARD_CORES=22`, sliding only | **88** | −3,918 | no — the cell's own ladder value; 26× what it shipped, *and more accurate* |
+| 3 | gemma-4-26B onA | `NORM_CORES=44` instead of the 88 it shipped | **88** | −375 | no — 44 beats the advised 88, bit-identically |
+| 4 | north-mini FN | `moe_norm_cores=16` instead of the 32 it shipped | **22** | −264 | no — 16 beats both the advised 22 and the shipped 32 |
+| | | | | **≈9,166** | **4,609 of 9,166 = 50 % is advice-following** |
+
+**So the answer to "where did this come from?": entirely from the advisor's data, and half of it from the
+advisor's actual recommendation.** The advisor's per-op output located every one of the four — no non-advisor
+analysis was needed to find them. What it did not supply in three of the four is the *right grid*: it named the
+op and the direction (widen this starved reduction) and a value that was beaten by one found by sweeping the
+legal ladder around it. That is why item 9 below exists, and why D1 (add a latency term to `LayoutScore`) is an
+advisor-side action rather than a stage one.
+
+⚠ **Item 1 grew from −3,466 to −4,609 µs/model in the 2026-08-07 pass.** The earlier figure used the rope in
+the *interleaved* form the cell shipped; with the rope in the form the advisor actually advised, the same cell
+gives 0.807535 → 0.663507 ms/layer × 32 layers (§3.27). The corpus total moved 8.0 → **9.2 ms/model** with it.
+
+### 8b. Outside the advisor entirely — a great deal, and bigger
 
 | # | opportunity | scale | kind of fix |
 |---|---|---|---|
@@ -1062,10 +1212,8 @@ corpus-wide: `rms_norm` 26.6 % (the proven class), then `multiply` 9.0 %, `add` 
 | 3 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
 | 4 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model, 3.9× what that cell shipped | tt-metal (sharded GQA SDPA output) then a decoder change |
 | 5 | phi FN's discarded combined candidate | **+8.5 pp** on that cell | stage: absolute oracle at the model's own bar |
-| 6 | gemma-4-26B B's `RESIDUAL_SHARD_CORES=22`, sliding only | **−3,918 µs/model**, 26× what it shipped, *and more accurate* | ship it |
-| 7 | gemma-4-26B onA at 44 cores instead of 88 | −375 µs/model, bit-identical output | ship it |
-| 8 | north-mini FN at 16 cores instead of 32 | −264 µs/model | ship it |
-| 9 | sweep the legal ladder both sides of the advice | 1–5 pp per affected cell | stage |
+| 6 | **screen the advisor's plan as candidate #1, then ablate** | **3.7× on the one cell measured** (§3.27) | stage: F5 |
+| 7 | sweep the legal ladder both sides of the advice | 1–5 pp per affected cell — items 2–4 of §8a are exactly this | stage |
 
 What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).
 
