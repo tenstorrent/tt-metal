@@ -178,11 +178,26 @@ Three scope limits hold throughout, whatever the fix recipe says:
   `invoke`, `compute_output_specs`, attribute parsing, dtype checks — is the op's contract with its
   callers, not Metal 2.0 surface. Editing it makes the diff something other than a post-port pass, and
   a reviewer expecting one will not be looking there.
-- **No opportunistic cleanup.** Not a rename you prefer, not a comment you'd word differently, not
-  a simplification you can see. These passes are cheap to review precisely because a reviewer can
-  confirm the whole diff is one known transformation; every unrelated change spends that. Those
-  observations are genuinely wanted — put them in your report, where they cost nothing and get
-  read.
+- **No opportunistic cleanup.** Your diff may contain exactly two things: the transformation, and
+  repairs to what the transformation broke. Nothing else — not a rename you prefer, not a
+  simplification you can see, not a comment you would word differently. These passes are cheap to
+  review precisely because a reviewer can confirm the whole diff is one known transformation; every
+  unrelated change spends that. Those observations are genuinely wanted — put them in your report,
+  where they cost nothing and get read.
+
+  The second category is usually empty, and it has a test: **was it true before your change and
+  false after?** A comment describing the construct you just replaced, a name that now describes
+  nothing, a guard asserting what your change made untrue — you are the reason each of those is
+  wrong, so leaving it behind is shipping a defect you introduced rather than respecting scope.
+  Hold the two cases side by side: *a comment you would word differently* is out of scope, and *a
+  comment your change made untrue* is part of your change. If you cannot answer the test with a
+  plain yes, the answer is no, and it goes in the report instead.
+
+  **Report each such repair on its own line**, never folded into the site list. A reviewer can
+  confirm the transformation mechanically and cannot confirm prose, so these are the lines that
+  most need their attention. Naming them one by one is also the check on this permission: if you
+  find yourself writing a justification you would not want read back to you, that repair was
+  cleanup wearing a better hat.
 
 **`ttnn/cpp/ttnn/operations/experimental/quasar/` is not evidence of anything.** Nothing from that
 directory may enter your work: do not cite it, copy a construct or a name from it, or offer it as
@@ -222,6 +237,10 @@ the session, in this shape:
 - **Sites** — `file:line` for each, one line each.
 - **Verification** — the sentinel set, green before and green after. State it plainly; do not imply
   it by silence.
+- **Repaired because the change falsified it** — one line each, per the scope limits in
+  [Step 3](#step-3--apply): the comment, name, or guard, and what your change made untrue about it.
+  Omit the heading entirely if there were none. These are the only lines in your diff a reviewer
+  cannot check mechanically, so do not leave them to be discovered.
 - **Noticed, not done** — everything you saw and correctly left alone: other fixes' targets,
   oddities, things that looked wrong but were out of scope. This is the most valuable section you
   write. It is read by the op's owners and by the people maintaining these recipes, and it is the
