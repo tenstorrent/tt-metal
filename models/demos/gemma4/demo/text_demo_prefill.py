@@ -2303,3 +2303,162 @@ def test_prefill_long_context_repeated(mesh_device, context_len, reset_seeds, re
             f"per-run device time drifted across runs ({', '.join(f'{d:.1f}s' for d in devs)}) — "
             f"suspect a leak accumulating between prefills"
         )
+
+
+# ── Test 12: single decoder layer, perf only ─────────────────────────────────
+
+
+def _build_perf_layer(mesh_device, layer_type, chunk):
+    """One decoder layer of ``layer_type``, built from the tensor cache for perf work.
+
+    Deliberately does NOT build the HuggingFace reference or load a reference forward:
+    correctness of these layers is ``test_prefill_layer``'s job, and skipping it takes
+    the setup from tens of seconds to a few, which is the whole point of iterating here.
+
+    Returns ``(tt_layer, forward, host_input, mesh_config, layer_idx)``.
+    """
+    model_path = _model_path()
+    text_config = _hf_text_config(model_path)
+    layer_idx = find_layer_idx(text_config, layer_type)
+    model_args = Gemma4ModelArgs.from_hf_config(text_config)
+    model_args._hf_text_config = text_config
+
+    precision = Gemma4Precision.load(model_path, tuple(mesh_device.shape))
+    layer_state = load_layer_state(model_path, layer_idx)
+    layer_state_prefixed = {
+        f"model.language_model.layers.{layer_idx}.{key}": value for key, value in layer_state.items()
+    }
+    mesh_config = _mesh_config(mesh_device)
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=layer_state_prefixed,
+        layer_idx=layer_idx,
+        ccl_manager=CCLManager(mesh_device),
+        dtype=MODEL_DTYPE,
+        shared_mlp_dtype=precision.get("shared_mlp", MODEL_DTYPE),
+        attention_dtype=precision.get("attention", MODEL_DTYPE),
+        tensor_cache_path=_cache_root(model_path),
+        mesh_config=mesh_config,
+        max_seq_len=chunk,
+        max_local_batch_size=1,
+    )
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(
+        mesh_device, text_config, chunk, layer_idx, mesh_config=mesh_config
+    )
+    x_torch = torch.randn(1, chunk, model_args.hidden_size, dtype=torch.float32)
+    host_input = _host_tensor(
+        mesh_device,
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh_config=mesh_config,
+    )
+
+    def forward(hidden_states):
+        return tt_layer(
+            hidden_states,
+            rope_mats=(cos_tt, sin_tt),
+            position_idx=None,
+            page_table=None,
+            kv_cache=None,
+            is_decode=False,
+        )
+
+    return tt_layer, forward, host_input, mesh_config, layer_idx
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
+    """Time ONE decoder layer, traced, over many replays — the perf iteration loop.
+
+    Two cases because the two layer types are genuinely different shapes, and which one
+    dominates depends on the change being made:
+
+      sliding: head_dim 256, 16 KV heads, full RoPE, 1024-token window
+      global:  head_dim 512, 4 KV heads (replicated at high TP), K=V tying, partial RoPE
+
+    Gemma4-31B is 50 sliding + 10 global, so a whole-model estimate is
+    ``50 * sliding + 10 * global`` plus the embedding and head. Comparing that against
+    the measured 60-layer body tells you how much is layer cost and how much is
+    everything else.
+
+    Traced and replayed ``GEMMA4_PERF_ITERS`` times (default 20), because a single pass
+    at this size is a few milliseconds and dominated by noise. Setup is a few seconds:
+    one layer from cache, no HuggingFace reference (that is test_prefill_layer's job).
+
+    Nothing is asserted about absolute time — a perf number pinned in an assert becomes
+    a flaky test on a shared machine. It asserts only that the layer stays finite and
+    that the replays are self-consistent, and prints the numbers.
+
+    For a device-op breakdown of the measured region (signposted, so the warmup and
+    capture are excluded):
+
+        TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
+          python -m tracy -p -r -v -m pytest \\
+          models/demos/gemma4/demo/text_demo_prefill.py::test_prefill_layer_perf -k sliding
+    """
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    iters = int(os.environ.get("GEMMA4_PERF_ITERS", "20"))
+
+    tt_layer, forward, host_input, mesh_config, layer_idx = _build_perf_layer(mesh_device, layer_type, chunk)
+    logger.info(f"[layer_perf] {layer_type} layer_idx={layer_idx} chunk={chunk} iters={iters}")
+
+    device_input = ttnn.to_device(host_input, device=mesh_device)
+
+    # Warm up first: a metal trace cannot compile kernels during capture. The layer
+    # deallocates its own input (it consumes the residual), so every pass — warmup,
+    # capture and replay — has to hand it a clone of the persistent buffer.
+    t0 = time.time()
+    warm = forward(ttnn.clone(device_input))
+    ttnn.synchronize_device(mesh_device)
+    warm.deallocate(True)
+    compile_s = time.time() - t0
+
+    t0 = time.time()
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = forward(ttnn.clone(device_input))
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    capture_s = time.time() - t0
+
+    try:
+        # Warm replay: the first one can still pay one-off dispatch setup.
+        ttnn.copy_host_to_device_tensor(host_input, device_input)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+        per_iter = []
+        signpost("start")
+        for _ in range(iters):
+            ttnn.copy_host_to_device_tensor(host_input, device_input)
+            t_i = time.time()
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            per_iter.append(time.time() - t_i)
+        signpost("stop")
+
+        hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+
+    assert torch.isfinite(hidden).all(), f"{layer_type} layer produced non-finite output"
+    assert float(hidden.std()) > 0.001, f"{layer_type} layer output is degenerate"
+
+    mean_s = sum(per_iter) / len(per_iter)
+    best_s = min(per_iter)
+    logger.info(
+        f"[layer_perf] {layer_type} chunk={chunk} compile={compile_s:.1f}s capture={capture_s:.1f}s | "
+        f"mean={mean_s * 1000:.2f}ms best={best_s * 1000:.2f}ms worst={max(per_iter) * 1000:.2f}ms "
+        f"| {chunk / mean_s:.0f} tok/s (mean) {chunk / best_s:.0f} tok/s (best)"
+    )
+    # Best-case is the cleanest signal when iterating: it is the least contaminated by
+    # other activity on the machine. Whole-model estimate uses it for the same reason.
+    n_sliding, n_global = 50, 10
+    share = n_sliding if layer_type == "sliding_attention" else n_global
+    logger.info(
+        f"[layer_perf] {layer_type} x{share} layers = {share * best_s * 1000:.0f}ms of a 60-layer chunk "
+        f"(best-case, excludes embedding/head and inter-layer CCL not in this graph)"
+    )
