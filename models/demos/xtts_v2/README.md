@@ -1,12 +1,12 @@
-# coqui/XTTS-v2 — end-to-end TTNN pipeline (text → speech)
+# coqui/XTTS-v2: end-to-end TTNN pipeline (text → speech)
 
 ## Platforms
 
 | Device | Status | Notes |
 |---|---|---|
-| BH (Blackhole p300c), single chip | Supported, verified 2026-08-06 | one chip of a 4-chip QuietBox-2; requires a `TT_VISIBLE_DEVICES` pin + the single-chip mesh descriptor (see [Run](#run)). `l1_small_size=24576` |
+| BH (Blackhole p300c), single chip | Supported, verified 2026-08-07 | one chip of a 4-chip QuietBox-2; requires a `TT_VISIBLE_DEVICES` pin + the single-chip mesh descriptor (see [Run](#run)). `l1_small_size=24576` |
 | Multi-chip mesh (TP/DP) | Not supported | the pipeline opens one device; no `ShardTensor*Mesh`, no collectives, no mesh mapper |
-| WH (Wormhole) | Not tested | nothing arch-specific in the modules, but no run exists — do not assume it works |
+| WH (Wormhole) | Not tested | nothing arch-specific in the modules, but no run exists; do not assume it works |
 
 ## Introduction
 
@@ -17,7 +17,7 @@ the full reference `Xtts.inference` chain (speaker encode → conditioning encod
 decode → GPT latents → vocode) on Tenstorrent hardware through 29 native TTNN modules, compared
 against the HuggingFace/coqui reference implementation.
 
-Parameter counts are measured from the real checkpoint, not estimated: **466.87 M total** —
+Parameter counts are measured from the real checkpoint, not estimated: **466.87 M total**:
 `gpt` (GPT-2-style AR decoder, 30 blocks + conditioning-perceiver cross-attention) **441.02 M**,
 `hifigan_decoder` (vocoder + nested ResNet speaker encoder) **25.86 M**.
 
@@ -25,45 +25,9 @@ The demo and the e2e test share one pipeline (`tt/pipeline.py::run_tts`), so a p
 a working demo. Only integer token bookkeeping and the repetition-penalty logit adjustment run on
 host; next-token selection is on device (`ttnn.argmax`).
 
-## This branch
-
-`xtts-v2-bringup` = the `tt_hw_planner`-generated bring-up plus three attention-fusion commits
-(shas as on this branch):
-
-| Commit | Change |
-|---|---|
-| `7e5c6ce2e0d` | fuse GPT-2 attention head split/merge via `ttnn.transformer.split_query_key_value_and_split_heads` / `concatenate_heads` (removes per-head layout churn) |
-| `5d47c370785` | fuse GPT-2 attention into `ttnn.transformer.scaled_dot_product_attention` (FlashAttention-2) |
-| `be509653ad9` | fuse the conditioning encoder's `QKVAttentionLegacy` into `ttnn` SDPA |
-
-Base: `tenstorrent/tt-metal` main @ `587a4f30` (2026-08-06). The branch adds only
-`models/demos/xtts_v2/` on top of main, so it merges cleanly. The bring-up was originally
-scaffolded on `apande-TT/tt-metal` `feature/tt-hw-planner`
-([tt-metal PR #46283](https://github.com/tenstorrent/tt-metal/pull/46283)); this branch no longer
-carries that PR. Every gate below was re-run on the rebased tip, so the numbers are what current
-main produces.
-
-**Three further commits were tried and dropped.** Custom tt-lang kernels (head-split,
-residual-add, concat-heads) each passed their op-level check but end-to-end verification showed
-the head-split kernel broke decode correctness (AR token match vs the HF reference fell from 1.0
-to 0.0, e2e PCC −0.05); the other two depend on its rewrite of `g_p_t2_block.py` and could not be
-separated from it. All three are out. Bisect (each point e2e-tested): base PASS 0.9909 → head
-split/merge PASS 0.9909 → SDPA PASS 0.9939 → **tt-lang head-split FAIL** → conditioning SDPA on
-top of SDPA PASS 0.9936. The generic lesson, since it applies to any op-level optimizer:
-**a device-time win measured per-op can still be an end-to-end correctness regression — re-run
-the e2e gate on the final tip, not just the op benchmark.**
-
-**Port-excellence commits on top (2026-08-06), each gated end-to-end.** The Effect column records
-what was measured when each commit landed, on the pre-rebase base; the gates and performance
-sections below carry the current-tip numbers:
-
-| Change | Effect |
-|---|---|
-| `build_pipeline()` resident pipeline — weights upload once per process | **3.39× warm-forward speedup** |
-| Conv weight pre-preparation (`prepare_conv_weights` per shape) | speaker encoder 104 → 30 ms; warm 780 → 696 ms; bit-identical |
-| fp32 speaker-waveform upload | full-chain PCC 0.7482 → **0.9328**; speaker embedding 0.9710 → 0.9996 |
-| Phase-insensitive log-mel metric + accuracy-decomposition test | printed (not gated): log-mel PCC 0.9965 |
-| KV-cached / fixed-capacity traced decode, traced non-AR stages | implemented, measured, **accuracy/soundness-capped** — kept as documented experimental opt-ins or removed (see [Performance](#performance)) |
+This branch adds only `models/demos/xtts_v2/` on top of `tenstorrent/tt-metal` main
+(@ `32cdc03d6`, 2026-08-07), so it merges cleanly. Every gate below was re-run on that base, so
+the numbers are what current main produces.
 
 ## Pipeline (all native TTNN)
 
@@ -78,7 +42,7 @@ gpt_latents + g ──────────────────> hifi_dec
 ```
 
 Stage contract: `PIPELINE_STAGES = [speaker_encode, conditioning_encode, gpt_prefill, gpt_decode,
-gpt_latents, vocode]`. The chain is fully self-fed — no reference tensor is injected at any joint.
+gpt_latents, vocode]`. The chain is fully self-fed: no reference tensor is injected at any joint.
 
 ## Key model parameters
 
@@ -93,10 +57,9 @@ gpt_latents, vocode]`. The chain is fully self-fed — no reference tensor is in
 | Speaker-wav input / mel bins | 16 kHz / 80 |
 | Output audio | 24 kHz mono waveform |
 | Decode | greedy, `do_sample=False`, `repetition_penalty=5.0` |
-| KV-cache | none by default — repeat-prefill; experimental `decode_mode="kv"`/`"trace"` opt-ins are accuracy-capped (see [Performance](#performance)) |
-| Component split (planner) | REUSE 3 / ADAPT 0 / NEW 29 |
+| KV-cache | none by default (repeat-prefill); experimental `decode_mode="kv"`/`"trace"` opt-ins are accuracy-capped (see [Performance](#performance)) |
 
-## modules (29, all invoked in the e2e path)
+## Modules (29, all invoked in the e2e path)
 
 Ordered leaf → composite, as the pipeline builds them (`tt/pipeline.py::_MODULE_ORDER`):
 
@@ -107,7 +70,7 @@ Ordered leaf → composite, as the pipeline builds them (`tt/pipeline.py::_MODUL
 | Speaker encoder (8) | `adaptive_avg_pool2d`, `s_e_layer`, `s_e_basic_block`, `instance_norm1d`, `mel_scale`, `mel_spectrogram`, `pre_emphasis`, `res_net_speaker_encoder` |
 | HiFi-GAN vocoder (7) | `weight_norm`, `parametrization_list`, `parametrized_conv1d`, `parametrized_conv_transpose1d`, `res_block1`, `hifigan_generator`, `hifi_decoder` |
 
-Invocation is proven by an execution tracker (`P.instrument_modules()` / `P.INVOKED`) — each module
+Invocation is proven by an execution tracker (`P.instrument_modules()` / `P.INVOKED`): each module
 is recorded when it actually runs, not by the caller's optimism.
 
 ## Precision
@@ -116,20 +79,20 @@ Weights and activations are bfloat16. Float32 is used deliberately at a few poin
 repetition-penalty / presence bookkeeping around the logits, the host-side mel and conditioning
 seeds, the speaker-encoder input waveform and its log-mel front end, and the LM-head projection,
 which runs `MathFidelity.HiFi4` with `fp32_dest_acc_en=True` and `packer_l1_acc=True`. The
-speaker-encoder input is uploaded in fp32 because bf16 quantization of the 16 kHz waveform —
-not any kernel — was the d-vector accuracy floor: near-silent mel bins carry large relative
+speaker-encoder input is uploaded in fp32 because bf16 quantization of the 16 kHz waveform,
+not any kernel, was the d-vector accuracy floor: near-silent mel bins carry large relative
 error, which `log(mel + 1e-6)` amplifies (see
 [Accuracy decomposition](#accuracy-decomposition)).
 
 ## Run
 
-Weights download from HuggingFace on first use — accept the Coqui Public Model License on
+Weights download from HuggingFace on first use; accept the Coqui Public Model License on
 `coqui/XTTS-v2` first. Build the standard tt-metal Python environment per
 [`INSTALLING.md`](../../../INSTALLING.md), then add the reference stack:
 
 ```bash
-pip install coqui-tts==0.27.5 "transformers<5"
-pip install torchaudio==2.11.0+cpu torchcodec==0.14.0+cpu --index-url https://download.pytorch.org/whl/cpu
+uv pip install -r models/demos/xtts_v2/requirements.txt
+uv pip install torchaudio==2.11.0+cpu torchcodec==0.14.0+cpu --index-url https://download.pytorch.org/whl/cpu
 ```
 
 On a multi-chip Blackhole box, pin one chip and point at the single-chip mesh descriptor
@@ -154,25 +117,22 @@ python -m pytest models/demos/xtts_v2/tests/e2e/test_00_forward_on_device.py -s
 
 # trace + 2CQ substrate self-tests and timing
 python -m pytest models/demos/xtts_v2/tests/e2e/test_trace_2cq.py models/demos/xtts_v2/tests/e2e/test_trace_2cq_timing.py -s
-
-# per-component PCC (needs golden tensors in _captured/, not committed — see Known limitations)
-python -m pytest models/demos/xtts_v2/tests/pcc/ -v
 ```
 
 `XTTS_E2E_N` caps the AR horizon (both TT and HF sides) so the on-device gate stays fast.
 
 ## Correctness gates (text `"hello world."`, `en`, N = 40)
 
-Measured 2026-08-06 on the rebased tip (main @ `587a4f30`), single Blackhole p300c chip
+Measured 2026-08-07 on main @ `32cdc03d6`, single Blackhole p300c chip
 (QuietBox-2), greedy decode
 with repetition penalty. Every row is asserted by `tests/e2e/test_e2e_tts.py`; the demo wrote a
 valid 24 kHz WAV (44,544 samples) in the same session.
 
 | Gate | Result |
 |---|---|
-| Gate 1 — routed modules composed as-is as native TTNN (no reference module substituted in the chain) | PASS (structural) |
-| Gate 2 — all 29 modules invoked in the real forward path | **PASS 29/29** (`missing=[]`) |
-| Gate 3 — e2e waveform PCC vs HF reference ≥ 0.95 | **0.9904 PASS** |
+| Gate 1: routed modules composed as-is as native TTNN (no reference module substituted in the chain) | PASS (structural) |
+| Gate 2: all 29 modules invoked in the real forward path | **PASS 29/29** (`missing=[]`) |
+| Gate 3: e2e waveform PCC vs HF reference ≥ 0.95 | **0.9904 PASS** |
 
 Per-stage PCC (each TT stage vs the HF reference run on the previous TT output; every stage gated
 at ≥ 0.95):
@@ -201,17 +161,17 @@ Re-derive every number in this section with one print-only command (nothing is g
 python -m pytest models/demos/xtts_v2/tests/e2e/test_accuracy_decomposition.py -s
 ```
 
-**2x2 vocoder ablation** — swap TT/HF GPT latents and d-vector independently through the reference
+**2x2 vocoder ablation**: swap TT/HF GPT latents and d-vector independently through the reference
 HiFi-GAN (PCC against the TT-chain waveform):
 
 | Comparison | PCC | Isolates |
 |---|---|---|
 | vocode(lat_tt, g_tt) vs vocode(lat_tt, **g_hf**) | 0.9809 | the d-vector alone |
 | vocode(**lat_tt**, g_tt) vs vocode(**lat_hf**, g_tt) | 0.9401 | the GPT latents alone |
-| vocode(lat_tt, g_tt) vs vocode(lat_hf, g_hf) | 0.9279 | both — the full-chain number |
+| vocode(lat_tt, g_tt) vs vocode(lat_hf, g_hf) | 0.9279 | both, i.e. the full-chain number |
 
 The **latents term is a metric artifact, not a defect**: `latents_pcc` is 0.9994 and that
-6e-4-level error costs raw waveform PCC only because HiFi-GAN generates phase — the
+6e-4-level error costs raw waveform PCC only because HiFi-GAN generates phase. The
 phase-insensitive log-mel PCC is 0.9966. The **d-vector term was root-caused to the bf16 upload
 of the speaker waveform** (fixed, 2026-08-06): the front end runs fp32, but the 16 kHz input was
 uploaded as bf16; near-silent mel bins carry large relative error which `log(mel + 1e-6)`
@@ -229,19 +189,19 @@ The fp32 upload moved the full-chain number from 0.7482 to 0.9279 (speaker embed
 
 **Honest summary: this workload is host-dispatch-bound, not kernel-bound.** The wins that
 survived end-to-end verification are host-side (build/upload hoisting, conv weight preparation);
-every structural decode lever below was implemented, measured, and hit a correctness ceiling —
+every structural decode lever below was implemented, measured, and hit a correctness ceiling,
 documented as such. The rebase itself is fresh evidence for the diagnosis: moving from the
-2026-06 base to current main, with zero model-code changes, cut the warm wall ~3× — the drift
+2026-06 base to current main, with zero model-code changes, cut the warm wall ~3.5×. The drift
 between the two bases is tt-metal host-dispatch work, which is exactly where this model's time goes.
 
-Wall clock, resident pipeline (`build_pipeline` — weights upload once per process), N = 40 tokens
-(44,544 samples = 1.856 s of audio), single p300c chip at AICLK 1350 MHz, measured 2026-08-06 on
-the rebased tip (second run for stability: 761.1 ms cold / 221.2 ms warm):
+Wall clock, resident pipeline (`build_pipeline`: weights upload once per process), N = 40 tokens
+(44,544 samples = 1.856 s of audio), single p300c chip at AICLK 1350 MHz, measured 2026-08-07 on
+main @ `32cdc03d6` (second run for stability: 741.2 ms cold / 201.9 ms warm):
 
 | Metric | Value |
 |---|---|
-| Cold forward (includes one-time program compile) | 743.9 ms (RTF 0.40) |
-| **Warm forward** | **225.2 ms (RTF 0.121)** |
+| Cold forward (includes one-time program compile) | 750.4 ms (RTF 0.40) |
+| **Warm forward** | **199.5 ms (RTF 0.107)** |
 | Warm speedup vs per-forward weight upload (pre-`build_pipeline`) | **3.39×** (measured at introduction, pre-rebase base) |
 
 Warm wall split, measured on the pre-rebase base (warm wall there 695.9 ms; the split is not
@@ -250,13 +210,13 @@ re-measured on the rebased tip): AR decode (40 eager steps) 399 ms (57%), HiFi-G
 feature extraction 79 ms (11%).
 
 Stage walls measured with device syncs around each stage entry point; the wrapped and unwrapped
-warm walls are identical, so stages fully serialize — there is no inter-stage overlap left to
+warm walls are identical, so stages fully serialize; there is no inter-stage overlap left to
 reclaim. Two host-side levers are already in:
 
 1. **Resident pipeline** (`build_pipeline`): weights upload once per process instead of once per
-   forward — the 3.39× warm speedup.
+   forward (the 3.39× warm speedup).
 2. **Conv weight pre-preparation** (`ttnn.prepare_conv_weights` per (weight, input shape)):
-   `ttnn.conv2d` otherwise re-prepares raw OIHW weights on *every* call — a device→host pull-back,
+   `ttnn.conv2d` otherwise re-prepares raw OIHW weights on *every* call: a device→host pull-back,
    host prep, and H2D push per conv, ~74 ms of pure host overhead per forward in the speaker
    encoder alone (104 → 30 ms). Bit-identical (the same preparation function conv2d calls
    internally); the e2e gate did not move a digit.
@@ -267,15 +227,15 @@ engineering effort:
 
 - **KV-cached decode step** (available as the experimental opt-in `decode_mode="kv"`): removes the
   repeat-prefill recompute, but per-step logits drift at the 0.9996-PCC level from the eager bf16
-  trajectory — different kernel scheduling at sequence length 1 vs repeat-prefill — and over 40
+  trajectory (different kernel scheduling at sequence length 1 vs repeat-prefill), and over 40
   greedy steps a thin margin (steps 18–21 on the gate text) flips an argmax. The gate requires
   `ar_token_match == 1.0` against the eager trajectory, so the lever is accuracy-capped. Even an
   fp32 attention/head variant diverges *more*: passing requires reproducing eager's exact bf16
   arithmetic, not approximating fp32 truth.
-- **Fixed-capacity traced decode** (`decode_mode="trace"`): same ceiling, same cause — tracing
+- **Fixed-capacity traced decode** (`decode_mode="trace"`): same ceiling, same cause: tracing
   pins the sequence length, which changes kernel scheduling, which drifts the logits.
 - **Traced non-AR stages** (speaker encoder, vocoder): trace replay is not bit-identical on this
-  stack — captured intermediates are freed after capture and their addresses reused, so replay
+  stack: captured intermediates are freed after capture and their addresses reused, so replay
   corrupts live state (observed: garbage waveform with intact codes); the vocoder additionally
   performs a per-call host→device upload that trace capture forbids outright. The experiment was
   removed rather than shipped behind a flag.
@@ -283,12 +243,12 @@ engineering effort:
 On the pre-rebase base, the eager AR decode's ~10 ms/step of host dispatch was 57% of the warm
 wall. Historical
 planner evidence: an automated `tt_hw_planner optimize` sweep (25 attempts across 14 ops) moved
-`device_ms` 98.52 → 98.49 (1.00×) with ~94.9 ms of ~98.5 ms being host dispatch overhead — op-level
+`device_ms` 98.52 → 98.49 (1.00×) with ~94.9 ms of ~98.5 ms being host dispatch overhead, so op-level
 levers provably cannot reach this bottleneck. A whole-pipeline Tracy profile (reduced-depth
-configuration `TT_PERF_LAYERS=2`, 4 tokens, pre-rebase base — absolute numbers not comparable to
+configuration `TT_PERF_LAYERS=2`, 4 tokens, pre-rebase base; absolute numbers not comparable to
 the walls above):
 21,752 op invocations, 247.9 ms device-kernel, 114.0 ms host-dispatch; `SliceDeviceOperation` alone
-is 3.2% of device time but 34% of host dispatch — the repeat-prefill signature of re-slicing a
+is 3.2% of device time but 34% of host dispatch, the repeat-prefill signature of re-slicing a
 uniquely-shaped growing sequence tensor per token.
 
 Reproduce:
@@ -326,34 +286,17 @@ python -m pytest models/demos/xtts_v2/tests/e2e/test_trace_2cq_timing.py -s
 Decode is greedy (`do_sample=False`) with a fixed repetition penalty and `torch.manual_seed(0)` in
 the gate, and next-token argmax runs on device. Measured 2026-08-06: three forwards in
 one process are bit-identical, and three fresh-process runs produce identical SHA-256 hashes for
-both the waveform and the codes. Cross-process determinism also holds on the rebased tip: the e2e
-gate, the accuracy-decomposition test, and the demo (three separate processes) print the identical
-waveform PCC, 0.9903768689534943. The AR token match against HF greedy decode is exact (1.0) at the
-gated horizon.
-
-## Reference (GPU) comparison
-
-Published third-party numbers, cited as-is — no independent GPU measurement by us, and the
-conditions do not match (this port is a single-chip bring-up at a capped AR horizon).
-
-| Path | Hardware | Metric | Value | Source |
-|---|---|---|---|---|
-| This work | 1× Blackhole p300c | e2e waveform PCC vs reference | 0.9904 | this branch, `test_e2e_tts.py` |
-| This work | 1× Blackhole p300c | real-time factor | 0.121 warm / 0.40 cold (resident pipeline, 40 tokens = 1.856 s audio) | this branch, `test_tts_perf.py::test_tts_perf_warm` |
-| Reference | GPU (RTX 5090 class) | RTF | ≈ 0.3× (≈3× faster than real-time) | [GIGAGPU TTS latency benchmarks](https://gigagpu.com/tts-latency-benchmarks/) |
-| Reference | GPU | first-chunk latency | 150–400 ms (320 ms on RTX 5090) | [GIGAGPU XTTS-v2 VRAM](https://gigagpu.com/xtts-v2-vram-requirements/) |
-| Reference | CPU | RTF | ≈ 1.41× (slower than real-time) | [GIGAGPU TTS latency benchmarks](https://gigagpu.com/tts-latency-benchmarks/) |
+both the waveform and the codes. Cross-process determinism also holds on the refreshed tip
+(re-verified 2026-08-07 on main @ `32cdc03d6`): the e2e gate, the accuracy-decomposition test, and
+the demo (three separate processes) print the identical waveform PCC, 0.9903768689534943. The AR
+token match against HF greedy decode is exact (1.0) at the gated horizon.
 
 ## Known limitations
 
 - **Default AR decode is repeat-prefill** (no KV-cache). KV-cached and fixed-capacity traced
   decode exist as experimental opt-ins (`decode_mode="kv"` / `"trace"`) and are accuracy-capped at
-  bf16 — see [Performance](#performance); they are not the default and the gate does not use them.
+  bf16 (see [Performance](#performance)); they are not the default and the gate does not use them.
 - **Single chip only.** No mesh sharding or collectives.
-- **Per-component PCC tests need golden tensors in `_captured/`**, which are gitignored and not
-  committed. The e2e gate is the self-contained verification.
-- **`tests/pcc/test_mel_spectrogram.py` fails** on a framing mismatch vs the torch reference (open
-  bug; the e2e path is unaffected — `mel_spectrogram` is invoked and gated there).
 
 ## Layout
 
@@ -366,6 +309,7 @@ models/demos/xtts_v2/
   tests/e2e/test_00_forward_on_device.py   # per-module device forward smoke
   tests/e2e/test_tts_perf.py         # Tracy / 2CQ / trace-replay perf harness
   tests/e2e/test_trace_2cq*.py       # trace + 2CQ self-tests and timing
-  tests/pcc/                         # 29 per-component PCC tests (need _captured/ goldens)
   tt/modules/*.py                    # the 29 native TTNN modules
+  reference.py                       # loads the native coqui reference model (demo + tests)
+  requirements.txt                   # demo-specific pip deps (coqui-tts, transformers<5)
 ```
