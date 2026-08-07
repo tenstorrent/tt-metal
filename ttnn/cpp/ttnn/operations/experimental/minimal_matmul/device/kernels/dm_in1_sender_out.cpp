@@ -161,8 +161,12 @@ void kernel_main() {
     srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
 #endif
     OpSignaler srs_fuse_signaler;
+    uint32_t mm_progress_counters_base = 0;
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array,
+        // pushed as the next RT arg right after the OpSignaler args.
+        mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
     }
 #endif
 
@@ -318,7 +322,7 @@ void kernel_main() {
                     // at the moment all cores are expected to be done writing their corresponding blocks.
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
                 }
 #endif
@@ -431,7 +435,7 @@ void kernel_main() {
 #ifdef SRS_FUSE_OP_SIGNALER
                     if (is_last_block) {
                         noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
 #endif
                 }
