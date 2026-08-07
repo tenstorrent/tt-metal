@@ -86,9 +86,14 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      TT_METAL_HOME: /home/user/tt-metal
+      PYTHONPATH: /home/user/tt-metal
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       # Per-job NFS scratch for launch.log + --output-filename ranklogs (kimi pattern).
       # Keeps 64-rank tagged stdout off the 4Gi Actions runner; uploaded then removed.
       PIPELINE_DIR: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}
+      TTRUN_CWD: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
     strategy:
       fail-fast: false
       matrix:
