@@ -522,9 +522,11 @@ void kernel_main() {
     // skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast rounds
     // fire only for chunks that will actually be processed — otherwise sparse's variable-rate
     // compute path breaks chain lockstep at high work-items-per-core.
-    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 3);
-    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 4);
-    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 5);
+    // Appended right after the 5-entry reader CB block (cb_q_in/cb_k_in/cb_v_in/cb_attention_sink/
+    // cb_kv_pad_derived at cb_arg_offset + 0..4), so the sparse flags live at cb_arg_offset + 5/6/7.
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 6);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

@@ -87,15 +87,16 @@ void kernel_main() {
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // Sparse-frames extension (windowed / block-sparse pattern). All three set together at the host or all
-    // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
+    // zero (feature disabled). Slots placed immediately after the 25-entry CB block, i.e. at
+    // cb_arg_offset + 25/26/27 = 79/80/81 (cb_arg_offset == 54; last CB slot is cb_attention_sink at +24).
     // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
     // division (host requires tiles_per_frame % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
     // chunk straddles a frame boundary; chunk sizes may be smaller than the frame to fit L1) and
     // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed sparse_frame_mask
     // bitmap in runtime args 11..(11+31).
-    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(72) == 1;
-    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(73);
-    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(74);
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(79) == 1;
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(80);
+    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(81);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);

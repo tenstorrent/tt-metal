@@ -523,15 +523,14 @@ void kernel_main() {
     // chunk has zero attended K chunks — otherwise compute's zero-work fast path (which skips
     // consuming cb_prev_out and skips pushing cb_out) leaves the writer stuck on cb_reserve_back
     // (restore-side) or cb_wait_front (save-side).
-    // The host appends the full 23-entry CB compile-time-arg block (cb_q_in .. cb_exp_max_diff)
-    // before the sparse flags, so these live at cb_arg_offset + 23/24/25 — matching the compute
-    // kernel (get_compile_time_arg_val(72..74) with its cb_arg_offset of 49). The writer only
-    // *reads* the first 15 CB slots it needs, but the block still occupies 23 slots; reading the
-    // sparse flags at +15 (the old value) returned cb_qk_im's CB id (!= 1) as sparse_frames_enabled,
-    // silently compiling the writer's dense path so it ignored q_work_bitmap and deadlocked.
-    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 23);
-    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 24);
-    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 25);
+    // The host appends the full 24-entry CB compile-time-arg block (cb_q_in .. cb_kv_pad_derived)
+    // before the sparse flags, so these live at cb_arg_offset + 24/25/26. The writer only *reads*
+    // the CB slots it needs, but the block still occupies all 24 slots; reading the sparse flags at
+    // the wrong offset returns a CB id (!= 1) as sparse_frames_enabled, silently compiling the
+    // writer's dense path so it ignores q_work_bitmap and deadlocks / ignores the mask.
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 24);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 25);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 26);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
