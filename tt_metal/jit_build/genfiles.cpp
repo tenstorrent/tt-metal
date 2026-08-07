@@ -284,7 +284,6 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
                "#include <array>\n"
-               "#include \"api/compile_time_args.h\"\n"
                "#include \"experimental/kernel_args.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
@@ -335,9 +334,9 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
     // Values are baked as literals (same spirit as named CtaVal); not read from
     // KERNEL_COMPILE_TIME_ARGS. Three accessors:
-    //   1. get_compile_time_varargs() — constexpr std::array of the baked words
+    //   1. get_compile_time_varargs() — const ref baked CTA varargs
     //   2. get_compile_time_vararg<idx>() — template index (static_assert bounds)
-    //   3. get_compile_time_vararg(idx) — function-parameter index
+    //   3. get_compile_time_vararg(idx) — function-parameter index (no assert)
     std::string cta_vararg_literals;
     if (!cta_varargs.empty()) {
         // e.g. {1, 2, 3} → "1u, 2u, 3u"
@@ -347,9 +346,11 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     }
     content << fmt::format(
         R"(
-// Compile-time varargs (Metal 2.0; baked literals — not KERNEL_COMPILE_TIME_ARGS)
-FORCE_INLINE constexpr std::array<uint32_t, {0}u> get_compile_time_varargs() {{
-    return std::array<uint32_t, {0}u>{{{{{1}}}}};
+namespace cta_vararg_detail {{
+inline constexpr std::array<uint32_t, {0}u> COMPILE_TIME_VARARGS = {{{{{1}}}}};
+}}  // namespace cta_vararg_detail
+FORCE_INLINE constexpr const std::array<uint32_t, {0}u>& get_compile_time_varargs() {{
+    return cta_vararg_detail::COMPILE_TIME_VARARGS;
 }}
 template <uint32_t idx>
 FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
