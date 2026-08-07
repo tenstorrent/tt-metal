@@ -20,6 +20,7 @@ import statistics
 import sys
 
 DRAM_BW = 512e9  # blackhole p150 peak DRAM bandwidth, B/s
+OP_CODES = {"GenericOpDeviceOperation", "MoeFusedSwiGluDeviceOperation"}
 
 
 def load_rows(path):
@@ -30,7 +31,7 @@ def load_rows(path):
     for p in csvs:
         with open(p) as fh:
             for r in csv.DictReader(fh):
-                if r.get("OP CODE") != "GenericOpDeviceOperation":
+                if r.get("OP CODE") not in OP_CODES:
                     continue
                 rows.append(
                     {
@@ -55,7 +56,7 @@ def main():
         rows, csvs = load_rows(report)
         if len(rows) != len(manifest):
             sys.exit(
-                f"REFUSING TO REPORT: {len(rows)} GenericOpDeviceOperation rows in {csvs} but "
+                f"REFUSING TO REPORT: {len(rows)} moe_fused_swiglu rows in {csvs} but "
                 f"{len(manifest)} dispatches in {manifest_path}. The count<->row mapping is "
                 f"order-based, so a length mismatch means every point could be attributed to the "
                 f"wrong count."
@@ -90,9 +91,10 @@ def main():
                 "us_median": med / 1e3,
                 "read_MB": p["m"]["read_bytes"] / 1e6,
                 "dram_util": p["m"]["read_bytes"] / (DRAM_BW * med / 1e9),
-                # Tokens per second the block sustains at this sequence length.
+                # Tokens per second the block sustains at this sequence length. M=0 is a useful
+                # fixed-dispatch-cost measurement, but per-token latency is undefined there.
                 "tokens_per_s": count / (med / 1e9),
-                "ns_per_token": med / count,
+                "ns_per_token": med / count if count else None,
                 "cores": p["cores"],
             }
         )
@@ -114,9 +116,10 @@ def main():
         print(f"{'count':>6} {'us':>9} {'spread%':>8} {'util':>6} {'ns/token':>9} {'Mtok/s':>8} {'reps':>5}")
         for r in sub:
             spread = 100.0 * (r["ns_max"] - r["ns_min"]) / r["ns_median"]
+            ns_per_token = f"{r['ns_per_token']:.1f}" if r["ns_per_token"] is not None else "—"
             print(
                 f"{r['count']:>6} {r['us_median']:>9.2f} {spread:>8.2f} {r['dram_util']:>6.3f} "
-                f"{r['ns_per_token']:>9.1f} {r['tokens_per_s'] / 1e6:>8.2f} {r['reps']:>5}"
+                f"{ns_per_token:>9} {r['tokens_per_s'] / 1e6:>8.2f} {r['reps']:>5}"
             )
         if len(sub) > 100:  # a full step-32 sweep, where a gap means a lost chunk
             missing = [c for c in range(32, sub[0]["capacity"] + 1, 32) if c not in {r["count"] for r in sub}]

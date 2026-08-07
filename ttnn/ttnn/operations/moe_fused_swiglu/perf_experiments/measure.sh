@@ -56,7 +56,7 @@ names = [c.strip() for c in cases.split(";") if c.strip()]
 ns = []
 for p in glob.glob(f"{report}/ops_perf_results*.csv"):
     for r in csv.DictReader(open(p)):
-        if r.get("OP CODE") == "GenericOpDeviceOperation":
+        if r.get("OP CODE") in {"GenericOpDeviceOperation", "MoeFusedSwiGluDeviceOperation"}:
             ns.append((int(r["GLOBAL CALL COUNT"]), int(r["DEVICE KERNEL DURATION [ns]"]), int(r["CORE COUNT"])))
 ns.sort()
 for (name, (_, dur, cores)) in zip(names, ns):

@@ -41,7 +41,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-OP_CODE = "GenericOpDeviceOperation"
+OP_CODES = {"GenericOpDeviceOperation", "MoeFusedSwiGluDeviceOperation"}
 EXPECTED_GRID = "11x8"
 COUNTS = (0, 64, 128, 256, 512, 1024, 2048, 4096, 5120)
 FORMATS = ("x_rm", "x_tile")
@@ -77,10 +77,10 @@ def _load_op_rows(report: str | Path) -> tuple[list[dict[str, str]], list[Path]]
     rows: list[dict[str, str]] = []
     for path in csvs:
         with path.open(newline="") as fh:
-            rows.extend(row for row in csv.DictReader(fh) if row.get("OP CODE") == OP_CODE)
+            rows.extend(row for row in csv.DictReader(fh) if row.get("OP CODE") in OP_CODES)
     rows.sort(key=lambda row: int(row["GLOBAL CALL COUNT"]))
     if not rows:
-        raise ValueError(f"no {OP_CODE} rows found in {csvs}")
+        raise ValueError(f"no moe_fused_swiglu rows found in {csvs}")
     return rows, csvs
 
 
@@ -113,7 +113,7 @@ def collect_measurements(source_pairs: list[tuple[str | Path, str | Path]]) -> t
             manifest = json.load(fh)
         if len(rows) != len(manifest):
             raise ValueError(
-                f"REFUSING TO REPORT: {len(rows)} {OP_CODE} rows in {csvs}, but "
+                f"REFUSING TO REPORT: {len(rows)} moe_fused_swiglu rows in {csvs}, but "
                 f"{len(manifest)} dispatches in {manifest_path}; attribution is order-based"
             )
         sources.append(

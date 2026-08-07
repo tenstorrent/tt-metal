@@ -35,7 +35,7 @@ def whole_op(report):
     for csv_path in report.glob("ops_perf_results*.csv"):
         with open(csv_path) as fh:
             for r in csv.DictReader(fh):
-                if r.get("OP CODE") != "GenericOpDeviceOperation":
+                if r.get("OP CODE") not in {"GenericOpDeviceOperation", "MoeFusedSwiGluDeviceOperation"}:
                     continue
                 rows.append(
                     (

@@ -1,0 +1,970 @@
+{
+  "sources": [
+    {
+      "report": [
+        "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/ops_k7168_bf16_rm.csv"
+      ],
+      "manifest": "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/manifest_k7168_bf16_rm.json",
+      "dispatches": 56
+    },
+    {
+      "report": [
+        "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/ops_k7168_bfp8_tile.csv"
+      ],
+      "manifest": "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/manifest_k7168_bfp8_tile.json",
+      "dispatches": 56
+    },
+    {
+      "report": [
+        "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/ops_k6144_bf16_rm.csv"
+      ],
+      "manifest": "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/manifest_k6144_bf16_rm.json",
+      "dispatches": 56
+    },
+    {
+      "report": [
+        "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/ops_k6144_bfp8_tile.csv"
+      ],
+      "manifest": "/localdev/mstaletovic/2026_07_31/1406_mstaletovic_moe_matmul_codegen/clones/moe_fused_swiglu_run1/tt-metal/generated/perf_table_8x11_raw/manifest_k6144_bfp8_tile.json",
+      "dispatches": 56
+    }
+  ],
+  "points": [
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 0,
+      "median_ns": 3450,
+      "samples_ns": [
+        3287,
+        3450,
+        3488
+      ],
+      "spread_pct": 5.826086956521739
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 64,
+      "median_ns": 89059,
+      "samples_ns": [
+        85616,
+        89059,
+        89327
+      ],
+      "spread_pct": 4.166900593988255
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 128,
+      "median_ns": 97333,
+      "samples_ns": [
+        95428,
+        97333,
+        98121
+      ],
+      "spread_pct": 2.7667902972270455
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 256,
+      "median_ns": 122758,
+      "samples_ns": [
+        122020,
+        122758,
+        124082
+      ],
+      "spread_pct": 1.679727594128285
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 512,
+      "median_ns": 200458,
+      "samples_ns": [
+        199099,
+        200458,
+        204791
+      ],
+      "spread_pct": 2.839497550609105
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 1024,
+      "median_ns": 350379,
+      "samples_ns": [
+        350022,
+        350379,
+        351093
+      ],
+      "spread_pct": 0.30566900413552184
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 2048,
+      "median_ns": 654405,
+      "samples_ns": [
+        652648,
+        654405,
+        655513
+      ],
+      "spread_pct": 0.4378022784055745
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 4096,
+      "median_ns": 1250894,
+      "samples_ns": [
+        1248490,
+        1250894,
+        1254349
+      ],
+      "spread_pct": 0.4683850110401041
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 5120,
+      "median_ns": 1554195,
+      "samples_ns": [
+        1553532,
+        1554195,
+        1554894
+      ],
+      "spread_pct": 0.08763379112659608
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 0,
+      "median_ns": 3353,
+      "samples_ns": [
+        3257,
+        3353,
+        3416
+      ],
+      "spread_pct": 4.742022069788249
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 64,
+      "median_ns": 77844,
+      "samples_ns": [
+        76533,
+        77844,
+        78161
+      ],
+      "spread_pct": 2.0913622116026924
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 128,
+      "median_ns": 86011,
+      "samples_ns": [
+        85937,
+        86011,
+        88027
+      ],
+      "spread_pct": 2.429921754194231
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 256,
+      "median_ns": 112384,
+      "samples_ns": [
+        110636,
+        112384,
+        114403
+      ],
+      "spread_pct": 3.3519006264236904
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 512,
+      "median_ns": 186275,
+      "samples_ns": [
+        183646,
+        186275,
+        186419
+      ],
+      "spread_pct": 1.48865924037042
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 1024,
+      "median_ns": 325177,
+      "samples_ns": [
+        323748,
+        325177,
+        325436
+      ],
+      "spread_pct": 0.5191019045012408
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 2048,
+      "median_ns": 602647,
+      "samples_ns": [
+        601386,
+        602647,
+        603059
+      ],
+      "spread_pct": 0.27760861665286646
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 4096,
+      "median_ns": 1157525,
+      "samples_ns": [
+        1157467,
+        1157525,
+        1157907
+      ],
+      "spread_pct": 0.03801213796678257
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 5120,
+      "median_ns": 1435502,
+      "samples_ns": [
+        1435126,
+        1435502,
+        1437736
+      ],
+      "spread_pct": 0.181817928501667
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 0,
+      "median_ns": 3556,
+      "samples_ns": [
+        3366,
+        3556,
+        3561
+      ],
+      "spread_pct": 5.483689538807649
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 64,
+      "median_ns": 79616,
+      "samples_ns": [
+        79003,
+        79616,
+        79782
+      ],
+      "spread_pct": 0.9784465434083601
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 128,
+      "median_ns": 84832,
+      "samples_ns": [
+        84499,
+        84832,
+        85737
+      ],
+      "spread_pct": 1.4593549603923048
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 256,
+      "median_ns": 112866,
+      "samples_ns": [
+        112054,
+        112866,
+        113059
+      ],
+      "spread_pct": 0.8904364467598745
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 512,
+      "median_ns": 190726,
+      "samples_ns": [
+        190170,
+        190726,
+        192262
+      ],
+      "spread_pct": 1.0968614661870957
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 1024,
+      "median_ns": 342844,
+      "samples_ns": [
+        342731,
+        342844,
+        343335
+      ],
+      "spread_pct": 0.17617341998109928
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 2048,
+      "median_ns": 642654,
+      "samples_ns": [
+        641544,
+        642654,
+        643126
+      ],
+      "spread_pct": 0.24616667755899754
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 4096,
+      "median_ns": 1242881,
+      "samples_ns": [
+        1242772,
+        1242881,
+        1256263
+      ],
+      "spread_pct": 1.0854619227424025
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 5120,
+      "median_ns": 1542840,
+      "samples_ns": [
+        1541547,
+        1542840,
+        1542960
+      ],
+      "spread_pct": 0.09158435093723263
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 0,
+      "median_ns": 3542,
+      "samples_ns": [
+        3415,
+        3542,
+        3544
+      ],
+      "spread_pct": 3.642010163749294
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 64,
+      "median_ns": 69666,
+      "samples_ns": [
+        69256,
+        69666,
+        69983
+      ],
+      "spread_pct": 1.0435506559871386
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 128,
+      "median_ns": 76973,
+      "samples_ns": [
+        76901,
+        76973,
+        77579
+      ],
+      "spread_pct": 0.8808283424057787
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 256,
+      "median_ns": 104833,
+      "samples_ns": [
+        104261,
+        104833,
+        104968
+      ],
+      "spread_pct": 0.6744059599553576
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 512,
+      "median_ns": 175508,
+      "samples_ns": [
+        174090,
+        175508,
+        175868
+      ],
+      "spread_pct": 1.0130592337671218
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 1024,
+      "median_ns": 313991,
+      "samples_ns": [
+        313456,
+        313991,
+        314757
+      ],
+      "spread_pct": 0.41434308626680383
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 2048,
+      "median_ns": 592540,
+      "samples_ns": [
+        591863,
+        592540,
+        592786
+      ],
+      "spread_pct": 0.15577007459412023
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 4096,
+      "median_ns": 1148025,
+      "samples_ns": [
+        1146075,
+        1148025,
+        1148140
+      ],
+      "spread_pct": 0.1798741316608959
+    },
+    {
+      "format": "x_rm",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 5120,
+      "median_ns": 1425448,
+      "samples_ns": [
+        1423758,
+        1425448,
+        1426963
+      ],
+      "spread_pct": 0.22484159366037906
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 0,
+      "median_ns": 3424,
+      "samples_ns": [
+        3382,
+        3424,
+        3473
+      ],
+      "spread_pct": 2.657710280373832
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 64,
+      "median_ns": 86933,
+      "samples_ns": [
+        86184,
+        86933,
+        87107
+      ],
+      "spread_pct": 1.0617371999125764
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 128,
+      "median_ns": 93718,
+      "samples_ns": [
+        91873,
+        93718,
+        94553
+      ],
+      "spread_pct": 2.859642758061418
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 256,
+      "median_ns": 118980,
+      "samples_ns": [
+        116279,
+        118980,
+        119820
+      ],
+      "spread_pct": 2.9761304420911077
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 512,
+      "median_ns": 197600,
+      "samples_ns": [
+        195902,
+        197600,
+        197744
+      ],
+      "spread_pct": 0.9321862348178138
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 1024,
+      "median_ns": 347793,
+      "samples_ns": [
+        346802,
+        347793,
+        348263
+      ],
+      "spread_pct": 0.42007745986837
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 2048,
+      "median_ns": 648661,
+      "samples_ns": [
+        646448,
+        648661,
+        648929
+      ],
+      "spread_pct": 0.3824802169392024
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 4096,
+      "median_ns": 1246521,
+      "samples_ns": [
+        1241952,
+        1246521,
+        1248016
+      ],
+      "spread_pct": 0.4864739543096346
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "kimi_k26",
+      "count": 5120,
+      "median_ns": 1546092,
+      "samples_ns": [
+        1544917,
+        1546092,
+        1546436
+      ],
+      "spread_pct": 0.09824771100296747
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 0,
+      "median_ns": 3337,
+      "samples_ns": [
+        3301,
+        3337,
+        3484
+      ],
+      "spread_pct": 5.483967635600839
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 64,
+      "median_ns": 77699,
+      "samples_ns": [
+        76984,
+        77699,
+        78076
+      ],
+      "spread_pct": 1.405423493223851
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 128,
+      "median_ns": 84741,
+      "samples_ns": [
+        81893,
+        84741,
+        84971
+      ],
+      "spread_pct": 3.632244132120225
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 256,
+      "median_ns": 109924,
+      "samples_ns": [
+        108496,
+        109924,
+        113059
+      ],
+      "spread_pct": 4.1510498162366725
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 512,
+      "median_ns": 180723,
+      "samples_ns": [
+        180487,
+        180723,
+        183010
+      ],
+      "spread_pct": 1.3960591623645027
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 1024,
+      "median_ns": 321119,
+      "samples_ns": [
+        321059,
+        321119,
+        321746
+      ],
+      "spread_pct": 0.21393938072801671
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 2048,
+      "median_ns": 599718,
+      "samples_ns": [
+        599007,
+        599718,
+        603581
+      ],
+      "spread_pct": 0.7626917984786182
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 4096,
+      "median_ns": 1156350,
+      "samples_ns": [
+        1154119,
+        1156350,
+        1157081
+      ],
+      "spread_pct": 0.2561508193885934
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_interleaved",
+      "model": "glm_51",
+      "count": 5120,
+      "median_ns": 1435991,
+      "samples_ns": [
+        1434182,
+        1435991,
+        1436878
+      ],
+      "spread_pct": 0.18774490926475165
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 0,
+      "median_ns": 3761,
+      "samples_ns": [
+        3504,
+        3761,
+        3781
+      ],
+      "spread_pct": 7.365062483382079
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 64,
+      "median_ns": 78336,
+      "samples_ns": [
+        77720,
+        78336,
+        80294
+      ],
+      "spread_pct": 3.285845588235294
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 128,
+      "median_ns": 84053,
+      "samples_ns": [
+        83888,
+        84053,
+        84108
+      ],
+      "spread_pct": 0.2617396166704341
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 256,
+      "median_ns": 108730,
+      "samples_ns": [
+        108461,
+        108730,
+        109674
+      ],
+      "spread_pct": 1.1156074680400994
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 512,
+      "median_ns": 185744,
+      "samples_ns": [
+        184841,
+        185744,
+        185803
+      ],
+      "spread_pct": 0.5179171332586786
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 1024,
+      "median_ns": 335295,
+      "samples_ns": [
+        334596,
+        335295,
+        335526
+      ],
+      "spread_pct": 0.2773676911376549
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 2048,
+      "median_ns": 635624,
+      "samples_ns": [
+        635246,
+        635624,
+        637307
+      ],
+      "spread_pct": 0.3242482977357683
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 4096,
+      "median_ns": 1234264,
+      "samples_ns": [
+        1233829,
+        1234264,
+        1235179
+      ],
+      "spread_pct": 0.10937692422366689
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "kimi_k26",
+      "count": 5120,
+      "median_ns": 1533001,
+      "samples_ns": [
+        1532564,
+        1533001,
+        1534433
+      ],
+      "spread_pct": 0.121917728690327
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 0,
+      "median_ns": 3637,
+      "samples_ns": [
+        3536,
+        3637,
+        3681
+      ],
+      "spread_pct": 3.986802309595821
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 64,
+      "median_ns": 70625,
+      "samples_ns": [
+        68925,
+        70625,
+        71701
+      ],
+      "spread_pct": 3.930619469026549
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 128,
+      "median_ns": 74234,
+      "samples_ns": [
+        73881,
+        74234,
+        76792
+      ],
+      "spread_pct": 3.921383732521486
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 256,
+      "median_ns": 98414,
+      "samples_ns": [
+        97567,
+        98414,
+        98473
+      ],
+      "spread_pct": 0.9206007275387648
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 512,
+      "median_ns": 171309,
+      "samples_ns": [
+        170536,
+        171309,
+        171736
+      ],
+      "spread_pct": 0.7004885907920775
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 1024,
+      "median_ns": 309333,
+      "samples_ns": [
+        309255,
+        309333,
+        310437
+      ],
+      "spread_pct": 0.382112480724656
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 2048,
+      "median_ns": 584960,
+      "samples_ns": [
+        583899,
+        584960,
+        585226
+      ],
+      "spread_pct": 0.2268531181619256
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 4096,
+      "median_ns": 1136921,
+      "samples_ns": [
+        1134976,
+        1136921,
+        1138273
+      ],
+      "spread_pct": 0.28999376385870257
+    },
+    {
+      "format": "x_tile",
+      "placement": "w_ndshard",
+      "model": "glm_51",
+      "count": 5120,
+      "median_ns": 1412650,
+      "samples_ns": [
+        1412428,
+        1412650,
+        1413014
+      ],
+      "spread_pct": 0.0414823204615439
+    }
+  ]
+}
