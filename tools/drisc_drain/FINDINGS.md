@@ -2189,3 +2189,34 @@ intermittently. That is a better-posed problem than the endpoint wedge and is pr
 across ~280 runs and went unnoticed because every one of them exited 0. The earlier two instances were the
 ordering trap (twice). Cheap invariants -- runtime, card state, log length -- catch this class of error
 before it becomes a finding.
+
+## §N+20 — §N+11's 2x2 IS SUSPECT: it was scored before WEDGE and TEARDOWN could be told apart
+
+§N+11 concluded "only DRISC *and* fast dispatch hangs" (4/134 vs 0/294, Fisher p ~ 0.004) and called it the
+strongest signal in this file. **It was scored on exit code / `PcieHangError`** -- i.e. it pools the two
+failure modes that §N+19 proved are distinct:
+
+- **WEDGE** -- PCIe endpoint stops completing TLPs, card reads `Unknown|63`
+- **TEARDOWN** -- `wait_until_cores_done` never completes, card perfectly HEALTHY
+
+Pooling these is exactly what produced and then destroyed §N+18. A cell recorded as "0/98 clean" only means
+no non-zero exits were seen; it does not establish that no wedge occurred, and it says nothing at all about
+teardown hangs, which under an unarmed build are SILENT (no log message -- see §N+19).
+
+The file already documents a separate slow-dispatch failure at line ~1363: *"Under slow dispatch the DRISC
+drainer wedges on sweep 1 and the host reports FAILED TO START"* -- a third state again, and one that would
+not have been scored as a hang in the 2x2 at all.
+
+**If the wedge occurs under slow dispatch too, the interaction claim is dead** and "DRAM-core egress in the
+presence of fast-dispatch traffic" loses its only support. Everything §N+11 built on -- including the
+`num_hw_cqs` experiment, which was chosen precisely to vary dispatch intensity -- inherits the doubt.
+
+**Required: re-run the full 2x2 with the classifying harness**, scoring WEDGE / TEARDOWN / MASKED separately
+and per-arm randomized. Needs two knobs wired into `drisc_hang_harness.sh`:
+`TT_METAL_SLOW_DISPATCH_MODE=1` and `TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1`. Until then, treat the
+DRISC-x-fast-dispatch interaction as UNCONFIRMED, not established.
+
+**Pattern worth naming, since it has now cost four findings in one day:** every wrong conclusion here came
+from a coarse observable standing in for the thing of interest -- exit code for failure mode, wall-clock for
+health, arm label for causation. The fix each time was a finer discriminator (card state, run duration,
+randomized order), never more runs. When a result surprises, sharpen the observable before spending silicon.
