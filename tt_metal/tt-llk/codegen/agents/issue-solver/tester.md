@@ -79,7 +79,10 @@ The manifest must exist and its `attempt_id` must equal
 `REQUIRED_VERIFICATION_ATTEMPT_ID`. Select only its `suite=llk` leaves. The
 runner reads the same manifest from `${LOG_DIR}/state.json`, rejects an
 unsealed selector before compilation, and binds each structured result to the
-leaf's run, attempt, and requirement IDs. Do not substitute a broader test.
+leaf's run, attempt, and requirement IDs. Run every selected leaf separately;
+before each invocation export that leaf's manifest `run_id`, `attempt_id`, and
+`requirement_id` as `CODEGEN_RUN_ID`, `CODEGEN_ATTEMPT_ID`, and
+`CODEGEN_REQUIREMENT_ID`. Do not substitute a broader test.
 
 Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs; otherwise use
 `TARGET_ARCH`. Run only architectures marked `in_scope`. Preserve the
@@ -206,12 +209,20 @@ For a functional test:
 - without it, use `subcommand=run` so the wrapper compiles and runs on the
   local device.
 
+Create one result path per sealed leaf before either local or queued execution:
+
+```bash
+mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+RESULT_JSON_OUT="$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json"
+```
+
 ```bash
 bash .claude/scripts/run_test.sh "$subcommand" \
   --worktree "$WORKTREE_DIR/tt_metal/tt-llk" \
   --arch "$arch" \
   --test "$TEST_FILE" \
   --log-dir "$LOG_DIR" \
+  --result-json-out "$RESULT_JSON_OUT" \
   --verbose
 ```
 
@@ -255,6 +266,7 @@ bash .claude/scripts/run_test.sh simulate \
   --arch quasar \
   --test "$TEST_FILE" \
   --log-dir "$LOG_DIR" \
+  --result-json-out "$RESULT_JSON_OUT" \
   --verbose
 qsr_exit=$?
 set -e
@@ -305,6 +317,7 @@ $HW_TEST_DISPATCH_CMD --kind llk --arch "$arch" \
   --worktree "$WORKTREE_DIR" \
   --base "$(sg GIT_COMMIT)" \
   --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+  --result-json-out "$RESULT_JSON_OUT" \
   --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/run.log"
 dispatch_exit=${PIPESTATUS[0]}
 set -e

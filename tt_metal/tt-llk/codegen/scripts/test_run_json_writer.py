@@ -434,6 +434,469 @@ def test_verification_result_fatal_marker_and_artifact_mutation_are_infra(tmp_pa
     )
 
 
+def _content_id(document, omitted):
+    return hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in document.items() if key not in omitted},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+
+
+def _reducer_manifest(log_dir, requirements):
+    document = {
+        "schema": "tt.issue-solver.required-verification",
+        "version": 1,
+        "manifest_id": "0" * 64,
+        "run_id": "run-reducer",
+        "attempt_id": "attempt-001",
+        "expected_base_sha": "a" * 40,
+        "revision": 1,
+        "parent_manifest_id": None,
+        "supersedes_reason": None,
+        "requirements": requirements,
+        "waivers": [],
+    }
+    document["manifest_id"] = _content_id(document, {"manifest_id"})
+    path = log_dir / "required_verification_manifest.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return document, path
+
+
+def _requirement(arch="blackhole", suite="llk", index=1, **overrides):
+    document = {
+        "requirement_id": f"{arch}:{suite}:{index}",
+        "architecture": arch,
+        "suite": suite,
+        "backend": "silicon",
+        "selector": {
+            "test": "test_reduce.py" if suite != "metal" else "LLK.Reduce",
+            "test_id": None,
+            "k": None,
+        },
+        "minimum_selected": 1,
+        "minimum_executed": 1,
+        "required_measurements": [],
+    }
+    document.update(overrides)
+    return document
+
+
+def _sealed_result(
+    manifest,
+    requirement,
+    *,
+    selected=1,
+    executed=1,
+    passed=1,
+    failed=0,
+    collection_errors=0,
+    collection_returncode=0,
+    returncode=0,
+    timed_out=False,
+    markers=None,
+    patch_sha256="b" * 64,
+    artifact_sha256="c" * 64,
+    executed_artifact_sha256=None,
+    attempt_id=None,
+    job_id="job-1",
+):
+    markers = markers or []
+    execution = {
+        "ran": executed > 0,
+        "executed": executed,
+        "passed": passed,
+        "failed": failed,
+        "skipped": 0,
+        "xfailed": 0,
+        "xpassed": 0,
+        "returncode": returncode,
+        "signal": None,
+        "timed_out": timed_out,
+        "infrastructure_markers": markers,
+    }
+    collection = {
+        "selected": selected,
+        "collected": selected,
+        "errors": collection_errors,
+        "returncode": collection_returncode,
+    }
+    if timed_out:
+        classification, reasons = "timed_out", ["execution_timed_out"]
+    elif collection_returncode or collection_errors or markers:
+        classification = "infra_error"
+        reasons = []
+        if collection_returncode:
+            reasons.append("collection_nonzero_exit")
+        if collection_errors:
+            reasons.append("collection_error")
+        reasons.extend(markers)
+    elif selected == 0:
+        classification, reasons = "coverage_error", ["zero_selected"]
+    elif executed == 0:
+        classification, reasons = "coverage_error", ["zero_executed"]
+    elif returncode == 0 and failed == 0 and passed == executed:
+        classification, reasons = "success", []
+    elif returncode == 1 and failed:
+        classification, reasons = "candidate_failure", ["test_failure"]
+    elif returncode == 0:
+        classification, reasons = "candidate_failure", ["outcome_count_mismatch"]
+    else:
+        classification, reasons = "infra_error", ["execution_nonzero_exit"]
+    result = {
+        "schema": "tt.issue-solver.verification-result",
+        "version": 2,
+        "result_id": "0" * 64,
+        "requirement_id": requirement["requirement_id"],
+        "run_id": manifest["run_id"],
+        "attempt_id": attempt_id or manifest["attempt_id"],
+        "job_id": job_id,
+        "architecture": requirement["architecture"],
+        "suite": requirement["suite"],
+        "backend": requirement["backend"],
+        "selector": requirement["selector"],
+        "provenance": {
+            "expected_base_sha": manifest["expected_base_sha"],
+            "actual_base_sha": manifest["expected_base_sha"],
+            "patch_sha256": patch_sha256,
+            "manifest_id": "d" * 64,
+            "artifact_set_sha256": artifact_sha256,
+            "executed_artifact_sha256": (executed_artifact_sha256 or artifact_sha256),
+        },
+        "collection": collection,
+        "execution": execution,
+        "classification": classification,
+        "reason_codes": list(dict.fromkeys(reasons)),
+    }
+    result["result_id"] = _content_id(result, {"result_id"})
+    return result
+
+
+def _reduce(log_dir, manifest_path, scope="all", perf_result=None):
+    args = [
+        "reduce-verification",
+        "--manifest",
+        str(manifest_path),
+        "--results-dir",
+        str(log_dir / "verification-results"),
+        "--scope",
+        scope,
+        "--output",
+        str(log_dir / "verification_reduction.json"),
+    ]
+    if perf_result:
+        args.extend(["--perf-result", str(perf_result)])
+    return _run(log_dir, *args)
+
+
+def test_verification_reducer_derives_multi_arch_totals_and_success_token(tmp_path):
+    requirements = [
+        _requirement(),
+        _requirement(
+            "wormhole",
+            "metal",
+            selector={"test": "LLK.Reduce", "test_id": None, "k": None},
+        ),
+    ]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    first = _sealed_result(manifest, requirements[0], selected=2, executed=2, passed=2)
+    second = _sealed_result(
+        manifest,
+        requirements[1],
+        selected=3,
+        executed=3,
+        passed=3,
+        job_id="job-2",
+    )
+    (results / "first.json").write_text(json.dumps(first), encoding="utf-8")
+    (results / "second.json").write_text(json.dumps(second), encoding="utf-8")
+    (tmp_path / "run.json").write_text(
+        json.dumps({"run_id": manifest["run_id"]}), encoding="utf-8"
+    )
+
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["tests_total"] == reduction["tests_passed"] == 5
+    assert reduction["success_token"]
+    assert run["arch_results"]["blackhole"]["verdict"] == "SUCCESS"
+    assert run["arch_results"]["wormhole"]["tests_total"] == 3
+
+
+@pytest.mark.parametrize(
+    ("result_kwargs", "classification", "reason"),
+    [
+        (
+            {"selected": 0, "executed": 0, "passed": 0},
+            "coverage_error",
+            "zero_selected",
+        ),
+        ({"executed": 0, "passed": 0}, "coverage_error", "zero_executed"),
+        (
+            {"collection_errors": 1, "collection_returncode": 2},
+            "infra_error",
+            "collection_error",
+        ),
+        ({"returncode": 2}, "infra_error", "execution_nonzero_exit"),
+        ({"returncode": 5, "timed_out": True}, "infra_error", "execution_timed_out"),
+        ({"markers": ["tt_fatal"]}, "infra_error", "tt_fatal"),
+        (
+            {"executed_artifact_sha256": "e" * 64},
+            "infra_error",
+            "identity_mismatch:executed_artifact_sha256",
+        ),
+    ],
+)
+def test_verification_reducer_rejects_false_green_evidence(
+    tmp_path, result_kwargs, classification, reason
+):
+    requirement = _requirement()
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    result = _sealed_result(manifest, requirement, **result_kwargs)
+    (results / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == classification
+    assert any(reason in value for value in reduction["reason_codes"])
+    assert reduction["success_token"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("architecture", "wormhole", "identity_mismatch:architecture"),
+        ("backend", "ttsim", "identity_mismatch:backend"),
+        (
+            "selector",
+            {"test": "other.py", "test_id": None, "k": None},
+            "identity_mismatch:selector",
+        ),
+        ("actual_base_sha", "f" * 40, "identity_mismatch:actual_base_sha"),
+    ],
+)
+def test_verification_reducer_requires_exact_sealed_identity(
+    tmp_path, field, value, reason
+):
+    requirement = _requirement()
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    result = _sealed_result(manifest, requirement)
+    if field == "actual_base_sha":
+        result["provenance"][field] = value
+    else:
+        result[field] = value
+    result["result_id"] = _content_id(result, {"result_id"})
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    (results / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "infra_error"
+    assert any(reason in value for value in reduction["reason_codes"])
+    assert reduction["success_token"] is None
+
+
+def test_verification_reducer_rejects_missing_and_mixed_patch_results(tmp_path):
+    requirements = [_requirement(), _requirement("wormhole")]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    first = _sealed_result(manifest, requirements[0], patch_sha256="b" * 64)
+    (results / "first.json").write_text(json.dumps(first), encoding="utf-8")
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "partial"
+    assert any("result_missing" in value for value in reduction["reason_codes"])
+
+    second = _sealed_result(
+        manifest, requirements[1], patch_sha256="e" * 64, job_id="job-2"
+    )
+    (results / "second.json").write_text(json.dumps(second), encoding="utf-8")
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "infra_error"
+    assert "patch_digest_mismatch" in reduction["reason_codes"]
+    assert all(
+        result["verdict"] == "ENV_ERROR"
+        for result in reduction["architecture_results"].values()
+    )
+
+
+def test_verification_reducer_requires_explicit_performance_measurements(tmp_path):
+    requirement = _requirement(
+        suite="perf",
+        minimum_selected=3,
+        minimum_executed=3,
+        selector={"test": "perf_reduce.py", "test_id": None, "k": None},
+        required_measurements=["cycle_comparison", "repeatability"],
+    )
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    result = _sealed_result(manifest, requirement, selected=3, executed=3, passed=3)
+    (results / "perf.json").write_text(json.dumps(result), encoding="utf-8")
+
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "coverage_error"
+    assert any(
+        "required_measurement_result_missing_or_invalid" in value
+        for value in reduction["reason_codes"]
+    )
+
+    perf_result = tmp_path / "perf_result.json"
+    perf_result.write_text(
+        json.dumps(
+            {
+                "outcome": "PERF_OK",
+                "measured": True,
+                "arch": "blackhole",
+                "test": "perf_reduce.py",
+                "base_commit": manifest["expected_base_sha"],
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "requirement_id": requirement["requirement_id"],
+                "patch_sha256": result["provenance"]["patch_sha256"],
+                "measurements": {
+                    "cycle_comparison": {"measured": True},
+                    "repeatability": {"measured": True, "executions": 3},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _reduce(tmp_path, manifest_path, perf_result=perf_result)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["success_token"]
+
+
+def test_verification_reducer_retains_foreign_attempt_and_rejects_duplicates(tmp_path):
+    requirement = _requirement()
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    old = _sealed_result(
+        manifest, requirement, attempt_id="attempt-000", job_id="old-job"
+    )
+    current = _sealed_result(manifest, requirement, job_id="current-job")
+    (results / "old.json").write_text(json.dumps(old), encoding="utf-8")
+    (results / "current.json").write_text(json.dumps(current), encoding="utf-8")
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["excluded_results"][0]["reason"] == "superseded_or_foreign_attempt"
+
+    duplicate = _sealed_result(manifest, requirement, job_id="second-current-job")
+    (results / "duplicate.json").write_text(json.dumps(duplicate), encoding="utf-8")
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "infra_error"
+    assert "duplicate_current_result" in reduction["reason_codes"][0]
+    assert reduction["success_token"] is None
+
+
+def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.name", "Test"], check=True
+    )
+    source = worktree / "source.txt"
+    source.write_text("base\n")
+    subprocess.run(["git", "-C", str(worktree), "add", "source.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "commit", "-q", "-m", "base"], check=True
+    )
+    base = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source.write_text("verified\n")
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qam", "fix"], check=True)
+    head = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    patch = subprocess.run(
+        ["git", "-C", str(worktree), "diff", base, head, "--"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    patch_sha256 = hashlib.sha256(patch).hexdigest()
+
+    requirement = _requirement()
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    manifest["expected_base_sha"] = base
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    result = _sealed_result(
+        manifest, requirement, patch_sha256=patch_sha256, job_id="verified-job"
+    )
+    (results / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    (tmp_path / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": manifest["run_id"],
+                "runner_pool": "audit",
+                "status": "running",
+                "step_history": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _reduce(tmp_path, manifest_path)
+
+    finalize_args = [
+        sys.executable,
+        str(SCRIPT),
+        "finalize",
+        "--log-dir",
+        str(tmp_path),
+        "--status",
+        "success",
+        "--final-result",
+        "success",
+        "--worktree",
+        str(worktree),
+    ]
+    finalized = subprocess.run(
+        finalize_args, check=False, capture_output=True, text=True
+    )
+    assert finalized.returncode == 0, finalized.stderr
+    assert json.loads((tmp_path / "run.json").read_text())["status"] == "success"
+
+    source.write_text("changed after verification\n")
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qam", "later"], check=True)
+    finalized_bytes = (tmp_path / "run.json").read_bytes()
+    finalized = subprocess.run(
+        finalize_args, check=False, capture_output=True, text=True
+    )
+    assert finalized.returncode != 0
+    assert "candidate patch differs from verified patch" in finalized.stderr
+    assert (tmp_path / "run.json").read_bytes() == finalized_bytes
+
+
 def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -624,6 +1087,43 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     assert local_result["provenance"]["artifact_set_sha256"] == (
         local_result["provenance"]["executed_artifact_sha256"]
     )
+
+    prior_manifest_id = required["manifest_id"]
+    required["attempt_id"] = "attempt-005"
+    required["revision"] = 5
+    required["parent_manifest_id"] = prior_manifest_id
+    required["supersedes_reason"] = "performance verification fixture"
+    required["requirements"][0]["requirement_id"] = "blackhole:perf:1"
+    required["requirements"][0]["suite"] = "perf"
+    required["manifest_id"] = _content_id(required, {"manifest_id"})
+    required_path.write_text(json.dumps(required))
+    perf_result_path = bound_log / "performance-verification-result.json"
+    perf_completed = subprocess.run(
+        [
+            "bash",
+            str(RUN_TEST),
+            "run",
+            "--worktree",
+            str(first_worktree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_fake.py",
+            "--log-dir",
+            str(bound_log),
+            "--result-json-out",
+            str(perf_result_path),
+        ],
+        env={**env, "CODEGEN_VERIFICATION_SUITE": "perf"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert perf_completed.returncode == 0, perf_completed.stderr
+    perf_result = json.loads(perf_result_path.read_text())
+    assert perf_result["suite"] == "perf"
+    assert perf_result["attempt_id"] == "attempt-005"
+    assert perf_result["requirement_id"] == "blackhole:perf:1"
 
 
 def test_init_emits_dashboard_fields(tmp_path):

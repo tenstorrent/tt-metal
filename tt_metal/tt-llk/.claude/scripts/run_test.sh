@@ -316,10 +316,11 @@ _patch_sha256() {
 # therefore cannot clear a compiled entry while collection initializes pytest.
 _prepare_artifact_identity() {
   local purpose="${1:-build}"
-  local compiler owner_scope selector required_manifest required_output
+  local compiler owner_scope selector required_manifest required_output verification_suite
   local manifest_base manifest_run manifest_attempt manifest_requirement
   compiler="${WORKTREE}/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
   SOURCE_TREE_SHA256="$(_source_tree_sha256)" || return $?
+  verification_suite="${CODEGEN_VERIFICATION_SUITE:-llk}"
   required_manifest="${CODEGEN_REQUIRED_VERIFICATION_MANIFEST:-}"
   if [[ -z "$required_manifest" && -n "$LOG_DIR" && -f "$LOG_DIR/state.json" ]]; then
     required_manifest="$(python3 - "$LOG_DIR/state.json" <<'PY'
@@ -336,9 +337,9 @@ PY
       echo "ERROR: required-verification manifest is missing: ${required_manifest}" >&2
       return 3
     }
-    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" <<'PY'
+    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$verification_suite" <<'PY'
 import hashlib, json, sys
-path, arch, test, test_id, k = sys.argv[1:6]
+path, arch, test, test_id, k, suite = sys.argv[1:7]
 d = json.load(open(path))
 payload = json.dumps({key: value for key, value in d.items() if key != "manifest_id"},
                      sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -350,11 +351,11 @@ if (d.get("schema") != "tt.issue-solver.required-verification" or
     raise SystemExit("invalid required-verification manifest")
 selector = {"test": test, "test_id": test_id or None, "k": k or None}
 matches = [r for r in d.get("requirements", [])
-           if r.get("architecture") == arch and r.get("suite") == "llk"
+           if r.get("architecture") == arch and r.get("suite") == suite
            and r.get("selector") == selector]
 if len(matches) != 1:
     raise SystemExit(
-        f"selector must match exactly one sealed LLK requirement (matched {len(matches)})"
+        f"selector must match exactly one sealed {suite} requirement (matched {len(matches)})"
     )
 print(d["expected_base_sha"], d["run_id"], d["attempt_id"],
       matches[0]["requirement_id"], sep="\t")
@@ -529,7 +530,7 @@ _emit_structured_result() {
     --attempt-id "$ATTEMPT_IDENTITY"
     --job-id "$JOB_IDENTITY"
     --architecture "$ARCH"
-    --suite llk
+    --suite "${CODEGEN_VERIFICATION_SUITE:-llk}"
     --backend "$backend"
     --test "$TEST_FILE"
     --expected-base-sha "$EXPECTED_BASE_SHA"
