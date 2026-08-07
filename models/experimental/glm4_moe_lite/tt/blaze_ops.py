@@ -669,6 +669,26 @@ def qkv_a(device, x, w, q_lora_rank: int, kvpe_dim: int, batch: int):
 
 def _build_q_stage_program(device, x, prepared: dict, *, epsilon: float):
     """Build x -> q_a -> deferred RMSNorm -> q_b as one Blaze program."""
+
+    # CONFIG DIFF vs bench_e_fused_stage_mesh.py: the bench builds the same op chain and does NOT
+    # hang, so the difference is in what each hands to blaze. Print the same fields the bench does.
+    if not globals().get("_Q_STAGE_CFG_LOGGED"):
+        globals()["_Q_STAGE_CFG_LOGGED"] = True
+        try:
+            _b = _try_import_blaze()
+            _wl, _wg = _b["bank_worker_cores"](device)
+            _rc = _receiver_core(device, _wg)
+            _g = device.compute_with_storage_grid_size()
+            print(
+                f"QSTAGE_CFG grid={_g.x}x{_g.y} banks={device.dram_grid_size().x} "
+                f"W={workers_per_bank()} cores={len(_wl)} workers={[(c.x, c.y) for c in _wl]} "
+                f"receiver=({_rc.x},{_rc.y}) k={prepared.get('k')} n_pad={prepared.get('n_pad')} "
+                f"k2={prepared.get('k2')} n_pad2={prepared.get('n_pad2')} "
+                f"x_shape={tuple(x.padded_shape)} x_mem={x.memory_config().buffer_type}",
+                flush=True,
+            )
+        except Exception as _e:
+            print(f"QSTAGE_CFG log failed: {_e}", flush=True)
     b = _try_import_blaze()
     w_per_bank = int(prepared["workers_per_bank"])
     _, worker_grid = b["bank_worker_cores"](device, w_per_bank)

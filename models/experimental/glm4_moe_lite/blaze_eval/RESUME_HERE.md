@@ -1426,3 +1426,34 @@ chosen receiver/sender, the CB ids and their core ranges — then diff that agai
 `bench_e_fused_stage_mesh.py` prints for the same stage. The bench and the model build the same op
 chain and only one hangs, so the difference is in that configuration and a diff will show it in
 one run instead of five.
+
+### The diff, done. Model vs bench config for the same stage.
+
+Added a one-shot `QSTAGE_CFG` print inside `_build_q_stage_program` (fires on the first call,
+before the hang) and compared it with what `bench_e_fused_stage_mesh.py` builds:
+
+```
+model: grid=12x10 banks=8 W=1 cores=8 receiver=(11,9)
+       workers=[(0,9),(0,0),(0,7),(0,3),(7,9),(7,1),(7,6),(7,4)]
+       x_shape=(1,1,32,2048)  x_mem=BufferType.L1     <-- activation in L1
+bench: same grid/banks/W/cores, gather_receiver=mcast_sender=(11,9)
+       activation built with ttnn.DRAM_MEMORY_CONFIG   <-- activation in DRAM
+```
+
+Receiver now matches (the reversed scan did that). **The one substantive difference found is the
+activation's memory type: L1 in the model, DRAM in every passing bench.**
+
+**Do not over-read this.** The `qkv_a` path consumes the *same* L1 activation through the *same*
+`TileRowReplicate` and runs fine end-to-end, so L1 is not sufficient on its own to cause the hang.
+What differs about the Q stage is what comes *after*: gather -> Mcast -> second matmul. A plausible
+combination is an L1 source whose pages are read while the same L1 is being used by the stage's own
+CBs, but that is a hypothesis, not a finding.
+
+**Concrete next step:** make the bench feed an L1 activation (`x` in
+`ttnn.L1_MEMORY_CONFIG` instead of `DRAM_MEMORY_CONFIG`) and re-run
+`bench_e_fused_stage_mesh.py`. That is ~1 minute and either reproduces the hang in a small script
+-- at which point it is a self-contained repro for the blaze owners -- or eliminates the last
+config difference and points at the model's op interleaving.
+
+Note the log also shows `k/n_pad/k2/n_pad2 = None`: the q-stage `prepared` dict uses different key
+names than the qkv_a one, so those fields in the print need fixing to be useful.
