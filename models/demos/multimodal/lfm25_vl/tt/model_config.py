@@ -155,6 +155,21 @@ class ModelArgs(TTModelArgs):
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
     @staticmethod
+    def _snapshot_has_weights(snapshot_path):
+        """A HF cache snapshot may exist with only config/tokenizer files (from earlier AutoConfig
+        calls) but no model weights; resolving HF_MODEL to such a path breaks from_pretrained
+        (it errors instead of downloading). Only treat a snapshot as usable if weights are present.
+        """
+        try:
+            names = os.listdir(snapshot_path)
+        except OSError:
+            return False
+        return any(
+            n.endswith(".safetensors") or n.endswith(".safetensors.index.json") or n == "pytorch_model.bin"
+            for n in names
+        )
+
+    @staticmethod
     def _resolve_hf_snapshot(hf_model_name):
         hf_cache = os.path.normpath(
             os.environ.get("HF_HUB_CACHE")
@@ -167,9 +182,9 @@ class ModelArgs(TTModelArgs):
         if not os.path.isdir(snapshots_dir):
             return None
         snaps = [
-            os.path.join(snapshots_dir, s)
-            for s in os.listdir(snapshots_dir)
-            if os.path.isdir(os.path.join(snapshots_dir, s))
+            path
+            for path in (os.path.join(snapshots_dir, s) for s in os.listdir(snapshots_dir))
+            if os.path.isdir(path) and ModelArgs._snapshot_has_weights(path)
         ]
         return max(snaps, key=os.path.getmtime) if snaps else None
 
@@ -229,10 +244,17 @@ class ModelArgs(TTModelArgs):
         if hasattr(config, "text_config") and config.text_config is not None:
             config.text_config.num_hidden_layers = self.n_layers
         model_cls = self.get_hf_model_cls()
-        try:
-            model = model_cls.from_config(config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf)
-        except TypeError:
-            model = model_cls.from_config(config)
+        # transformers 5.x removed `from_config` from concrete PreTrainedModel classes
+        # (only Auto* classes keep it); instantiate directly from the config in that case.
+        if hasattr(model_cls, "from_config"):
+            try:
+                model = model_cls.from_config(
+                    config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                )
+            except TypeError:
+                model = model_cls.from_config(config)
+        else:
+            model = model_cls(config).to(torch.bfloat16)
         gc.collect()
         return model
 
