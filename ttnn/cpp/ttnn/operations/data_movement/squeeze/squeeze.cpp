@@ -87,11 +87,16 @@ ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<i
             // Shard::dim is unnormalized by construction (may be negative); normalize against the
             // PRE-squeeze rank, since that's what it was recorded against.
             const auto normalized_dim = static_cast<int32_t>(original_logical_shape.get_normalized_index(shard->dim));
-            TT_FATAL(
-                std::find(erased_dims.begin(), erased_dims.end(), normalized_dim) == erased_dims.end(),
-                "squeeze: dim {} is both squeezed away (size 1) and mesh-sharded; ambiguous how to remap "
-                "its Shard placement",
-                normalized_dim);
+            if (std::find(erased_dims.begin(), erased_dims.end(), normalized_dim) != erased_dims.end()) {
+                // A squeezed dim is size 1 per device, so a Shard here means that mesh axis's devices
+                // each held exactly one (degenerate) slice along it -- a real, valid layout (e.g. an
+                // evenly-divided expert/dispatch-group axis), not a bug. There's no tensor dim left to
+                // anchor the placement to once it's squeezed away, so Replicate is the only placement
+                // that still accurately describes this axis.
+                placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+                topology_changed = true;
+                continue;
+            }
             const int32_t shift = static_cast<int32_t>(
                 std::count_if(erased_dims.begin(), erased_dims.end(), [normalized_dim](int32_t erased) {
                     return erased < normalized_dim;
