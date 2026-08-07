@@ -1764,7 +1764,10 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     # kv_actual_isl == 0, which the kernels derive on-device, so the ring graph serves it
     # too — halving trace memory and warmup, and dropping the mask path's ~80ms premium on
     # chunk 0 (277ms -> 189ms). GEMMA4_ONE_TRACE=0 restores the two-trace split.
-    settle_ms = float(os.environ.get("GEMMA4_TRACE_SETTLE_MS", "25"))
+    # Default 0: the deadlock this used to work around is fixed at the source (the halo no
+    # longer shares — or clears — the all-gather's semaphore). Kept as a knob for bisecting
+    # if a similar stall ever reappears.
+    settle_ms = float(os.environ.get("GEMMA4_TRACE_SETTLE_MS", "0"))
     one_trace = os.environ.get("GEMMA4_ONE_TRACE", "1") == "1"
     # The ring trace must be captured at a chunk that HAS a predecessor: the halo layout is
     # built host-side at create time and needs a complete predecessor group. Replaying it
@@ -1838,8 +1841,8 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
-            # Fabric settle between replays. WORKAROUND, not a fix: large ring gathers
-            # issued back-to-back deadlock at deep ring depth. Characterized with
+            # Optional settle between replays. No longer needed — kept only as a bisect
+            # knob. The deadlock it masked is fixed in ttnn; it was characterized with
             # test_prefill_trace_replay_stress —
             #   fixed depth (value constant, shallow gather)   120 replays, survived
             #   capped 1..10 (value CHANGES, shallow gather)   120 replays, survived

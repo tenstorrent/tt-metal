@@ -182,9 +182,14 @@ class CCLManager:
         # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
         # same grid (Blackhole is wider than 8x8).
         self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
-        # Forward/backward pair, matching deepseek_v3_d_p and minimax_m3.
+        # THREE, not the usual forward/backward pair. The third is the neighbor-halo
+        # exchange's own counter. With only two, the halo reuses semaphores[0] — the
+        # all-gather's backward semaphore — and lands on the same worker core, so two
+        # protocols with different arrival counts share one counter. The halo's completion
+        # then destroys all-gather increments and the ring deadlocks at depth. See
+        # docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md.
         self.ring_attention_ccl_semaphore_handles = [
-            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
         self._ring_gather_buffers = {}
         # Trace-safe per-chunk scalars for the ring path. One pair for the whole model:
