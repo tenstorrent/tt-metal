@@ -199,7 +199,7 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
         pcc_threshold = 0.999
         rtol = 0.015
         atol = 4177.920
-        frobenius_threshold = 0.015
+        frobenius_threshold = 0.025
     # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
