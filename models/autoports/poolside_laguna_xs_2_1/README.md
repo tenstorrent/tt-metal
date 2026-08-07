@@ -3,6 +3,12 @@
 
 # Laguna-XS-2.1 on Tenstorrent (P150x4)
 
+## Coding agent quickstart
+
+Tell your coding agent:
+
+> run laguna-2.1-xs and then give me a command to point the `pool` coding agent from poolside.ai at the running model.
+
 TTNN bring-up + vLLM serving of [`poolside/Laguna-XS-2.1`](https://huggingface.co/poolside/Laguna-XS-2.1),
 a ~31B GLM/Qwen3-style MoE (256 experts, top-8, shared expert; 40 layers, 10 full-attention + 30
 sliding-window(512); hybrid KV; router `sigmoid(logits)+e_bias`, `norm_topk_prob`, no router bias).
