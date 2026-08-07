@@ -12,7 +12,6 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
@@ -27,28 +26,6 @@ from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 from ttexalens.tt_exalens_lib import write_to_device
-
-# -----------------------------------------------------------------------------
-# Extra includes fixture
-# -----------------------------------------------------------------------------
-
-# Extra include dirs the compressed-mm kernels need (the deepseek vendored llk_lib
-# + its metal llk_api). Added to TestConfig.INCLUDES for the duration of each test
-# by the autouse fixture below; import the fixture into a test module to activate it.
-EXTRA_INCLUDES = [
-    "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
-    "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api",
-]
-
-
-@pytest.fixture(autouse=True)
-def compressed_mm_include_paths():
-    added = [inc for inc in EXTRA_INCLUDES if inc not in TestConfig.INCLUDES]
-    TestConfig.INCLUDES.extend(added)
-    yield
-    for inc in added:
-        TestConfig.INCLUDES.remove(inc)
-
 
 # -----------------------------------------------------------------------------
 # Simple assignment generators

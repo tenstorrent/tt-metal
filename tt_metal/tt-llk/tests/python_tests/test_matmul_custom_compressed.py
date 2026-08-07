@@ -4,18 +4,33 @@
 import numpy as np
 import pytest
 from conftest import blackhole_only
-from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — imported to activate in this module)
+from helpers.compressed_utils import (
     DEEPSEEK_T420,
     FMT_CODE,
     assign_clustered,
     assign_interleaved,
     assign_random,
-    compressed_mm_include_paths,
     generate_exact_assignment,
     run_compressed,
 )
 from helpers.param_config import parametrize
+from helpers.test_config import TestConfig
 from helpers.tile_constants import DEFAULT_TILE_C_DIM
+
+# This suite's LLKs are still vendored under models/demos/deepseek_v3_b1, so the compile needs that
+# llk_lib on the include path. Only llk_lib: those headers pull in nothing from the vendored llk_api.
+# The face-granular op no longer needs any of this -- it moved to tt-llk's experimental/.
+VENDORED_LLK_LIB = "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"
+
+
+@pytest.fixture(autouse=True)
+def compressed_mm_include_paths():
+    added = VENDORED_LLK_LIB not in TestConfig.INCLUDES
+    if added:
+        TestConfig.INCLUDES.append(VENDORED_LLK_LIB)
+    yield
+    if added:
+        TestConfig.INCLUDES.remove(VENDORED_LLK_LIB)
 
 
 def promote_assignment(assignment, ct):
@@ -102,8 +117,12 @@ EXT_SHAPES = [
     # (8,  576, 512), #  18x16
 ]
 
+# The format lists below are kept identical to test_matmul_face_compressed's, so the two kernels can be
+# compared on the same compression. That makes them the intersection of what both support, which excludes
+# bfp8 even though this kernel handles it (SUPPORTED_FORMATS above) -- so bfp8 goes unexercised by this
+# suite. Adding tile-only bfp8 coverage is left out of this change rather than dropped.
 SINGLE_FORMATS = [
-    # ("bfp8",), unsupported in face version
+    # ("bfp8",), excluded for the parity reason above, not because this kernel lacks it
     ("bfp4",),
     ("bfp2",),
 ]

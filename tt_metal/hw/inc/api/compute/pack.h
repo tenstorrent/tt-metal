@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
@@ -32,7 +31,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
     PACK((llk_pack_init(ocb)));
 }
@@ -86,13 +85,10 @@ ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE(
  * | Function   | output_tile_index| The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-template <bool out_of_order_output = false, bool mutex_ADC = false>
-ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+template <bool out_of_order_output = false>
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
     LLK_SAN_FUNCTION();
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default, mutex_ADC>(
-        ifrom_dst, icb, output_tile_index)));
-#elif !defined(ARCH_QUASAR)
+#ifndef ARCH_QUASAR
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
@@ -136,7 +132,7 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
@@ -160,7 +156,7 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
  */
 // clang-format on
 [[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
-pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     pack_block(ifrom_dst, icb, ntiles);
 }
 
@@ -185,7 +181,7 @@ pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
+ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 // clang-format off
 /**
@@ -204,7 +200,9 @@ ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_r
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_init(std::uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
+ALWI void pack_rows_init(uint32_t num_rows) {
+    PACK((llk_pack_rows_init(num_rows)));
+}
 #endif
 
 // clang-format off
@@ -231,7 +229,7 @@ ALWI void pack_rows_init(std::uint32_t num_rows) { PACK((llk_pack_rows_init(num_
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows(std::uint32_t idst, std::uint32_t ocb, std::uint32_t output_index = 0) {
+ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
     PACK((llk_pack_rows(idst, ocb, output_index)));
 }
 #endif
@@ -250,7 +248,9 @@ ALWI void pack_rows(std::uint32_t idst, std::uint32_t ocb, std::uint32_t output_
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
+ALWI void pack_rows_uninit() {
+    PACK((llk_pack_rows_uninit()));
+}
 #endif
 
 /**

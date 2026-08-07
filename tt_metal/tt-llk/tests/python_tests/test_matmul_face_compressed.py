@@ -4,14 +4,13 @@
 import numpy as np
 import pytest
 from conftest import blackhole_only
-from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — imported to activate in this module)
+from helpers.compressed_utils import (
     DEEPSEEK_T420,
     FMT_CODE,
     assign_clustered,
     assign_interleaved,
     assign_random,
     assign_tile_matched,
-    compressed_mm_include_paths,
     generate_refined_face_assignment,
     run_compressed,
 )
