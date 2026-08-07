@@ -37,8 +37,12 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Initializes the random generator. A unique stream_id decorrelates related
+ * per-core seeds while preserving deterministic output for a given pair.
  */
-ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
+ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
+    constexpr uint32_t stream_seed_multiplier = 0x9E3779B9U;
+    MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed + stream_id * stream_seed_multiplier));
+}
 
 }  // namespace ckernel

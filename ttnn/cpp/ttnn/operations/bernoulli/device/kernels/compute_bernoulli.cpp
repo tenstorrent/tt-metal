@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr std::uint32_t rand_from = 0;
     constexpr std::uint32_t rand_scale = 0x3F7FFFFFU;
 
-    rand_tile_init(seed);
+    rand_tile_init(seed, start_id);
     for (std::uint32_t i = start_id; i < end_id; ++i) {
         cb_intermed.reserve_back(1);
 
