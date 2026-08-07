@@ -54,11 +54,17 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_blocks; i++) {
             dfb_in0.reserve_back(num_tiles_block_c);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-            // pad the tile by reading values from zero buffer in L1
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
-            // 8 = tile_height / 4
-            for (uint32_t z = 0; z < block_row_size * 8; z++) {
-                dst[z] = pad_value;
+            const uint32_t pad_bytes = block_row_size * 32;  // 32 = tile_height * 4 bytes/u32
+            if (pad_value == 0) {
+                // Fast path: zero-fill via NOC read from the zero source instead of scalar stores.
+                noc.async_write_zeros(dfb_in0, pad_bytes);
+                noc.write_zeros_l1_barrier();
+            } else {
+                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+                // 8 = tile_height / 4
+                for (uint32_t z = 0; z < block_row_size * 8; z++) {
+                    dst[z] = pad_value;
+                }
             }
             dfb_in0.push_back(num_tiles_block_c);
         }
@@ -67,6 +73,7 @@ void kernel_main() {
     auto read_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
         dfb_in0.reserve_back(num_tiles_block_c);
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+        const uint32_t entry_base = l1_write_addr;
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             CoreLocalMem<uint32_t> dst_mem(l1_write_addr);
@@ -74,19 +81,29 @@ void kernel_main() {
                 s, dst_mem, block_size, {.page_id = curr_stick_id + k, .offset_bytes = offset}, {.offset_bytes = 0});
 
             if (block_row_size > block_size) {
-                dataflow_kernel_lib::fill_l1_range<elem_size>(
-                    l1_write_addr + block_size, block_row_size - block_size, pad_value);
+                const uint32_t tail_bytes = block_row_size - block_size;
+                if (pad_value == 0) {
+                    noc.async_write_zeros(
+                        dfb_in0, tail_bytes, {.offset_bytes = l1_write_addr + block_size - entry_base});
+                } else {
+                    dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr + block_size, tail_bytes, pad_value);
+                }
             }
 
-            // Block before copying data from tmp to cb buffer
+            // Block before copying data from tmp to cb buffer (and any zero-fill NOC reads issued above)
             noc.async_read_barrier();
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
-
-            for (uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
-                dst[z] = pad_value;
+            const uint32_t leftover_bytes = block_row_size * (tile_height - num_rows);
+            if (pad_value == 0) {
+                noc.async_write_zeros(dfb_in0, leftover_bytes, {.offset_bytes = l1_write_addr - entry_base});
+                noc.write_zeros_l1_barrier();
+            } else {
+                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+                for (uint32_t z = 0; z < leftover_bytes / 4; z++) {
+                    dst[z] = pad_value;
+                }
             }
         }
         dfb_in0.push_back(num_tiles_block_c);
