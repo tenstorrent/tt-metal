@@ -15,6 +15,10 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
     const uint32_t tile_offset = get_arg_val<uint32_t>(2);
     const uint32_t blk = get_arg_val<uint32_t>(3);
+    const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
+    // Wt is required so rem matches compute/reader (per-row), not flat num_tiles.
+    // When Wt % blk != 0 but (num_rows*Wt) % blk == 0, a flat rem clamp deadlocks.
+    const uint32_t Wt = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t num_datum_padded = get_compile_time_arg_val(0);
     constexpr uint32_t tile_hw = get_compile_time_arg_val(1);
@@ -25,8 +29,6 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(dfb_id_out0);
 
     constexpr uint32_t dfb_id_mask = tt::CBIndex::c_5;
-    const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
-    // const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
 
     Noc noc;
     DataflowBuffer dfb_id_out0_obj(dfb_id_out0);
@@ -52,16 +54,30 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t tile_id = tile_offset;
-    for (uint32_t i = 0; i < num_tiles; i += blk) {
-        dfb_id_out0_obj.wait_front(blk);
+    // Idle cores are given num_tiles=0 / Wt=0; avoid 0/0 and skip the write loop.
+    if (num_tiles > 0 && Wt > 0) {
+        // Uniform blocks tile the CB capacity, so a row that blk divides needs no realignment.
+        const uint32_t out0_pad = (Wt % blk == 0) ? 0 : (((blk * 2) - (Wt % (blk * 2))) % (blk * 2));
+        const uint32_t num_rows = num_tiles / Wt;
+        for (uint32_t row = 0; row < num_rows; ++row) {
+            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+                const uint32_t rem = (wt + blk > Wt) ? (Wt - wt) : blk;  // clamped final block of each row
+                dfb_id_out0_obj.wait_front(rem);
 
-        uint32_t read_offset = 0;
-        for (uint32_t j = 0; j < blk; j++) {
-            noc.async_write(dfb_id_out0_obj, s, tile_bytes, {.offset_bytes = read_offset}, {.page_id = tile_id});
-            tile_id++;
-            read_offset += tile_bytes;
+                uint32_t read_offset = 0;
+                for (uint32_t j = 0; j < rem; j++) {
+                    noc.async_write(
+                        dfb_id_out0_obj, s, tile_bytes, {.offset_bytes = read_offset}, {.page_id = tile_id});
+                    tile_id++;
+                    read_offset += tile_bytes;
+                }
+                noc.async_write_barrier();
+                dfb_id_out0_obj.pop_front(rem);
+            }
+            if (out0_pad > 0) {
+                dfb_id_out0_obj.wait_front(out0_pad);
+                dfb_id_out0_obj.pop_front(out0_pad);
+            }
         }
-        noc.async_write_barrier();
-        dfb_id_out0_obj.pop_front(blk);
     }
 }
