@@ -907,10 +907,15 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
 
-    // Surface per-kernel JIT compile time so a slow or stuck compile is visible, not silent.
-    // Only when something was actually compiled — cache hits are instant and would be noise.
+    // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
+    // can compile 10k+ kernels, so it is off by default (TT_METAL_LOG_KERNEL_COMPILE=1 opts in;
+    // models/tt_dit sets it for every DiT run). Read once, lazily, so an importer that sets the env
+    // before the first compile is honored; only when something actually compiled (cache hits are noise).
     if (compiled.any() && !kernel_name.empty()) {
-        log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+        static const bool log_compile = tt::parse_env<bool>("TT_METAL_LOG_KERNEL_COMPILE", false);
+        if (log_compile) {
+            log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+        }
     }
 }
 
