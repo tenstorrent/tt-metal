@@ -210,15 +210,22 @@ uint32_t drain_noc() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_FULL_GRID: under slow dispatch, do NOT hold the last worker column back -- poll the
-// whole 12x10=120 grid. The column is reserved by default so a DRISC (120 cores) and a Tensix (110, one of
-// them being the drainer itself) sweep the same poll-list length and stay comparable. Give it back when the
-// question is about FIRMWARE COVERAGE rather than sweep cost: with the workload run at the full grid every
-// core the drainer touches has a program on it, instead of the reserved column sitting in reset. Ignored on
-// the Tensix arm, where the drainer physically lives in that column.
-bool full_grid() {
+// TT_METAL_PERF_DEBUG_RESERVE_COLUMN: under slow dispatch, hold the last worker column back and poll only
+// 11x10=110, instead of the full 12x10=120.
+//
+// Default changed 2026-08-07: the DRISC arm now polls the FULL grid. Reserving the column was only ever a
+// COMPARABILITY device -- it made a DRISC (120 cores) and a Tensix (110, one of them being the drainer
+// itself) sweep the same poll-list length, so a difference between the arms could not be blamed on the grid.
+// It is not a functional requirement for a DRISC: that drainer lives on a DRAM core
+// (pick_unused_dram_logical_core), so no worker core is ever needed for it. Full-grid coverage is the more
+// useful default -- it profiles all 120 cores, and it makes `--gx 0` ("use whatever grid the device offers")
+// safe under slow dispatch, which is exactly the mismatch that hung the workload for weeks (FINDINGS N+24).
+//
+// Set this when running the DRISC-vs-Tensix 2x2, where equal sweep cost matters more than coverage.
+// Ignored on the Tensix arm, whose drainer physically lives in that column, so there it is always reserved.
+bool reserve_column_env() {
     static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FULL_GRID");
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_RESERVE_COLUMN");
         return s != nullptr && *s != '\0' && *s != '0';
     }();
     return v;
@@ -601,16 +608,24 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
     // Slow dispatch hands the WHOLE worker grid to compute (12x10 here) because nothing is reserved for
-    // dispatch. Give the last column back: the drainers live there and the producer grid becomes 11x10 =
-    // 110, which is exactly the grid the DRISC runs saw under fast dispatch. Run the workload with
-    // `--gx 11` to match -- the poll list built below stops at column 11, so a producer placed there would
-    // both go undrained and scribble on the drainer's L1.
-    // Reserved for BOTH drainer types by default, not just Tensix: the poll list length IS the idle sweep
-    // cost, so a DRISC polling 120 cores against a Tensix polling 110 would differ by the grid, not the core
-    // type. TT_METAL_PERF_DEBUG_FULL_GRID=1 drops the reservation on the DRISC arm (see full_grid()).
-    // TT_METAL_PERF_DEBUG_FULL_GRID=1 gives the column back to the producers (DRISC arm only -- the Tensix
-    // drainer's own core comes out of it, so it stays reserved there regardless).
-    const bool reserve_column = slow_dispatch && (tensix_drain || !full_grid());
+    // dispatch; fast dispatch reserves the rest itself and returns 11x10.
+    //
+    // THE POLL LIST BUILT BELOW DEFINES THE DRAINED SET, AND A PRODUCER OUTSIDE IT HANGS THE WORKLOAD.
+    // Producers are lossless: an undrained one fills its SPSC ring, blocks forever in ring_ensure_room,
+    // never finishes, and the host dies in wait_until_cores_done on an uncaught 45 s throw. So the poll
+    // list must cover every core the workload can land on.
+    //
+    // DRISC (default): poll the full 12x10. The drainer is on a DRAM core, so no worker is spent on it and
+    // there is nothing to reserve -- `--gx 0` is then safe, because the producer grid and the poll list are
+    // the same 120 cores by construction.
+    //
+    // Tensix: the drainer physically lives in the last column, so that column is ALWAYS held back and the
+    // workload must be run with `--gx 11` to match. A producer placed there would both go undrained and
+    // scribble on the drainer's L1 -- which is why the Tensix arm hangs on all 120 cores rather than 10.
+    //
+    // TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1 forces the 110 reservation on the DRISC arm too, for 2x2 runs
+    // where equal poll-list length (= equal idle sweep cost) matters more than coverage. See FINDINGS N+24.
+    const bool reserve_column = slow_dispatch && (tensix_drain || reserve_column_env());
     const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
