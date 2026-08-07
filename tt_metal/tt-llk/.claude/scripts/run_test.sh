@@ -456,7 +456,17 @@ PY
     echo "ERROR: result writer is missing: ${RUN_JSON_WRITER}" >&2
     return 3
   }
-  export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  if grep -Fq -- 'TT_LLK_ARTEFACTS_DIR' \
+      "${WORKTREE}/tests/python_tests/helpers/test_config.py"; then
+    export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  else
+    # Historical test_config.py only honors RUNNER_TEMP and appends its fixed
+    # tt-llk-build basename. Point it at the same attempt-owned namespace and
+    # seal the directory it actually creates.
+    export RUNNER_TEMP="$ARTIFACT_DIR"
+    ARTIFACT_DIR="${RUNNER_TEMP}/tt-llk-build"
+    export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  fi
   SRC_ID="${SOURCE_TREE_SHA256:0:16}"
   _vlog "artifact owner=${ARTIFACT_OWNER} build=${BUILD_INPUT_DIGEST} root=${ARTIFACT_DIR}"
 }

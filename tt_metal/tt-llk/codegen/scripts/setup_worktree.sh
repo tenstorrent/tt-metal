@@ -157,17 +157,34 @@ setup_worktree() {
   ln -sf "${LLK_ROOT}/.claude/scripts/run_qsr_metal_test.sh" "${wt_llk}/.claude/scripts/run_qsr_metal_test.sh"
   ln -sf "${LLK_ROOT}/.claude/scripts/llk_triage.py" "${wt_llk}/.claude/scripts/llk_triage.py"
 
-  # Share the source checkout's Python venv across worktrees instead of rebuilding
-  # it every run — apt + pip install of requirements.txt is the slow part, and the
-  # deps are arch-independent. Symlink it like the other codegen infra; the venv's
-  # activate hardcodes its real path, so activation through the symlink (run_test.sh
-  # sources tests/.venv/bin/activate) resolves to the real venv.
-  # The tt-metal Docker image has no venv (deps are system-wide) — skip the link there.
-  if [[ -d "${LLK_ROOT}/tests/.venv" ]]; then
-    echo "[worktree] Linking shared test venv from ${LLK_ROOT}/tests/.venv"
-    ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
+  # Share the source checkout's Python venv only when the pinned requirements
+  # match. Historical worktrees may require older tt-exalens/tt-umd APIs, so a
+  # latest-source venv is not safe for them. Provision those worktrees from their
+  # own requirements instead; the existing .venv ignore keeps the checkout clean.
+  local source_venv="${LLK_ROOT}/tests/.venv"
+  local source_requirements="${LLK_ROOT}/tests/requirements.txt"
+  local worktree_requirements="${wt_llk}/tests/requirements.txt"
+  if [[ -d "$source_venv" ]] \
+      && { [[ ! -f "$source_requirements" || ! -f "$worktree_requirements" ]] \
+           || cmp -s "$source_requirements" "$worktree_requirements"; }; then
+    echo "[worktree] Linking matching shared test venv from $source_venv"
+    ln -snf "$source_venv" "${wt_llk}/tests/.venv"
+  elif [[ -f "$worktree_requirements" ]]; then
+    local uv_bin=""
+    if command -v uv >/dev/null 2>&1; then
+      uv_bin="$(command -v uv)"
+    elif [[ -x "${source_venv}/bin/uv" ]]; then
+      uv_bin="${source_venv}/bin/uv"
+    else
+      echo "[worktree] ERROR: uv is required to provision the pinned test environment" >&2
+      return 1
+    fi
+    echo "[worktree] Provisioning test venv from pinned worktree requirements"
+    "$uv_bin" venv --python "$(command -v python3)" "${wt_llk}/tests/.venv"
+    "$uv_bin" pip install --python "${wt_llk}/tests/.venv/bin/python" \
+      --index-strategy unsafe-best-match -r "$worktree_requirements"
   else
-    echo "[worktree] No shared venv at ${LLK_ROOT}/tests/.venv — using ambient python (Docker image)"
+    echo "[worktree] No test requirements found — using ambient python"
   fi
 
   # Fetch only the arch-specific SFPI toolchain per worktree (setup_testing_env.sh

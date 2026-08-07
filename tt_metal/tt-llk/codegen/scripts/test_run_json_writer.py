@@ -1243,9 +1243,11 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
         "  printf 'test_fake.py::test_fake\\n'\n"
         "fi\n"
         'if [[ "$producer" == true ]]; then\n'
-        '  printf \'%s\\n\' "$TT_LLK_ARTEFACTS_DIR" >> "$CAPTURE"\n'
-        '  mkdir -p "$TT_LLK_ARTEFACTS_DIR"\n'
-        '  touch "$TT_LLK_ARTEFACTS_DIR/fake-output"\n'
+        '  artifact_root="$TT_LLK_ARTEFACTS_DIR"\n'
+        '  [[ "${HISTORICAL_ARTIFACTS:-}" != 1 ]] || artifact_root="$RUNNER_TEMP/tt-llk-build"\n'
+        '  printf \'%s\\n\' "$artifact_root" >> "$CAPTURE"\n'
+        '  mkdir -p "$artifact_root"\n'
+        '  touch "$artifact_root/fake-output"\n'
         "fi\n"
     )
     pytest_bin.chmod(0o755)
@@ -1253,10 +1255,12 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     def make_worktree(name, *, structured_collection=True):
         worktree = tmp_path / name
         test_dir = worktree / "tests" / "python_tests"
+        helper_dir = test_dir / "helpers"
         compiler_dir = worktree / "tests" / "sfpi" / "compiler" / "bin"
         source_dir = worktree / "tt_llk_blackhole"
         writer_dir = worktree / "codegen" / "scripts"
         test_dir.mkdir(parents=True)
+        helper_dir.mkdir()
         compiler_dir.mkdir(parents=True)
         source_dir.mkdir()
         writer_dir.mkdir(parents=True)
@@ -1266,6 +1270,11 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
             'COLLECTION_OPTION = "--codegen-collection-json"\n'
             if structured_collection
             else "# historical harness without structured collection option\n"
+        )
+        (helper_dir / "test_config.py").write_text(
+            'ARTEFACTS_ENV = "TT_LLK_ARTEFACTS_DIR"\n'
+            if structured_collection
+            else "# historical harness only honors RUNNER_TEMP\n"
         )
         compiler = compiler_dir / "riscv-tt-elf-g++"
         compiler.write_bytes(b"compiler-v1")
@@ -1343,13 +1352,20 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
             "--log-dir",
             str(tmp_path / "logs-historical"),
         ],
-        env={**env, "REJECT_COLLECTION_FLAG": "1"},
+        env={
+            **env,
+            "REJECT_COLLECTION_FLAG": "1",
+            "HISTORICAL_ARTIFACTS": "1",
+        },
         check=False,
         capture_output=True,
         text=True,
     )
     assert historical.returncode == 0, historical.stderr
     assert "test_fake.py::test_fake" in historical.stderr
+    historical_root = Path(capture.read_text().splitlines()[-1])
+    assert historical_root.name == "tt-llk-build"
+    assert historical_root.is_relative_to(managed_root / "v2")
 
     original = header.stat()
     header.write_text("#define VALUE_B 1\n")  # same size; only content differs
