@@ -15,6 +15,7 @@ from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .dense_mlp import DenseMLP
+from .residual import use_sharded_residual
 from .topk import TopKRouter
 
 
@@ -67,6 +68,12 @@ class MLP:
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl = ccl_manager
+        # Residual-stream layout (tt/residual.py). Sharded => this block CONSUMES full emb (the layer's
+        # single pre-MLP all-gather, shared with the router and the shared expert) and RETURNS emb/tp:
+        # the routed side stops at its reduce-scatter, the shared expert reduce-scatters instead of
+        # all-reducing, and the two are added in emb/tp. That removes two of the three all-gathers this
+        # block pays under the replicated layout.
+        self.sharded_residual = use_sharded_residual() and mesh_config is not None and mesh_config.tp > 1
         # Split state dict. MiniMax's SparseMoeBlock has `gate.weight` (no bias) plus a sibling
         # `e_score_correction_bias` buffer; experts live under `experts.*`.
         router_state_dict = dict(substate(state_dict, "gate"))
@@ -185,10 +192,15 @@ class MLP:
     def __call__(self, hidden_states):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        hidden_states: per-device [1,1,S,H] (the prompts/seq-shards live in the mesh rows). The EP
-        dispatch reads rows via cluster_axis=0; the router runs per-row (each row routes its own
-        tokens). The MoE returns reduce-scattered emb/tp; we all-gather it back to full emb so it
-        matches the layer residual's [1,1,S,H]. The shared expert runs on the same input and is added.
+        hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
+        Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
+        all three consumers here — the router, the shared expert and the EP dispatch — read that one
+        tensor. The EP dispatch reads rows via cluster_axis=0; the router runs per-row (each row routes
+        its own tokens).
+
+        Returns emb/tp under a sharded residual (routed reduce-scatter + shared reduce-scatter, added),
+        or full emb under the replicated one (the routed output is all-gathered back and the shared
+        expert all-reduced), matching the layer residual either way.
         """
         with zone("shared_expert"):
             shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
@@ -199,7 +211,7 @@ class MLP:
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
-        if self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
+        if not self.sharded_residual and self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             # TP all-gather (reduce-scattered emb -> full emb). Use the MANAGED all_gather_async
             # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of
             # the raw ttnn.all_gather: the raw op left a stale tile-face on a non-device-0 TP column's

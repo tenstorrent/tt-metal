@@ -233,9 +233,10 @@ class TtPrefillRuntime:
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
-        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] — full hidden, TP-replicated (the
-        residual-stream contract); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden
-        by default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
+        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
+        [1, 1, s_local, emb_dim/tp] under M3_SHARDED_RESIDUAL — whichever the residual-stream contract
+        is (tt/residual.py); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden by
+        default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
         x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
