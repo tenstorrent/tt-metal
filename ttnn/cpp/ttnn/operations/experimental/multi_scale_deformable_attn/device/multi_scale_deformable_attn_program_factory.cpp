@@ -176,11 +176,12 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     compute_desc.config = ComputeConfigDescriptor{};
 
     // Writer kernel descriptor.
-    KernelDescriptor::CompileTimeArgs writer_ct{
-        output_tile_cb,
-        output_scratch_cb,
-        output_stick_aligned,
-    };
+        KernelDescriptor::CompileTimeArgs writer_ct{
+            output_tile_cb,
+            output_scratch_cb,
+            output_stick_aligned,
+            D,  // D needed for HALF_STICK_NBYTES calculation in writer
+        };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;

@@ -27,10 +27,19 @@
 constexpr uint32_t output_tile_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t output_scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_stick_nbytes = get_compile_time_arg_val(2);
+constexpr uint32_t D = get_compile_time_arg_val(3);
 
 constexpr auto output_args = TensorAccessorArgs<3>();
 
-constexpr uint32_t HALF_STICK_NBYTES = 32;
+// D (compile-time arg 5) is the per-query width in bf16. A tile row
+// spans FACE_ROWS=16 rows per face. For D > 32, a single output row
+// (D values) overflows one row's width in a 32-wide tile face, so the
+// row is laid out across multiple face-rows (bitsliced).
+// For D <= 32: 1 row = 1 face-row (2 halves of D/2 each in TL+TR/BL+BR).
+// For D in 33..64: 1 row spans 2 face-rows within a face, etc.
+// We derive HALF_STICK_NBYTES from D so any multiple of 16 works.
+constexpr uint32_t D = get_compile_time_arg_val(5);
+constexpr uint32_t HALF_STICK_NBYTES = (D * sizeof(uint16_t)) / 2;  // bytes in one row half
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
 
 void kernel_main() {
@@ -55,7 +64,7 @@ void kernel_main() {
         const uint32_t tile_l1 = output_tile_cb.get_read_ptr();
 
         for (uint32_t r = 0; r < v_rows; ++r) {
-            const auto off = msda_tile_layout::tile_row_offsets(r);
+            const auto off = msda_tile_layout::tile_row_offsets<D>(r);
             const uint32_t src_lo = tile_l1 + off.lo;
             const uint32_t src_hi = tile_l1 + off.hi;
 

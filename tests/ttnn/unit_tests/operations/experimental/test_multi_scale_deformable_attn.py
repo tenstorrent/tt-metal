@@ -36,7 +36,7 @@ def _reference_msda(value: torch.Tensor, grid: torch.Tensor, attn: torch.Tensor,
 
 @pytest.mark.parametrize("N", [1, 4])
 @pytest.mark.parametrize("h_in,w_in", [(10, 10), (32, 32)])
-@pytest.mark.parametrize("D", [32])
+@pytest.mark.parametrize("D", [16, 32, 64])
 @pytest.mark.parametrize("Q", [16, 64])
 @pytest.mark.parametrize("P", [4, 8])
 @pytest.mark.parametrize("align_corners", [False, True])

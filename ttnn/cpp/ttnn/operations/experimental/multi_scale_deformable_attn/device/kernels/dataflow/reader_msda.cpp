@@ -90,7 +90,14 @@ constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_MAX_ROWS = 32;
-constexpr uint32_t HALF_STICK_NBYTES = 32;  // 16 bf16 per row half (TL or TR portion of one row)
+// D (compile-time arg 5) is the per-query width in bf16. A tile row
+// spans FACE_ROWS=16 rows per face. For D > 32, a single output row
+// (D values) overflows one row's width in a 32-wide tile face, so the
+// row is laid out across multiple face-rows (bitsliced).
+// For D <= 32: 1 row = 1 face-row (2 halves of D/2 each in TL+TR/BL+BR).
+// For D in 33..64: 1 row spans 2 face-rows within a face, etc.
+// We derive HALF_STICK_NBYTES from D so any multiple of 16 works.
+constexpr uint32_t HALF_STICK_NBYTES = (D * sizeof(uint16_t)) / 2;  // bytes in one row half
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
 
 void kernel_main() {
@@ -229,7 +236,7 @@ void kernel_main() {
                     if (!(yv_arr[r] && xv_arr[r])) {
                         continue;
                     }
-                    const auto off = msda_tile_layout::tile_row_offsets(r);
+                    const auto off = msda_tile_layout::tile_row_offsets<D>(r);
                     CoreLocalMem<volatile uint32_t> s(value_scratch_l1 + r * value_stick_nbytes);
                     CoreLocalMem<volatile uint32_t> dl(tile_l1 + off.lo);
                     CoreLocalMem<volatile uint32_t> dh(tile_l1 + off.hi);
@@ -267,7 +274,7 @@ void kernel_main() {
                     // Rows ≥ v_rows OR invalid corners: bf stays 0 — explicitly
                     // overwrite col 0 because the CB slot may contain non-zero
                     // bf16 left by a previous tile where this row was valid.
-                    CoreLocalMem<volatile uint16_t> p16(s_tile_l1 + msda_tile_layout::tile_col0_offset(r));
+                    CoreLocalMem<volatile uint16_t> p16(s_tile_l1 + msda_tile_layout::tile_col0_offset<D>(r));
                     p16[0] = bf;
                 }
                 scalar_tile_cb.push_back(1);
