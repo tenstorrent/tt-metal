@@ -284,11 +284,16 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
+    // Without IOMMU, UMD pins with TENSTORRENT_PIN_PAGES_CONTIGUOUS. Anonymous
+    // mmap (#47616) avoids the file-backed EINVAL, but multi-page anonymous
+    // regions are still not physically contiguous — pin fails for fifo sizes
+    // larger than one host page (Gemma4 activation pages are ~11 KiB). Force the
+    // sysmem hugepage fallback whenever IOMMU is absent; keep the pinned path
+    // only when IOMMU can map non-contiguous pages.
+    bool can_use_pinned_memory = cluster.is_iommu_enabled();
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;

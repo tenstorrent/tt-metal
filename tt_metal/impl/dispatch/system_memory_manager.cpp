@@ -170,11 +170,11 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->channel_offset = 0;
 
         // Carve out the hugepage "auxiliary" tail (same layout as the MMIO path below).
-        // Per HW CQ we reserve two TRANSFER_PAGE_SIZE (4 KiB) pages outside the issue/completion
-        // fifo layout; they are pooled after all CQ slots in free_region_* and allocated via
-        // allocate_region() when host code needs extra device-visible sysmem (e.g. D2H socket
-        // hugepage fallback for fifo data and bytes-sent counters).
-        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
+        // Per HW CQ we reserve AUX pages outside the issue/completion fifo layout; they are
+        // pooled after all CQ slots in free_region_* and allocated via allocate_region() when
+        // host code needs extra device-visible sysmem (e.g. D2H socket hugepage fallback for
+        // fifo data and bytes-sent counters). Sized for ~11 KiB activation pages + counter.
+        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 4;
         uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
         this->cq_size -= per_cq_reduction_sim;
         uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
@@ -209,8 +209,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    // Two TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
-    static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
+    // TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
+    // 4 pages (16 KiB) covers Gemma4-class D2H activation fifos (~11 KiB) + bytes_sent.
+    static constexpr uint32_t AUX_PAGES_PER_CQ = 4;
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
     this->cq_size -= per_cq_reduction;
 
