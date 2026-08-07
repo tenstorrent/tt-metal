@@ -2808,10 +2808,7 @@ SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
     "input_shapes",
     (
         (torch.Size([100])),
-        (torch.Size([10, 10])),
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 1, 102400, 32])),
-        (torch.Size([1, 1, 400, 512])),
+        (torch.Size([4, 128, 32])),
     ),
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])

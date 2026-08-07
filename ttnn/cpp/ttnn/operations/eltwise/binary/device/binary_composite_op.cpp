@@ -895,7 +895,7 @@ Tensor situ_glu(
     const Tensor& gate,
     const Tensor& up,
     float beta1,
-    std::optional<float> beta2,
+    float beta2,
     const std::optional<MemoryConfig>& output_mem_config) {
     using namespace operations::unary;
 
@@ -911,8 +911,8 @@ Tensor situ_glu(
         ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, interm_mem),
         std::nullopt,
         interm_mem);
-    // up half: softcapped by beta2 when provided, otherwise left untouched.
-    Tensor up_half = beta2.has_value() ? ttnn::softcap(up, *beta2, interm_mem) : up;
+    // up half: softcap(up, beta2).
+    Tensor up_half = ttnn::softcap(up, beta2, interm_mem);
     return ttnn::multiply(situ_a, up_half, std::nullopt, output_mem_config);
 }
 
