@@ -7,6 +7,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 namespace ckernel
 {
@@ -29,6 +30,8 @@ template <std::uint32_t STORE_OFFSET>
 inline void _exp_init_loadmacro_(
     const std::uint32_t load_base_addr, const int num_sfpu_iterations, const std::uint32_t load_sfpmem, const std::uint32_t store_sfpmem)
 {
+    LLK_ASSERT(num_sfpu_iterations <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
+
     // LOADMACRO CONTROL (config_dest 0x8): DEFAULT_STORE_INSMOD = store_sfpmem. With
     // STORE_INHERITS_INSMOD=0 this register, not the captured SFPSTORE, sets the store format.
     TT_SFPLOADI(0x0, 0x2, store_sfpmem);

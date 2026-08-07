@@ -96,7 +96,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
-#include "cfg_defines.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
@@ -112,7 +111,7 @@ using namespace ckernel::sfpu;
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const volatile FormatConfig& formats = params.formats;
+    const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t num_tiles = params.TILE_CNT;
 
@@ -152,8 +151,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
-
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
     _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
