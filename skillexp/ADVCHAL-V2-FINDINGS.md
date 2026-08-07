@@ -281,7 +281,7 @@ and a 30-op capture of the same op count are not read as the same evidence.
 | qwen3.6-27B (both arms) | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` |
 | north-mini onA | the whole sparse MoE tail | `ttnn.sparse_matmul` had no direct-TTNN handler — **since ported, see below** |
 | gemma-4-26B onA | **64.7 % sliding / 58.5 % full** of the window | sparse experts |
-| phi-3.5 B | the fused-cache share | no tracer handler for `paged_fused_update_cache` |
+| north-mini FN (3 kinds) | everything after QKV | no handler for `paged_fused_update_cache` — **since added as two `paged_update_cache` ops**; its capture returned `query` |
 
 Every structural zero in the corpus is a tracer-coverage zero. qwen's linear layers cost ~13× a full layer,
 and that kind is **97 % of its model decode time**. But the trace stops *inside* the layer, not before it: of

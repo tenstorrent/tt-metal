@@ -48,7 +48,7 @@ index 62c6a199a9..509fcb391d 100644
      def __class__(self):
          # Spoof isinstance(proxy, ttnn.Tensor) so real model code that gates on
 diff --git a/tools/ttnn-jit/_src/ttnn_emit_tracer.py b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
-index abaada1806..e54653e15b 100644
+index abaada1806..fabfe57cdd 100644
 --- a/tools/ttnn-jit/_src/ttnn_emit_tracer.py
 +++ b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
 @@ -17,12 +17,16 @@ Coverage is the full transformer-decoder vocabulary: dense compute
@@ -74,7 +74,7 @@ index abaada1806..e54653e15b 100644
  """
  
  from contextlib import contextmanager
-@@ -245,6 +249,99 @@ def _linear_handler(
+@@ -245,6 +249,113 @@ def _linear_handler(
          )
  
  
@@ -161,6 +161,20 @@ index abaada1806..e54653e15b 100644
 +        )
 +
 +
++def _pow_handler(jit_ctx, x, y, **kwargs):
++    """``ttnn.pow(x, y)`` -> ``ttnn.pow_tensor`` (tensor y) or ``ttnn.pow_scalar``."""
++    dims = [int(d) for d in x.mlir_value.type.shape]
++    with InsertionPoint(jit_ctx.func_bb), Location.unknown(jit_ctx.ctx):
++        rt = _retype(jit_ctx.ctx, x.mlir_value, dims)
++        if hasattr(y, "mlir_value"):
++            return ttnn.pow_tensor(result=rt, lhs=x.mlir_value, rhs=y.mlir_value)
++        return ttnn.pow_scalar(
++            result=rt,
++            lhs=x.mlir_value,
++            rhs=FloatAttr.get(F32Type.get(jit_ctx.ctx), float(y)),
++        )
++
++
 +def _ones_like_handler(jit_ctx, input, **kwargs):
 +    """``ttnn.ones_like(x)`` -> ``ttnn.ones`` of x's shape/element type."""
 +    dims = [int(d) for d in input.mlir_value.type.shape]
@@ -174,7 +188,39 @@ index abaada1806..e54653e15b 100644
  def _binary(op_fn):
      def handler(jit_ctx, x, y, **kwargs):
          # Either operand may be a python scalar -- `ttnn.multiply(gate, 1.703125)`
-@@ -966,6 +1063,10 @@ def _repeat_handler(jit_ctx, x, repeat_dims=None, **kwargs):
+@@ -891,6 +1002,31 @@ def _paged_update_cache_handler(
+         )
+ 
+ 
++def _paged_fused_update_cache_handler(
++    jit_ctx, cache1, input1, cache2, input2, *, update_idxs_tensor=None,
++    page_table=None, share_cache=None, **kwargs
++):
++    """``ttnn.experimental.paged_fused_update_cache`` -> TWO ``ttnn.paged_update_cache``.
++
++    DECOMPOSITION, not 1:1. The fused op updates the K and V caches in one
++    invocation; the TTNN dialect has PagedUpdateCacheOp but no fused variant, and
++    the fused signature is literally (cache1, input1, cache2, input2, ...), so two
++    ops express exactly the same writes. The advisor then places the two cache
++    updates independently, which for layout purposes is more information, not less
++    -- but it is two device ops where the shipped graph runs one, so a
++    reconciliation will pair them by position.
++    """
++    with InsertionPoint(jit_ctx.func_bb), Location.unknown(jit_ctx.ctx):
++        pt = page_table.mlir_value if page_table is not None else None
++        for cache, inp in ((cache1, input1), (cache2, input2)):
++            ttnn.paged_update_cache(
++                cache=cache.mlir_value,
++                input=inp.mlir_value,
++                update_index=update_idxs_tensor.mlir_value,
++                page_table=pt,
++            )
++
++
+ def _paged_fill_cache_handler(jit_ctx, cache, input, page_table, **kwargs):
+     with InsertionPoint(jit_ctx.func_bb), Location.unknown(jit_ctx.ctx):
+         ttnn.paged_fill_cache(
+@@ -966,6 +1102,12 @@ def _repeat_handler(jit_ctx, x, repeat_dims=None, **kwargs):
  _VALUE_HANDLERS = {
      "matmul": _matmul_handler,
      "linear": _linear_handler,
@@ -182,10 +228,20 @@ index abaada1806..e54653e15b 100644
 +    "softplus": _softplus_handler,
 +    "ones_like": _ones_like_handler,
 +    "repeat_interleave": _repeat_interleave_handler,
++    "pow": _pow_handler,
++    "pow_tensor": _pow_handler,
      "reshape": _reshape_handler,
      "typecast": _typecast_handler,
      "softmax": _softmax_handler,
-@@ -1080,6 +1181,34 @@ _PASSTHROUGH_IDENTITY = {
+@@ -1060,6 +1202,7 @@ _EXPERIMENTAL_MULTI = {
+ _EXPERIMENTAL_INPLACE = {
+     "paged_update_cache": (_paged_update_cache_handler, 0),
+     "paged_fill_cache": (_paged_fill_cache_handler, 0),
++    "paged_fused_update_cache": (_paged_fused_update_cache_handler, 0),
+ }
+ 
+ # ttnn.transformer.<op> handlers.
+@@ -1080,6 +1223,34 @@ _PASSTHROUGH_IDENTITY = {
  }
  _PASSTHROUGH_NONE = {"deallocate"}
  
@@ -220,7 +276,7 @@ index abaada1806..e54653e15b 100644
  
  def _identity_passthrough(*args, **kwargs):
      for a in args:
-@@ -1127,6 +1256,9 @@ def patch_ttnn(jit_ctx):
+@@ -1127,6 +1298,9 @@ def patch_ttnn(jit_ctx):
          for name in _PASSTHROUGH_NONE:
              originals[name] = getattr(_ttnn_rt, name, _MISSING)
              setattr(_ttnn_rt, name, _none_passthrough)

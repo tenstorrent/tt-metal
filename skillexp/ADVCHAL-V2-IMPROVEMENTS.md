@@ -656,12 +656,18 @@ explicit handlers **plus** the 54-op `supported_ops.py` allowlist it reaches via
 
 | cell / kind | untraced | ceiling vs floor | resolvable |
 |---|---|---|---|
+| **north-mini B, sliding rope MoE** | 75.66 % → **21.12 %** | 1.80× → **22.77×** | 0 → **6** |
+| **north-mini B, full no-rope MoE** | 76.40 % → **21.48 %** | 0.45× → **16.09×** | 0 → **5** |
 | north-mini onA, full MoE | 77.15 % → **14.39 %** | 0.66× → **10.09×** | 0 → **2** |
 | north-mini onA, sliding MoE | 76.62 % → **15.47 %** | 0.12× → 0.67× | 0 → 0 |
 | gemma-4-26B onA, full | 58.51 % → **3.86 %** | 1.70× → 3.29× | 0 → 0 |
 | gemma-4-26B onA, sliding | 64.70 % → **4.17 %** | 4.08× → **13.74×** | 2 → **4** |
+| north-mini FN, both MoE kinds | 5 → **37** and 7 → **39** ops | *no window reproduces the cell's* | — |
 
-gemma needed no new handler — only its capture stopped substituting `_dense_mlp` for the routed path.
+**north-mini B is the biggest single result.** It published a flat zero with a ceiling *below* its own noise floor;
+two handlers (`ones_like`, `sparse_matmul`) give it **11 candidates worth 632.1 µs/model** — more than every
+shipped win in the corpus combined. gemma needed no new handler at all: only its capture stopped substituting
+`_dense_mlp` for the routed path.
 
 **Evidence:** [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) — every blocker in the corpus, classed and where
 cheap, fixed. Also [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The port, and what it bought".
@@ -673,10 +679,21 @@ cheap, fixed. Also [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The po
 activations), **`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :n]` killed qwen's trace with
 `'TracedTensor' object is not subscriptable`), and `ttnn.repeat_interleave`.
 
-**Left, all cheap:** `paged_fused_update_cache` is literally two `paged_update_cache` calls and both the dialect
-op and its handler exist; `ones_like` → `ttnn.ones` at the input shape (done, oracle-tested, unused so far);
-`pow`/`pow_tensor` have `TTNN_PowTensorOp`/`TTNN_PowScalarOp`; `rearrange` decomposes to `permute` + `reshape`;
-`rotary_embedding_hf` needs porting *into* the interception tracer or the `--help` fallback claim needs dropping.
+**Also done since:** `paged_fused_update_cache` → two `ttnn.paged_update_cache` ops (verified in the IR; the fused
+signature is literally `(cache1, in1, cache2, in2, …)`), `ones_like` → `ttnn.ones` at the input shape, and
+`pow`/`pow_tensor` → `TTNN_PowTensorOp`/`TTNN_PowScalarOp`. **All five real blockers are closed.**
+
+**Left, and only one of them matters:** `rearrange` needs its einops pattern string parsed before it can become
+`permute` + `reshape` — no cell needs it. And **`rotary_embedding_hf` cannot be ported into the interception
+tracer at all**: TTIR has only `rotary_embedding_llama`, which requires a `trans_mat` operand the HF op has no
+equivalent for, and fabricating one would add a tensor the advisor then places. **So drop the fallback claim from
+`--help` rather than try to honour it** — that is the cheap, honest fix.
+
+**Four recorded blockers were already handled**: `paged_scaled_dot_product_attention_decode`,
+`nlp_concat_heads_decode`, `topk` and `scatter` all have handlers, and the re-runs contain them. They were copied
+out of `unfixable_ops` — which means *the advisor will not place this op* — into `uncapturable.ops`, which means
+*the tracer cannot trace it*. **Two different questions.** Validate anything written into the second with an
+actual trace attempt.
 
 **And one label to delete: `ttnn.recurrent_state_update` does not exist.** It appears in two of the cell's own
 artefacts and nowhere else — not in TTNN, not in `ttnn`, not in the model. The state write is a `ttnn.copy`

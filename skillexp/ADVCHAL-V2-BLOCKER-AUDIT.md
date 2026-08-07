@@ -4,9 +4,10 @@ Seven of fifteen cells returned zero, and the docs attribute three of those to "
 advisor never saw. This audits every op those cells named as a blocker, decides what class of fix each needs, and
 where a fix was cheap, applies it and re-measures.
 
-**Headline:** of the ops named across the corpus, **one did not exist**, **two more blockers were never named at
-all**, and the tracer-side gaps were all closed in one afternoon of pure-Python edits — no rebuild. Coverage on
-four cell/kind pairs went from 58–77 % untraced to 4–15 %.
+**Headline:** of the ten ops cells named as blockers, **four were already handled** and **one does not exist**.
+Two real blockers were never named at all. Every real one is now fixed — 218 lines of pure Python across the two
+tracers, no rebuild — and coverage on eight cell/kinds went from 58–77 % untraced to 4–21 %. One cell that
+published a flat zero now has **11 screenable candidates worth 632 µs/model**.
 
 Method: re-capture each cell with the handler added, then re-run `reconcile.py` against **the cell's own profile
 window and incumbent**, with the shipped report re-run through the identical command as a verified control. Where
@@ -14,27 +15,40 @@ the control did not reproduce the cell's published numbers, the comparison is no
 
 ---
 
-## 1. The verdict per blocker
+## 1. The complete blocker list, swept from the artefacts
 
-| op, as the docs name it | real blocker? | what a fix needs | status |
+Not from what the docs mention — from every `uncapturable.ops` entry in all 15 cells' `report.json`:
+
+| op, as a cell recorded it | cell/kinds | real? | what a fix needs | status |
+|---|---|---|---|---|
+| `ttnn.sparse_matmul` / `sparse_matmul` | **12** | yes | port the handler the sibling tracer already has | **done, measured** |
+| `paged_fused_update_cache` | 3 | yes | it *is* `(cache1, in1, cache2, in2, …)` — two `paged_update_cache` ops | **done, verified in IR** |
+| `paged_scaled_dot_product_attention_decode` | 3 | **NO — already handled** | — | see §3 |
+| `nlp_concat_heads_decode` | 3 | **NO — already handled** | — | see §3 |
+| `topk` | 2 | **NO — already handled** | — | see §3 |
+| `scatter` | 2 | **NO — already handled** | — | see §3 |
+| `ttnn.ones_like` | 2 | yes | `ttnn.ones` at the input shape — a copy of `_zeros_like_handler` | **done, measured** |
+| `ttnn.copy` | 1 | yes | tracer bookkeeping only; no dialect op exists or is needed | **done, traces** |
+| `ttnn.softplus` | 1 | yes | no standalone dialect op → 3-op decomposition | **done, traces** |
+| `ttnn.recurrent_state_update` | 1 | **NO — the op does not exist** | — | see §4 |
+
+Two more were never recorded by any cell and had to be found by re-running:
+
+| found by re-running | real? | what a fix needs | status |
 |---|---|---|---|
-| `ttnn.sparse_matmul` | **yes** | port the handler that already exists in the sibling tracer | **done, measured** — 4 cell/kinds |
-| `ttnn.copy` | **yes** | tracer bookkeeping only; no dialect op exists or is needed | **done** — traces |
-| `ttnn.softplus` | **yes** | no standalone dialect op; 3-op decomposition, or add `TTNN_SoftplusOp` | **done** (decomposed) |
-| `ttnn.recurrent_state_update` | **NO — the op does not exist** | — | see §3 |
-| `ttnn.paged_fused_update_cache` | yes | it is two `paged_update_cache` calls; both dialect ops and handlers exist | not applied |
-| `ttnn.ones_like` | yes | `ttnn.ones` at the input's shape — a copy of `_zeros_like_handler` | **done**, oracle-tested |
-| `pow` / `pow_tensor` | yes | `TTNN_PowTensorOp` / `TTNN_PowScalarOp` exist | not applied |
-| `rearrange` | yes | no dialect op; decomposes to `permute` + `reshape` | not applied |
-| `rotary_embedding_hf` *(missing from the interception tracer)* | yes | port from the emit tracer, or drop the `--help` claim | not applied |
-| sharded GQA SDPA output | yes | a tt-metal kernel — out of scope | recommendation only |
-| **`TracedTensor.__getitem__`** — *not in any doc* | **yes** | not an op at all: a proxy-protocol gap | **done** — traces |
-| **`ttnn.repeat_interleave`** — *not in any doc* | **yes** | `TTNN_RepeatInterleaveOp` exists | **done**, oracle-tested |
+| **`TracedTensor.__getitem__`** | yes | **not an op** — a proxy-protocol gap | **done, traces** |
+| `ttnn.repeat_interleave` | yes | `TTNN_RepeatInterleaveOp` exists | **done, oracle-tested** |
 
-Nothing here is a tt-mlir optimizer defect. Every item is either a `ttnn-jit` tracer gap, a missing dialect op, or
-a tt-metal kernel limitation — and the tracer gaps are the overwhelming majority.
+And three that no cell hit but the tracers still lack:
 
----
+| gap | what a fix needs | status |
+|---|---|---|
+| `pow` / `pow_tensor` | `TTNN_PowTensorOp` / `TTNN_PowScalarOp` exist | **done, oracle-tested** |
+| `rearrange` | no dialect op; the einops pattern string needs parsing, then `permute` + `reshape` | not done — no cell needs it |
+| `rotary_embedding_hf` *in the interception tracer* | **cannot be ported.** TTIR has only `rotary_embedding_llama`, which requires a `trans_mat` operand the HF op has no equivalent for. Fabricating one would add a tensor the advisor then places | **drop the `--help` fallback claim instead** |
+
+**So of the ten ops cells recorded as blockers, four were already handled and one does not exist.** Five were
+real, and all five are now fixed. Nothing in the list is a tt-mlir optimizer defect.
 
 ## 2. What the fixes bought, measured
 
@@ -47,7 +61,36 @@ re-reconciled through the identical command as a control.
 | north-mini onA, sliding sparse MoE | **76.62 % → 15.47 %** | 0.12× → 0.67× | 0 → 0 |
 | gemma-4-26B onA, full attention | **58.51 % → 3.86 %** | 1.70× → 3.29× | 0 → 0 |
 | gemma-4-26B onA, sliding attention | **64.70 % → 4.17 %** | 4.08× → **13.74×** | **2 → 4** |
-| qwen3.6-27B B, linear attention | trace aborted → **71 ops captured** | *see §4* | *see §4* |
+| **north-mini B, sliding rope MoE** | **75.66 % → 21.12 %** | 1.80× → **22.77×** | **0 → 6** |
+| **north-mini B, full no-rope MoE** | **76.40 % → 21.48 %** | 0.45× → **16.09×** | **0 → 5** |
+| north-mini FN, full attention MoE | 5 → **37 ops captured** | *no comparison — see below* | — |
+| north-mini FN, sliding attention MoE | 7 → **39 ops captured** | *no comparison — see below* | — |
+| qwen3.6-27B B, linear attention | trace aborted → **71 ops captured** | *see §5* | *see §5* |
+
+**north-mini B is the largest result in this audit.** The cell published a flat zero — *"all measured geometries
+slower or stalled"* — with a screening ceiling of 0.45× and 1.80× its own noise floor. Two handlers later
+(`ones_like` and `sparse_matmul`) it has **11 candidates above the floor worth 632.1 µs/model between them**,
+which is more than every shipped win in the corpus combined:
+
+| kind | chain | removes | vs floor | per model |
+|---|---|---|---|---|
+| sliding rope MoE | `:5` `scatter` | 3.367 µs | 3.60× | **121.2 µs** |
+| sliding rope MoE | `:4` `scatter` | 2.825 µs | 3.02× | **101.7 µs** |
+| sliding rope MoE | `:b32`, `:b40`, `:b37`, `:b33` | 2.339 / 2.321 / 1.475 / 1.107 µs | 2.50–1.18× | 84.2 / 83.6 / 53.1 / 39.9 µs |
+| full no-rope MoE | `:5` `scatter` | 3.382 µs | 2.68× | **40.6 µs** |
+| full no-rope MoE | `:4` `scatter` | 2.848 µs | 2.25× | **34.2 µs** |
+| full no-rope MoE | `:b36`, `:b28`, `:b33` | 2.359 / 2.305 / 1.481 µs | 1.87–1.17× | 28.3 / 27.7 / 17.8 µs |
+
+*(Per-cell figures. Do not add across arms of the same model — B and onA are alternatives, not additive.)*
+
+**north-mini FN's captures were the most truncated in the corpus and are shown without a reconciliation.** Its
+sparse branch returned `query` — it stopped immediately after QKV, before attention, before the cache update,
+before the experts. With `paged_fused_update_cache` and `sparse_matmul` handled it captures 37 and 39 ops. But no
+profile CSV in that branch reproduces the cell's published 67.9 % / 69.0 % untraced share, so the accounting
+comparison is **not shown** rather than shown against a different window. The op counts are the finding.
+
+The fused-cache decomposition is verified in the IR: `paged_fused_update_cache` emits exactly
+`2 "ttnn.paged_update_cache"`.
 
 **Four new screenable candidates, none of them in the corpus's reachable total:**
 
@@ -72,7 +115,24 @@ Tracing the op is still what makes the surrounding placement possible.
 
 ---
 
-## 3. `ttnn.recurrent_state_update` does not exist
+## 3. Four recorded blockers were already handled
+
+`paged_scaled_dot_product_attention_decode`, `nlp_concat_heads_decode`, `topk` and `scatter` are all registered in
+the direct-TTNN tracer — `_TRANSFORMER_VALUE`, `_EXPERIMENTAL_VALUE` and `_VALUE_HANDLERS` respectively. The
+re-runs prove it: north-mini FN's new capture contains `paged_scaled_dot_product_attention_decode` and
+`nlp_concat_heads_decode`, and every MoE capture contains `topk` and `scatter`.
+
+**How the mistake happened is worth knowing, because it recurs.** `nlp_concat_heads_decode` and
+`rotary_embedding` dominate the corpus's `unfixable_ops` field — 20 and 18 declarations. That field means *the
+advisor's constraint query failed, so it will not place this op*. It does **not** mean the tracer cannot trace it.
+Two cells copied names from one into the other, turning a placement limitation into a coverage claim, and the
+tracer's own docstring made the same error in the other direction — it declared the MoE router
+(`topk`/`scatter`/`zeros`/`arange`/`pad`/`clamp`/`fill_cache`) unsupported long after handlers were added.
+
+**`uncapturable.ops` and `unfixable_ops` answer different questions.** Anything written into the first should be
+reproduced by an actual trace attempt first.
+
+## 4. `ttnn.recurrent_state_update` does not exist
 
 north-mini's and qwen's reports name three terminal ops for the linear-attention kind:
 
@@ -97,7 +157,7 @@ qwen's three did.
 
 ---
 
-## 4. qwen: the coverage gap is closed, and the failure moved
+## 5. qwen: the coverage gap is closed, and the failure moved
 
 qwen is the biggest prize in the corpus — `linear_attention` is **97 % of its model decode time** and 63.5 % of
 that window was untraced, so ≈62 % of the model was never advised on. Its untraced bulk is not exotic:
@@ -133,7 +193,7 @@ from the softplus decomposition, `slice_static` ×8 from the subscripts, and the
 **The failure that remains is not a coverage gap.** `ttnn-advise capture` now aborts natively inside
 `mlir::PassManager::run` while placing this graph, with no diagnostic. What is established:
 
-- each new handler passes a one-op trace in isolation (§5), so none of them emits invalid IR on its own;
+- each new handler passes a one-op trace in isolation (§6), so none of them emits invalid IR on its own;
 - the traced module verifies and parses — `ttmlir-opt --ttnn-to-ttnn-l1-advisor` accepts it and exits 0;
 - the crash is inside the pass pipeline, in-process, where the op-model constraint queries run.
 
@@ -145,7 +205,7 @@ figure should be read as "reachable, pending one pipeline crash" rather than "un
 
 ---
 
-## 5. The one-op oracle, and why an autofix skill is safe
+## 6. The one-op oracle, and why an autofix skill is safe
 
 Each new handler was checked by tracing a one-op function on a `(1, 4, 32, 128)` bf16 input:
 
@@ -187,13 +247,16 @@ that is how a capture starts lying.
 
 ---
 
-## 6. Where this leaves the corpus's numbers
+## 7. Where this leaves the corpus's numbers
 
-- **Reachable value is a lower bound for a third reason.** Four new candidates worth ~200 µs/model sit outside it.
-- **"3 coverage gaps" was right about the count and wrong about the cause.** One was a single missing handler
+- **Reachable value is a lower bound for a third reason.** **17 new candidates** sit outside it — 11 on
+  north-mini B (632.1 µs/model), 2 on gemma sliding (141.6 µs/model), 2 on north-mini onA full MoE (61.9 µs/model).
+- **Two of seven zeros were not "no headroom" and not "coverage gap" either — they were both.** north-mini B's
+  zero was honest about what it measured and wrong about what was measurable.
+- **"3 coverage gaps" undercounted.** north-mini B and FN were also coverage-limited, and neither is in that count. On cause: One was a single missing handler
   (north-mini), one was a capture that substituted a dense MLP for the routed one (gemma), and one was four
   gaps of three different kinds (qwen).
-- **Coverage was not the binding constraint everywhere it looked like it was.** Two of the four fixed cell/kinds
+- **Coverage was not the binding constraint everywhere it looked like it was.** Two of the eight fixed cell/kinds
   still cannot screen, because their harness noise floor exceeds the ceiling. That is a different defect, already
   filed as STG-5 / I5.
 
