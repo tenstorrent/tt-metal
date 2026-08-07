@@ -61,9 +61,8 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Compile time varargs
     //--------------------------------
-    // TODO: This is currently unimplemented.
-    //       However, certain variadic kernels require this workaround.
-    //       (#45388 tracks the implementation of this feature.)
+    // Values of the varargs for the kernel.
+    std::vector<uint32_t> compile_time_varargs;
 
     //--------------------------------
     // Runtime varargs

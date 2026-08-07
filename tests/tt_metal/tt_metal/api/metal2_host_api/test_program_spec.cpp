@@ -4138,6 +4138,37 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 }
 
 // ============================================================================
+// Compile-time varargs — mock-device JIT smoke
+// ============================================================================
+//
+// Host: KernelAdvancedOptions::compile_time_varargs (values fixed at ProgramSpec time).
+// Kernel: get_compile_time_vararg(idx), 0-based into the CTA-vararg section.
+// Compile-only on mock Wormhole — the static_assert fires at JIT time if the value is wrong
+// or the helper/offset plumbing is broken. No silicon, no dispatch.
+
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kExpected = 0xCAFEBABEu;
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {kExpected};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_readable";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
 // Kernel hash sensitivity to TensorParameter spec
 // ============================================================================
 //
