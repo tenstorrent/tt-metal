@@ -12,7 +12,12 @@ from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
 from .test_config import TestConfig
 
+
 # Length of the shared config array (matches counters.h COUNTER_SLOT_COUNT).
+class CounterConfigError(RuntimeError):
+    """The capture did not match what was requested, so the numbers are not usable."""
+
+
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 
 COUNTER_BANK_NAMES = {
@@ -213,7 +218,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
             # The group is baked into brisc.elf, and nothing keys a rebuild on it, so a stale ELF
             # would otherwise return a self-consistently labelled duplicate dataset.
-            raise RuntimeError(
+            raise CounterConfigError(
                 f"L1 counters were captured with mux group {l1_mux}, but "
                 f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
                 "the change; recompile the producer (the group is a compile-time constant)."

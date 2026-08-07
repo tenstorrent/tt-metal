@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
-from .counters import print_counters, read_counters
+from .counters import CounterConfigError, print_counters, read_counters
 from .device import BootMode
 from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -22,12 +22,14 @@ from .metrics import compute_metrics, export_counters, export_metrics, print_met
 from .perf_schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
+    INIT_MARKER,
     LOOP_FACTOR_COLUMN,
     MARKER,
     MEAN,
     STD,
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
+    TILE_LOOP_MARKER,
     PerfSchemaError,
     stat_prefix,
     text_size_column,
@@ -36,12 +38,6 @@ from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
-
-# Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
-# match the marker values the kernels record; a mismatch silently empties the
-# TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
-INIT_MARKER = "INIT"
-TILE_LOOP_MARKER = "TILE_LOOP"
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -669,6 +665,10 @@ class PerfConfig(TestConfig):
                                 print_counters(counter_results)
                             if TestConfig.DUMP_RAW_METRICS:
                                 print_metrics(counter_results)
+                    except CounterConfigError:
+                        # A misconfiguration, not a flaky device read: the counters are not measuring
+                        # what was asked for, so a warning would let a wrong answer through.
+                        raise
                     except Exception as e:
                         logger.warning("Error reading counters: {}", e)
 
@@ -677,10 +677,22 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
             if not stats_df.empty:
                 results.append(stats_df)
+
+            if not variant_counter_results and TestConfig.ENABLE_PERF_COUNTERS:
+                # Usually a kernel using ZONE_SCOPED instead of START_PERF_MEASURE: only the latter
+                # arms the counters, so the deltas read as "no overhead" rather than "not measured".
+                logger.warning(
+                    "{} {}: --enable-perf-counters is set but no zone returned counter data for "
+                    "run type {}. The kernel is probably not instrumented with START_PERF_MEASURE, "
+                    "so counter and metric columns will be absent and any WC-vs-NC comparison for "
+                    "this test is vacuous.",
+                    self.test_name,
+                    self.variant_id,
+                    run_type.name,
+                )
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
