@@ -6,12 +6,19 @@
 // These tests require a real device (slow dispatch).
 
 #include <cstdlib>
+#include <cstring>
+#include <utility>
+#include <vector>
 #include <gtest/gtest.h>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
+#include "tt_metal/hw/inc/hostdev/socket.h"
 
 namespace tt::tt_metal {
 
@@ -153,6 +160,110 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     auto buf2 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
+}
+
+// ================== Per-core socket data-buffer allocation (Phase B) ==================
+// Exercises SocketMemoryConfig{..., per_core_allocation=true}: the receiver FIFO should be allocated with the
+// per-core allocator (only on the receiver connection core) instead of lockstep across every worker core, and
+// the handshake metadata should carry that per-core address.
+
+namespace {
+
+// Builds a single-connection, single-device (md == md) per-core socket on the fixture's first unit mesh.
+std::pair<distributed::MeshSocket, distributed::MeshSocket> make_per_core_socket(
+    const std::shared_ptr<distributed::MeshDevice>& md,
+    const CoreCoord& sender_core,
+    const CoreCoord& receiver_core,
+    uint32_t fifo_size) {
+    distributed::SocketConnection connection(
+        distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), sender_core),
+        distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), receiver_core));
+    distributed::SocketMemoryConfig mem_config(
+        BufferType::L1, fifo_size, /*sender_sub_device=*/std::nullopt, /*receiver_sub_device=*/std::nullopt,
+        /*per_core_allocation=*/true);
+    distributed::SocketConfig socket_config({connection}, mem_config);
+    return distributed::MeshSocket::create_socket_pair(md, md, socket_config);
+}
+
+}  // namespace
+
+TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
+    auto md = this->devices_[0];
+    auto* device = md->get_devices()[0];
+
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(0, 1);
+    const uint32_t fifo_size = 2048;
+
+    auto [send_socket, recv_socket] = make_per_core_socket(md, sender_core, receiver_core, fifo_size);
+
+    auto data_buffer = recv_socket.get_data_buffer();
+    ASSERT_TRUE(per_core::is_per_core_allocation(*data_buffer));
+
+    // The FIFO occupies L1 only on the receiver core, at a valid per-core address.
+    auto pc_addr = per_core::get_per_core_address(*data_buffer, receiver_core);
+    EXPECT_GT(pc_addr, 0u) << "Receiver per-core address should be above the L1 base";
+    EXPECT_LT(pc_addr, device->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
+
+    // A per-core buffer has no single lockstep address.
+    EXPECT_EQ(data_buffer->address(), 0u);
+}
+
+TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
+    auto md = this->devices_[0];
+    auto* device = md->get_devices()[0];
+
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(0, 1);
+    const uint32_t fifo_size = 2048;
+
+    auto [send_socket, recv_socket] = make_per_core_socket(md, sender_core, receiver_core, fifo_size);
+    auto pc_addr = per_core::get_per_core_address(*recv_socket.get_data_buffer(), receiver_core);
+
+    // A subsequent lockstep L1 buffer spanning the receiver core must not alias the per-core socket FIFO.
+    CoreRange grid(CoreCoord(0, 0), CoreCoord(1, 0));
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(grid), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    auto lockstep_buf = Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+    EXPECT_TRUE(lockstep_buf->is_allocated());
+    EXPECT_NE(lockstep_buf->address(), pc_addr) << "Lockstep buffer aliases the per-core socket FIFO";
+}
+
+TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
+    auto md = this->devices_[0];
+
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(0, 1);
+    const uint32_t fifo_size = 2048;
+
+    auto [send_socket, recv_socket] = make_per_core_socket(md, sender_core, receiver_core, fifo_size);
+    auto pc_addr = per_core::get_per_core_address(*recv_socket.get_data_buffer(), receiver_core);
+
+    // The receiver's on-device config must point read_ptr/fifo_addr at the receiver core's per-core address.
+    std::vector<receiver_socket_md> recv_config_readback;
+    distributed::ReadShard(
+        md->mesh_command_queue(),
+        recv_config_readback,
+        recv_socket.get_config_buffer(),
+        distributed::MeshCoordinate(0, 0));
+    ASSERT_EQ(recv_config_readback.size(), 1u);
+    EXPECT_EQ(recv_config_readback[0].fifo_addr, pc_addr);
+    EXPECT_EQ(recv_config_readback[0].read_ptr, pc_addr);
+    EXPECT_EQ(recv_config_readback[0].fifo_total_size, fifo_size);
+
+    // The sender's downstream_fifo_addr must match the same per-core address.
+    std::vector<uint8_t> sender_config_bytes;
+    distributed::ReadShard(
+        md->mesh_command_queue(),
+        sender_config_bytes,
+        send_socket.get_config_buffer(),
+        distributed::MeshCoordinate(0, 0));
+    ASSERT_GE(sender_config_bytes.size(), sizeof(sender_socket_md));
+    sender_socket_md sender_md{};
+    std::memcpy(&sender_md, sender_config_bytes.data(), sizeof(sender_socket_md));
+    EXPECT_EQ(sender_md.downstream_fifo_addr, pc_addr);
+    EXPECT_EQ(sender_md.downstream_fifo_total_size, fifo_size);
 }
 
 }  // namespace tt::tt_metal
