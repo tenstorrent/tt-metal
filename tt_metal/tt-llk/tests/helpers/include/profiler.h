@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "barrier.h"
 #include "ckernel.h"
 
 // Logic to convert zone name -> 16bit numeric id
@@ -105,82 +106,16 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    auto& barrier = *barrier_ptr;
-
-    // Relative generation, the same scheme sync_point uses below. This used to write an absolute
-    // sentinel (store 1, wait for every peer to read 1), which is only a barrier on the very first
-    // launch: reset() clears the profiler buffer and the epoch but not this array, and the array lives
-    // at a raw L1 address inside no linker-cleared section with no host-side writer, so its contents
-    // survive from one kernel launch to the next within a device session. Once every slot holds the
-    // sentinel, a later launch stores 1 over 1, reads its peers as already 1, and walks straight
-    // through without synchronising anything. Every launch leaves the array in exactly that state, so
-    // from the second launch onward the barrier was vacuous for any kernel whose only cross-thread
-    // rendezvous is this one.
-    //
-    // Waiting on "< gen" rather than "!= gen" also keeps a peer that has already run ahead into a
-    // later barrier from parking us forever, which the absolute form could do once sync_point started
-    // writing 2 into the slot this function treated as a constant 1.
-    const std::uint32_t gen = barrier[TRISC_ID] + 1;
-    barrier[TRISC_ID]       = gen;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_CORES; ++i)
-    {
-        if (i == TRISC_ID)
-        {
-            continue;
-        }
-        while (barrier[i] < gen)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
+    // Startup rendezvous, now the same barrier every zone uses. It was an L1 protocol with an absolute
+    // sentinel, which stopped being a barrier at all after the first launch in a session because the
+    // barrier array is never cleared, and it was a third implementation of something we only need one of.
+    llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// Cross-thread actor-release rendezvous used at each zone: all announce arrival, the actor waits for
-// all, runs action() then bumps epoch to release. Actor spins only before action(), so it never lands
-// inside the measured window. Compiler fences at entry/exit keep surrounding work from reordering
-// across the rendezvous.
-template <typename Action>
-__attribute__((always_inline)) inline void sync_point(bool is_actor, Action action)
-{
-    ckernel::fence_compiler();
-
-    auto& barrier = *barrier_ptr;
-
-    // Read epoch BEFORE announcing arrival (else the actor could bump it first and a waiter deadlocks).
-    const std::uint32_t my_epoch = *epoch_ptr;
-
-    const std::uint32_t gen = barrier[TRISC_ID] + 1;
-    barrier[TRISC_ID]       = gen;
-
-    if (is_actor)
-    {
-        for (std::uint32_t i = 0; i < NUM_CORES; ++i)
-        {
-            if (i == TRISC_ID)
-            {
-                continue;
-            }
-            // Lock-step: a peer cannot advance past this generation before the actor releases it, so
-            // wait for exact equality — also wrap-safe if the 32-bit generation ever rolls over.
-            while (barrier[i] != gen)
-            {
-                ckernel::invalidate_data_cache();
-            }
-        }
-        action();                  // arm / freeze / no-op — actor never spins AFTER this
-        *epoch_ptr = my_epoch + 1; // single-writer release
-    }
-    else
-    {
-        while (*epoch_ptr == my_epoch)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
-
-    ckernel::fence_compiler();
-}
+// The L1 epoch and barrier words below are no longer used by any rendezvous: every barrier now goes
+// through llk_barrier::rendezvous on a hardware semaphore. The region is still reserved and still
+// initialised in reset(), because BARRIER_END anchors BUFFERS_START and reclaiming it would move every
+// profiler buffer address.
 
 __attribute__((always_inline)) inline void reset()
 {
