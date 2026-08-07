@@ -191,9 +191,6 @@ ttnn::Tensor reduce_scatter(
             compute_kernel_config,
             intermediate_memory_config,
             use_l1_small_for_semaphores)) {
-        // The direct path is otherwise silent (no logging, no perf model), so a CI log cannot answer
-        // "did this shape take it?". Warning level to survive filtering; deduplicated by shape because
-        // reduce_scatter runs inside per-step model loops.
         {
             // Non-const so decltype(key) is a valid std::set value_type.
             auto key = std::make_tuple(
@@ -209,20 +206,17 @@ ttnn::Tensor reduce_scatter(
                 first_for_shape = direct_warned.insert(key).second;
             }
             if (first_for_shape) {
-                log_warning(
+                log_debug(
                     tt::LogOp,
                     "reduce_scatter: taking the DIRECT (one-shot) path -- num_devices={}, per-device input "
-                    "{} B (gate {} B), dtype={}, scatter dim={}, shape={}, topology={}. The {} B gate is "
-                    "calibrated on a 1x8 Blackhole ring at 2 links only; other ring sizes and link counts "
-                    "are unvalidated. Emitted once per distinct shape.",
+                    "{} B (gate {} B), dtype={}, scatter dim={}, shape={}, topology={}.",
                     std::get<0>(key),
                     input_tensor.buffer()->size(),
                     k_direct_rs_max_input_bytes,
                     input_tensor.dtype(),
                     normalized_dim,
                     input_tensor.padded_shape(),
-                    direct_rs_topology_name(topology_),
-                    k_direct_rs_max_input_bytes);
+                    direct_rs_topology_name(topology_));
             }
         }
         return ttnn::prim::reduce_scatter_minimal_direct(
