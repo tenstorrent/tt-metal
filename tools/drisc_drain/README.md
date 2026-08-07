@@ -47,3 +47,22 @@ investigation. Do not remove them.
   string subscripts silently collapse to index 0 and every arm reports the same number.
 - Recovery: try `tt-smi -r` first (seconds, and it does clear a wedged card), fall back to a host
   reboot only if the link stays `Unknown`.
+
+## Reclassifying after the fact
+
+`drisc_reclassify.py <run_dir>` re-derives every run's class from its log and writes
+`runs_reclassified.csv`. Use it on any block collected before a classification rule was fixed —
+the raw logs hold everything, so no block ever needs re-running for a scoring bug.
+
+The discriminator is **how far the log got**, not the exit code and not a log signature:
+
+| ending | card | class |
+|---|---|---|
+| `Cluster destructor completed` | — | CLEAN |
+| stops at the profiler teardown block | healthy | TEARDOWN |
+| stops earlier | `Unknown\|63` | WEDGE |
+| reaches the end, but logged a caught timeout | healthy | MASKED |
+
+The signature-only rule was wrong because `waiting for physical cores to finish` is emitted **only
+when the timeout is armed**. Unarmed runs hang at the identical place in silence, so every unarmed
+teardown hang was landing in OTHER.
