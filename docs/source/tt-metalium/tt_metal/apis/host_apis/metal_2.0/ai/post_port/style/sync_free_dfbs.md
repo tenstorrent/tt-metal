@@ -36,19 +36,56 @@ Gen2 — but treat that as a bonus rather than the reason.
 
 ## The criterion
 
-**A DFB is sync-free when no kernel that binds it ever calls any of these four methods on it:**
+### The property
+
+This pass turns on a semantic question: **does anything, anywhere, synchronize through this
+buffer?** If nothing does, the buffer is not a FIFO and declaring it one misdescribes it. If
+something does, converting it deletes that synchronization.
+
+On Gen1, a DFB synchronizes through exactly four methods:
 
 ```
 reserve_back   push_back   wait_front   pop_front
 ```
 
-That is the whole test on Gen1. Nothing else counts as synchronization here: the implicit-sync
-mechanism (NOC transfers exchanging credits without FIFO calls) is a Gen2 concept and does not
-exist on the Gen1 hardware you are targeting.
+Nothing else counts here. Implicit sync — NOC transfers exchanging credits without any FIFO call —
+is supported only on Gen2 DFBs, and this pass runs on Gen1 ops recently migrated to Metal 2.0, so
+every buffer you meet synchronizes explicitly or not at all.
 
-The test is **per DFB, across every kernel that binds it** — not per kernel and not per file.
+So the property is: **no kernel that binds this DFB ever causes any of those four calls on it.**
+*Causes*, not *contains* — that distinction is way 4 below. It is a property of the DFB, holding
+across every binding kernel and every configuration the spec is built under; it is not per kernel
+and not per file.
 
-### Four ways to get this wrong
+### The test
+
+Gather evidence for the property by grepping each binding kernel:
+
+```bash
+grep -nE "reserve_back|push_back|wait_front|pop_front" <each binding kernel>
+```
+
+This is a good first move and it is **not** the property. It is a syntactic search standing in for a
+semantic question, and the gap between the two is where every mistake in this pass has come from.
+Use the grep to *find* synchronization; never read a clean result as proof there is none. The four
+known divergences are below, and there is no reason to think that list is complete.
+
+### When you cannot establish absence, it is not a site
+
+The two ways to be wrong here cost very different amounts, so let your uncertainty fall on the cheap
+side deliberately.
+
+- Wrongly calling a DFB **synchronized** costs you a site. This pass is explicitly allowed to find
+  zero sites, and the site stays there for whoever looks next.
+- Wrongly calling a DFB **sync-free** deletes real synchronization, silently, in a way your
+  sentinels are not guaranteed to catch.
+
+The bar is therefore not *"I found no evidence of synchronization"* but *"I am confident there is
+none."* If you are not, leave the DFB as it is and say so in your report. That is a complete and
+correct outcome, and a useful one — it tells the people maintaining this recipe where the test ran
+out, which is how the list below got written in the first place.
+
+### Four ways the test diverges from the property
 
 Each of these is a real pattern, and the first two appear *side by side in a single file*
 (`moreh_fold`'s `reader_fold_rm.cpp`), which is worth reading before you start.
@@ -68,10 +105,23 @@ usage. The getters appear on both sides of the line and carry no information abo
 read a pattern into which getter a kernel used.** Only the absence of the four sync methods
 decides.
 
+The base address does not always arrive through a getter, either. A helper taking the DFB's id —
+`get_pointer_to_cb_data<T>(dfb::recip, 0)`, as `layernorm_pre_all_gather_welford` uses — hands back
+a pointer without either getter appearing. It carries exactly as little information as they do:
+it is a base-address grab, not a synchronization signal.
+
 **3. A DFB is only sync-free if it is sync-free *everywhere*.** Check every kernel that binds it.
 A buffer that looks like an untouched scratch region in the kernel you are reading may be waited on
 by a second kernel you have not opened. Enumerate the binding kernels from the host spec, not from
 the kernel you happen to have in front of you.
+
+*Everywhere* also spans **configurations**, not just kernels. One `DataflowBufferSpec` can be
+sync-free scratch under one sharding and a genuine FIFO under another — conv2d's `ACT_TILIZED` is
+the canonical example, sync-free when height-sharded and a real FIFO when block- or width-sharded.
+So a factory that builds its bindings or its kernel set behind a branch has to be answered per
+branch, and a DFB that is sync-free on only some paths is **not a site**. If the branch is chosen
+host-side from something you cannot pin down, that is a case for [the safe
+default](#when-you-cannot-establish-absence-it-is-not-a-site).
 
 **4. A grep for the four methods can come back clean on a synchronized DFB.** The calls do not have
 to appear in the kernel you are reading — a helper can make them on its behalf, and then the buffer
@@ -115,7 +165,8 @@ Work from the host spec outwards; it is the only place the complete picture exis
    Any hit on that handle → synchronized, not a site.
 
 4. **A clean grep is not yet a verdict — first follow the handle.** Per
-   [way 4](#four-ways-to-get-this-wrong), the calls may be made by a helper on the kernel's behalf.
+   [way 4](#four-ways-the-test-diverges-from-the-property), the calls may be made by a helper on the
+   kernel's behalf.
    Before you may conclude sync-free, check whether the DFB's handle, or the id it was built from,
    is passed anywhere: into a function, a constructor (including an RAII guard), or a template
    argument. If it is, open that callee and apply the same test there — following it out of the op
@@ -143,12 +194,13 @@ pipeline will be exactly that.
 
 **Don't pattern-match on how the old code wrapped the address.** The examples below show the address
 being grabbed into a `CoreLocalMem<T>`, which is the tidy Device 2.0 form, but ported kernels carry
-at least three shapes and all of them collapse to the same replacement:
+at least four shapes and all of them collapse to the same replacement:
 
 ```cpp
 CoreLocalMem<uint16_t> lut(dfb.get_read_ptr());                            // Device 2.0 wrapper
 auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());  // raw cast
 uint32_t addr = dfb.get_write_ptr();                                       // bare address, passed on
+auto* q = get_pointer_to_cb_data<uint16_t>(dfb::lut, 0);                   // helper, takes the id
 ```
 
 What identifies the code you are replacing is that **an address is taken from the DFB and memory is
@@ -181,6 +233,13 @@ LocalTensorAccessor<uint16_t> lut(tensor::lut);
 `T` is the element type the kernel actually reads, chosen by you. Element access is **not**
 bounds-checked, exactly as the raw-pointer form wasn't — this is not a safety regression, but do
 not present it as a safety improvement in your report either.
+
+**If the before-code was `volatile`, `T` is `volatile` too.** The qualifier is part of the element
+type, not decoration on the old cast: dropping it lets the compiler hoist or elide a load the old
+code forced. Do not assume a NOC read barrier covers you — `invalidate_l1_cache()` is `asm("fence")`
+on Blackhole with **no memory clobber**, and empty on Wormhole, so it is not a compiler barrier.
+Both forms pass your sentinels today, which is exactly why this has to be read off the old code
+rather than decided.
 
 ### Regular-backed → `Scratchpad`
 
