@@ -378,18 +378,29 @@ void DropoutDeviceOperation::override_runtime_arguments(
     // Everything else the descriptor emplaced (tile counts/offsets) derives from the input spec and the
     // compute grid, both fixed on a cache hit; rewritten anyway since the shared walk already has them.
     // Both CBs are program-local (no .buffer/.tensor binding), so there is no CB address to re-point.
-    for_each_dropout_core(dropout_core_split(input), [&](const DropoutCoreWork& work) {
-        auto& reader_args = GetRuntimeArgs(program, kReaderIdx, work.core);
+    // Hoist the per-kernel lookup: the whole-kernel overload hands back the [x][y] grid, so this costs
+    // one lookup per kernel instead of one per core per kernel (same amortisation apply_resolved_bindings does).
+    const DropoutCoreSplit split = dropout_core_split(input);
+    auto& reader_grid = GetRuntimeArgs(program, kReaderIdx);
+    auto& writer_grid = GetRuntimeArgs(program, kWriterIdx);
+    auto& compute_group_1_grid = GetRuntimeArgs(program, kComputeGroup1Idx);
+    auto* compute_group_2_grid =
+        split.core_group_2.ranges().empty() ? nullptr : &GetRuntimeArgs(program, kComputeGroup2Idx);
+
+    for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
+        auto& reader_args = reader_grid[work.core.x][work.core.y];
         reader_args[0] = src_addr;
         reader_args[1] = work.num_tiles;
         reader_args[2] = work.tile_offset;
 
-        auto& writer_args = GetRuntimeArgs(program, kWriterIdx, work.core);
+        auto& writer_args = writer_grid[work.core.x][work.core.y];
         writer_args[0] = dst_addr;
         writer_args[1] = work.num_tiles;
         writer_args[2] = work.tile_offset;
 
-        GetRuntimeArgs(program, work.in_group_1 ? kComputeGroup1Idx : kComputeGroup2Idx, work.core)[0] = seed;
+        TT_FATAL(work.in_group_1 || compute_group_2_grid != nullptr, "Core group 2 kernel should be present");
+        auto& compute_grid = work.in_group_1 ? compute_group_1_grid : *compute_group_2_grid;
+        compute_grid[work.core.x][work.core.y][0] = seed;
     });
 }
 
