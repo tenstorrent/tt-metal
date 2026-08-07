@@ -48,7 +48,7 @@ exist on the Gen1 hardware you are targeting.
 
 The test is **per DFB, across every kernel that binds it** — not per kernel and not per file.
 
-### Three ways to get this wrong
+### Four ways to get this wrong
 
 Each of these is a real pattern, and the first two appear *side by side in a single file*
 (`moreh_fold`'s `reader_fold_rm.cpp`), which is worth reading before you start.
@@ -73,6 +73,31 @@ A buffer that looks like an untouched scratch region in the kernel you are readi
 by a second kernel you have not opened. Enumerate the binding kernels from the host spec, not from
 the kernel you happen to have in front of you.
 
+**4. A grep for the four methods can come back clean on a synchronized DFB.** The calls do not have
+to appear in the kernel you are reading — a helper can make them on its behalf, and then the buffer
+reads as untouched. Two real shapes:
+
+- **An RAII guard.** `integral_image`'s `device/kernels/common.hpp` defines `ReadCBGuard` and
+  `WriteCBGuard`, whose constructor and destructor call `wait_front`/`pop_front` and
+  `reserve_back`/`push_back`. A kernel that says `ReadCBGuard g(dfb::acc, n);` contains none of the
+  four names, and the calls inside the guard are made on a `DataflowBuffer(cb)` temporary, so there
+  is no named handle to attribute them to either.
+- **A shared kernel library, outside the op entirely.** `moreh_dot`'s compute kernel calls
+  `compute_kernel_lib::reduce<…>` with the synchronization chosen as a *template argument* —
+  `ReduceInputPolicy::WaitAndPopPerTile` — and the FIFO calls live in
+  `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl`. That file is not under the op directory, so
+  even a recursive grep of the whole op finds nothing.
+
+This is the one item on this list that is **unsafe** rather than merely wrong. The other three make
+you miss a site; this one makes you convert a buffer whose synchronization is real. A `Scratchpad`
+has no synchronization semantics at all, so the conversion does not preserve that synchronization —
+it deletes it. On a compute kernel, where Unpack / Math / Pack run on different physical cores, the
+result is a race, and a race that happens to pass your sentinels looks exactly like a clean pass.
+
+**Absence of a grep hit is only evidence when nothing opaque touched the buffer.** If the DFB's
+handle — or the id it was constructed from — is ever passed to a function, a constructor, or a
+template argument, follow it before concluding anything.
+
 ## Step 2 — Survey
 
 Work from the host spec outwards; it is the only place the complete picture exists.
@@ -87,9 +112,18 @@ Work from the host spec outwards; it is the only place the complete picture exis
    grep -nE "reserve_back|push_back|wait_front|pop_front" <each binding kernel>
    ```
 
-   Any hit on that handle → synchronized, not a site. No hits in any binding kernel → **sync-free**.
+   Any hit on that handle → synchronized, not a site.
 
-4. **For each sync-free DFB, read `borrowed_from` on its spec.** That field decides its end-state
+4. **A clean grep is not yet a verdict — first follow the handle.** Per
+   [way 4](#four-ways-to-get-this-wrong), the calls may be made by a helper on the kernel's behalf.
+   Before you may conclude sync-free, check whether the DFB's handle, or the id it was built from,
+   is passed anywhere: into a function, a constructor (including an RAII guard), or a template
+   argument. If it is, open that callee and apply the same test there — following it out of the op
+   directory if it leads there, as `ttnn/cpp/ttnn/kernel_lib/` will.
+
+   No hits on that handle in any binding kernel, **and** nothing opaque taking it → **sync-free**.
+
+5. **For each sync-free DFB, read `borrowed_from` on its spec.** That field decides its end-state
    and is the whole fork:
 
    | `borrowed_from` | What it is | Becomes |
