@@ -382,6 +382,32 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### VAE prepared-conv-weight cache (IMPLEMENTED: -11.8s, bit-identical)
+
+- After the DiT work, `tt_vae_weight_upload_s` was the largest remaining phase
+  at ~12.6s. `TTVAEDecodeAdapter` construction runs
+  `ttnn.experimental.prepare_conv3d_weights` for every causal conv, reformatting
+  each weight for the conv3d kernel on the host -- the same class of host-side
+  preparation the DiT cache removes. This report flagged the gap long ago ("no
+  serialized prepared-weight cache or explicit load/deallocate lifecycle").
+- `HY_VAE_WEIGHT_CACHE=1` caches the prepared tensors:
+
+  | | `tt_vae_weight_upload_s` | cache |
+  |---|---:|---:|
+  | off | 12.617s | -- |
+  | cold (populates) | 19.061s | 1.7 GB |
+  | **warm** | **0.809s** | 1.7 GB |
+
+- **12.6s -> 0.81s, 15.6x.** Generated output bit-identical in both the cold and
+  warm arms (frame PCC 1.00000000, max abs pixel difference 0.0 across 121
+  frames), confirming the conv3d-prepared layout survives `DumpTensorMode.LOCAL`
+  round-tripping exactly -- which was the open risk, since that layout is
+  kernel-specific and differs from ordinary DiT weights.
+- 1.7 GB per configuration, a tenth of the DiT cache's 16 GB. The cold run pays
+  ~6.4s to populate. Convs are constructed in deterministic order so a
+  sequential index is a sufficient key; mesh shape, core grid, dtype and the H/W
+  sharding mode go in the directory tag.
+
 ### Unused mid-granularity part stubs (IMPLEMENTED: -28s, bit-identical)
 
 - A phase breakdown of a 480p i2v 121f run put `tt_dit_weight_upload_s` at

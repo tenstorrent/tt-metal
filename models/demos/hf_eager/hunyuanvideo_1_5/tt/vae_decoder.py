@@ -105,6 +105,42 @@ def replicate_pad_bthwc_to_shape(x, target_h, target_w):
     return x
 
 
+_VAE_WCACHE = {"dir": None, "n": 0}
+
+
+def vae_weight_cache_begin(device, dtype, *, hw_sharded):
+    """Arm the prepared-conv-weight cache for one adapter construction.
+
+    Returns the directory in use, or None when the cache is off. The counter is
+    reset here so indices are per-adapter and reproducible: convs are built in a
+    fixed order, so index N always refers to the same conv for a given tag."""
+    if os.environ.get("HY_VAE_WEIGHT_CACHE", "0") != "1":
+        _VAE_WCACHE.update(dir=None, n=0)
+        return None
+    root = (
+        os.environ.get("HY_VAE_WEIGHT_CACHE_DIR")
+        or os.environ.get("HY_DIT_WEIGHT_CACHE_DIR")
+        or os.environ.get("TT_DIT_CACHE_DIR")
+        or "~/.cache/tt-dit"
+    )
+    grid = device.compute_with_storage_grid_size()
+    mesh = "x".join(str(d) for d in tuple(device.shape)) if device.get_num_devices() > 1 else "1"
+    tag = f"mesh{mesh}_grid{grid.x}x{grid.y}_{dtype}_hw{int(bool(hw_sharded))}"
+    path = os.path.join(os.path.expanduser(root), "hunyuanvideo15_vae", tag)
+    os.makedirs(path, exist_ok=True)
+    _VAE_WCACHE.update(dir=path, n=0)
+    return path
+
+
+def _vae_wcache_path():
+    """Next cache path for a prepared conv weight, or None when the cache is off."""
+    if _VAE_WCACHE["dir"] is None:
+        return None
+    p = os.path.join(_VAE_WCACHE["dir"], f"conv{_VAE_WCACHE['n']}.tensorbin")
+    _VAE_WCACHE["n"] += 1
+    return p
+
+
 class CausalConv3d:
     """ttnn HunyuanVideo15CausalConv3d: replicate-pad (on device) + conv3d(pad=0)."""
 
@@ -133,8 +169,26 @@ class CausalConv3d:
             raise ValueError("parallel_config and ccl_manager must be provided together")
 
         self.cfg = get_conv3d_config(cin, cout, (kt, kh, kw), dtype, device.compute_with_storage_grid_size())
-        w = ttnn.from_torch(weight, dtype=dtype)
-        w = ttnn.experimental.prepare_conv3d_weights(weight_tensor=w, C_in_block=self.cfg.C_in_block, device=device)
+        # Prepared-conv-weight cache (HY_VAE_WEIGHT_CACHE=1). `prepare_conv3d_weights`
+        # reformats every causal-conv weight for the conv3d kernel on the host at
+        # adapter construction; the phase breakdown puts that whole stage at ~12.5s.
+        # Same mechanism as the DiT cache: `DumpTensorMode.LOCAL` persists each
+        # device's own shard and restores placement, so the reload is exact. Convs
+        # are constructed in deterministic order, so a sequential index is a
+        # sufficient key -- everything that changes the prepared layout (mesh, dtype,
+        # core grid, sharding) is in the directory tag.
+        _path = _vae_wcache_path()
+        if _path is not None and os.path.exists(_path):
+            w = ttnn.load_tensor(_path, device=device)
+        else:
+            w = ttnn.from_torch(weight, dtype=dtype)
+            w = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=w, C_in_block=self.cfg.C_in_block, device=device
+            )
+            if not ttnn.is_tensor_storage_on_device(w):
+                w = ttnn.to_device(w, device)
+            if _path is not None:
+                ttnn.dump_tensor(_path, w, mode=ttnn.DumpTensorMode.LOCAL)
         if not ttnn.is_tensor_storage_on_device(w):
             w = ttnn.to_device(w, device)
         self.w = w
@@ -822,6 +876,9 @@ class TTVAEDecodeAdapter:
         self.__dict__["_hw_sharded"] = hw_sharded
         self.__dict__["_parallel_config"] = parallel_config
         self.__dict__["_ccl_manager"] = ccl_manager
+        # Arm the prepared-conv-weight cache before the decoder tree is built, so
+        # every CausalConv3d below picks up a sequential index from the same run.
+        self.__dict__["_wcache_dir"] = vae_weight_cache_begin(device, dtype, hw_sharded=hw_sharded)
         self.__dict__["_dec"] = HunyuanVideo15Decoder(
             real_vae.decoder,
             device=device,
