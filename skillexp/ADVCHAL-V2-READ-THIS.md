@@ -74,9 +74,9 @@ named kind, and **blank means I have no measurement**, not that nothing was avai
 | model | cell | control ms/layer | what v2 shipped | v2 result | **reachable (measured)** |
 |---|---|---|---|---|---|
 | llama-3.2-1B | exp17 | 0.3731 | nothing | 0.0 % | — *ladder never swept* |
-| llama-3.1-8B | exp17 | 0.6650 | nothing | 0.0 % | **0.0 % — verified**, full ladder swept |
-| phi-3.5-mini | **onA** | 0.6570 | `rope_l1_rect32` | **−8.75 %** | = shipped, nothing further found |
-| phi-3.5-mini | **B** | 0.7888 | `rope_l1_chain` | **−5.74 %** | = shipped, nothing further found |
+| llama-3.1-8B | exp17 | 0.6650 | nothing | 0.0 % | **0.0 % — tested**, full ladder swept, nothing beat the default |
+| phi-3.5-mini | **onA** | 0.6570 | `rope_l1_rect32` | **−8.75 %** | — **not tested** |
+| phi-3.5-mini | **B** | 0.7888 | `rope_l1_chain`, sharded multiply/add | **−5.74 %** | — **not tested**, but see the note below |
 | phi-3.5-mini | **FN** | 0.8072 | rope only, L1 interleaved | −4.91 % | **−17.84 % / layer** — the advised rope (−10.43 %, *bit-identical*) plus the advised 11-core norm |
 | phi-3.5-mini | exp17 | 1.1009 | nothing | 0.0 % | — *advised sharding never tried* |
 | qwen3.6-27B | **FN** | 1.2083 full / 19.14 linear | `packed_qkv_l1_chain` | −445.7 µs — inside its ±618.5 µs band | — *its `linear` kind, 97 % of model time, was never advised on* |
@@ -92,6 +92,17 @@ named kind, and **blank means I have no measurement**, not that nothing was avai
 *Scope: `v2 result` is what the cell reported at its own scope (model-level % where it had one, µs where it did
 not). `reachable` is per-layer on the named kind, from my re-measurements — the two are not directly
 subtractable. The corpus totals that combine them are in §4 and* [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) *§3.11.*
+
+⚠ **"not tested" means exactly that.** I re-measured **5 of the 15 cells** looking for something better than what
+shipped. Of the rest, only **llama-3.1-8B** was swept and confirmed to have nothing further; the other nine were
+never probed for alternatives, so their blanks carry no information either way. **The corpus "reachable" total is
+therefore a lower bound**, and so is the 64 % credited figure derived from it.
+
+**One inference worth having, labelled as an inference.** phi B shipped the *sharded multiply/add* form of the
+rope chain. Measured on **phi FN's** decoder, that form is −6.97 % where the **fully** advised form is −10.43 %.
+If that ordering holds on phi B's own incumbent — untested — phi B has headroom too. It is the most likely place
+to find another win cheaply.
+
 
 **8 shipped, 7 returned zero.**
 

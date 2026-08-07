@@ -271,8 +271,8 @@ frozen. What would "best decoder reachable from the advisor's own directions" ha
 | g26 onA sliding | 1.823508 | 1.587511 | **1.574985** | −12.94 % | −13.63 % |
 | nm FN sliding MoE | 0.577971 | 0.518022 | **0.512764** | −10.37 % | −11.28 % |
 | g26 FN sliding | 1.341153 | 1.318449 | 1.316251 | −1.69 % | −1.86 % |
-| phi A dense | 0.656989 | 0.607172 | 0.607172 | −7.58 % | −7.58 % |
-| phi B dense | 0.788610 | 0.748458 | 0.748458 | −5.09 % | −5.09 % |
+| phi A dense | 0.656989 | 0.607172 | *unknown — not probed* | −7.58 % | — |
+| phi B dense | 0.788610 | 0.748458 | *unknown — not probed* | −5.09 % | — |
 | llama-8B dense | 0.667737 | 0.667737 | 0.667737 | 0.00 % | 0.00 % |
 
 | | summed model-level saving |

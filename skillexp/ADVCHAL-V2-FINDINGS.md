@@ -242,10 +242,17 @@ on the *same* decoder (my re-measurements included):
 | g26 onA sliding | 1.823508 | 1.587511 | **1.574985** | −12.94 % | −13.63 % |
 | nm FN sliding MoE | 0.577971 | 0.518022 | **0.512764** | −10.37 % | −11.28 % |
 | g26 FN sliding | 1.341153 | 1.318449 | 1.316251 | −1.69 % | −1.86 % |
-| phi A / phi B / llama-8B | — | = best | = best | — | nothing further found |
+| llama-8B dense | 0.665237 | = incumbent | = incumbent | — | **tested**: whole ladder swept, nothing beats the default (E3) |
+| phi A dense, phi B dense | 0.656989 / 0.788610 | = shipped | *unknown* | −7.58 % / −5.09 % | **not tested** — never probed for a better configuration |
 
 **Shipped 13,601 µs/model. Reachable 21,368 µs/model — 1.57×**, so the stage credited the advisor with **64 %**
-of what it found. The missing third is not new ideas: it is the same directions at a different grid, the same
+of what it found.
+
+⚠ **"Reachable" is a lower bound, and so is the 64 %.** Five cell/kinds contribute a measured better
+configuration; llama-8B contributes a **tested** zero; **phi A and phi B contribute zero because I never probed
+them**, not because nothing is there. The seven cells outside this table were not re-measured at all. So 64 % is
+the *highest* share the stage could have credited given what I measured — the true share is lower by an unknown
+amount. The missing third is not new ideas: it is the same directions at a different grid, the same
 candidate past an oracle that should have passed it, or — the largest single piece — **the advisor's own plan
 applied as written instead of assembled chain by chain**.
 
