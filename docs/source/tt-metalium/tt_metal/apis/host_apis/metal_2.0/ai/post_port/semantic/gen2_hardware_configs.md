@@ -47,8 +47,14 @@ on one after the fact**. That second half is the one that is easy to miss and th
 most:
 
 ```bash
-grep -rn "hw_config\|to_compute_hardware_config\|std::get<\|holds_alternative" <op-dir>
+grep -rn "hw_config\|to_compute_hardware_config\|Gen1Config\|std::get<\|std::get_if<\|holds_alternative" <op-dir>
 ```
+
+Two of those terms close specific escapes, and dropping them costs you sites. `Gen1Config` matches
+shape 4's own definition directly, catching a hand-written config built into a local and passed
+onward through a parameter not named `hw_config` — do not rely on the assignment line being spelled
+the way you expect. `std::get_if<` catches the shape-3 variant described below; note that
+`std::get<` does **not** match it.
 
 Each result is one of four shapes.
 
@@ -74,6 +80,20 @@ throws `std::bad_variant_access`. The op does not merely run slowly on Quasar �
 Some ops have already noticed and guard it, funnelling the access through a wrapper that
 `TT_FATAL`s on `std::holds_alternative` with a "this op is Gen1-only" message. **A guarded site is
 still a site**, and still needs converting; the guard only replaces a crash with a legible refusal.
+
+**The `std::get_if` variant is the same site with a quieter failure**, and it is easy to wave past
+because it looks like it already handles both generations:
+
+```cpp
+if (auto* gen1 = std::get_if<ComputeGen1Config>(&compute_hw)) { gen1->unpack_modes = { … }; }
+```
+
+On Quasar that pointer is null, the block does not run, and nothing throws — so the field the
+factory meant to set is simply never set, and the op proceeds with whatever the helper's default
+was. That is worse than the `std::get` form to find and no better to have: a crash names itself,
+whereas this surfaces later as wrong numerics, a validation failure far from the cause, or a silent
+pessimization. **Convert it the same way**, and note in your report that it was the `get_if` form,
+since its absence of a Quasar crash is why nobody has noticed it yet.
 
 **4 — A `DataMovementGen1Config` or `ComputeGen1Config` written by hand.** Needs a Gen2 branch. The
 compute case here is the op that avoided the helper deliberately — usually because the helper would
@@ -131,10 +151,10 @@ when it no longer is. Convert **every** call site first, then remove the wrapper
 be converted, leave the guard alone, convert nothing, and report — a half-converted op carrying a
 stale "Gen1-only" guard is worse than either end state.
 
-### What tidies up, and what doesn't
+#### What else shape 3's conversion takes with it
 
-This pass removes exactly the variant handling that its own transformation makes unnecessary, and
-no more. In scope, because leaving them *is* the bug:
+The conversion removes exactly the variant handling its own transformation makes unnecessary, and
+no more. These are in scope, because leaving them *is* the bug:
 
 - **Every `std::get<ComputeGen1Config>` that reaches a common field** — whether it writes or merely
   reads. A read throws on Quasar exactly as a write does.
@@ -144,14 +164,8 @@ no more. In scope, because leaving them *is* the bug:
   helper otherwise alone — do not delete an abstraction the op's author chose just because its body
   got shorter, and do not restyle it.
 
-Out of scope. Note these in your report and leave the code as it is:
-
-- **`std::get<m2::ComputeHardwareConfig>(kernel_spec.hw_config)` — the *outer* variant.** It looks
-  like the same grossness and it isn't. That variant distinguishes a compute config from a data
-  movement one, so a mismatch is a programming error rather than something the architecture
-  decides, and it does not throw on Quasar. Leave it.
-- **`bfp_pack_precision_mode`**, which is Gen1-only and must keep naming its generation.
-- Any other variant awkwardness you notice on the way past.
+For what stays untouched, see [What not to tidy, in any shape](#what-not-to-tidy-in-any-shape) —
+that list governs shape 4 as well, so it lives after both shapes rather than here.
 
 ### Shape 4, data movement: default-construct
 
@@ -211,17 +225,35 @@ leave a marker for the humans who will do it:
 ```
 
 **Put it wherever this pass causes Quasar's `unpack_modes` to take a Gen1-derived value** — beside
-the accessor assignment in shape 3, or on the Gen2 config you build in shape 4 — whether or not you
-believe this op has any SFPU-consumed buffers. That belief is exactly the judgement we just said you are not equipped to
-make, and a marker that is sometimes present and sometimes not is ambiguous between "considered,
-not applicable" and "nobody looked." Unconditional means its absence is meaningful.
+the accessor assignment in shape 3, or on the Gen2 config you build in shape 4 *compute* — whether
+or not you believe this op has any SFPU-consumed buffers. That belief is exactly the judgement we
+just said you are not equipped to make, and a marker that is sometimes present and sometimes not is
+ambiguous between "considered, not applicable" and "nobody looked." Unconditional means its absence
+is meaningful.
+
+**Unconditional within that scope, which is compute only.** `unpack_modes` is a compute field;
+`DataMovementGen2Config` has no such field, and nothing in shape 4 *data movement* can cause Quasar
+to take a Gen1-derived value for it. So a pass whose sites are all shape-4-DM carries no marker
+anywhere, and that absence is not a signal — there was nothing for it to mark. Say so in your
+report rather than leaving a future reader to infer it, and do not add a marker to a
+`DataMovementGen2Config{}` to be safe: a marker on a config that has no `unpack_modes` field points
+at nothing and devalues the ones that do.
 
 ### Getting `arch`, and where the branch goes
 
 **Shape 4 only** — shape 3 needs no architecture check at all. Get the architecture the way the
-op's factories already do —
-`operation_attributes.mesh_device->arch()` or `device->arch()`, hoisted to a `const auto arch` local
-if used more than once. Ops already on the DM helper demonstrate the idiom.
+op's factories already do — `operation_attributes.mesh_device->arch()` or `device->arch()`. Ops
+already on the DM helper demonstrate the idiom.
+
+Hoist it to a `const auto arch` local only if **the code you add** reads it more than once. The
+count is over your own additions, not over the factory: an op may already call `device->arch()`
+several times, and rewriting those call sites is out of scope. Hoisting a local that sits directly
+above surviving `device->arch()` calls reads as half-finished and invites exactly the cleanup the
+procedure forbids.
+
+**One branch can cover several configs.** Where a factory has more than one custom DM config — a
+reader and a writer, typically — put them in a single `if`, rather than giving each its own branch
+and its own hoisted local. That is usually the difference between needing a local and not.
 
 **Prefer the form that leaves the existing Gen1 initializer textually untouched:**
 
@@ -241,6 +273,20 @@ tests actually cover.
 When writing the new braced initializer, end the last field with a trailing comma. Without it,
 clang-format aligns the whole list to the opening brace instead of block-indenting it, and the
 result is unreadable and churns the diff.
+
+### What not to tidy, in any shape
+
+Reaching a config through a variant is ugly, and this pass makes some of that ugliness go away. That
+is not a licence to remove the rest. **This applies to whichever shape you are working on** — shape
+4 included, where the temptation arrives precisely because you already have the config open. Note
+these in your report and leave the code as it is:
+
+- **`std::get<m2::ComputeHardwareConfig>(kernel_spec.hw_config)` — the *outer* variant.** It looks
+  like the same grossness and it isn't. That variant distinguishes a compute config from a data
+  movement one, so a mismatch is a programming error rather than something the architecture
+  decides, and it does not throw on Quasar. Leave it.
+- **`bfp_pack_precision_mode`**, which is Gen1-only and must keep naming its generation.
+- Any other variant awkwardness you notice on the way past.
 
 ## The Gen1 path must come out unchanged
 
