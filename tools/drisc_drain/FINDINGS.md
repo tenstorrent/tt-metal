@@ -1774,3 +1774,36 @@ socket's NOC0-derived `pcie_xy_enc` is correct on BOTH NoCs. Mirroring is retain
 **Diagnostic worth keeping: pages flowed while zero markers decoded.** Socket credits advance on a different
 path than the payload writes, so a wrong payload destination looks like healthy throughput -- 2.37M pages
 "delivered" into a ring full of nothing. A page count cannot tell you the data arrived; only decode can.
+
+## §N+13 — The degradation is CARD-WIDE, not the DRAM endpoint (bh-05, 2026-08-06)
+
+The worker control probe added in §N+11 finally caught a degraded card (this one came back degraded from a warm
+reboot; the previous three came back healthy -- warm reboot remains an unreliable cure).
+
+| probe | healthy | degraded | ratio |
+|---|---|---|---|
+| ack write (DRAM core) | 172 ns | 2301-2322 | 13.4x |
+| device read (DRAM core) | 775 ns | 2935-3004 | 3.8x |
+| **worker read (CONTROL)** | 710 ns | **2861-2885** | **4.0x** |
+| host sock-read | 21-22 GB/s | 11.0-12.0 | ~half |
+| PCIe link | 32 GT/s x16 | 32 GT/s x16 | unchanged |
+
+**The worker is as slow as the DRAM core -- 2861 vs 2935 ns, within 3%.** Card-wide MMIO latency; the drainer
+core is incidental. Every degraded figure previously measured at the drainer therefore generalizes, and
+critically **the Tensix arm was never blind to degradation** -- a worry raised in §N+11 that would have
+invalidated the entire Tensix-vs-DRISC comparison. Workers show it just as clearly.
+
+The ack WRITE degrades much harder (13.4x) than either READ (~4x). Writes and reads are not equally affected.
+
+### Read-only ablation: the arm runs, the harness still does not
+
+`TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S=5` makes the host writer stop waiting for data that will never arrive
+(safe here specifically because with egress compiled out the drainer never reserves pages, so nothing starves).
+The drainer itself is provably healthy in this mode:
+
+```
+done=0x0 (still resident) | heartbeat 682,627,025 -> 690,790,353 (advancing) | phase 2 (POLL)
+```
+
+Sweeping and reading normally. But the run still burns the full 150 s harness timeout somewhere after the
+writer gives up, so the read-only arm is STILL not measurable for hang statistics. Teardown needs tracing next.
