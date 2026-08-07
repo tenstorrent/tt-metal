@@ -2832,7 +2832,9 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
 
     # tanh is bounded by 1, so beta is a hard bound; an overshoot means the polynomial's
     # saturation clamp is not holding.
-    assert tt_res.to(torch.float32).abs().max().item() <= SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
+    assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
     assert_with_pcc(golden, tt_res, pcc=SOFTCAP_PCC[ttnn_dtype])
 
 
@@ -2861,7 +2863,9 @@ def test_softcap_bfloat16_full_domain(device):
     golden = ttnn.get_golden_function(ttnn.softcap)(input_tensor, beta=SOFTCAP_BETA, device=device)
     result = ttnn.to_torch(ttnn.softcap(tt_in, SOFTCAP_BETA))
 
-    assert result.to(torch.float32).abs().max().item() <= SOFTCAP_BETA * (1.0 + 1e-3)
+    max_abs = result.to(torch.float32).abs().max().item()
+    fd_bound = SOFTCAP_BETA * (1.0 + 1e-3)
+    assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
     assert not torch.isnan(result).any(), "finite input produced NaN"
 
     g = golden.to(torch.float32)

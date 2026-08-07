@@ -899,6 +899,9 @@ Tensor situ_glu(
     const std::optional<MemoryConfig>& output_mem_config) {
     using namespace operations::unary;
 
+    // Both betas are divisors (softcap precomputes 1/beta), so zero would emit inf.
+    TT_FATAL(beta1 != 0.0f && beta2 != 0.0f, "situ_glu: beta1 and beta2 must be non-zero");
+
     // Keep intermediates resident in L1 for the widths that fit; the final output uses the
     // caller's config, defaulting to the input placement (below).
     const std::optional<MemoryConfig> interm_mem = gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN
