@@ -93,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Accuracy-merge: read input from the runtime operand address
                     // (StimuliConfig layout) instead of the fixed PERF_INPUT_A, so
                     // the harness's stimuli line up with what the kernel consumes.
-                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
                         L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -175,8 +175,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
-                    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
-
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         if constexpr (unpack_to_dest)
@@ -197,8 +195,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 /* iterations*/ num_faces);
                         }
                     }
-
-                    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -312,7 +308,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        // L1_CONGESTION packs free-running, like PACK_ISOLATE and the other ten kernels.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -331,7 +328,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
