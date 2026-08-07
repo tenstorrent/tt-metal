@@ -58,10 +58,11 @@ engine: copilot
 
 network: defaults
 
-# One port at a time per op: two concurrent runs would fight over the same card and produce
-# timings that are noise rather than measurement.
+# One port at a time per branch: two concurrent runs would fight over the same card and produce
+# timings that are noise rather than measurement. Keyed on the ref rather than the op because
+# workflow-level fields are evaluated before a push event has any inputs to read.
 concurrency:
-  group: "gh-aw-port-op-${{ inputs.op || 'pad' }}"
+  group: "gh-aw-port-op-${{ github.ref_name }}"
 
 timeout-minutes: 330
 
@@ -233,7 +234,7 @@ safe-outputs:
   noop:
 ---
 
-# Port `${{ inputs.op || 'pad' }}` to a C++ program factory
+# Port a codegen op to a C++ program factory
 
 You are porting the tt-dm-codegen generic_op **`${{ inputs.op || 'pad' }}`** into tt-metal as a native C++
 `DeviceOperation`, and proving on silicon that it beats the existing implementation.
