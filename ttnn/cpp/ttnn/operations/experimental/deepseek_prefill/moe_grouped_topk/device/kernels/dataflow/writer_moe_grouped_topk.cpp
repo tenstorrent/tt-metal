@@ -6,6 +6,8 @@
 // write_single_scalar, gather<>, and overwrite_index_row_with_sentinel live in the common header.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp"
 
+#include "api/debug/assert.h"
+
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
     CircularBuffer cb(cb_expert_index_template);
@@ -47,13 +49,32 @@ FORCE_INLINE void generate_index_tiles(
 }
 
 // Vertically along each tile, write index 0, ..., n_groups - 1
+//
+// BOUNDS GUARD: the loop below only reserves ONE page (index_tile::tile_size_bytes == 2048 B) and
+// walks `write_ptr` forward with a hand-rolled face-advance. That advance is only correct while
+// every row lands in face 0, i.e. group_index < rows_per_face (16):
+//   - the `> rows_per_face - 1` test is off by one (it should be `>= rows_per_face`: the jump out
+//     of face 0 has to happen on the *last* face-0 row, not one row later), and
+//   - more seriously, the "skip a face" branch fires once *per group* instead of exactly once, so
+//     write_ptr advances a whole 512 B face for every group past the boundary. The resulting
+//     offsets are 512 B at g=16, 1024 B at g=17, 1536 B at g=18 and >= 2048 B for g >= 19 — past
+//     the end of the reserved page, ~6 KB past it at n_groups == 32, scribbling over whatever
+//     follows in the L1 heap.
+// The host op hard-fails unless n_groups == 8 (moe_grouped_topk_device_operation.cpp), so this is
+// unreachable today. Clamp anyway so that relaxing the host check can only produce wrong values,
+// never an out-of-bounds L1 write. With the clamp in place group_index <= 15 always, so the
+// "skip a face" branch is dead and its off-by-one is moot; fix both together if multi-face group
+// index tiles are ever actually needed.
 FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t cb_group_index_template, uint32_t width_tiles, uint32_t n_groups) {
+    ASSERT(n_groups <= rows_per_face);
+    const uint32_t bounded_n_groups = (n_groups <= rows_per_face) ? n_groups : rows_per_face;
+
     CircularBuffer cb(cb_group_index_template);
     cb.reserve_back(1);
     uint32_t base_write_addr = cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
-    for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
+    for (uint32_t group_index = 0; group_index < bounded_n_groups; group_index++) {
         for (uint32_t i = 0; i < columns_per_face / 2; i++) {
             write_ptr[i] = (group_index) << 16 | group_index;
         }
