@@ -43,38 +43,38 @@ ALWI void add_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    add_tiles_init(icb0.get_id(), icb1.get_id());
+    add_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void add_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    add_bcast_rows_init_short(icb0.get_id(), icb1.get_id());
+    add_bcast_rows_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_cols_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void add_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    add_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    add_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_scalar_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void add_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    add_bcast_scalar_init_short(icb0.get_id(), icb1.get_id());
+    add_bcast_scalar_init(icb0.get_id(), icb1.get_id());
 }
 
 ALWI void sub_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    sub_tiles_init(icb0.get_id(), icb1.get_id());
+    sub_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void sub_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void sub_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -83,46 +83,46 @@ ALWI void sub_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer 
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0.get_id(), icb1.get_id())));
 }
 
-ALWI void sub_bcast_cols_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void sub_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    sub_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    sub_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void sub_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void sub_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    sub_tiles_bcast_scalar_init_short(icb0.get_id(), icb1.get_id());
+    sub_bcast_scalar_init(icb0.get_id(), icb1.get_id());
 }
 
 ALWI void mul_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_tiles_init(icb0.get_id(), icb1.get_id());
+    mul_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void mul_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_rows_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_rows_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_bcast_cols_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void mul_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+ALWI void mul_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_tiles_bcast_scalar_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_scalar_init(icb0.get_id(), icb1.get_id());
 }
 
 class ArgFetcher {
@@ -312,7 +312,7 @@ ALWI void mul_tiles_bcast_rows_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_rows_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_rows_init(icb0.get_id(), icb1.get_id());
     mul_tiles_bcast_rows(icb0.get_id(), icb1.get_id(), itile0, itile1, dst0);
     tile_regs_commit();
 
@@ -350,7 +350,7 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_rows_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_rows_init(icb0.get_id(), icb1.get_id());
     mul_tiles_bcast_rows(icb0.get_id(), icb1.get_id(), itile0, itile1, dst0);
 
     log_tile_init();
@@ -391,7 +391,7 @@ ALWI void mul_tiles_bcast_cols_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_cols_init(icb0.get_id(), icb1.get_id());
     mul_tiles_bcast_cols(icb0.get_id(), icb1.get_id(), itile0, itile1, dst0);
     tile_regs_commit();
 
@@ -429,7 +429,7 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    mul_bcast_cols_init(icb0.get_id(), icb1.get_id());
     mul_tiles_bcast_cols(icb0.get_id(), icb1.get_id(), itile0, itile1, dst0);
 
     log_tile_init();
@@ -592,7 +592,7 @@ ALWI void sub_tiles_bcast_cols_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    sub_bcast_cols_init_short(icb0.get_id(), icb1.get_id());
+    sub_bcast_cols_init(icb0.get_id(), icb1.get_id());
     sub_tiles_bcast<BroadcastType::COL>(icb0.get_id(), icb1.get_id(), itile0, itile1, dst0);
     tile_regs_commit();
 
@@ -630,7 +630,7 @@ ALWI void sub_tiles_bcast_rows_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    // sub_bcast_rows_init_short();
+    // sub_bcast_rows_init();
     {
         MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>(
             icb0.get_id(), icb1.get_id())));

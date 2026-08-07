@@ -873,7 +873,7 @@ void kernel_main() {
                 PACK((llk_pack_init(untilize_mode_out_cb_id)));
 #endif
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
 
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);

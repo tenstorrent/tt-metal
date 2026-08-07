@@ -317,15 +317,22 @@ void kernel_main() {
 
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(direction)) {
-        static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+        // A one-tile packet uses the unicast header below, but the scatter header is still pre-populated for
+        // the shared packet-state setup. Scatter writes require at least two chunks, so seed that otherwise-unused
+        // header with the minimum valid chunk count rather than the one-tile unicast packet size.
+        constexpr uint32_t scatter_header_chunk_count = num_tiles_to_write_per_packet < NOC_SCATTER_WRITE_MIN_CHUNKS
+                                                            ? NOC_SCATTER_WRITE_MIN_CHUNKS
+                                                            : num_tiles_to_write_per_packet;
+        static_assert(
+            scatter_header_chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS, "tiles per packet > 4 is unsupported");
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            page_size * num_tiles_to_write_per_packet);
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, scatter_header_chunk_count),
+            page_size * scatter_header_chunk_count);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
