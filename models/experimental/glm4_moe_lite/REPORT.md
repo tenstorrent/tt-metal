@@ -559,3 +559,57 @@ model one cluster at a time*. To use Blaze on GLM-4.7-Flash properly, the layer 
 ported wholesale, in the shape of `dsa_glm_sparse_layer` — a rewrite, not an integration. Whether
 that beats the current 33.2 ms/token is unknown, and points 2–4 above are reasons for caution even
 then.
+
+---
+
+## 19. Whole-layer port: both blockers are now CLEARED
+
+Re-checked the two structural blockers this report cited against whole-layer fusion. **Both are
+gone**, and both had been carried as assumptions rather than re-verified:
+
+| blocker as documented | actual state |
+|---|---|
+| "20 heads breaks `layout_plan`; no TP divisor fixes it" | **False.** `solve_mla_q_grid` solves it at **tp=1** (our operating point, since TP is pinned off): `sender_rows=4, qnope_cols=5, qrope_cols=1, num_workers=4, heads_per_receiver=5` |
+| "routed expert gives PCC 0.0235 at GLM's 64 experts" | **Fixed.** `test_glm47_routed_expert_dims` now **passes** in 20.8 s |
+
+So Blaze can express both halves of a GLM-4.7-Flash decoder layer: MLA attention and the 64-expert
+MoE. **A whole-layer port is structurally available.** That is a materially different conclusion
+from §18, and it supersedes the parts of §18 that rested on those two claims.
+
+### The port, scoped
+
+The template is `sparse_layer` ("MLA + CbReconfig + HotColdExpertMoE") and `dsa_glm_sparse_layer`
+("DSA attention followed by GLM MoE"). A `GLMFlashSparseLayer` would compose:
+
+```
+Mla(...)  ->  CbReconfig  ->  GlmMoe / FFNInterleaved  ->  ResidualAdd  ->  output
+```
+
+with the intermediates never leaving L1 — **two boundary crossings per layer instead of two per
+op**, which is the entire point (§16).
+
+**What the work actually involves**, from reading `dsa_glm_sparse_layer`:
+- ~30 `Input` declarations (weights, caches, scratch, gather/scatter buffers, metadata) — every
+  buffer the layer touches becomes an explicit input.
+- Weight preparation for all of them at load time, in the DRAM-sharded / tile-shuffled layouts each
+  sub-op expects.
+- The paged KV cache update, which our model does with ttnn `paged_update_cache`; Blaze's analogues
+  are `dflash_kv_injection` / `compressor_kv_cache_update` and neither matches our paged layout
+  directly. **This is the largest unknown.**
+- The existing Q-stage deadlock (§9) must be resolved first — it is the same class of in-model
+  failure a layer op would hit.
+
+**Honest estimate: this is a multi-day rewrite, not an integration.** It is the right shape and it
+is now unblocked, but it is a project rather than a change. What §19 establishes is that it is
+*worth scoping* — which the previous two blockers had ruled out.
+
+### Recommended order
+
+1. Fix the Q-stage deadlock (§9) — instrument CB core ranges and L1 offsets in a model run and diff
+   against SDPA's static region. Nothing larger will work until a mid-size fused stage survives
+   in-model.
+2. Port MLA alone as a layer-fragment op, gate PCC against the ttnn attention output, measure
+   traced e2e. This is where boundary amortisation first becomes visible.
+3. Add the MoE half, gate, measure again.
+4. Only then judge whether whole-layer fusion beats 33.2 ms/token — the weight-bandwidth bound
+   (§3) and the 8-vs-80 core deficit (§6.2) still apply, so this is not a foregone win.
