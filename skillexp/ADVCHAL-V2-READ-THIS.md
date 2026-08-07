@@ -21,9 +21,9 @@ Numbers come from the cells' own artefacts or from re-measurements on the same h
 
 ## 1. The verdict
 
-Two verdicts, not one. **§1a is about the stage** — measured directly, 15 cells. **§1b is about the advisor
-itself**, inferred from how it behaved inside that stage. Fifteen independent decoders is a fair test of a tool,
-but it is not a study of the tool, and the two answers differ.
+**§1a is the stage**, measured directly across 15 cells. **§1b is the advisor**, inferred from how it behaved
+inside that stage — fifteen independent decoders is a fair test of a tool, though not a study of one. The two
+answers come out differently.
 
 ### 1a. What v2 delivered
 
@@ -166,7 +166,7 @@ action points in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).*
 | STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
 | STG-10 | **It throws away the perf report it runs.** Only 1 of 15 cells saved a before/after profile pair. | Op-level verification is impossible for 14 cells | **B0** |
 
-**The asymmetry is the point.** The advisor's defects are real but need tt-mlir builds. **The stage's defects are
+**The two columns are not the same size of problem.** The advisor's defects are real but need tt-mlir builds. **The stage's defects are
 almost all one-file, no-build changes, and they account for the larger measured loss** — STG-1 alone is 3.7× on the
 cell where it can be measured, and STG-2 hid two of the corpus's three biggest wins. gemma-4-12B is the extreme
 case: **52 measurements without ever applying one advised grid.**
@@ -174,8 +174,8 @@ case: **52 measurements without ever applying one advised grid.**
 ### Neither — outside any layout advisor's reach
 
 The corpus's **largest** numbers are in neither column: `retilize` at 191 ms/model, qwen's untraced 97 %,
-`sparse_matmul` coverage, and the sharded-GQA kernel gap. They are listed under *Still on the table* below, and
-recorded there so nobody files them against the advisor.
+`sparse_matmul` coverage, and the sharded-GQA kernel gap. They are itemised in §4, and they belong to the decoder
+and to tt-metal — a layout advisor could not reach any of them.
 
 ---
 
