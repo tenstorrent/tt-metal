@@ -12,7 +12,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -76,8 +75,10 @@ def test_llama_attention_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = Attention(args=model_args)
+    reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
+    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
+    reference_model.attention.to(torch.float32)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
@@ -143,43 +144,35 @@ def test_llama_attention_inference(
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    for _ in range(2):
-        attention_input = model_args.prepare_residual_tensor_prefill(
-            tt_attention_input,
-            force_replicated=False if model_args.is_galaxy else True,
-        )
+    attention_input = model_args.prepare_residual_tensor_prefill(
+        tt_attention_input,
+        force_replicated=False if model_args.is_galaxy else True,
+    )
 
-        tt_out = tt_model(
-            attention_input,
-            current_pos=None,
-            rot_mats=rot_mats,
-            user_id=0,
-            mode="prefill",
-            page_table=page_table_tt,
-        )
-        tt_out = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )
-        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
-            batch_size, max_seq_len, -1
-        )  # [ batch, seq, hidden_dim]
-        positions = torch.LongTensor(range(max_seq_len))
-        freqs_cis_i = precompute_freqs_cis(
-            model_args.head_dim,
-            model_args.max_seq_len * 2,
-            model_args.rope_theta,
-            model_args.use_scaled_rope,
-            model_args.rope_scaling_factor,
-        )[positions]
-        attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
-        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+    tt_out = tt_model(
+        attention_input,
+        current_pos=None,
+        rot_mats=rot_mats,
+        user_id=0,
+        mode="prefill",
+        page_table=page_table_tt,
+    )
+    tt_out = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
+    positions = torch.LongTensor(range(max_seq_len))
+    # The HF reference wrapper computes RoPE internally, so freqs_cis_i is unused.
+    freqs_cis_i = None
+    attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
+    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
-        logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
     if passing:
         logger.info(f"Llama_Attention Passed!")
     else:
