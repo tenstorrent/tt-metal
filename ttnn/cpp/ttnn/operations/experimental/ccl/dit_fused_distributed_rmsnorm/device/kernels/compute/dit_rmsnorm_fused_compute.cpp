@@ -141,7 +141,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
     matmul_init(intermediate_cb, transformation_mat_cb);
-    binary_op_init_common(input_cb, input_cb, input_cb);
+    compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
     // One-time waits for reader-produced singletons.
     cb_wait_front(reduce_scalar_sum_cb, 1);
@@ -185,7 +185,7 @@ void kernel_main() {
             // that squares in the unpacker/math before the row-reduce (a "reduce of
             // squares" primitive) -- kernel-dev scope, deferred. Init-hoisting was
             // tried and does NOT help (the per-row reduce clobbers the math config, so
-            // mul_tiles_init must re-run each row; it's FPU-throughput-bound, not
+            // mul_init must re-run each row; it's FPU-throughput-bound, not
             // init-bound).
             if constexpr (streaming_low_l1) {
                 // Streamed whole-row PRE (one group). Input
@@ -198,7 +198,7 @@ void kernel_main() {
                     reconfig_data_format(input_cb, input_cb);
                     pack_reconfig_data_format(pre_intermediate_cb);
                     PACK((llk_pack_reconfig_l1_acc(0)));
-                    mul_tiles_init(input_cb, input_cb);
+                    mul_init(input_cb, input_cb);
 
                     cb_reserve_back(pre_intermediate_cb, 1);
                     for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
@@ -241,7 +241,7 @@ void kernel_main() {
                         reconfig_data_format(input_cb, input_cb);
                         pack_reconfig_data_format(pre_intermediate_cb);
                         PACK((llk_pack_reconfig_l1_acc(0)));
-                        mul_tiles_init(input_cb, input_cb);
+                        mul_init(input_cb, input_cb);
 
                         cb_reserve_back(pre_intermediate_cb, 1);
 
@@ -479,7 +479,7 @@ void kernel_main() {
                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
                             reconfig_data_format(input_cb, reduce_result_cb);
                             pack_reconfig_data_format(mul_rms_result_cb);
-                            mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                            mul_bcast_cols_init(input_cb, reduce_result_cb);
                             if constexpr (streaming_low_l1) {
                                 // Streamed POST re-read: reader's 2nd pass pushes the
                                 // row's input block by block. Each block is waited at a
@@ -551,7 +551,7 @@ void kernel_main() {
                                 // ---- x * (1/rms_head): resident input cols -> mul_rms_result_cb ----
                                 reconfig_data_format(input_cb, reduce_result_cb);
                                 pack_reconfig_data_format(mul_rms_result_cb);
-                                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                                mul_bcast_cols_init(input_cb, reduce_result_cb);
                                 cb_reserve_back(mul_rms_result_cb, block_size);
                                 tile_regs_acquire();
                                 for (uint32_t i = 0; i < tiles_in_block; i++) {
@@ -573,9 +573,9 @@ void kernel_main() {
                                     reconfig_data_format(mul_rms_result_cb, weight_cb);
                                     pack_reconfig_data_format(mul_weight_result_cb);
                                     if constexpr (per_token_weight != 0) {
-                                        mul_tiles_init(mul_rms_result_cb, weight_cb);
+                                        mul_init(mul_rms_result_cb, weight_cb);
                                     } else {
-                                        mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                                        mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
                                     }
                                     cb_reserve_back(mul_weight_result_cb, block_size);
                                     tile_regs_acquire();
@@ -604,9 +604,9 @@ void kernel_main() {
                                     reconfig_data_format(mul_weight_result_cb, bias_cb);
                                     pack_reconfig_data_format(add_bias_result_cb);
                                     if constexpr (per_token_bias != 0) {
-                                        add_tiles_init(mul_weight_result_cb, bias_cb);
+                                        add_init(mul_weight_result_cb, bias_cb);
                                     } else {
-                                        add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                                        add_bcast_rows_init(mul_weight_result_cb, bias_cb);
                                     }
                                     cb_reserve_back(add_bias_result_cb, block_size);
                                     tile_regs_acquire();
@@ -717,7 +717,7 @@ void kernel_main() {
                         cb_wait_front(input_cb, block_size);
                         reconfig_data_format(input_cb, reduce_result_cb);
                         pack_reconfig_data_format(mul_rms_result_cb);
-                        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                        mul_bcast_cols_init(input_cb, reduce_result_cb);
                         cb_reserve_back(mul_rms_result_cb, block_size);
                         tile_regs_acquire();
                         for (uint32_t i = 0; i < block_size; i++) {
@@ -739,9 +739,9 @@ void kernel_main() {
                             reconfig_data_format(mul_rms_result_cb, weight_cb);
                             pack_reconfig_data_format(mul_weight_result_cb);
                             if constexpr (per_token_weight != 0) {
-                                mul_tiles_init(mul_rms_result_cb, weight_cb);
+                                mul_init(mul_rms_result_cb, weight_cb);
                             } else {
-                                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                                mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
                             }
                             cb_reserve_back(mul_weight_result_cb, block_size);
                             tile_regs_acquire();
@@ -769,9 +769,9 @@ void kernel_main() {
                             reconfig_data_format(mul_weight_result_cb, bias_cb);
                             pack_reconfig_data_format(add_bias_result_cb);
                             if constexpr (per_token_bias != 0) {
-                                add_tiles_init(mul_weight_result_cb, bias_cb);
+                                add_init(mul_weight_result_cb, bias_cb);
                             } else {
-                                add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                                add_bcast_rows_init(mul_weight_result_cb, bias_cb);
                             }
                             cb_reserve_back(add_bias_result_cb, block_size);
                             tile_regs_acquire();
@@ -896,9 +896,9 @@ void kernel_main() {
                     reconfig_data_format(mul_rms_result_cb, weight_cb);
                     pack_reconfig_data_format(mul_weight_result_cb);
                     if constexpr (per_token_weight != 0) {
-                        mul_tiles_init(mul_rms_result_cb, weight_cb);
+                        mul_init(mul_rms_result_cb, weight_cb);
                     } else {
-                        mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                        mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
                     }
 
                     for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
@@ -934,9 +934,9 @@ void kernel_main() {
                     reconfig_data_format(mul_weight_result_cb, bias_cb);
                     pack_reconfig_data_format(add_bias_result_cb);
                     if constexpr (per_token_bias != 0) {
-                        add_tiles_init(mul_weight_result_cb, bias_cb);
+                        add_init(mul_weight_result_cb, bias_cb);
                     } else {
-                        add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                        add_bcast_rows_init(mul_weight_result_cb, bias_cb);
                     }
                     for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                         const uint32_t tiles_in_block =

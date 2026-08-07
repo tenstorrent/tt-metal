@@ -324,16 +324,15 @@ jobs:
       - name: Count clang-tidy violations
         run: |
           FIXES_DIR=".build/clang-tidy/fixes"
-          # Each diagnostic is one "- DiagnosticName:" list item; nested notes are not.
-          VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml 2>/dev/null \
-            | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
-          VIOLATIONS=${VIOLATIONS:-0}
+          # PyYAML is not baked into the CI image; installed here (unconditional, unlike
+          # the ctcache step) so fork PRs — which skip the secrets-gated ctcache setup —
+          # still get a real report instead of just a count.
+          uv pip install --quiet PyYAML
+          REPORT=".github/scripts/clang_tidy_report.py"
+          VIOLATIONS=$(python3 "$REPORT" "$FIXES_DIR" --format count --repo-root "$(pwd)")
           echo "CLANG_TIDY_VIOLATIONS=${VIOLATIONS}" >> "$GITHUB_ENV"
-          echo "clang-tidy found ${VIOLATIONS} violation(s)"
-          {
-            echo '## Clang-Tidy Violations'
-            echo "Found **${VIOLATIONS}** violation(s)."
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 "$REPORT" "$FIXES_DIR" --format list --repo-root "$(pwd)"
+          python3 "$REPORT" "$FIXES_DIR" --format summary-md --repo-root "$(pwd)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply clang-tidy fixes to working tree
         # success() so a genuine build failure (partial YAMLs) doesn't post misleading fixes.
@@ -374,7 +373,16 @@ jobs:
           VIOLATIONS="${CLANG_TIDY_VIOLATIONS:-0}"
           BUILD_EXIT="${CLANG_TIDY_BUILD_EXIT:-0}"
           if [ "$VIOLATIONS" -gt 0 ]; then
-            echo "::error::clang-tidy found ${VIOLATIONS} violation(s)"
+            FIXES_DIR=".build/clang-tidy/fixes"
+            REPORT=".github/scripts/clang_tidy_report.py"
+            # Re-print the violation list here (not just the count) so this failing
+            # step is self-contained — no digging through the analyze step's ~5000-line
+            # (green, by design) build log to find out what actually broke.
+            python3 "$REPORT" "$FIXES_DIR" --format list --repo-root "$(pwd)"
+            echo ""
+            # One ::error annotation per violation, so they show up on the PR diff /
+            # checks tab, not just as a "there were N violations" summary line.
+            python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
             exit 1
           fi
           # No violations but the build failed: a real compile/link error, not a diagnostic.

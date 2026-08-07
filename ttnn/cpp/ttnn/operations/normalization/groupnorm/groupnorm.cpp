@@ -7,6 +7,9 @@
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
+
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 
@@ -216,6 +219,28 @@ Tensor group_norm(
         nhw,
         ttnn::types::TILE_SIZE);
 
+    // The #50682 correction exists only on the two-pass path: Welford transposes H*W into the tile
+    // columns and counts in tile units, so the padding rows cannot be excluded. Route here and drop
+    // the Welford-only reciprocals LUT. Only place that enforces it -- a new direct
+    // ttnn::prim::group_norm caller would need its own guard.
+    std::optional<Tensor> effective_reciprocals = reciprocals;
+    const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
+    if (use_welford && (input_shape[2] % tile_height_align != 0)) {
+        // Once per process: group_norm runs inside per-step model loops.
+        static std::once_flag welford_fallback_warned;
+        std::call_once(welford_fallback_warned, [&] {
+            log_warning(
+                tt::LogOp,
+                "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0); "
+                "falling back to the two-pass path, which handles this case correctly (#50682). "
+                "This warning is emitted once per process.",
+                input_shape[2],
+                tile_height_align);
+        });
+        use_welford = false;
+        effective_reciprocals = std::nullopt;
+    }
+
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
@@ -384,7 +409,7 @@ Tensor group_norm(
             beta,
             mask,
             negative_mask,
-            reciprocals);
+            effective_reciprocals);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
@@ -408,7 +433,7 @@ Tensor group_norm(
         beta,
         mask,
         negative_mask,
-        reciprocals);
+        effective_reciprocals);
 }
 
 }  // namespace ttnn

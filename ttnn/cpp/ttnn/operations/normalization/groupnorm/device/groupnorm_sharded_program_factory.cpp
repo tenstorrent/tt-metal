@@ -564,11 +564,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    // Unlike the interleaved paths these ship as RUNTIME args (8, 9).
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
+    const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);
+
     // writer defines
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
     if (negative_mask.has_value()) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
+    }
+    if (pad.active) {
+        writer_defines["PAD_CORRECTION"] = "1";
     }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
@@ -678,6 +688,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
+    // Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
+    // above shifts them). Only the two-pass kernel reads them.
+    mcast_sender_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_sender_compute_compile_time_args.push_back(pad.padded_hw);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -712,6 +726,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
+    mcast_receiver_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1107,6 +1123,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
+
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
@@ -1235,7 +1260,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t input_mask_tile_start_id = 0;
     for (const auto& core : core_coords) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
-        writer_mcast_sender_args.reserve(8);
+        // 8 base args plus the two #50682 pad-correction args pushed unconditionally below.
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         if (gamma.has_value()) {
             writer_mcast_sender_args.push_back(gamma.value().buffer());
@@ -1260,6 +1286,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
+        // args 8, 9: only read when PAD_CORRECTION.
+        writer_mcast_sender_args.push_back(pad_scaler_bits);
+        writer_mcast_sender_args.push_back(pad.k_bits);
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {

@@ -26,6 +26,24 @@ HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
 
+# Non-tile-aligned N*H*W on the sharded two-pass path (#50682). Single-core height sharding keeps
+# the whole padded height, and its padding tail, on one core.
+# (N, C, H, W, num_groups)
+HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES = [
+    (1, 128, 1, 200, 32),  # H*W=200 -> padded 224 (10.7% padding)
+    (1, 256, 1, 100, 32),  # H*W=100 -> padded 128 (21.9% padding)
+]
+
+# Block-sharded (v2) non-tile-aligned cases. grid_x splits the padded H*W tile count and
+# must divide it; grid_y splits channels. H*W=100 -> padded 128 = 4 tiles, so grid_x in {1, 2, 4}
+# keeps each M-shard tile-aligned. grid_x > 1 exercises the multi-core M-split, where the padding
+# tail lands on the last M-core only.
+# (N, C, H, W, num_groups, grid_y, grid_x)
+BLOCK_SHARDED_NON_TILE_ALIGNED_CASES = [
+    (1, 256, 1, 100, 32, 2, 1),  # channel split only, single M-core
+    (1, 256, 1, 100, 32, 2, 2),  # multi-core M-split: 4 tiles across 2 x-cores, padding on last
+]
+
 BLOCK_SHARDED_V2_8X4_SHAPES = [
     (1, 1280, 16, 16, 32),
     (1, 320, 1, 8192, 32),
@@ -225,6 +243,184 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES)
+def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_groups):
+    # Single-core height-sharded group_norm with a non-tile-aligned flattened height must match
+    # torch within bf16 tolerance.
+    torch.manual_seed(0)
+
+    assert (N * H * W) % 32 != 0, "shape must be non-tile-aligned to exercise the fix"
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    # Tile-pad the flattened height to the tile boundary (logical H*W stays non-aligned; the
+    # padded height is a multiple of 32), matching how a non-aligned tensor reaches the op.
+    padded_hw = ((N * H * W + 31) // 32) * 32
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor = ttnn.tilize_with_zero_padding(input_tensor, use_multicore=True)
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = padded_hw // grid_size.x, C // grid_size.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    # Twice, like run_group_norm_DRAM: the sharded path ships the corrected reduce scaler and K as
+    # RUNTIME args, so a program-cache hit on the second call must not lose or stale them.
+    for _ in range(2):
+        output_tensor = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            output_layout=ttnn.TILE_LAYOUT,
+            inplace=False,
+            use_welford=False,
+        )
+        ttnn.synchronize_device(device)
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    # rtol is left at its default: this bug was a per-group affine drift, which PCC cannot see and
+    # a value-proportional tolerance would partly absorb, so atol is the discriminator.
+    assert_numeric_metrics(torch_output_tensor, output_tensor, atol=0.08, frobenius_threshold=0.03)
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", BLOCK_SHARDED_NON_TILE_ALIGNED_CASES)
+@pytest.mark.parametrize(
+    "use_welford, out_row_major",
+    [(False, False), (True, False), (False, True)],
+    ids=["legacy", "welford_routed", "row_major_out"],
+)
+def test_group_norm_block_sharded_non_tile_aligned(
+    device, N, C, H, W, num_groups, grid_y, grid_x, use_welford, out_row_major
+):
+    # Block-sharded two-pass path. grid_x > 1 splits the padded H*W across M-cores
+    # (padding tail on the last), exercising the multi-core correction; use_welford=True must be
+    # routed to the two-pass path; out_row_major selects UNTILIZE_OUT, which runs after the
+    # corrected rsqrt and so must not change the result. negative_mask is not covered: it requires
+    # ROW_MAJOR, where padded_shape[2] == logical_shape[2], so the correction never engages.
+    torch.manual_seed(0)
+    if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
+        pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
+
+    assert (N * H * W) % 32 != 0, "shape must be non-tile-aligned to exercise the fix"
+    padded_hw = ((N * H * W + 31) // 32) * 32
+    assert (padded_hw // 32) % grid_x == 0, "padded H*W tiles must be divisible by grid_x"
+    grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor = ttnn.tilize_with_zero_padding(input_tensor, use_multicore=True)
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = padded_hw // grid_size.x, C // grid_size.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    # Twice: the sharded path ships the corrected reduce scaler and K as RUNTIME args, so a
+    # program-cache hit on the second call must not lose or stale them.
+    for _ in range(2):
+        output_tensor = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT if out_row_major else ttnn.TILE_LAYOUT,
+            inplace=False,
+            use_welford=use_welford,
+        )
+        ttnn.synchronize_device(device)
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+    output_tensor = output_tensor.reshape(N, 1, -1, C)[:, :, : W * H, :]
+
+    assert_numeric_metrics(torch_output_tensor, output_tensor, atol=0.08, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -1307,6 +1503,58 @@ def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
             memory_config=sharded_mem_config,
             core_grid=ttnn.CoreGrid(y=1, x=1),
         )
+
+
+def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_error):
+    # Scope boundary for #50682, which only engages for TILE inputs with logical_shape[2] <
+    # padded_shape[2]. The N*H*W check above misses a PER-SAMPLE H*W that is not a whole number of
+    # tiles -- N=2, H*W=80 gives N*H*W=160, a multiple of 32 -- so the device op's own H*W check is
+    # what rejects it, and such shapes fail loudly rather than reducing over a partial tile.
+    N, C, HW, num_groups = 2, 320, 80, 32
+    assert (N * HW) % 32 == 0, "N*H*W must look aligned, so only the per-sample check can reject"
+    assert HW % 32 != 0, "per-sample H*W must not be tile-aligned"
+
+    torch_input_tensor = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (N * HW, C), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    with expect_error(RuntimeError, "must be a multiple of the tile height"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            memory_config=sharded_mem_config,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+        )
+
+
+def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
+    # Scope boundary, same argument as negative_mask above: inplace is only
+    # allowed for ROW_MAJOR inputs, and a ROW_MAJOR tensor has padded_shape[2] == logical_shape[2],
+    # so inplace and the tile-padding correction can never be active at the same time. Note the
+    # binding defaults inplace to True, which is why every TILE-input test passes inplace=False.
+    C, HW, num_groups = 320, 128, 32
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, HW, C), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "Tile layout requires non-inplace tensors"):
+        ttnn.group_norm(input_tensor, num_groups=num_groups, inplace=True)
 
 
 def test_group_norm_rejects_host_input_mask(device, expect_error):
