@@ -967,17 +967,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # LayerCompletionRouter the multi-rank host-callback path uses, so it is multi-host compatible: it
     # works on any rank count (single-rank => world_size=1 router, local ring + counter channel, no MPI).
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
-    # D2H is NOT trace-capturable: its ack record is the per-chunk socket metadata tensor, whose address
-    # changes every chunk, so a capture would bake in a stale one (TtPrefillRuntime.prefill_chunk asserts
-    # the same thing). Reject the combination up front rather than replay a trace that silently emits no
-    # acks -- and reject rather than quietly downgrade, since PREFILL_LAYER_ACK_D2H=1 is an explicit ask.
-    # The host-callback backends DO work traced (the controller splits the capture at each ack point).
-    if use_d2h and runtime.config.use_trace:
-        raise ValueError(
-            "PREFILL_LAYER_ACK_D2H=1 is incompatible with PREFILL_USE_TRACE=1: the D2H ack record is a "
-            "per-chunk socket tensor whose address cannot be captured, so the replay would emit no acks. "
-            "Run untraced for the D2H backend, or leave PREFILL_LAYER_ACK_D2H unset to ack under trace."
-        )
     # The router path covers: (a) any multi-rank run (each rank owns only a layer slice, so it can't
     # inject the scheduler channel directly and must route to the master), and (b) the D2H backend on
     # any rank count (its LayerAckService is a pure producer into the ring). The single-rank non-D2H
@@ -1037,7 +1026,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 first_layer_idx=first_layer_idx,
                 local_layers=num_my_layers,
             )
-            layer_ack_service.start()  # connects to the router-owned ring (created above)
+            if runtime.config.use_trace:
+                # Traced: the ack op is recorded inside the capture, so register the service up front and
+                # defer the reader — it starts after the capture's warm records are drained below, or the
+                # scheduler would see a phantom chunk's acks and migrate a slot that was never filled.
+                runtime.set_d2h_ack_service(d2h_service)
+            else:
+                layer_ack_service.start()  # connects to the router-owned ring (created above)
             source_desc = "D2H device records"
         else:
             # Host-callback source: the runtime fires on_layer_complete(layer_idx, request_id) per layer
@@ -1080,6 +1075,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # No-op if already captured. See TtPrefillRuntime.capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
+        # D2H ack under trace: the capture's warm forward compiles the ack programs by running them, so
+        # num_layers real records already sit in the FIFO. Drain them before the reader starts, or the
+        # scheduler sees a phantom chunk's worth of layer acks and migrates a slot that was never filled.
+        # The host-callback source has no reader to defer and writes no D2H records, so it skips this.
+        if use_d2h and layer_ack_service is not None:
+            n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
+            for _ in range(n_warm):
+                d2h_service.read_metadata()
+            if n_warm:
+                logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
+            layer_ack_service.start()
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 

@@ -614,9 +614,10 @@ class TtPrefillBlock(LightweightModule):
                 # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
                 # host before the zero has executed, so the ack implies zero-complete with no host sync —
                 # unlike the host-callback path below, which needs an explicit flush.
-                # NOT used under trace: metadata_msg is the per-chunk socket metadata tensor, so its address
-                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
-                # asserts d2h_service is None when use_trace.
+                # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
+                # buffer binding, which trace replay does not re-patch. A traced caller must therefore
+                # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
+                # socket tensor, whose address moves every chunk.
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             else:
                 # Trace path: route the ack through the controller. At capture it splits the trace here (a host
