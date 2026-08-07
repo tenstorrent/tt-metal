@@ -138,11 +138,16 @@ def test_rs_domain_bias_requires_a_tile_aligned_shard():
 
 
 @pytest.mark.parametrize("flag", ["HY_DIT_FUSED_HEADS", "HY_DIT_FUSED_QKV_HEADS"])
-def test_head_layout_fusions_default_off_and_parse_strictly(flag, monkeypatch):
-    # Both default off: they are opt-in until the 720p A/B and a clean
-    # re-baseline land, even though 480p output is bit-identical.
+def test_head_layout_fusions_default_on_and_parse_strictly(flag, monkeypatch):
+    # Both default ON. The heads-major layout is a pure data-movement
+    # rearrangement: generated output is bit-identical to the legacy permute +
+    # reshape path (frame PCC 1.00000000, max abs pixel difference 0.0 across
+    # 121 frames at both 480p and 720p), so there is no quality tradeoff to
+    # weigh against the measured -32.2% / -23.1% denoise. Setting the flag to
+    # "0" restores the legacy path for bisection.
     monkeypatch.delenv(flag, raising=False)
-    assert not block._enabled(os.environ.get(flag, "0"))
+    assert block._enabled(os.environ.get(flag, "1"))
+    assert not block._enabled("0")
     for value in ("1", "true", "YES", "on"):
         assert block._enabled(value)
     # A typo must fail loudly rather than silently selecting the legacy path --

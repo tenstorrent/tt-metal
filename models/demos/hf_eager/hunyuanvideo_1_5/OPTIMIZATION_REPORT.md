@@ -356,7 +356,10 @@ section is measured unless explicitly marked otherwise.
   both arms failed at device init on a board that needed a reset. Expect a
   smaller relative gain there because attention, the one quadratic term,
   dominates more at 111,600 tokens.
-- Both flags default off pending the 720p A/B and a clean re-baseline.
+- **Both flags now default ON.** The 720p A/B and the clean re-baseline are
+  done, output is bit-identical at both resolutions, and the single-device and
+  sharded-mesh gates pass with the new defaults in force (no env override).
+  Set either flag to `0` to restore the legacy path for bisection.
 
 ### Wan SDPA chunk preset at Hunyuan shapes (rejected -- does not run)
 

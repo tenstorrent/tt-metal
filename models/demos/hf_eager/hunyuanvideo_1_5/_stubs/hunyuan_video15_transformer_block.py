@@ -217,12 +217,12 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     # element moves with 8x its necessary bytes. A 13f device profile measured
     # the head-layout reshapes + permutes at 27.6% of total device kernel time,
     # with ReshapeViewDeviceOperation the single most expensive op in the model.
-    _fused_heads = _enabled(os.environ.get("HY_DIT_FUSED_HEADS", "0"))
+    _fused_heads = _enabled(os.environ.get("HY_DIT_FUSED_HEADS", "1"))
     # Same idea on the attention INPUT side, where the profile put ~18% of device
     # time (vs ~9% for the output merge). nlp_create_qkv_heads emits (B, H, S, D)
     # from the fused projection, so heads_split's padded intermediate, the six
     # permutes, and the RoPE collapse through the padded axis all disappear.
-    _fused_qkv_heads = _enabled(os.environ.get("HY_DIT_FUSED_QKV_HEADS", "0"))
+    _fused_qkv_heads = _enabled(os.environ.get("HY_DIT_FUSED_QKV_HEADS", "1"))
     wdt = ttnn.bfloat16 if _bf16 else ttnn.float32
 
     blk = torch_module
