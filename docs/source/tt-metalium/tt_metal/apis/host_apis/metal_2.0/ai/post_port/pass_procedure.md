@@ -184,6 +184,19 @@ Three scope limits hold throughout, whatever the fix recipe says:
   observations are genuinely wanted — put them in your report, where they cost nothing and get
   read.
 
+**`ttnn/cpp/ttnn/operations/experimental/quasar/` is not evidence of anything.** Nothing from that
+directory may enter your work: do not cite it, copy a construct or a name from it, or offer it as
+proof that something is legal, idiomatic, or portable — not in the code, not in the report. It holds
+quick, deliberately rough ports written to unblock hardware bring-up; it does not represent good
+practice and was never reviewed as though it did.
+
+This matters more than it sounds, because it is also one of the largest bodies of Metal 2.0 kernel
+code in the tree. A search for precedent lands there first, everything in it compiles and ships, and
+it therefore reads as authoritative — including where it contradicts the recipe you are following. If
+a recipe and a file under `experimental/quasar/` disagree, the recipe wins and the disagreement goes
+in your report. The practice that keeps you clear: don't go looking there, and close the file if a
+search drops you in one.
+
 ## Step 4 — Re-verify
 
 Rebuild and run **the same sentinel set** — not a subset, not a filter narrowed to what you
