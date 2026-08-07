@@ -84,7 +84,8 @@ seconds).
 ## Docs
 
 - **`doc/vllm_integration/serve_vllm.md`** — the canonical serve runbook (stock vLLM 0.24.0 + public
-  `vllm-tt-plugin` + `vllm_ext`, on a PyPI `ttnn` wheel — no tt-metal build needed). Scripts:
+  `vllm-tt-plugin` + `vllm_ext`, with `ttnn` built from this checkout — see the runbook for why a
+  released wheel cannot serve this model). Scripts:
   `setup_vllm.sh` (builds `.venv/` from `requirements.txt`) and `serve_vllm.sh` (launch/teardown,
   runs setup itself if the env is missing).
 - **`vllm_ext/README.md`** — the tt-metal-side delta (EXTRA_MODELS_DIR bundle + poolside_v1 tool-parser

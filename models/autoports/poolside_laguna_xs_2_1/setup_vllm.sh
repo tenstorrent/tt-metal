@@ -15,18 +15,17 @@ FORCE=0
 
 # Pins are read from requirements.txt so there is one place to bump them.
 req() { grep -m1 "^$1" "$MODEL_DIR/requirements.txt" | sed 's/[[:space:]]*#.*//'; }
-TTNN_PIN=$(req 'ttnn==')
 VLLM_PIN=$(req 'vllm==')
 PLUGIN_PIN=$(req 'vllm-tt-plugin @')
-for p in "$TTNN_PIN" "$VLLM_PIN" "$PLUGIN_PIN"; do
+for p in "$VLLM_PIN" "$PLUGIN_PIN"; do
   [ -n "$p" ] || { echo "ERROR: could not read pins from $MODEL_DIR/requirements.txt"; exit 1; }
 done
 
 echo "=============================================================================="
 echo " Laguna-XS-2.1 vLLM env -> $VLLM_ENV"
-echo "   $TTNN_PIN | $VLLM_PIN"
-echo " First run takes ~30-45 min: vLLM is built from sdist (the PyPI wheel is CUDA)."
-echo " Re-runs on an existing env are quick. Serving is a separate ~10 min boot."
+echo "   ttnn: built from $REPO_ROOT | $VLLM_PIN"
+echo " First run builds tt-metal (~1-3 h) then vLLM from sdist (~30-45 min)."
+echo " Re-runs on an existing build/env are quick. Serving is a separate ~10 min boot."
 echo "=============================================================================="
 
 # ---- uv -----------------------------------------------------------------------------------
@@ -54,8 +53,21 @@ else
 fi
 PY="$VLLM_ENV/bin/python"
 
-echo "==> [2/6] $TTNN_PIN (manylinux wheel; no tt-metal build required)"
-uv pip install --python "$PY" "$TTNN_PIN"
+# ---- ttnn (built from this checkout) --------------------------------------------------------
+# NOT the PyPI wheel: this checkout carries an SDPA change no release has — the chunked path
+# accepts sliding_window_size, which the 30 sliding-window layers need whenever a prefix-cache
+# hit makes prefill start at start_pos>0 (tt/optimized_decoder.py:_prefill_attention). A wheel
+# ttnn raises TypeError there, so ttnn must come from this tree.
+if [ ! -f "$REPO_ROOT/ttnn/ttnn/_ttnn.so" ]; then
+  echo "==> [2/6] building tt-metal (no _ttnn.so yet) — this is the long one, ~1-3 h"
+  ( cd "$REPO_ROOT" && ./build_metal.sh )
+else
+  echo "==> [2/6] reusing existing tt-metal build ($REPO_ROOT/ttnn/ttnn/_ttnn.so)"
+fi
+# Editable install: setup.py skips cmake for editable/srcdir installs and just wires the tree up,
+# so the build above is what actually produces _ttnn.so. Needs setuptools-scm (git describe).
+uv pip install --python "$PY" setuptools==80.10.2 setuptools-scm==8.1.0 wheel
+uv pip install --python "$PY" --no-build-isolation -e "$REPO_ROOT"
 
 echo "==> [3/6] $VLLM_PIN from sdist (VLLM_TARGET_DEVICE=empty, CPU torch) — the slow step"
 # The CPU torch index is required: without it vLLM's torch==2.11.0 resolves to the default CUDA

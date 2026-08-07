@@ -1,9 +1,9 @@
 # Serving Laguna-XS-2.1 on vLLM (stock vLLM 0.24.0 + tenstorrent/vllm-tt-plugin)
 
 Runbook for serving `poolside/Laguna-XS-2.1` on **P150×4**. The serving env is self-contained: a
-dedicated venv built from a PyPI `ttnn` wheel plus stock upstream `vllm==0.24.0`, the public
-`tenstorrent/vllm-tt-plugin`, and this model's `vllm_ext` package. **No tt-metal build is
-required.** Device-verified 2026-08-06 (full 131072 KV pool, decode ~29 t/s/u @1k C1, `auto`
+dedicated venv holding `ttnn` built from this checkout, stock upstream `vllm==0.24.0`, the public
+`tenstorrent/vllm-tt-plugin`, and this model's `vllm_ext` package. Everything the server needs is
+built from this repo — no hand-prepared environment. Device-verified 2026-08-06 (full 131072 KV pool, decode ~29 t/s/u @1k C1, `auto`
 tool-calling green).
 
 --------------------------------------------------------------------------------------------------------------
@@ -15,12 +15,13 @@ models/autoports/poolside_laguna_xs_2_1/serve_vllm.sh
 tail -f /home/ttuser/laguna_serve.log
 ```
 
-Budget **~30–45 min for the first run** (vLLM is built from sdist; see §1) plus **~10 min** for
-the server boot itself. Re-runs skip straight to the boot. Ready when the log says
-`Application startup complete`.
+The first run builds tt-metal (**~1–3 h**) and then vLLM from sdist (**~30–45 min**); after that
+it is just the **~10 min** server boot. Ready when the log says `Application startup complete`.
 
-Prerequisites: Linux x86-64 with glibc ≥ 2.34, Python 3.12 available, a Tenstorrent P150×4 with
-`tt-smi` on PATH, and the HF model cached (gated — `huggingface-cli login`, ~63 GB).
+Prerequisites: Linux x86-64, Python 3.12, a tt-metal build toolchain (see the repo's
+`INSTALLING.md` — `./install_dependencies.sh`), submodules initialised
+(`git submodule update --init --recursive`), a Tenstorrent P150×4 with `tt-smi` on PATH, and the
+HF model cached (gated — `huggingface-cli login`, ~63 GB).
 
 --------------------------------------------------------------------------------------------------------------
 ## 1. The env (`setup_vllm.sh`)
@@ -33,12 +34,27 @@ does and why:
 
 | Step | Why |
 |---|---|
-| `uv venv --python 3.12` | The `ttnn` wheels are `cp312` with no stable-ABI tag, so the Python minor version must match. |
-| `uv pip install ttnn==0.74.0` | 0.74.0 is the release cut from the `v0.74.0-dev` line this checkout sits on. Ships manylinux wheels, so no tt-metal build. Declares `numpy<2` + `loguru` only — no torch pin. |
+| `uv venv --python 3.12` | Matches the Python the C++ extension is built against. |
+| `./build_metal.sh` (if `ttnn/ttnn/_ttnn.so` is absent), then `uv pip install -e <repo root>` | **`ttnn` must come from this checkout, not PyPI** — see below. The editable install does not run cmake; it only wires the built tree into the venv, so the build step is what produces `_ttnn.so`. |
 | `VLLM_TARGET_DEVICE=empty uv pip install --no-binary vllm --extra-index-url …/whl/cpu --index-strategy unsafe-best-match --override overrides.txt vllm==0.24.0` | The PyPI vLLM wheel is CUDA, so it must be built from sdist against the `empty` target; the `tt` platform comes from the plugin at runtime. The CPU torch index is required — without it `torch==2.11.0` resolves to the CUDA build and pulls ~4 GB of `nvidia-*-cu13` wheels. **This is the slow step.** |
 | `uv pip uninstall torchaudio` | `transformers>=5.12` imports it if merely installed, and the wheel pulled in alongside CPU torch is unloadable. |
 | `uv pip install vllm-tt-plugin @ git+…` | Provides the `tt` platform and `EXTRA_MODELS_DIR` model registration. |
 | `uv pip install -e vllm_ext` | The newline-tolerant `poolside_v1` tool-parser override — REQUIRED for `auto` tool-calling; see `../../vllm_ext/README.md`. |
+
+### Why `ttnn` is built here and not installed from PyPI
+The 30 sliding-window layers pass `sliding_window_size` to SDPA. On a prefix-cache hit, prefill
+resumes at `start_pos > 0` and reads the cached prefix through
+`ttnn.transformer.chunked_scaled_dot_product_attention`
+(`tt/optimized_decoder.py:_prefill_attention`) — and **no released `ttnn` accepts
+`sliding_window_size` on the chunked op.** It is absent from 0.74.0, from 0.75.0, and from
+`origin/main`; the device op has always supported the window, but the chunked entry points
+hard-coded `std::nullopt` with a "not supported yet" comment.
+
+This branch removes that restriction — the two `chunked_scaled_dot_product_attention` overloads in
+`ttnn/cpp/ttnn/operations/transformer/sdpa/` now forward the argument — which is why the serving
+env is built from this checkout. Consumers must build tt-metal from this branch; a stock wheel
+raises `TypeError` on the first cache hit. Every other chunked call site is guarded by
+`if not cfg.is_sliding`, so only this path is affected.
 
 **Why `uv` and not `pip`:** `ttnn` pins `numpy<2` while vLLM 0.24.0 wants
 `opencv-python-headless>=4.13.0`, which needs `numpy>=2`. That is a hard conflict, and `pip -c`
@@ -46,9 +62,10 @@ constraints cannot resolve it — only `uv pip --override` can. See `overrides.t
 rationale.
 
 The script finishes by verifying the env, and each assertion is there because it has a real
-failure mode: `vllm` is the stock install; `ttnn` SDPA exposes `sliding_window_size` (every
-sliding layer needs it); `models.autoports.…tt.generator_vllm` imports (what `EXTRA_MODELS_DIR`
-resolves at serve time); and `poolside_v1` resolves to `laguna_vllm_ext`, not the stock parser.
+failure mode: `vllm` is the stock install; `torch` is the CPU build; all three SDPA entry points
+accept `sliding_window_size` (catches a stock/wheel `ttnn` sneaking in);
+`models.autoports.…tt.generator_vllm` imports (what `EXTRA_MODELS_DIR` resolves at serve time);
+and `poolside_v1` resolves to `laguna_vllm_ext`, not the stock parser.
 
 --------------------------------------------------------------------------------------------------------------
 ## 2. Serve
@@ -69,8 +86,9 @@ $MODEL_DIR/.venv/bin/vllm serve poolside/Laguna-XS-2.1 \
   --enable-prefix-caching --enable-auto-tool-choice \
   --tool-call-parser poolside_v1 --reasoning-parser poolside_v1 --port 8000 2>&1 | tee /home/ttuser/laguna_serve.log
 ```
-> **Do not set `TT_METAL_HOME`.** A wheel `ttnn` self-locates its runtime root; pointing
-> `TT_METAL_HOME` at some other tt-metal tree mixes in a different version's kernels.
+> **Do not set `TT_METAL_HOME`.** `ttnn` self-locates its runtime root from the tree it was
+> installed from; pointing `TT_METAL_HOME` at a different tt-metal tree mixes in another
+> version's kernels — which is exactly the drift this setup exists to remove.
 >
 > **Boot takes ~10 min** (weight convert/tilize + prefill+decode warmup). Ready at
 > `Application startup complete`. The KV line should read
