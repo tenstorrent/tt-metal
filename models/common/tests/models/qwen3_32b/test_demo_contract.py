@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.common.models.executor import _is_traced_executor
 from models.common.models.qwen3_32b import executor as qwen3_executor
 
 _DEMO_PATH = "models/common/tests/demos/qwen3_32b/demo.py"
@@ -25,6 +24,10 @@ def _calls(function_name, called_name):
         for node in ast.walk(_function(function_name))
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == called_name
     ]
+
+
+def _has_trace_surface(executor) -> bool:
+    return hasattr(executor, "trace_id_prefill") and hasattr(executor, "trace_ids_decode")
 
 
 def test_demo_case_manifest_is_preserved():
@@ -129,4 +132,4 @@ def test_traced_compatibility_wrapper_is_accepted_by_transition_perf_helper(monk
     model = SimpleNamespace(model_args=SimpleNamespace(), config=SimpleNamespace(max_seq_len=4096, max_batch_size=32))
     traced = qwen3_executor.TracedQwen3_32BExecutor(model, mesh_device=object(), ondevice_decode_loop=True)
 
-    assert _is_traced_executor(traced)
+    assert _has_trace_surface(traced)

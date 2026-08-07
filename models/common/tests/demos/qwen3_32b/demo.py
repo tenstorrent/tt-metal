@@ -46,16 +46,16 @@ from loguru import logger
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
+from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor, TracedQwen3_32BExecutor
+from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_PERFORMANCE, Qwen3_32B
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
     load_eval_repeat_prompts_batch32,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor, TracedQwen3_32BExecutor
-from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_PERFORMANCE, Qwen3_32B
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -94,7 +94,7 @@ EXPECTED_METRICS: dict = {
 # -k batch-1, "Average speed"): perf 27.1 t/s/u (36.9ms/step, TTFT 118.8ms), acc 22.57 (44.3ms/step).
 #
 # DECODE GAP CLOSED (issue #49282, fixed by #49284). The base now carries the shared on-device decode
-# loop + pipelined non-blocking readback (models/common/models/executor.py), and it IS wired into this
+# loop + pipelined non-blocking readback (model-owned traced executor), and it IS wired into this
 # model (TracedQwen3_32BExecutor(ondevice_decode_loop=...) on the perf path). That removes the per-step
 # host round-trip (blocking readback + synchronize_device) that made TTTv2 ~35% slower at batch-1 on the
 # old base (c93ed50, which had no on-device decode loop). On a healthy box TTTv2 on_device_topk reaches
