@@ -3569,6 +3569,36 @@ state and not comparable" and moved on. That is the shape of an excuse, not a me
 paired run had shown 86 → 85, which established *my change* was innocent and nothing more. The
 question of why the level was 86 went unasked for one line of prose.
 
+### 6.55 — prefill is where the synthetic error lives, and there is no lever worth pulling
+
+Follow-up to §6.54: if Block 1's prefill is the source, can it be improved? Priced the only lever
+§6.16 found to matter — weight dtype — on both populations at once:
+
+| arm | REAL PCC | REAL rel | SYN PCC | SYN rel | ms/step |
+|---|---|---|---|---|---|
+| **shipped** (FF bf8, attn bf8) | 0.999894 | **0.70%** | 0.986540 | 15.58% | **17.26** |
+| +bf16 FF | 0.999914 | **0.70%** | 0.976994 | 20.47% | 20.11 |
+| all bf16 | 0.999934 | **0.70%** | 0.990304 | 18.01% | 22.16 |
+
+**1. THE SYNTHETIC NUMBER IS NON-MONOTONIC IN PRECISION.** FF→bf16 is unambiguously more precise
+and makes synthetic PCC **worse** (0.9865 → 0.9770). A metric that degrades when you improve the
+implementation cannot rank configurations — off-manifold the model is chaotic, and the number
+reports which arbitrary point in the basin you landed on, not an error magnitude. This kills the
+idea that the synthetic gate is a useful *sensitivity canary* for regressions real prompts would
+hide; that hypothesis was proposed here and rejected by this measurement. **Never rank a config on
+the synthetic block.**
+
+**2. REAL-PROMPT PREFILL ERROR IS PINNED AT 0.70% ACROSS THE WHOLE LADDER.** Doubling every
+weight's precision buys **+0.00004 PCC for +4.91 ms/step** (~12% slower). So the residual 0.70% is
+**not weight quantisation** — it is activation precision and accumulation. There is no weight lever
+left, which independently confirms §6.16's knee from the opposite direction: §6.16 showed going
+*down* in precision costs accuracy; this shows going *up* buys none.
+
+**So the answer to "what can we do about it" is: nothing, and that is a measured result rather
+than a shrug.** Real-prompt prefill sits at PCC 0.999894 last-position, ahead of tt_transformers'
+own 0.999564 at P=200 on the same FF-BFP8 config, with long-form WER 1 in 894. The 15.58% only
+exists for inputs the model is never asked to process.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
