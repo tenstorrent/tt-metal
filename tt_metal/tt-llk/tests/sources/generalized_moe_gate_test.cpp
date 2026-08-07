@@ -183,6 +183,17 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
 // One SFPU call on DEST tile 0; each gate functor walks its own region offsets from there.
 #define GMG_SFPU_CALL(FN, TEMPLATES, ...) SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0, VectorMode::RC_custom, ##__VA_ARGS__)
 
+// The MOP runners take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
+// In the op that is tile 0, because the eltwise binary ahead of them runs at dst_index 0 and leaves
+// it there, which is why run_gate does not call this. MOVE and RUN skip the binary and reach the MOPs
+// straight out of datacopies that walk all four tiles, so the offset would sit at tile 3. Put it back
+// so those modes exercise the MOPs under the offset the op actually gives them.
+static inline void mop_dest_reset()
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
+}
+
 static inline void run_gate()
 {
     GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
@@ -245,30 +256,36 @@ static inline void run_move()
     if constexpr (GMG_SUB_OP == MOVE_STEP0)
     {
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP1)
     {
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP1_HI)
     {
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<GMG_D2B_DST, GMG_B2D_BASE, false>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP2)
     {
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
     }
     else
     {
         _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false, GMG_SRCB>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
         if constexpr (GMG_SECOND_COPY)
         {
             _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC_2, GMG_ROW_DST_2, false, GMG_SRCB_2>();
+            mop_dest_reset();
             _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
         }
     }
@@ -281,6 +298,7 @@ static inline void run_placement()
         // An FPU MOP leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
         // on entry; without a MOP in front of them that reset is never needed and never tested.
         _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false, GMG_SRCB>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
     }
 
@@ -311,6 +329,7 @@ static inline void run_placement()
         GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 2, 8, 10, 4, 6));
         GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false>();
+        mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
     }
     else if constexpr (GMG_SUB_OP == RUN_COMBINE_RELOCATED)
