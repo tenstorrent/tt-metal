@@ -276,6 +276,24 @@ ScratchpadSpec{
 },
 ```
 
+**`data_format_metadata` has no counterpart, so establish that nothing uses it before dropping it.**
+A `ScratchpadSpec` carries only `unique_id` and `size_per_node`. The field exists on a DFB for the
+LLKs, which reach tiles through the FIFO protocol, so on a buffer that qualifies for this pass it is
+*expected* to be inert — but that is a statement about what the field is for, not a guarantee about
+the op in front of you, and nothing stops an op consulting it some other way.
+
+So check rather than assume, and be particular about it here: unlike the DM self-loop pass, this one
+can convert a buffer bound by a **compute** kernel, which is where LLK use is plausible in the first
+place. Walk every use of the DFB's handle or id across the binding kernels — if each one is a raw
+address grab or a NOC operand, nothing consults the declared format and the field drops. A comment
+beside the spec saying the format is inert is a pointer to what the author intended, not a substitute
+for looking.
+
+**If anything does consult it, stop and report** rather than improvising a way to carry it. That
+combination is not currently expressible, and a real op needing it is exactly the evidence the API
+owner wants; a workaround in your diff buries it instead. Either way, do not carry it through as a
+compile-time arg — that is out of scope for this pass.
+
 `size_per_node` is the same number of bytes the DFB reserved on each node — carry it across, do not
 recompute it from tile counts. A DFB sized as *entries × entry size* becomes that product.
 
