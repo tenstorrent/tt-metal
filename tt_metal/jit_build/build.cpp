@@ -164,8 +164,17 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-        "-flto=auto -ffast-math "
+        // Use C++17, plus some specific C++20 features we've enabled
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        // Ban dynamic initializations, via a check we've added
+        "-ftt-no-dyninit "
+        // Rely on Link Time Optimization (removes globally unreachable code)
+        "-flto=auto "
+        // Fast math allows non-IEEE compliant optimizations ...
+        "-ffast-math "
+        // ... but we require these IEEE behaviors
+        "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+        // No exceptions or rtti emission, and no using cxa-atexit for cleanups
         "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
@@ -179,11 +188,14 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
+        // Extra warnings and make them fatal
         "-Wall -Werror "
+        // But don't die for these warnings
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
-        "-Wno-error=unused-but-set-variable -Wno-unused-variable "
-        "-Wno-unused-function ";
+        "-Wno-error=unused-but-set-variable "
+        // And don't detect these issues
+        "-Wno-unused-variable -Wno-unused-function ";
 
     // Defines
     this->defines_ = "";

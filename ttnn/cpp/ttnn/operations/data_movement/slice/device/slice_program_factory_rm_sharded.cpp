@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -214,10 +215,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
-    // stick sizes
-    uint32_t W_padded = input.logical_shape()[-1];
     uint32_t W_unpadded = output.logical_shape()[-1];
-    auto stick_size_padded = W_padded * input.element_size();
     auto stick_size_unpadded = W_unpadded * output.element_size();
 
     // input shard spec
@@ -263,6 +261,15 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
+    const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
+    const uint32_t dst_stride_bytes = output.buffer()->aligned_page_size();
+    const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
+    TT_FATAL(
+        begins_bytes % ::hal::get_l1_alignment() == 0,
+        "SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
+        begins_bytes);
+
     // Sharded CBs: total_size and page_size vary with shard shape / element size,
     // so padded_shape is folded into compute_program_hash() to keep each unique
     // sizing in its own cache entry.  On cache hit, the framework copies runtime
@@ -271,32 +278,34 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // CB order here (src0, then c_16) is mirrored positionally by override_runtime_arguments; keep in sync.
     constexpr uint8_t src0_cb_index = 0;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_padded * stick_size_padded,
+        .total_size = shard_height_padded * src_stride_bytes,
         .core_ranges = all_cores_unpadded,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src0_cb_index,
             .data_format = cb_data_format,
-            .page_size = stick_size_padded,
+            .page_size = src_stride_bytes,
         }}},
         .buffer = input.buffer(),
     });
 
     constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_unpadded * stick_size_unpadded,
+        .total_size = shard_height_unpadded * dst_stride_bytes,
         .core_ranges = all_cores_unpadded,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = output_cb_index,
             .data_format = dst_cb_data_format,
-            .page_size = stick_size_unpadded,
+            .page_size = dst_stride_bytes,
         }}},
         .buffer = output.buffer(),
     });
 
     std::vector<uint32_t> reader_ct_args = {
-        static_cast<uint32_t>(stick_size_padded),
         static_cast<uint32_t>(stick_size_unpadded),
-        static_cast<uint32_t>(shard_height_unpadded)};
+        static_cast<uint32_t>(shard_height_unpadded),
+        src_stride_bytes,
+        dst_stride_bytes,
+        begins_bytes};
 
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
         input,

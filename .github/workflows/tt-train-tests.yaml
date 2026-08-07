@@ -176,16 +176,7 @@ jobs:
       - name: Install ttml module
         if: ${{ inputs.wheel-artifact-name }}
         timeout-minutes: 10
-        run: |
-          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
-          if [[ -z "$SITE_PACKAGES" ]]; then
-            echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
-            exit 1
-          fi
-          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
-          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
-          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
-          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+        run: bash -c ./tt-train/scripts/setup_pth.sh
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}

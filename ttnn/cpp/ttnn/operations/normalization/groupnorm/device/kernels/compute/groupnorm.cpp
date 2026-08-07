@@ -198,10 +198,8 @@ void kernel_main() {
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
     bool copy_or_add = true;
-    bool reset_index = false;
     uint32_t group_reset_index = 0;
     uint32_t index_block_w = 0;
-    uint32_t output_tile_index = 0;
     bool apply_gamma_beta[block_w];
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
@@ -306,10 +304,8 @@ void kernel_main() {
 
         row_offset = num_cols_per_group;
         copy_or_add = true;
-        reset_index = false;
         group_reset_index = 0;
         index_block_w = 0;
-        output_tile_index = 0;
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {

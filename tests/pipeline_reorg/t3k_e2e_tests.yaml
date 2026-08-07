@@ -38,7 +38,7 @@
   skus:
     wh_llmbox:
       timeout: 10
-  owner_id: U08LD7UCKDF # Tomer Levin
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 - name: t3k_dispatch_unit_tests

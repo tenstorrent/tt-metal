@@ -305,6 +305,40 @@ def test_all_skus_on_comment_only_yaml_yields_empty_matrix(tmp_path: Path):
     assert matrix == []
 
 
+def test_cmd_strips_indented_comments(tmp_path: Path):
+    """Whole-line '#' comments inside a cmd block are dropped from the matrix cmd.
+
+    Regression for galaxy_stress_tests.yaml: a comment carrying a lone apostrophe
+    and parentheses (e.g. "overrides setup-job's 5s default") otherwise lands in
+    the matrix JSON's cmd and breaks downstream shell single-quoting of the cmd.
+    """
+    path = tmp_path / "comment_cmd.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: commented test
+              cmd: |
+                # 0 disables the timeout (overrides setup-job's 5s default), which
+                # else false-fails slow subtests (size_4096 unicast ~6.2s).
+                run_the_thing --filter 'name.*_short'
+              skus:
+                wh_n150_civ2:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    matrix = run_matrix(path, "wh_n150_civ2")
+    assert len(matrix) == 1
+    cmd = matrix[0]["cmd"]
+    # Comment lines (and their apostrophes/parentheses) are gone; the real
+    # command line — including its own single-quoted arg — survives intact.
+    assert "#" not in cmd
+    assert "setup-job's" not in cmd
+    assert "run_the_thing --filter 'name.*_short'" in cmd
+
+
 def test_models_merge_gate_placeholder_skips(tmp_path: Path):
     """The real (currently empty) models gate list must not fail on merge_group."""
     matrix = run_matrix(
