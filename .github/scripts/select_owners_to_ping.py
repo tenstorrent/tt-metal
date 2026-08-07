@@ -102,6 +102,13 @@ def approved(login: str, approved_reviewers: str) -> bool:
     return login != "" and login in approved_reviewers
 
 
+def approved_exact(login: str, approved_reviewers: str) -> bool:
+    """Exact match, matching the original per-file `... | tr ',' '\\n' | grep -qx`."""
+    if login == "":
+        return False
+    return login in approved_reviewers.replace(",", "\n").split("\n")
+
+
 class Selector:
     def __init__(self) -> None:
         # TEAM_MEMBERS may be passed inline or via a file path (the original
@@ -192,27 +199,16 @@ class Selector:
 
         result: dict[str, bool] = {}
         for key, combined in files_to_members.items():
-            has_approval = any(
-                approved(m, self.approved_reviewers)
-                for m in combined.split(",")
-                if m
-            )
+            has_approval = any(approved(m, self.approved_reviewers) for m in combined.split(",") if m)
             if has_approval:
                 log(f"DEBUG select-owners: Files [{key}] approved (combined)")
             else:
                 for other_key, other_members in files_to_members.items():
                     if other_key == key or not has_overlap(key, other_key):
                         continue
-                    if any(
-                        approved(m, self.approved_reviewers)
-                        for m in other_members.split(",")
-                        if m
-                    ):
+                    if any(approved(m, self.approved_reviewers) for m in other_members.split(",") if m):
                         has_approval = True
-                        log(
-                            f"DEBUG select-owners: Files [{key}] approved via "
-                            f"overlapping set [{other_key}]"
-                        )
+                        log(f"DEBUG select-owners: Files [{key}] approved via " f"overlapping set [{other_key}]")
                         break
             result[key] = has_approval
         return result
@@ -266,11 +262,7 @@ class Selector:
                 file_approved = False
                 for fset, members in files_to_members.items():
                     if tfile in fset.split(","):
-                        if any(
-                            approved(m, self.approved_reviewers)
-                            for m in members.split(",")
-                            if m
-                        ):
+                        if any(approved_exact(m, self.approved_reviewers) for m in members.split(",") if m):
                             file_approved = True
                             break
                 if not file_approved:
@@ -299,11 +291,7 @@ class Selector:
 
             # metalium-api-owners: always include akerteszTT for tt_metal/api/ files.
             if team == API_OWNERS_TEAM:
-                files_under_api = any(
-                    f.lstrip("./").startswith("tt_metal/api/")
-                    for f in team_files.split(",")
-                    if f
-                )
+                files_under_api = any(f.lstrip("./").startswith("tt_metal/api/") for f in team_files.split(",") if f)
                 if files_under_api and API_REQUIRED_REVIEWER in unapproved:
                     selected_owners.append(API_REQUIRED_REVIEWER)
                     unapproved = [u for u in unapproved if u != API_REQUIRED_REVIEWER]
