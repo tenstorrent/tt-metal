@@ -22,7 +22,6 @@ void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t number_of_available_cores = get_arg(args::number_of_available_cores);
     constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
     constexpr bool descending = get_arg(args::descending);
     constexpr bool stable =
         get_arg(args::stable);  // TODO: In the future change LLK to have the option or add additional step with
