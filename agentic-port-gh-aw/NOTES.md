@@ -593,3 +593,42 @@ are recorded in the order sidecar and consumed positionally but excluded from sa
 - `workflow_dispatch` resolves against the default branch, so a workflow not yet on main cannot be
   dispatched. V1 carries a temporary `push` trigger on `ebanerjee/port-op-dryrun` for shakedown;
   **remove it before merge**.
+
+### 12.5 V1 output vs the hand-written pad port — the v2 backlog
+
+Draft [PR #50699](https://github.com/tenstorrent/tt-metal/pull/50699) is the hand-written pad port.
+Comparing its file set against what v1 produces:
+
+**Matches exactly.** All five kernels (`reader_pad_rm_interleaved.cpp`,
+`reader_tile_interleaved_unified.cpp`, `sequencers.h`, `writer_pad_rm_interleaved.cpp`,
+`writer_pad_tiled_interleaved.cpp`), the six `codegen/` host files, both CMake registrations
+(byte-identical), and the three shared-file edits (`pad.cpp`, `pad.hpp`, `pad_nanobind.cpp`).
+
+**Three divergences, all deliberate or benign:**
+
+1. `pad_codegen_device_operation_types.hpp` — the PR has a seventh header that `scaffold.py` does
+   not create. Not a blocker: the write-path allowlist covers all of `pad/codegen/`, so the agent
+   can add it. Worth scaffolding in v2 so the file set is fully predetermined.
+2. `tests/.../test_pad_codegen.py` — the PR ships a generated routing test. V1 drops it *and* the
+   allowlist actively blocks the agent from writing it, which is the intended behaviour: no
+   agent-written hardware tests, ever. **The v2 answer is not to relax the rule but to generate
+   this test deterministically from the ledger**, the same way `scaffold.py` generates the tree.
+   It is a mechanical projection of the `scope: in` / `scope: out` split and needs no model.
+3. `.gitignore` — the PR touches it; the allowlist blocks that. Almost certainly incidental to the
+   hand-written port rather than something a port needs.
+
+**Perf comparison.** Measured locally against the hand-written port on a Blackhole card:
+`device_vs_native` 1.07–1.31, wall ratio 1.008–1.039. These are the numbers v1's gates would grade,
+so a generated port is directly comparable to the hand-written one on the same scale. The remaining
+question v1 cannot answer by itself is whether an agent starting from `main` reaches the same
+routing predicates — that is what the shakedown run exists to find out.
+
+### 12.6 Deferred to v2
+
+- Generate the routing test from the ledger (see above).
+- Demotion analysis. `is_demoted()` is a v1 stub returning `false`; the real gate needs the
+  per-config perf data v1 already collects, so the input exists.
+- Phase 4b independent review of the diff.
+- Cross-arch dispatch. V1 is N150 only; `ARCH_NAME` is currently hardcoded `wormhole_b0`.
+- Update mode, phase 2 manifest generation, phase 1 intake screen.
+- Scaffold `<op>_codegen_device_operation_types.hpp`.
