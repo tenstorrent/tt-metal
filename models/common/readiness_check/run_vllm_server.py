@@ -160,10 +160,7 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N300": (1, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
-    # Blackhole p300c ×4 (1×4 mesh). The value is only used to gate the --mesh-device argparse
-    # choice; the TT plugin worker maps MESH_DEVICE=P150x4 → (1, 4) when opening the mesh.
     "P150x4": (1, 4),
-    # Blackhole p300c ×2 (1×2 mesh). Plugin worker already maps MESH_DEVICE=P150x2 → (1, 2).
     "P150x2": (1, 2),
 }
 
@@ -240,9 +237,6 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    # The current Tenstorrent vLLM fork consumes the `tt` namespace via
-    # `--additional-config` (the TT platform hook reads it); older builds used
-    # `--plugin-config`.
     cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
