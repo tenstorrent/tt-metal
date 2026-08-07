@@ -260,6 +260,8 @@ class TtJanusProImageAttention(LightweightModule):
             attn_mask=mask,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            # Same reasoning as q/k/v above: nlp_concat_heads is the only consumer.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # deallocate keys and values
@@ -272,6 +274,8 @@ class TtJanusProImageAttention(LightweightModule):
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
+            # DRAM rather than L1, unlike the two ops above: `wo` reads this as a matmul in0,
+            # where an L1 source forces a mcast fan-out instead of a per-core parallel read.
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
