@@ -146,6 +146,13 @@ ladder above 22.
 
 ### 3.5 Tracer coverage decides more than placement does
 
+**What "the tracer" is.** `ttnn-advise` builds its graph by tracing the model's Python `decode` function —
+that trace is the *capture* step, and it is the only thing the advisor ever sees. Some ops are **terminal** in
+it: `ttnn.copy` on mutable state, `ttnn.sparse_matmul`, `softplus`, `recurrent_state_update`. When the trace
+reaches one, it stops there, and everything downstream is absent from the graph. The advisor then declares those
+ops in `report.json`'s `uncapturable` field, and the reconciliation books the profiled cost it cannot pair as
+`untraced`.
+
 | model | unreachable | cause |
 |---|---|---|
 | qwen3.6-27B (both arms) | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` |
@@ -154,8 +161,12 @@ ladder above 22.
 | phi-3.5 B | the fused-cache share | no tracer handler for `paged_fused_update_cache` |
 
 Every structural zero in the corpus is a tracer-coverage zero. qwen's linear layers cost ~13× a full layer,
-so **97 % of its model decode time** was never advised on. **This is a `$shard-advise`/tt-mlir coverage problem, not
-a placement problem.**
+and that kind is **97 % of its model decode time**. But the trace stops *inside* the layer, not before it: of
+qwen B's 15,833 µs `linear_attention` window, **63.5 % is `untraced`** (the gated-delta token mixer — `ttnn.copy`,
+`softplus`, `recurrent_state_update`), while the surrounding residual/norm/MLP envelope **is** captured —
+boundary 30.9 %, disagreements 2.7 %, agreement 2.9 %. So the advisor saw about **36 %** of it, and **≈62 % of
+qwen B's model decode time sits in ops the tracer could not capture**. **This is a `$shard-advise`/tt-mlir
+coverage problem, not a placement problem.**
 
 ### 3.6 A ~0 µs ceiling is not a stopping condition
 
@@ -1018,7 +1029,7 @@ gives 0.807535 → 0.663507 ms/layer × 32 layers (§3.27). The corpus total mov
 | # | opportunity | scale | kind of fix |
 |---|---|---|---|
 | 1 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 %** | **decoder**: get the 4-element conv window off the 32-wide tile axis (circular buffer) — §3.19 |
-| 2 | qwen's untraced linear attention | **97 %** of its decode time never advised on | tt-metal: tracer support for mutable-state `ttnn.copy` |
+| 2 | qwen's untraced linear attention | the kind is **97 %** of decode time; **≈62 %** of the model is in ops the tracer cannot capture | tt-metal: tracer support for mutable-state `ttnn.copy` |
 | 3 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
 | 4 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model, 3.9× what that cell shipped | tt-metal (sharded GQA SDPA output) then a decoder change |
 | 5 | phi FN's discarded combined candidate | **+8.5 pp** on that cell | stage: absolute oracle at the model's own bar |

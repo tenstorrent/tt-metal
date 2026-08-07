@@ -73,7 +73,7 @@ be a stopping condition on its own.
 
 Every structural zero in this corpus is a tracer-coverage zero, and the biggest one hides **97 %** of a
 model's decode time behind a single unhandled op. Placement work on the visible 3 % cannot compete with making
-the other 97 % visible. Coverage is the highest-leverage investment available.
+the ≈62 % of it that the tracer cannot capture visible. Coverage is the highest-leverage investment available.
 
 ## I5. A per-process protocol cannot control a cross-process effect
 

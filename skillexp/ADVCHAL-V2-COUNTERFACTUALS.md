@@ -610,7 +610,7 @@ proven class and the rest is small: `multiply` 9.0 %, `add` 4.8 %, `slice_static
 | # | opportunity | scale | kind of fix |
 |---|---|---|---|
 | 1 | `retilize` on qwen's `add → rms_norm` edge | **191 ms/model, 24.4 %** | tt-metal: tiled input for conv/recurrent composites |
-| 2 | qwen's untraced linear attention | 97 % of decode time unexamined | tt-metal: tracer support for mutable-state `ttnn.copy` |
+| 2 | qwen's untraced token mixer | ≈62 % of decode time never advised on | tt-metal: tracer support for mutable-state `ttnn.copy` |
 | 3 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model | tt-metal: sharded GQA SDPA output, then a decoder change |
 | 4 | the four unshipped placement wins | ≈8 ms/model total | stage: oracle rule + grid ladder |
 

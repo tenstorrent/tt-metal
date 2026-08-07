@@ -116,7 +116,8 @@ Cheap to make, expensive downstream, because everything built on them inherits t
 | gemma-4-26B: "the fusing arm had already fixed it" | The **fastest** arm is a `nofuse` arm. The variable is stage-02 quality, not fusing | Comparing the arms' controls |
 | The advisor has a "**fewer-cores bias**" | Its ordering prefers **more** cores, at level 6 of 7. The low values come from somewhere else — still an open question | Reading `LayoutScore::operator>` in the tt-mlir source |
 | `nlp_create_qkv_heads_decode` on 1 core is a **starved reduction** | **Not a defect.** The op height-shards over *batch*, so its core count **is** the batch size — exactly, across all 23 corpus rows (batch 1 → 1 core, batch 32 → 32). The advisor advising 1 is **correct** | Checking the core count against the batch across every cell |
-| qwen's unreachable linear layers are "~91 %" of its model time | **97 %** | Recomputing from its own per-kind medians and layer counts |
+| qwen's unreachable linear layers are "~91 %" of its model time | **97 %** is the layer kind's share of model time | Recomputing from its own per-kind medians and layer counts |
+| …and then that 97 % was "never advised on" | **Wrong — the trace stops *inside* the layer.** Of qwen B's 15,833 µs `linear_attention` window, 63.5 % is `untraced`; the residual/norm/MLP envelope around the token mixer **is** captured. The advisor saw ≈36 % of it, so **≈62 %** of the model was never advised on, not 97 % | Reading the layer's own `accounting` block instead of inferring it from "the kind is uncapturable" |
 | DS-matmul advice never wins | One **did** — gemma-4-12B, `linear` 12 → 55 cores, kept | Reading the cells' kept lists rather than the skill's claim |
 
 **The check:** before calling a low core count a defect, ask what the op's sharding *semantics* are. And derive
