@@ -146,6 +146,10 @@ ladder above 22.
 
 ### 3.5 Tracer coverage decides more than placement does
 
+**The capture scripts themselves vary enormously** — 54 to 290 lines, four cells substitute model methods
+before tracing, six never trace the model's own `decode_forward`. That is its own audit:
+[`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md).
+
 **What "the tracer" is.** `ttnn-advise` builds its graph by tracing the model's Python `decode` function. That
 trace is the *capture* step, and the graph it produces is the only thing the advisor ever sees. Certain ops are
 **terminal** in it — `ttnn.copy` on mutable state, `ttnn.sparse_matmul`, `softplus`, `recurrent_state_update`.

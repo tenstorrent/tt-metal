@@ -312,13 +312,25 @@ rediscovering errors handed to them in writing: phi FN's `advisor_sdpa_concat_l1
 both record the identical string from `unfixable_ops`. `SKILL.md` and the stage prompt never mention the field.
 → action **C5g**.
 
-### D13. The capture does not trace the cell's own RoPE
+### D13. Capture scope is unconstrained, unrecorded, and varies 6× between cells
 
-The capture template substitutes a hand-written `_decode_rope` before tracing, with the stated reason *"the
-direct advisor tracer cannot query a symbolic tensor's runtime `memory_config()`"*. So the advisor never sees the
-shipped implementation of that region — its advice there is advice for a stand-in, and a RoPE-side change cannot
-reach the capture at all. Either fix the tracer limitation or record the substitution in `report.json` so a
-reader knows which regions of the advice are second-hand.
+Not a template defect — a **per-cell** one, and it is the most under-examined part of the stage. Fifteen cells
+wrote fifteen capture scripts, **54 to 290 lines**, and nothing compares them.
+
+- **Four cells substitute model methods before tracing.** phi FN, B and onA each replace `_decode_rope` (the
+  tracer cannot resolve `memory_config()` before layout assignment, so they write a stand-in with a declared
+  config); **qwen B replaces `_rms_norm_decode`, `_decode_linear` and `_partial_rope_decode`** — three of the op
+  classes this corpus's findings concern. The advisor's advice for those regions is advice for a stand-in.
+- **Six never trace the model's own `decode_forward`**, hand-writing the traced path instead.
+- **At one shared terminal — `ttnn.sparse_matmul` — five cells stopped in four different places**, from 30 ops
+  captured down to 5. A 6× spread on the same wall in the same model family.
+- **Two invented private env knobs** (`CHALLENGER_CAPTURE_ATTENTION_ONLY`, `CHALLENGER_FINALIZE_CAPTURE`) whose
+  values are not recorded anywhere, so a reader cannot tell which mode produced a given capture.
+
+The fix is cheap and it is one field: **record the capture's own scope in `report.json`** — ops attempted,
+methods substituted, knobs and their values. Without it, cross-cell coverage numbers mix captures that attempted
+very different amounts of the layer, and nothing in the artefacts says so.
+→ [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md).
 
 ---
 

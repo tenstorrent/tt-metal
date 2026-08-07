@@ -246,6 +246,7 @@ caught each one.
 |---|---|
 | **this file** | the verdict, the cells, the ledger — a few minutes |
 | [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the detailed analysis: 29 findings and the method** — this is where `§3.x` lives |
+| [`ADVCHAL-V2-CAPTURE-VARIANCE.md`](ADVCHAL-V2-CAPTURE-VARIANCE.md) | **how the 15 cells captured** — 54 to 290 lines for the same job; 4 substitute model methods, 6 never trace `decode_forward`, and what that costs comparability |
 | [`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md) | **30 corrected mistakes, in 7 patterns**, each with the check that would have caught it — plus what remains unverified |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
