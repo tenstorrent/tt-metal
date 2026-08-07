@@ -44,8 +44,31 @@ Traced steady-state (`LTX_TRACED=1`, warmup + replay), same shape: 1088×1920, 1
 | **Total** | **7.6s** |
 
 
+### 1080p AV Pro (2-stage, full guidance) — Blackhole Galaxy (4×8), traced
+
+Traced steady-state (`LTX_TRACED=1`, gen #1 pure replay), 1088×1920, 145 frames. Stage 1 runs 30
+guided steps; at the default scales each step is 4 transformer branches (cond + CFG + STG +
+modality), so 120 forwards against the distilled path's 11.
+
+| Stage | Time |
+|-------|------|
+| Gemma encode (device; cached prompt) | 0.0s |
+| Stage 1 denoise (half-res, 120 guided forwards) | 32.2s |
+| Latent upsample | 0.2s |
+| Stage 2 denoise (full-res, distilled LoRA) | 2.7s |
+| VAE decode | 0.9s |
+| Audio decode (on-device) | 0.8s |
+| **Total** | **36.8s** |
+
+Guidance runs device-resident: the combination is linear in the velocity, so only the rescale's two
+moment scalars per modality cross to the host each step. At 0.27s per guided forward the branch
+bookkeeping costs nothing measurable against the distilled path's 0.29s per unguided forward.
+
 Remaining performance work:
-- batched/fused MultiModalGuider passes
+- batched/fused MultiModalGuider passes — the cond/uncond pair can share one forward; the STG and
+  modality branches skip different blocks, so they stay separate
+- traced capture and replay diverge at a fixed seed (PSNR 26 dB Pro, 21 dB distilled), so gen #0 is
+  not reproducible from gen #1
 
 ## Prerequisites
 
