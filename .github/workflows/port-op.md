@@ -86,18 +86,22 @@ steps:
       } >> $GITHUB_ENV
       mkdir -p /tmp/ccache
 
+  # Checked out at the workspace root, not a subdirectory: gh-aw's own later steps assume the
+  # workspace root is the repository, and a subdirectory checkout fails them.
   - name: Checkout tt-metal
     uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     with:
       fetch-depth: 0
       submodules: recursive
-      path: docker-job
       # The agent has no business holding a push token; the pull-request safe output does the
       # pushing from outside the sandbox.
       persist-credentials: false
 
   # Read-only, credentials not persisted: the agent must never be able to push to the generator
-  # repo, and the port only ever reads from it.
+  # repo, and the port only ever reads from it. `actions/checkout` cannot place a repo outside the
+  # workspace, so it lands in a dotted directory that is then excluded from tt-metal's index --
+  # otherwise the whole generator tree reads as untracked files and the write-path guard, which
+  # counts untracked files, would refuse every verify call.
   - name: Checkout tt-dm-codegen
     uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     with:
@@ -105,11 +109,11 @@ steps:
       ref: ${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}
       token: ${{ secrets.CODEGEN_REPO_TOKEN }}
       persist-credentials: false
-      path: codegen
+      path: .codegen
 
   - name: Record the base commit
-    working-directory: docker-job
     run: |
+      echo ".codegen/" >> .git/info/exclude
       echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
       echo "PORT_OP=${{ inputs.op || 'pad' }}" >> $GITHUB_ENV
       echo "PORT_CATEGORY=${{ inputs.category || 'data_movement' }}" >> $GITHUB_ENV
@@ -132,8 +136,8 @@ steps:
         --device /dev/tenstorrent \
         --group-add 1457 \
         --network host \
-        -v "${{ github.workspace }}/docker-job:/work" \
-        -v "${{ github.workspace }}/codegen:/codegen" \
+        -v "${{ github.workspace }}:/work" \
+        -v "${{ github.workspace }}/.codegen:/codegen" \
         -v /dev/hugepages-1G:/dev/hugepages-1G \
         -e TT_METAL_HOME=/work \
         -e PYTHONPATH=/work:/work/ttnn:/work/tools:/codegen \
@@ -187,13 +191,21 @@ steps:
     continue-on-error: true
     run: docker exec portdev ccache -sv || true
 
+  # ttnn imports graphviz via ttnn.graph, which the dev image's system Python does not carry, so
+  # the harness needs tt-metal's own virtualenv rather than whatever python3 is on PATH.
+  - name: Create the Python environment
+    timeout-minutes: 30
+    run: |
+      docker exec portdev ./create_venv.sh
+      docker exec portdev ./python_env/bin/python3 -c 'import ttnn, graphviz; print("ttnn imports OK")'
+
   # Informational, and deliberately non-fatal: the ported leg is still an empty stub here, so this
   # is expected to report a failing verdict. Its value is proving the harness and the card work
   # before the agent starts, so a later failure is unambiguously the agent's code.
   - name: Native baseline
     continue-on-error: true
     run: |
-      docker exec portdev python3 .github/scripts/port/gate.py \
+      docker exec portdev ./python_env/bin/python3 .github/scripts/port/gate.py \
         --op "${{ inputs.op || 'pad' }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
         --category "${{ inputs.category || 'data_movement' }}" --band performance --repo /work \
         --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] || '24' }}" --skip-write-check || true
@@ -232,7 +244,7 @@ mcp-scripts:
         correctness|performance|both) BAND="$INPUT_BAND" ;;
         *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
       esac
-      docker exec portdev python3 .github/scripts/port/gate.py \
+      docker exec portdev ./python_env/bin/python3 .github/scripts/port/gate.py \
         --op "$PORT_OP" --manifest "$PORT_MANIFEST" --category "$PORT_CATEGORY" \
         --band "$BAND" --repo /work --base-sha "$PORT_BASE_SHA" --limit "$PORT_LIMIT"
 
@@ -264,14 +276,14 @@ diagnostic will be prefixed differently from the path you edit. They are the sam
 
 | What | Where you edit it |
 | --- | --- |
-| tt-metal checkout (your working tree) | `docker-job/` |
-| The op you are porting | `docker-job/ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'pad' }}/` |
+| tt-metal checkout (your working tree) | the workspace root |
+| The op you are porting | `ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'pad' }}/` |
 | Your stubs to fill in | `.../${{ inputs.op || 'pad' }}/codegen/` |
-| tt-dm-codegen (read-only) | `codegen/` |
-| The manifest — source of truth | `codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml` |
-| The porting guide — read this first | `codegen/agentic_port/knowledge/porting-guide.md` |
-| The generator you are transliterating | the manifest's `codegen_builder` path, under `codegen/` |
-| **A finished, merged port to imitate** | `docker-job/ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/` |
+| tt-dm-codegen (read-only) | `.codegen/` |
+| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml` |
+| The porting guide — read this first | `.codegen/agentic_port/knowledge/porting-guide.md` |
+| The generator you are transliterating | the manifest's `codegen_builder` path, under `.codegen/` |
+| **A finished, merged port to imitate** | `ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/` |
 
 Read the manifest and the porting guide in full before you write anything. The merged `repeat`
 port is the single most useful thing here: it is a complete, reviewed example of exactly the
