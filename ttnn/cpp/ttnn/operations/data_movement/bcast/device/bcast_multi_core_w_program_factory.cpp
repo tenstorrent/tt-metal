@@ -146,7 +146,8 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreWProgramFactory::create_p
         .unique_id = COMPUTE,
         .source =
             std::filesystem::path("ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp"),
-        .compiler_options = {.defines = compute_defines},
+        // Compute default opt_level is O3 in legacy but O2 in Metal 2.0 — set it explicitly to preserve.
+        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
