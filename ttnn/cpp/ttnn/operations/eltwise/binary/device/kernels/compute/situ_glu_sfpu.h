@@ -26,6 +26,10 @@
 // sfpu_reciprocal_iter reads vConstFloatPrgm0 -- so it cannot be used for the
 // sigmoid here. _situ_glu_reciprocal_ below carries its constant as a literal
 // instead, letting a single tanh_init serve the whole op.
+//
+// tanh is always the Sollya polynomial (never _sfpu_tanh_fp32_accurate_), in both
+// dst modes -- tanh_init only loads the polynomial coefficients. fp32 dst raises
+// only the exp/reciprocal precision, not tanh's.
 //=============================================================================
 
 #if defined(TRISC_PACK) || defined(TRISC_MATH)

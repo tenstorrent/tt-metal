@@ -899,8 +899,8 @@ Tensor situ_glu(
     const std::optional<MemoryConfig>& output_mem_config) {
     using namespace operations::unary;
 
-    // Keep intermediates resident in L1 for the widths that fit; the final output always
-    // uses the caller's memory config.
+    // Keep intermediates resident in L1 for the widths that fit; the final output uses the
+    // caller's config, defaulting to the input placement (below).
     const std::optional<MemoryConfig> interm_mem = gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN
                                                        ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG)
                                                        : output_mem_config;
@@ -913,7 +913,11 @@ Tensor situ_glu(
         interm_mem);
     // up half: softcap(up, beta2).
     Tensor up_half = ttnn::softcap(up, beta2, interm_mem);
-    return ttnn::multiply(situ_a, up_half, std::nullopt, output_mem_config);
+    // Pin the output to the caller's config, or the input's placement when unset -- otherwise
+    // multiply would inherit situ_a's (possibly L1) config, making output placement depend on
+    // the hidden dim.
+    const MemoryConfig out_mem = output_mem_config.value_or(gate.memory_config());
+    return ttnn::multiply(situ_a, up_half, std::nullopt, out_mem);
 }
 
 }  // namespace ttnn
