@@ -1967,11 +1967,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
             },
         .compile_time_args =
             {
-                {"total_work_units", total_work_units},
                 {"Wt", Wt},
                 {"Ht", Ht},
-                {"total_number_of_cores", total_number_of_cores},
-                {"number_of_available_cores", number_of_available_cores},
                 {"is_32_bit_data", static_cast<uint32_t>(is_32_bit_data)},
                 {"W_tile_bytes", W_tile_bytes},
                 {"W_index_bytes", W_index_bytes},
@@ -2012,9 +2009,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
             {
                 {"Wt", Wt},
                 {"Ht", Ht},
-                {"total_number_of_cores", total_number_of_cores},
                 {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
-                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
                 {"number_of_available_cores", number_of_available_cores},
                 {"W_tile_bytes", W_tile_bytes},
                 {"W_index_bytes", W_index_bytes},
@@ -2047,9 +2042,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
             {
                 {"Wt", Wt},
                 {"Ht", Ht},
-                {"total_number_of_cores", total_number_of_cores},
                 {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
-                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
                 {"number_of_available_cores", number_of_available_cores},
                 {"W_tile_bytes", W_tile_bytes},
                 {"W_index_bytes", W_index_bytes},
@@ -2085,7 +2078,6 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                 {"Ht", Ht},
                 {"number_of_available_cores", number_of_available_cores},
                 {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
-                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
                 {"descending", static_cast<uint32_t>(attributes.descending)},
                 {"stable", static_cast<uint32_t>(attributes.stable)},
                 {"log2Wt", log2Wt},

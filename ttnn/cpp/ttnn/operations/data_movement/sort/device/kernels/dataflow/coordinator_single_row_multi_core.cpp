@@ -34,11 +34,8 @@ void kernel_main() {
     const uint32_t num_multicast_dests = get_arg(args::num_multicast_dests);
 
     // Compile time args
-    constexpr uint32_t total_work_units = get_arg(args::total_work_units);
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t Ht = get_arg(args::Ht);
-    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
-    constexpr uint32_t number_of_available_cores = get_arg(args::number_of_available_cores);
     constexpr bool is_32_bit_data = get_arg(args::is_32_bit_data) == 1;
     constexpr uint32_t W_tile_bytes = get_arg(args::W_tile_bytes);
     constexpr uint32_t W_index_bytes = get_arg(args::W_index_bytes);

@@ -19,9 +19,7 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t Ht = get_arg(args::Ht);
-    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
     constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
     constexpr uint32_t number_of_available_cores = get_arg(args::number_of_available_cores);
     constexpr uint32_t W_tile_bytes = get_arg(args::W_tile_bytes);
     constexpr uint32_t W_index_bytes = get_arg(args::W_index_bytes);
