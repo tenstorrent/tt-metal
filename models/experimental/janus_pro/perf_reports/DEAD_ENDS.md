@@ -61,6 +61,8 @@ Each row is a device measurement, not an opinion.
 
 | stage | lever | measured | why it lost |
 |---|---|---|---|
+| 28 | the patch projection writing L1 **interleaved**, to cheapen the position add | **9.990 ms against 9.401**, +0.589 ms | an interleaved-L1 output propagates into the residual, and from there **47 new `InterleavedToSharded`** appear and the block adds go 3.9 -> 9.7 us. The milder form of the stage-7 result below. Block-sharding the same output, with a 2D config so the grid survives, is change 29 |
+| 28 | the same output block-sharded but with **no** program config | 9.452 ms, +0.051 ms | the shard spec alone is not enough: ttnn's derivation collapsed the projection to **12 cores** and it went 43.7 -> 128.3 us. The consumer side worked exactly as intended (-28 us); the producer paid three times that |
 | 28 | dropping the `qkv` output shard, so the matmul writes DRAM and no unshard is needed | **11.507 ms against 9.300**, +23.7% | re-tested because changes 18 and 19 were measured against an 11.7 ms tower, before LoFi and before the norm shard. The unshard costs 226 us; removing it costs the matmuls **+1.76 ms**. The margin is wider now, not narrower |
 | 26 | narrowing the layer-norm output to bfloat8_b, so `qkv` and `c_fc` read a bfp8 in0 under LoFi | **+0.355 ms**, 295 -> 343 ops | the matmuls *do* gain — `c_fc` 79.2 -> 77.5 us, `qkv` 48.2 -> 47.6, **-0.042 ms** over all 99 — but the conversion cannot ride inside the norm, so it is 48 separate typecasts at **+0.396 ms**, 9.4x what it buys. Why it cannot ride inside: [below](#where-the-bfp8-norm-output-is-blocked) |
 | 24 | `nlp_create_qkv_heads` / `nlp_concat_heads` as slice + reshape + permute | **+29.5 ms, 3.9x slower** | its own section [below](#long-form-the-head-reshape-rewrite) |
@@ -152,6 +154,7 @@ and 28 show the rule was drawn one level too wide.
 | the aligner's intermediate | a matmul | +24 us |
 | **q/k/v from `nlp_create_qkv_heads`** | **SDPA** | **-306.9 us, 48.0 -> 35.2 us each** |
 | **SDPA's output** | **`nlp_concat_heads`** | **-104.8 us, 17.1 -> 12.7 us each** |
+| **`nlp_concat_heads`'s output** | **`wo`, a matmul in0** | **-0.7 us per instance** |
 
 The split is not the tensor and not its size. It is **what the consumer does to read it**. A 2D
 matmul multicasts its in0 across the core grid, so an L1 source makes every core fan its own piece
@@ -159,9 +162,16 @@ out over the NOC, and that fan-out costs more than the parallel DRAM read it rep
 head ops read what is in front of them; nothing multicasts, so an L1 write is simply local and an
 L1 read is simply near.
 
-`nlp_concat_heads`'s *own* output stays in DRAM for exactly this reason: `wo` reads it as a matmul
-in0. Two of the three tensors in that stretch belong in L1 and the third does not, and the rule that
-tells them apart is the consumer's access pattern, not the producer's.
+The last row is the one that corrects the rule. `nlp_concat_heads`'s output was left in DRAM on the
+reasoning that `wo` reads it as a matmul in0 -- and that was **wrong**: it gains from L1 like the
+others. Every measurement in the top half of the table has a *sharded* in0, where each core has to
+multicast its own piece. An **interleaved** L1 in0 under an explicit 2D config multicasts nothing;
+it is simply a nearer read. The penalty is mcast, not L1, and the two are easy to confuse because
+the only way to get an L1 in0 before change 27 was to shard it.
+
+Stage 7's +134% looks like a counter-example and is not: there was no explicit program config then,
+so an L1 input flipped ttnn's derivation to a 1D 64-core strategy. The layout was the trigger, not
+the cost.
 
 **The general form:** ask what reads the tensor before choosing where it lives. For a data-movement
 op the write is most of what it costs, and an L1 write is the cheaper write.
@@ -274,3 +284,4 @@ Not dead ends — just surfaces with nothing left on them, recorded so a sweep i
 | LayerNorm | `welford`, `inplace`, `legacy_reduction`, `legacy_rsqrt`, `subblock_w`, grid shape |
 | the four body matmuls | `in0_block_w` in both directions at two fidelities, `out_subblock`, `transpose_mcast`, `core_grid`, 1D vs 2D, output memory config, output dtype |
 | the head ops and SDPA | output memory config (changes 27 and 28 took L1 on all three; `nlp_concat_heads` keeps DRAM because `wo` reads it) |
+| the patch projection | output memory config and layout: DRAM, L1 interleaved, block shard without a config, block shard with one (change 29 kept the last) |

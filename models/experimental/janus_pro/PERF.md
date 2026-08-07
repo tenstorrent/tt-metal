@@ -104,11 +104,12 @@ target: nothing about it varies at runtime. This section documents how long it t
 device and why.
 
 **Where it stands.** Kernel time — the sum of every op's compute time for one forward pass —
-went from **29.501 ms to 9.401 ms, −68.1%**, and device ops from 393 to 295. Every number here
+went from **29.501 ms to 9.316 ms, −68.4%**, and device ops from 393 to 293. Every number here
 was measured on an N150; none is estimated. Accuracy held: the strictest gate
 (`test_vision_transformer`, 0.99) ended at 0.998811, *higher* than the 0.998631 it started at.
+The tower's own metric ended at 0.970880 against its 0.95 gate.
 
-**Where the 19.5 ms came from.** Four op families account for 96% of it. If you read nothing
+**Where the 20.2 ms came from.** Four op families account for 96% of it. If you read nothing
 else, read this table:
 
 | what was slow | why | what fixed it | saved |
@@ -277,19 +278,20 @@ Full report: **[`perf_reports/00-baseline-unoptimized.md`](perf_reports/00-basel
 
 | Op | inst then | ms then | inst now | ms now | Δ ms | Δ % |
 |---|---:|---:|---:|---:|---:|---:|
-| Matmul | 99 | 12.686 | 99 | 5.275 | −7.411 | **−58.4** |
-| BinaryNg (elementwise) | 148 | 5.762 | 50 | 0.196 | −5.566 | **−96.6** |
-| SDPA | 24 | 4.382 | 24 | 1.587 | −2.795 | **−63.8** |
+| Matmul | 99 | 12.686 | 99 | 5.246 | −7.440 | **−58.6** |
+| BinaryNg (elementwise) | 148 | 5.762 | 49 | 0.150 | −5.612 | **−97.4** |
+| SDPA | 24 | 4.382 | 24 | 1.567 | −2.815 | **−64.2** |
 | Unary (standalone gelu) | 25 | 3.064 | — | — | −3.064 | **gone** |
-| LayerNorm | 49 | 1.581 | 49 | 0.933 | −0.648 | −41.0 |
-| NlpCreateHeads | 24 | 1.526 | 24 | 0.863 | −0.663 | **−43.4** |
-| NLPConcatHeads | 24 | 0.488 | 24 | 0.325 | −0.163 | **−33.4** |
-| ShardedToInterleaved | — | — | 24 | 0.231 | +0.231 | new |
-| InterleavedToSharded | — | — | 1 | 0.008 | +0.008 | new |
-| **total** | **393** | **29.501** | **295** | **9.401** | **−20.100** | **−68.1** |
+| LayerNorm | 49 | 1.581 | 49 | 0.943 | −0.638 | −40.4 |
+| NlpCreateHeads | 24 | 1.526 | 24 | 0.856 | −0.670 | **−43.9** |
+| NLPConcatHeads | 24 | 0.488 | 24 | 0.318 | −0.170 | **−34.8** |
+| ShardedToInterleaved | — | — | 24 | 0.232 | +0.232 | new |
+| InterleavedToSharded | — | — | — | — | — | — |
+| **total** | **393** | **29.501** | **293** | **9.316** | **−20.185** | **−68.4** |
 
-Read the two "new" rows as the price of sharding: 24 unshards were *added*, and they bought back
-many times their cost in the matmuls that follow them.
+Read the `ShardedToInterleaved` row as the price of sharding: 24 unshards were *added*, and they
+bought back many times their cost in the matmuls that follow them. The reshard that used to sit in
+front of the first block is gone -- the patch projection now writes the shard `ln_1` wants.
 
 ### Which matmuls performed badly, and why
 
@@ -344,15 +346,14 @@ Kernel time per op code, one trace replay:
 
 | Op | inst | us each | ms | % |
 |---|---:|---:|---:|---:|
-| Matmul | 99 | 53.28 | 5.275 | 56.0 |
-| SDPA | 24 | 66.11 | 1.587 | 16.8 |
-| LayerNorm | 49 | 19.03 | 0.933 | 9.9 |
-| NlpCreateHeads | 24 | 35.97 | 0.863 | 9.2 |
-| NLPConcatHeads | 24 | 13.52 | 0.325 | 3.4 |
-| ShardedToInterleaved | 24 | 9.61 | 0.231 | 2.5 |
-| BinaryNg | 50 | 3.92 | 0.196 | 2.1 |
-| InterleavedToSharded | 1 | 7.60 | 0.008 | 0.1 |
-| **total** | **295** | | **9.401** | |
+| Matmul | 99 | 52.99 | 5.246 | 56.3 |
+| SDPA | 24 | 65.29 | 1.567 | 16.8 |
+| LayerNorm | 49 | 19.24 | 0.943 | 10.1 |
+| NlpCreateHeads | 24 | 35.68 | 0.856 | 9.2 |
+| NLPConcatHeads | 24 | 13.24 | 0.318 | 3.4 |
+| ShardedToInterleaved | 24 | 9.66 | 0.232 | 2.5 |
+| BinaryNg | 49 | 3.06 | 0.150 | 1.6 |
+| **total** | **293** | | **9.316** | |
 
 Matmul's *share* rose from 43.0% to 53.2% even though its absolute time fell 58%, because
 everything around it shrank harder. **Share is not progress; absolute milliseconds are.**
@@ -365,7 +366,7 @@ optimization, the **delta**, and **what in the profiler selected it**, and links
 explanation.
 
 `kernel after` is the tower's whole kernel time once that change was in, so the column traces the
-arc from 29.501 down to 9.401. `Δ kernel` is what that row alone changed, and `ops` is the device
+arc from 29.501 down to 9.316. `Δ kernel` is what that row alone changed, and `ops` is the device
 op count per forward pass — worth watching, because two rows *add* ops and still come out ahead.
 
 **Every row was measured the same way.** Each stage was checked out and re-run through the harness
@@ -404,7 +405,8 @@ figure against its 0.95 gate. The per-stage breakdowns are in
 | 25 | aligner | fusion | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.033 ms | 9.983 | 295 | 0.966489 | the last standalone Unary, 1 inst / 0.124 ms at 1.2% |
 | 26 | MLP `c_fc` | sharding | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | 9.841 | 295 | 0.966489 | per-RISC split: BRISC at 99-100% of every matmul, and c_fc's was the only unsharded output |
 | 27 | attn heads | memcfg | [q/k/v written into L1](perf_reports/27-qkv-heads-output-l1.md) | -0.342 ms | 9.499 | 295 | 0.966489 | pure data movement, and SDPA reads all three straight back |
-| 28 | SDPA | memcfg | [SDPA's output written into L1](perf_reports/28-sdpa-output-l1.md) | -0.098 ms | **9.401** | 295 | 0.966489 | same shape; `nlp_concat_heads` is its only consumer |
+| 28 | SDPA | memcfg | [SDPA's output written into L1](perf_reports/28-sdpa-output-l1.md) | -0.098 ms | 9.401 | 295 | 0.966489 | same shape; `nlp_concat_heads` is its only consumer |
+| 29 | patch embed, attn | progcfg + memcfg | [the encoder's activations all live in L1](perf_reports/29-encoder-activations-in-l1.md) | -0.085 ms | **9.316** | 293 | 0.970880 | the patch projection's 2D config lands on the norm's grid; `nlp_concat_heads` writes L1 because the in0 penalty is mcast, not L1 |
 
 The PCC column is the **tower unit test's** (`test_vision_tower_janus`), against its 0.95 gate,
 **except rows 2 and 3 which only have an end-to-end figure** and are labelled `e2e`. Read the
@@ -418,7 +420,7 @@ the total drop, and seven of the 24 steps moved PCC *up*.
 | [`perf_reports/NN-*.md`](perf_reports/) | one per change-log row, linked from the Change column: that stage's explanation next to its own per-op and per-matmul breakdown |
 | [`perf_reports/DEAD_ENDS.md`](perf_reports/DEAD_ENDS.md) | levers measured that did not pay, and one that **did** — the largest win found anywhere here — deliberately absent because it breaks an accuracy gate |
 | [`perf_reports/PROFILER_NOTES.md`](perf_reports/PROFILER_NOTES.md) | three ways `tt-perf-report` and the per-RISC counters mislead on this tower, which ops are structurally closed, and what the profiling did *not* establish |
-| [`perf_reports/OPTIMIZED_OP_LIST.md`](perf_reports/OPTIMIZED_OP_LIST.md) | every device op of one replay at 9.401 ms, as `tt-perf-report` prints it |
+| [`perf_reports/OPTIMIZED_OP_LIST.md`](perf_reports/OPTIMIZED_OP_LIST.md) | every device op of one replay at 9.316 ms, as `tt-perf-report` prints it |
 | [`perf_reports/README.md`](perf_reports/README.md) | how a stage report is produced and regenerated |
 
 Read `DEAD_ENDS.md` before trying anything on this tower. It is the cheapest way to avoid
