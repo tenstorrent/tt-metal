@@ -25,8 +25,6 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
-    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
-    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
     constexpr uint32_t column_id = get_named_compile_time_arg_val("column_id");
 
     // Run-time arguments
