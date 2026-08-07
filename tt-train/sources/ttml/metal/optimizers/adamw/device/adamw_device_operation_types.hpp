@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
@@ -21,6 +22,8 @@ struct operation_attributes_t {
     float weight_decay{};
     bool amsgrad{false};
     StochasticRounding stochastic_rounding{StochasticRounding::Disabled};
+    // Host-drawn entropy, spread over the cores by the program factory. Engaged iff SR is enabled.
+    std::optional<uint32_t> stochastic_rounding_seed{std::nullopt};
 };
 
 struct tensor_args_t {

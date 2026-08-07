@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -25,6 +26,10 @@ bool is_effectively_1d(const ttnn::Tensor& tensor) {
         non_unit_dims += static_cast<int>(shape[i] > 1);
     }
     return non_unit_dims < 2;
+}
+
+uint32_t draw_stochastic_rounding_seed() {
+    return static_cast<uint32_t>(autograd::ctx().get_generator()());
 }
 }  // namespace
 
@@ -105,7 +110,8 @@ void AdamW::step() {
             m_beta2_pow,
             m_config.epsilon,
             weight_decay,
-            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding));
+            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
+            m_config.stochastic_rounding ? std::optional<uint32_t>{draw_stochastic_rounding_seed()} : std::nullopt);
     }
 }
 

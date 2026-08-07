@@ -126,6 +126,19 @@ class TrainingConfig(BaseTrainingConfig):
         self.model_save_interval = self.save_every
 
 
+def resolve_effective_max_steps(training_cfg: TrainingConfig, steps_per_epoch: float) -> int:
+    """Run length: whichever of the `max_steps`/`num_epochs` caps comes first (0 disables a cap)."""
+    caps = []
+    if training_cfg.max_steps > 0:
+        caps.append(training_cfg.max_steps)
+    if training_cfg.num_epochs > 0:
+        # Round up, or the last fractional step of the requested epochs is dropped.
+        caps.append(max(1, math.ceil(training_cfg.num_epochs * steps_per_epoch)))
+    if not caps:
+        raise ValueError("No stop condition: set max_steps > 0 or num_epochs > 0 in training_config.")
+    return min(caps)
+
+
 # ── Mesh / device ─────────────────────────────────────────────────────────────
 
 
@@ -513,25 +526,15 @@ def run_training(
     peak_tflops = get_device_peak_tflops_bf16() * mesh.num_devices() if flops_per_token > 0 else 0.0
 
     grad_accum = max(1, training_cfg.gradient_accumulation_steps)
-    dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
-    global_batch = training_cfg.batch_size * grad_accum * dp_size
+    # batch_size is already global: the dataloader draws that many samples and the collate mapper
+    # shards them across the data-parallel axes, so scaling by dp_size here would double-count.
+    global_batch = training_cfg.batch_size * grad_accum
 
     corpus_tokens = len(dataset.tokens)
     tokens_per_step = global_batch * seq_len
     steps_per_epoch = corpus_tokens / tokens_per_step
 
-    # Either knob caps the run; 0 disables that knob. Stop at whichever active cap comes first,
-    # so max_steps and num_epochs are symmetric (0 = no limit) rather than 0 meaning "no steps".
-    caps = []
-    if training_cfg.max_steps > 0:
-        caps.append(training_cfg.max_steps)
-    if training_cfg.num_epochs > 0:
-        # Round up: flooring would stop short of completing the requested epochs
-        # (e.g. 1 epoch at 10.9 steps/epoch needs 11 steps, not 10).
-        caps.append(max(1, math.ceil(training_cfg.num_epochs * steps_per_epoch)))
-    if not caps:
-        raise ValueError("No stop condition: set max_steps > 0 or num_epochs > 0 in training_config.")
-    effective_max_steps = min(caps)
+    effective_max_steps = resolve_effective_max_steps(training_cfg, steps_per_epoch)
 
     callbacks: list[TrainerCallback] = []
 

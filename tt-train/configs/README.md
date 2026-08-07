@@ -22,14 +22,22 @@ Training hyperparameters and optimization settings.
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
 | `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
-| `max_steps` | int | 1000 | Step cap; 0 = uncapped. At least one of `max_steps`/`num_epochs` must be set |
+| `max_steps` | int | 1000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
+| `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
+
+An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
+
+> **Runner differences.** Most configs run under both `examples/train/train.py` and `examples/nano_gpt`
+> (C++). Only `train.py` treats `max_steps: 0` as uncapped and raises when neither cap is set; the C++
+> runner requires `max_steps` and stops immediately at 0.
 
 ### LR Schedule Parameters
-Apply to `scheduler_type: warmup_linear`.
+Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
+the equivalent of the defaults below and ignores overrides.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -37,7 +45,6 @@ Apply to `scheduler_type: warmup_linear`.
 | `warmup_steps` | int | unset | Absolute warmup length; overrides `warmup_ratio`. Omit to use the ratio; set to 0 for no warmup |
 | `min_lr_ratio` | float | 0.01 | Final LR as a fraction of the peak LR |
 | `lr_schedule_steps` | int | 0 | Steps the LR curve is shaped over; 0 = the run length. Set larger than `max_steps` to run only a prefix of a longer curve |
-| `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
 ### Optimizer
 
@@ -260,7 +267,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
-| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases) |
+| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters
