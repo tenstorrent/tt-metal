@@ -616,6 +616,36 @@ applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
 
+## D7. `ttnn-jit` — reconcile the two tracers' handler tables ⭐⭐ bounded, additive, and it unblocks this corpus
+
+Not the optimizer — `tt-mlir/tools/ttnn-jit/_src/`. Three of 15 cells lost coverage to a *missing op handler*,
+not to anything about placement, and the two tracers already hold handlers the other lacks.
+
+**Port 3 handlers into the direct-TTNN tracer** (the default, and the one `shard_advisor.py:191` selects):
+`sparse_matmul`, `paged_update_cache`, `paged_fill_cache`. The shape logic exists, hand-written, in
+`interception_tracer.py`. `sparse_matmul` alone unblocks the MoE captures — north-mini onA truncated to 14 ops
+because of it.
+
+**Port 13 handlers into the interception tracer,** or stop advertising it: `arange, clamp, concat, embedding,
+matmul, pad, permute, repeat, rotary_embedding, rotary_embedding_hf, scaled_dot_product_attention_decode,
+transpose, zeros`. `--tracer interception` is documented as the fallback "for ops not yet handled by the
+direct-TTNN tracer", but with `rotary_embedding_hf`, `concat`, `permute`, `embedding` and `matmul` missing it
+cannot trace a modern decoder — switching to it fails *earlier* than the default. **Tested:** it dies on
+`rotary_embedding_hf` before reaching the sparse tail.
+
+**Write 5 new handlers:** `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`, `recurrent_state_update`.
+Only these are genuinely new work; the rest is a port.
+
+**Why a generator does not cover it.** `supported_ops.py` allowlists 54 ops in six categories and the TTIR path
+routes all of them through one generic `BaseOpHandler`, so auto-generating those 54 for the emit tracer is
+straightforward. **None of the ops above are in that allowlist** — they need per-op output-shape logic, and the
+dialect will not supply it: `TTNN_SparseMatmulOp` has `hasVerifier = 1` and `outs AnyRankedTensor` (it *checks*
+shapes, it does not *infer* them), and `TTNN_RotaryEmbeddingHfOp` / `TTNN_PagedFusedUpdateCacheOp` declare
+neither a verifier nor `InferTypeOpInterface`. The shape relationship lives in C++ verifier code, not in a form a
+Python generator can read.
+
+- **Evidence:** [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), axis 3 and the missing-op tables.
+
 ## E0a. Add a cross-model op-cost comparison — it finds defects the stage's question cannot express ⭐
 
 Everything the stage does is *intra-cell*: one decoder against one advisor plan, asking *"which conversions does
