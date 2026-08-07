@@ -39,8 +39,9 @@ class GeluTanh(Function):
 class WanFeedForward(AbstractModuleBase):
     def __init__(self, config) -> None:
         super().__init__()
-        self.ff1 = LinearLayer(config.dim, config.ffn_dim, True, weight_init=ttml.init.normal(0.0, 0.02))
-        self.ff2 = LinearLayer(config.ffn_dim, config.dim, True, weight_init=ttml.init.normal(0.0, 0.02))
+        init = config.weight_init()
+        self.ff1 = LinearLayer(config.dim, config.ffn_dim, True, weight_init=init)
+        self.ff2 = LinearLayer(config.ffn_dim, config.dim, True, weight_init=init)
 
     def forward(self, x):
         return self.ff2(GeluTanh.apply(self.ff1(x)))

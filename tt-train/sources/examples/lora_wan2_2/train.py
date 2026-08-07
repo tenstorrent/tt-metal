@@ -55,11 +55,12 @@ def latent_shape(cfg: Config) -> tuple:
     )
 
 
-def model_config_for(cfg: Config) -> WanConfig:
+def model_config_for(cfg: Config, *, init_weights: bool = True) -> WanConfig:
     return WanConfig(
         runner_type=(
             ttml.models.RunnerType.MemoryEfficient if cfg.GRADIENT_CHECKPOINTING else ttml.models.RunnerType.Default
         ),
+        init_weights=init_weights,
     )
 
 
@@ -67,7 +68,7 @@ def build_lora_expert(role: str, cfg: Config) -> ttml.modules.LoraModel:
     sub = SUBFOLDER[role]
     print(f"[lora] loading {role}-noise expert ({sub}) from {cfg.MODEL_ID} ...")
 
-    model_config = model_config_for(cfg)
+    model_config = model_config_for(cfg, init_weights=False)
     model = WanTransformer3D(model_config)
     load_expert_from_safetensors(model, cfg.MODEL_ID, subfolder=sub)
 
