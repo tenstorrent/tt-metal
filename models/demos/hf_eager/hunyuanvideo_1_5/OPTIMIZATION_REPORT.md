@@ -382,6 +382,27 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### Prompt cache: MEASURED at last (-10.5s on a repeat prompt)
+
+- `HY_PROMPT_CACHE=1` already existed but had never been benchmarked; this
+  report previously said "no warm served Qwen or prompt-cache timing has been
+  measured, so no warm speedup is claimed". Measured now, 480p i2v 121f with all
+  other optimisations on:
+
+  | | `text_encode_s` | wall |
+  |---|---:|---:|
+  | off | 10.152s | 140.2s |
+  | cold (populates) | 10.178s | 138.5s |
+  | **warm** | **0.013s** | **129.7s** |
+
+- **-10.5s wall on a repeat prompt**, text encode 781x faster, generated output
+  bit-identical (frame PCC 1.00000000, max abs pixel difference 0.0). Cache is
+  16 MB. The cold arm costs essentially nothing to populate (10.178 vs 10.152s),
+  so there is no penalty for enabling it speculatively.
+- **This is a served-path win, not a one-shot one.** It helps only when the same
+  prompt is generated again; a cold one-shot run pays full text-encode either
+  way. Do not fold it into the headline one-shot numbers.
+
 ### VAE prepared-conv-weight cache (IMPLEMENTED: -11.8s, bit-identical)
 
 - After the DiT work, `tt_vae_weight_upload_s` was the largest remaining phase
