@@ -1303,3 +1303,31 @@ multi-layer model context for some other reason and the next lever is a single-l
 
 Recovery reminder: after every one of these hangs, TWO `tt-smi -r` cycles were needed; control
 then passes 6/6 in ~11 s.
+
+### Mcast-under-trace: ALSO WRONG. The untested variable is Mcast on a MESH.
+
+Ran the Q stage with `--enable-trace` omitted. **It still hangs**, same place, ~150 s in. So trace
+is not the cause either. Two hypotheses tested and both disproved:
+
+| hypothesis | test | result |
+|---|---|---|
+| shared `_PROGRAM_SEMAPHORES` across 47 layers | `..._OWN_SEM=1` | still hangs |
+| Mcast rendezvous broken by trace capture | no `--enable-trace` | still hangs |
+
+What is actually different between "works" and "hangs" is narrower than I had been assuming:
+
+- `bench_e_fused_stage.py` — the standalone run that completes in 13 s — opens
+  **`ttnn.open_device(device_id=0)`: ONE chip.**
+- the model runs on a **4x8 mesh of 32**.
+- `mesh_qkv_a_ab.py` proved the **mcast-free** chain (replicate -> DSM -> gather) on 32 chips.
+  **The Q stage's `Mcast` has never been run on a mesh at all.**
+
+So the leading hypothesis is now **Mcast on a 32-chip mesh**, not trace, not semaphore sharing.
+It is consistent with every observation: single-chip fine, mesh hangs, mcast-free mesh path fine,
+and all 256 workers (8 x 32) starved uniformly at the consumer of the mcast.
+
+**Next test — do NOT run the 10-minute model again for this.** Take
+`bench_e_fused_stage.py` and open a mesh instead of `open_device(0)`, the same way
+`mesh_qkv_a_ab.py` does (`open_mesh_device(MeshShape(4,8))` + `create_submesh`, `ReplicateTensorToMesh`
+on every tensor, underscore-only prefixes). That reproduces or clears the hang in ~1 minute rather
+than ~10, and if it hangs it is a small self-contained repro to hand to the blaze owners.
