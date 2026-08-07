@@ -146,7 +146,10 @@ class TtLfm25VlVisionModel(LightweightModule):
 
         # Project each image independently (variable H/W after unpad), then concat tokens.
         host = ttnn.to_torch(encoded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-        host = host[:bsz]
+        # Encoder output may be 4D ([1, B, N, H]) and the composer stacks one identical replica
+        # per device on dim 0; flatten leading dims to [num_replicas * B, N, H] and keep the
+        # first replica's B images so per-image indexing below sees [N, H] features.
+        host = host.reshape(-1, host.shape[-2], host.shape[-1])[:bsz]
         projected_parts = []
         for img_idx in range(bsz):
             feature = host[img_idx]
