@@ -1489,3 +1489,26 @@ per token, sharing L1 with all of it. The stage in isolation is fine at every co
 3. If both stay clean, the stage is fine and the fault is an interaction with the model's L1
    allocator/CB layout — at which point dump the CB core ranges and L1 offsets from a model run
    and check them against SDPA's static region, which `blaze_ops.py` already warns about.
+
+### 47 programs: ALSO CLEAN (7th). Scale is not it either.
+
+`bench_e_stage_47.py` builds and runs **47** independent fused-stage programs on the 32-chip mesh
+with an L1 activation — the model's exact layer count. **All 47 run OK.**
+
+**Seven hypotheses, seven eliminated.** The stage is correct at the model's exact configuration
+*and* scale: 32 chips, Mcast, L1 activation, receiver (11,9), 47 programs. It only hangs inside the
+model.
+
+The remaining difference is now a single one, and it is the one a standalone bench cannot fake:
+**the model interleaves other ttnn work between stage dispatches** — SDPA, the paged KV cache, MoE,
+the rest of the decode graph — all competing for the same L1.
+
+**Next (step 2 of the plan, ~2 min):** in the 47-program probe, allocate and free an SDPA-shaped L1
+tensor *between* each program run. If that reproduces the hang, the bug is L1 contention between
+the stage's CBs and the model's transient allocations, which matches the warning already in
+`blaze_ops.py` about colliding with SDPA's static CB region — and it would be a self-contained
+repro for the blaze owners.
+
+If even that stays clean, stop trying to reproduce it outside the model: instead dump the stage's
+CB core ranges and L1 offsets from a real model run and compare them against SDPA's static region
+directly.
