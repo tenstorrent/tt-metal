@@ -7,9 +7,9 @@ import pytest
 import ttnn
 
 
-def create_fabric_router_config(max_payload_size: int = 8192):
+def create_fabric_router_config(max_packet_payload_size_bytes=8192):
     config = ttnn.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
+    config.max_packet_payload_size_bytes = max_packet_payload_size_bytes
     return config
 
 
@@ -31,7 +31,6 @@ line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
 line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
-# 4 KB payload (2 tiles/packet for the strided AG): A/B control against the 8k variant.
 ring_params_4k = {**ring_params, "fabric_router_config": create_fabric_router_config(4096)}
 line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
 ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}
