@@ -923,7 +923,11 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    tt_res = ttnn.to_torch(ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2))
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    # Output placement must follow the input, not the (possibly L1) intermediates -- so it is
+    # the same on both the L1 and DRAM branches.
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
 
     is_bfp8 = ttnn_dtype == ttnn.bfloat8_b

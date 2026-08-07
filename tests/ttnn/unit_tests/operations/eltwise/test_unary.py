@@ -2822,6 +2822,7 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
     else:
         # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
         # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
+        torch.manual_seed(0)
         in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2832,7 +2833,7 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
     # tanh is bounded by 1, so beta is a hard bound; an overshoot means the polynomial's
     # saturation clamp is not holding.
     assert tt_res.to(torch.float32).abs().max().item() <= SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
-    assert_with_pcc(tt_res, golden, pcc=SOFTCAP_PCC[ttnn_dtype])
+    assert_with_pcc(golden, tt_res, pcc=SOFTCAP_PCC[ttnn_dtype])
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
@@ -2872,4 +2873,4 @@ def test_softcap_bfloat16_full_domain(device):
     tiny_max = r[~mask].abs().max().item()
     assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
 
-    assert_with_pcc(r, g, pcc=0.9999)
+    assert_with_pcc(g, r, pcc=0.9999)

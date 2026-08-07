@@ -5,11 +5,11 @@
 """Standalone device test for the fused situ_glu binary SFPU op (situ_glu_sfpu.h).
 
 Drives the op through ttnn.generic_op with a minimal binary test kernel (no
-production op wired), reaching both dst-accumulator modes and both up-half
-variants, and compares against the torch reference:
+production op wired), reaching both dst-accumulator modes, and compares against
+the torch reference:
 
     situ_a  = beta_gate * tanh(gate / beta_gate) * sigmoid(gate)
-    up_half = beta_up * tanh(up / beta_up)   if cap_up else up
+    up_half = beta_up * tanh(up / beta_up)
     result  = situ_a * up_half
 """
 
