@@ -45,6 +45,13 @@ GX=${GX:-11}; GY=${GY:-10}
 CELLX=""
 [ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1"
 [ "$DRAINER"  = "tensix" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1"
+# Keep the arms comparable. As of 2026-08-07 the DRISC drainer polls the FULL 12x10 under slow dispatch
+# by default, while the Tensix drainer must always reserve the last column (its drainer lives there).
+# Left alone that would make a slow-dispatch DRISC cell sweep 120 cores against Tensix's 110 -- a
+# difference in POLL-LIST LENGTH, which is the idle sweep cost, masquerading as a difference between
+# core types. Force the reservation on both so every cell polls 110. Measurement only: full-grid
+# coverage is the right default for real captures, and GX/GY above already match this 110.
+[ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1"
 REPEAT=${REPEAT:-0}
 REPX=""
 [ "$REPEAT" != "0" ] && REPX="TT_METAL_PERF_DEBUG_SHIP_REPEAT=$REPEAT"

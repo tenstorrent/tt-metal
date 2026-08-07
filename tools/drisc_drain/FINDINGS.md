@@ -10,10 +10,14 @@
 > Three DISTINCT failures, never pool them: **WEDGE** (card `Unknown|63`) · **TEARDOWN** (healthy card,
 > core-wait hangs) · **DEGRADED** (13× MMIO latency, needs a box freeze).
 >
-> **§N+24 (newest) SOLVES the slow-dispatch TEARDOWN** and overrides §N+21 B: it was the harness passing
+> **§N+24 SOLVES the slow-dispatch TEARDOWN** and overrides §N+21 B: it was the harness passing
 > `--gx 0` (= 12x10 under slow dispatch) while the drainer polls 11 columns. Harness fixed; slow cells are
 > now 10/10 clean and slow dispatch is unblocked. **All previously recorded slow-dispatch cells are void.**
 > `14-2..14-11` are TENSIX WORKERS (one column), not the DRAM/DRISC column.
+>
+> **§N+25 (newest): the DRISC drainer now polls the FULL 120-core grid by default** (verified lossless),
+> which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
+> replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 
 <!--
 SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
@@ -2511,3 +2515,66 @@ Setting it on the reserved columns at boot would turn the DRISC arm's silent 45 
 is simply unprofiled". **It does not save the Tensix arm** — there the stray producer physically
 overwrites the drainer's L1, which no flag prevents. Full protection needs the workload to clamp to the
 drainer's producer grid, which means publishing that grid.
+
+## §N+25 — DRISC now polls the FULL 120-core grid by default (bh-05, 2026-08-07)
+
+Direct follow-on from §N+24. Reserving the last worker column was **only ever a comparability device** --
+it made a DRISC (120 cores) and a Tensix (110, one of them being the drainer) sweep the same poll-list
+length, so a difference between the arms could not be blamed on the grid. It was never a functional
+requirement for a DRISC: that drainer sits on a **DRAM core** (`pick_unused_dram_logical_core`), so no
+worker core is ever spent on it.
+
+`TT_METAL_PERF_DEBUG_FULL_GRID=1` (opt-in) is replaced by `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`
+(opt-out). Default DRISC behaviour under slow dispatch is now the full 12x10.
+
+**This also removes the §N+24 footgun at the source for the DRISC arm.** With the poll list covering all
+120 cores, `--gx 0` ("use whatever grid the device offers") is safe by construction: the producer grid
+and the poll list are the same 120 cores. The Tensix arm keeps the reservation -- its drainer physically
+lives in that column -- so there `--gx 11` is still mandatory.
+
+### Verified on silicon (bh-05, slow dispatch unless noted, card reset before the block)
+
+| # | condition | poll list | result |
+|---|---|---|---|
+| T1 | DRISC default, `--gx 0` | 120 | CLEAN, 12x10, 600 lanes |
+| T2 | DRISC default, `--gx 11 --gy 10` | 120 | CLEAN -- polling a column with **no program on it** is safe |
+| T3 | DRISC + `RESERVE_COLUMN=1`, `--gx 11` | **110** | CLEAN -- the knob works, `cores [0,110) of 110` |
+| T4 | DRISC default | **120** | `cores [0,120) of 120` |
+| T5 | Tensix, `--gx 11` | 110 | CLEAN, drainer on logical (11,0) -- unchanged |
+| T6 | DRISC default, `--gx 0`, **REAL DECODE** | 120 | **LOSSLESS** (below) |
+| T7 | **FAST** dispatch, DRISC | 110 | unchanged -- `reserve_column` is gated on slow dispatch |
+
+T2 was the one genuine risk in this change and it passes: the drainer polls the zeroed control vector of
+an idle core and finds nothing, exactly as it does for a quiet producer.
+
+**T6, the one that matters -- full grid, real decode, nothing lost:**
+
+```
+DRISC 0 resident ... cores [0,120) of 120, 7 staging slots x 10560 B
+lanes=600  total markers=1200000
+DRISC: 1526 sweeps (1492 idle), 2037 frames, 792 pushes, 2403240 words, 336105 pages,
+       max occ 384/512, overflows 0
+socket 0 drained: 336105 pages, 1201200 markers (329 reads); producer stall zones: 0
+L1 STALL COUNTERS -- 0 producer stalls across 0 of 120 cores
+BroadcastRing: ... consumer took 1201200 records, dropped 0
+```
+
+1,201,200 drained vs 1,200,000 offered: the +1,200 is exactly **2 sticky-timer markers per lane**
+(600 lanes x 2), not loss. Zero overflows, zero stalls, zero drops, on all 120 cores.
+
+### The harness now forces the reservation on slow cells
+
+`drisc_hang_harness.sh` sets `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1` whenever `DISPATCH=slow`. Without it
+a slow DRISC cell would poll 120 against Tensix's 110 and the 2x2 would be comparing **poll-list length**
+-- i.e. idle sweep cost -- while appearing to compare core types. Measurement only; real captures should
+take the full-grid default. Post-change: DRISC slow 3/3 CLEAN.
+
+### ⚠ §N+6 ALREADY FOUND THE §N+24 FOOTGUN, AND IT WAS LOST
+
+§N+6 states it outright: *"The one genuinely reproducible footgun: workload grid > drainer poll list
+hangs the workload forever. `--gx 0` (120 producers) against a 110-core poll list leaves 10 cores
+undrained; their rings fill and they block. Match them, or use `FULL_GRID=1`."* Fifteen sections later
+§N+21 B met the same hang and classified it as a device-side TEARDOWN, which then blocked slow dispatch
+entirely and voided a 2x2. **A known footgun buried in a long audit log is a footgun you will pay for
+twice.** §N+6 also independently confirms full-grid runs are clean ("4 runs at the 110 grid, 6 at 120"),
+which is corroborating evidence for this default change.
