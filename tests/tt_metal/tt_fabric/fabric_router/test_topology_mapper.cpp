@@ -21,6 +21,46 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Cluster requirements for each TopologyMapperTest case, keyed by exact test name.
+//
+// Keyed on the exact name rather than a name prefix on purpose: a prefix match silently leaves a
+// newly added test ungated (which is how N300MeshGraphTest ended up running on every cluster), and
+// silently mis-gates a test whose name happens to share a prefix with an unrelated topology. Every
+// case in this fixture must have an entry here -- SetUp() fails an unlisted test rather than
+// guessing, so adding a test forces a deliberate decision about what hardware it needs.
+struct ClusterRequirement {
+    std::optional<tt::tt_metal::ClusterType> cluster_type;
+    std::optional<std::size_t> world_size;
+};
+
+const std::map<std::string_view, ClusterRequirement>& topology_mapper_test_requirements() {
+    static const std::map<std::string_view, ClusterRequirement> requirements = {
+        {"T3kMeshGraphTest", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
+        {"T3kMultiMeshTest", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
+        {"T3kMeshGraphTestHostRankWithManualPinning", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
+        {"T3kMeshGraphTestFromPhysicalSystemDescriptor", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
+        {"N300MeshGraphTest", {tt::tt_metal::ClusterType::N300, std::nullopt}},
+        {"P100MeshGraphTest", {tt::tt_metal::ClusterType::P100, std::nullopt}},
+        {"DualGalaxyBigMeshTest", {tt::tt_metal::ClusterType::GALAXY, 2}},
+        {"PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin", {tt::tt_metal::ClusterType::GALAXY, 2}},
+        {"PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins", {tt::tt_metal::ClusterType::GALAXY, 2}},
+        {"PinningThrowsOnBadAsicPositionGalaxyMesh", {tt::tt_metal::ClusterType::GALAXY, 2}},
+        {"BHQB4x4MeshGraphTest", {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, 4}},
+        {"BHQB4x4StrictReducedMeshGraphTest", {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, 4}},
+        {"BHQB4x4RelaxedMeshGraphTest", {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, 4}},
+        {"BHQB4x4StrictInvalidMeshGraphTest", {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, 4}},
+        // ClosetBox cases bind a mesh per rank across 4 ranks but are not tied to one cluster type.
+        {"ClosetBox3PodTTSwitchHostnameAPIs", {std::nullopt, 4}},
+        {"ClosetBoxSuperpodRelaxedPolicyTest", {std::nullopt, 4}},
+        {"ClosetBoxSuperpodStrictInvalidPolicyTest", {std::nullopt, 4}},
+    };
+    return requirements;
+}
+
+}  // namespace
+
 class TopologyMapperTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -30,27 +70,19 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const std::string_view test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
 
-        std::optional<tt::tt_metal::ClusterType> required_cluster_type;
-        std::optional<std::size_t> required_world_size;
-        if (test_name.starts_with("T3k") || test_name.starts_with("T3K")) {
-            required_cluster_type = tt::tt_metal::ClusterType::T3K;
-        } else if (test_name.starts_with("DualGalaxy") || test_name.starts_with("Pinning")) {
-            required_cluster_type = tt::tt_metal::ClusterType::GALAXY;
-            required_world_size = 2;
-        } else if (test_name.starts_with("P100")) {
-            required_cluster_type = tt::tt_metal::ClusterType::P100;
-        } else if (test_name.starts_with("BHQB")) {
-            required_cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
-            required_world_size = 4;
-        } else if (test_name.starts_with("ClosetBox")) {
-            required_world_size = 4;
-        }
+        const auto& requirements = topology_mapper_test_requirements();
+        auto requirement_it = requirements.find(test_name);
+        ASSERT_NE(requirement_it, requirements.end())
+            << test_name
+            << " has no entry in topology_mapper_test_requirements(). Add one declaring the cluster type "
+               "and/or world size it needs (use std::nullopt for a requirement that does not apply).";
+        const auto& requirement = requirement_it->second;
 
-        if (required_cluster_type.has_value() && cluster.get_cluster_type() != *required_cluster_type) {
+        if (requirement.cluster_type.has_value() && cluster.get_cluster_type() != *requirement.cluster_type) {
             GTEST_SKIP() << "Test requires its named fixed cluster topology";
         }
-        if (required_world_size.has_value() && *distributed_context->size() != *required_world_size) {
-            GTEST_SKIP() << "Test requires exactly " << *required_world_size << " world ranks";
+        if (requirement.world_size.has_value() && *distributed_context->size() != *requirement.world_size) {
+            GTEST_SKIP() << "Test requires exactly " << *requirement.world_size << " world ranks";
         }
 
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -803,13 +835,29 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
         std::exception);
 }
 
-// Parameterized test fixture for testing TopologyMapper with custom mappings
+// Parameterized test fixture for testing TopologyMapper with custom mappings.
+//
+// Gates on cluster type here rather than via topology_mapper_test_requirements(): a TEST_P case
+// reports its base name (without the parameter index) to current_test_info(), so keying the table on
+// it would be ambiguous. The per-parameter eth-coord precondition is checked in the body instead,
+// since it depends on GetParam().
 class T3kTopologyMapperWithCustomMappingFixture
     : public TopologyMapperTest,
-      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
+protected:
+    void SetUp() override {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+            GTEST_SKIP() << "Test requires a T3K topology";
+        }
+        TopologyMapperTest::SetUp();
+    }
+};
 
 TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    if (!fabric_router_tests::has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
 

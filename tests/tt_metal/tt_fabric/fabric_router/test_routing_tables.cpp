@@ -285,6 +285,11 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
         GTEST_SKIP() << "Test requires a T3K topology";
     }
+    const auto& mesh_graph_eth_coords = std::get<1>(t3k_mesh_descriptor_chip_mappings[0]);
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
+
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
@@ -304,7 +309,8 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+    auto control_plane = make_control_plane(
+        t3k_mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
 
     check_asic_mapping_against_golden("TestT3kControlPlaneInit", "ControlPlaneFixture_T3k");
 }
@@ -313,10 +319,16 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     if (!has_cluster_type(tt::tt_metal::ClusterType::T3K)) {
         GTEST_SKIP() << "Test requires a T3K topology";
     }
+    const auto& mesh_graph_eth_coords = std::get<1>(t3k_mesh_descriptor_chip_mappings[0]);
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
+
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+    auto control_plane = make_control_plane(
+        t3k_mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
 
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
     EXPECT_GT(valid_chans.size(), 0);
@@ -473,6 +485,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
 
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     // This prevents MetalContext from creating an auto-discovery control plane that writes a mapping file first
@@ -533,6 +548,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
     std::srand(std::time(nullptr));  // Seed the RNG
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
     auto control_plane = make_control_plane(
@@ -561,6 +579,9 @@ TEST_F(ControlPlaneFixture, TestT3kDisjointFabricRoutes) {
         GTEST_SKIP() << "Test requires a T3K topology";
     }
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_disjoint_mesh_descriptor_chip_mappings[0];
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
     auto control_plane = make_control_plane(
