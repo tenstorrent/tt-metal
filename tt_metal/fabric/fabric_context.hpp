@@ -58,7 +58,13 @@ public:
     tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
-    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
+    // Whether a router on this axis needs protected (bubble) flow control compiled in.
+    //
+    // Express meshes derive it from whether the axis actually carries protected rings, since express
+    // chords can close a ring on an axis that is not a torus. Other meshes keep the topology-derived
+    // answer unchanged.
+    bool need_deadlock_avoidance_support(
+        const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const;
     bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
 
     // ============ Mesh Type Queries ============
@@ -70,30 +76,6 @@ public:
     // Check if a fabric node has Z router channels
     // Queries control plane to see if any ethernet channels are assigned Z direction
     bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
-
-    // Check if a fabric node has an INTRA-mesh Z neighbor (sub-torus "skip link"): a RoutingDirection::Z
-    // edge within the same mesh. Distinct from has_z_router_on_device (inter-mesh Z router). When true,
-    // the standard mesh router gains a 5th VC0 sender channel (channel 4 = intra-mesh Z).
-    bool has_intra_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
-
-    // Fabric-wide check: true if ANY node in ANY mesh has an intra-mesh Z edge (sub-torus skip link).
-    // Used to size the fabric-wide max sender channel counts: a single intra-mesh Z router widens VC0
-    // from 4 -> 5, so the shared EDM config must reserve the 5th VC0 sender channel.
-    bool has_any_intra_mesh_z_router(const ControlPlane& control_plane) const;
-
-    // Mesh-level check: true if ANY node in the given mesh has an intra-mesh Z edge (sub-torus skip
-    // link). This is the granularity at which the skip-link indexed ABI is selected: every router in
-    // the mesh runs the same decode, since Z-laden packet maps transit chips that have no Z edge of
-    // their own.
-    bool has_intra_mesh_z_in_mesh(const ControlPlane& control_plane, MeshId mesh_id) const;
-
-    // Check if a fabric node has an INTER-mesh Z neighbor (galaxy Z router bridging two meshes): a
-    // RoutingDirection::Z edge in inter-mesh connectivity. This is the precise signal for inter-mesh Z
-    // router presence; unlike has_z_router_on_device (which is true for ANY active Z eth channel, including
-    // intra-mesh sub-torus skip-links), it stays false on a device whose only Z links are intra-mesh.
-    // Used to gate the inter-mesh-Z-specific builder behavior (VC1 4th sender channel + MESH_TO_Z) and to
-    // select the Z_ROUTER variant for a Z-direction router.
-    bool has_inter_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
