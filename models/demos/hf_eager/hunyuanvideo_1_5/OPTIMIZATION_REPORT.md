@@ -468,6 +468,38 @@ section is measured unless explicitly marked otherwise.
   larger slice of the post-denoise window, took one wiring change rather than a
   1137-line refactor, and does not touch files the VAE work would conflict with.
 
+### HY_VAE_TILE_PX is at its ceiling (swept; larger tiles OOM)
+
+- `tile_overlap_factor` is **0.25** (`diffusers/models/autoencoders/
+  autoencoder_kl_hunyuanvideo15.py:700`). With the production
+  `HY_VAE_TILE_PX=128` and spatial compression 16, the latent tile is 8 with
+  stride 6, giving 45 tiles at 480p (2 rounds over 32 chips, 1.81x the image
+  area decoded) and 112 at 720p (4 rounds, 1.99x). So **45-50% of VAE decode
+  work is redundant overlap or edge padding.**
+- Larger tiles do NOT reduce that redundancy -- it is roughly scale-invariant
+  at this overlap factor and slightly worsens with tile size as edge padding
+  grows (1.81x at 128px vs 2.42x at 256px for 480p). What they would reduce is
+  the round count: 192px+ is a single round at 480p, 256px a single round at
+  720p.
+- Swept at 480p/121f with everything else held constant:
+
+  | `HY_VAE_TILE_PX` | result |
+  |---|---|
+  | **128** | **passes, 149.6s** |
+  | 192 | OOM, 1.14 GB DRAM allocation |
+  | 256 | OOM, 1.02 GB |
+  | 384 | OOM, 1.13 GB |
+
+- All three failures are the same `TT_FATAL: Out of Memory ... DRAM buffer
+  across 8 banks`. The default is already at the ceiling: the VAE time-shares
+  all 32 chips with a resident DiT, so the per-tile upsample intermediate is
+  what bounds tile size. **The knob is closed; do not re-sweep it.**
+- This strengthens the case for spatial sharding beyond the redundancy
+  argument: fracturing the latent across the mesh means each chip holds a
+  fraction of the intermediate rather than a whole tile's upsample buffer,
+  which relieves the exact constraint causing these OOMs *and* removes the
+  45-50% redundant compute.
+
 ### VAE spatial sharding: scaffolded but unwired
 
 - `tt/vae_spatial.py` provides a complete, property-tested toolkit
