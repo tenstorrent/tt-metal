@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ..ir import ACT, UNREGISTERED_OP, Dist, Graph, Mesh, Node, Placement, TensorSymbol
+from ..ir import ACT, UNREGISTERED_OP, Dist, Graph, Mesh, Node, Placement, TensorSymbol, is_model_frame
 from .context import CTX, DISPATCH_FILES, MODEL_MARKER, STACK_DEPTH
 from .tensor import Tensor, dtype_tag
 
@@ -44,29 +44,43 @@ def fresh(base: str) -> str:
 # -----------------------------------------------------------------------------
 # source attribution (roadmap blocker 44)
 # -----------------------------------------------------------------------------
-def caller_stack(depth: int = STACK_DEPTH) -> List[str]:
-    """Up to ``depth`` tt_dit frames, innermost first, at most one per file.
+def caller_stack(depth: int = STACK_DEPTH, hard_max: int = 8) -> List[str]:
+    """tt_dit frames, innermost first, at most one per file, that reach the model call site.
 
-    A finding that names only the innermost frame names shared library code:
-    the spike's duplicate gathers landed on ``layers/linear.py:250`` (the AGMM
-    call inside ``ColParallelLinear``) rather than on the ``to_qkv`` call that
-    chose to gather. Both are true; only the caller is actionable, so keep a few
-    frames and let the report pick.
+    A finding that names only the innermost frame names shared library code: the spike's
+    duplicate gathers landed on ``layers/linear.py:250`` (the AGMM inside ``ColParallelLinear``)
+    rather than the ``to_qkv`` call that chose to gather. Both are true; only the caller is
+    actionable, so ``source_chain`` leads with the model frame and lists the library frames
+    underneath.
 
-    ``sys._getframe`` rather than ``traceback`` because this runs once per node
-    and ``traceback`` reads source files to build its lines.
+    Keep up to ``depth`` frames for that library context, but **always keep walking (to
+    ``hard_max``) until a model call site is captured** — a row-parallel feedforward goes
+    feedforward → linear → manager, three library frames, so a flat ``depth`` of 3 stopped
+    before ever reaching the transformer block that owns the feedforward (the frame the
+    engineer actually wants). If no model frame exists on the stack, stop at ``depth``.
+
+    ``sys._getframe`` rather than ``traceback`` because this runs once per node and
+    ``traceback`` reads source files to build its lines.
     """
     frames: List[str] = []
     previous_file = None
+    saw_model = False
     frame = sys._getframe(1)
-    while frame is not None and len(frames) < depth:
+    while frame is not None and len(frames) < hard_max:
         filename = frame.f_code.co_filename
         cut = filename.find(MODEL_MARKER)
         if cut >= 0 and "dit_analyzer" not in filename and filename != previous_file:
             relative = filename[cut:]
             if not relative.startswith(DISPATCH_FILES):  # Module.__call__ -> forward
-                frames.append("%s:%d" % (relative, frame.f_lineno))
-                previous_file = filename
+                model = is_model_frame(relative)
+                # take library frames up to `depth`; keep taking (only the model frame) past
+                # `depth` until the model call site is in, then stop.
+                if len(frames) < depth or (model and not saw_model):
+                    frames.append("%s:%d" % (relative, frame.f_lineno))
+                    previous_file = filename
+                    saw_model = saw_model or model
+                if len(frames) >= depth and saw_model:
+                    break
         frame = frame.f_back
     return frames
 

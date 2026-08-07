@@ -251,6 +251,34 @@ def test_fused_gated_matmul_covers_the_doubled_k_without_tainting():
     assert any(d.code == "K_COVERAGE" for d in repb.diagnostics)
 
 
+def test_source_chain_leads_with_the_model_call_site_over_library_frames():
+    """A finding is actionable at the model call site, not the shared layer under it (blocker 44).
+    A row-parallel feedforward stacks three library frames (feedforward → linear → manager) before
+    the transformer block that owns it, so the report must reach past them to the block — the line
+    an engineer opens — and list the library frames as `via`.
+    """
+    from dit_analyzer.ir import is_model_frame, source_chain
+
+    # innermost-first, as caller_stack records it: three library frames, then the model block
+    stack = [
+        "models/tt_dit/parallel/manager.py:549",
+        "models/tt_dit/layers/linear.py:442",
+        "models/tt_dit/layers/feedforward.py:121",
+        "models/tt_dit/models/transformers/minimax_h3/transformer_block_minimax_h3.py:298",
+    ]
+    chain = source_chain(stack)
+    assert chain[0] == "models/tt_dit/models/transformers/minimax_h3/transformer_block_minimax_h3.py:298", chain
+    assert chain[-1] == "models/tt_dit/parallel/manager.py:549"  # library plumbing listed underneath
+
+    # the text encoder lives under encoders/, not models/ — still model code, not shared library
+    assert is_model_frame("models/tt_dit/encoders/qwen3vl/model_qwen3vl.py:415")
+    assert not is_model_frame("models/tt_dit/layers/feedforward.py:121")
+
+    # a stack with no model frame at all falls back to the outermost library frame it saw
+    lib_only = source_chain(["models/tt_dit/parallel/manager.py:549", "models/tt_dit/layers/linear.py:442"])
+    assert lib_only[0] == "models/tt_dit/layers/linear.py:442", lib_only
+
+
 def test_gqa_split_qkv_gives_each_device_its_grouped_kv_heads():
     """Per-device fused QKV with kv_heads < heads (Qwen3-VL / MiniMax-H3).
 

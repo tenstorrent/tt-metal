@@ -73,6 +73,21 @@ UNREGISTERED_OP = "unregistered"
 #: ``layers/linear.py`` line underneath it (roadmap blocker 44).
 MODEL_CODE_PREFIX = "models/tt_dit/models/"
 
+#: Shared, model-agnostic building blocks. A frame in one of these is *not* the
+#: model call site an engineer navigates to — it is the plumbing the model called.
+#: Everything else under ``models/tt_dit`` (models/, encoders/, pipelines/) is model code.
+LIBRARY_PREFIXES = ("models/tt_dit/layers/", "models/tt_dit/parallel/", "models/tt_dit/utils/")
+
+
+def is_model_frame(frame: str) -> bool:
+    """True when ``frame`` is model code (the actionable call site), not shared library.
+
+    Covers DiT blocks (``models/``), the text encoder (``encoders/``), and pipelines —
+    anything under ``models/tt_dit`` that is not one of :data:`LIBRARY_PREFIXES`. The
+    engineer's ask: the ``feedforward.py`` line under a flagged reduce-scatter is plumbing;
+    the transformer block that *called* that feedforward is the line to open."""
+    return "models/tt_dit/" in frame and not any(p in frame for p in LIBRARY_PREFIXES)
+
 
 @dataclass(frozen=True)
 class Mesh:
@@ -126,7 +141,7 @@ def source_chain(stack: Sequence[str], loc: Optional[str] = None) -> List[str]:
     """
     if not stack:
         return [loc] if loc else []
-    model = [i for i, frame in enumerate(stack) if MODEL_CODE_PREFIX in frame]
+    model = [i for i, frame in enumerate(stack) if is_model_frame(frame)]
     cut = model[0] if model else len(stack) - 1
     return list(reversed(list(stack)[: cut + 1]))
 
