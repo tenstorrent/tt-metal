@@ -286,29 +286,16 @@ _source_tree_sha256() {
   )
 }
 
-# Hash the candidate delta separately from the complete post-patch source tree.
-# The tracked diff and every untracked, nonignored file are NUL-framed so a
-# local run has the same base/patch distinction as a dashboard-dispatched run.
+# Use the run writer's canonical temporary-index algorithm so collection,
+# execution, reduction, resume, and final packaging bind to identical bytes.
 _patch_sha256() {
-  local relative path size digest tracked_digest
-  (
-    set -o pipefail
-    {
-      printf '%s\0' "tt-llk-local-patch-v1"
-      tracked_digest="$(git -C "$WORKTREE" diff --binary --full-index HEAD -- . | sha256sum | cut -d' ' -f1)"
-      printf '%s\0' "$tracked_digest"
-      while IFS= read -r -d '' relative; do
-        path="${WORKTREE}/${relative}"
-        [[ -f "$path" && ! -L "$path" ]] || {
-          echo "ERROR: unsupported untracked patch entry: ${relative}" >&2
-          return 3
-        }
-        size="$(stat -c %s "$path")"
-        digest="$(sha256sum "$path" | cut -d' ' -f1)"
-        printf '%s\0%s\0%s\0' "$relative" "$size" "$digest"
-      done < <(git -C "$WORKTREE" ls-files -z --others --exclude-standard -- .)
-    } | sha256sum | cut -d' ' -f1
-  )
+  local writer="${WORKTREE}/codegen/scripts/run_json_writer.py"
+  [[ -f "$writer" ]] || {
+    echo "ERROR: candidate patch writer is missing: ${writer}" >&2
+    return 3
+  }
+  python3 "$writer" candidate-patch-digest \
+    --worktree "$WORKTREE" --expected-base-sha "$EXPECTED_BASE_SHA"
 }
 
 # Derive the artifact path only after SFPI setup, so the selected compiler's

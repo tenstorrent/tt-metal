@@ -674,6 +674,32 @@ def test_verification_reducer_cannot_hide_one_unexecuted_architecture(tmp_path):
     assert any("zero_executed" in reason for reason in reduction["reason_codes"])
 
 
+def test_verification_reducer_retains_explicit_incomplete_outcome_coverage(tmp_path):
+    requirement = _requirement()
+    manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    result = _sealed_result(
+        manifest,
+        requirement,
+        selected=3,
+        executed=2,
+        passed=2,
+    )
+    (results / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+    _reduce(tmp_path, manifest_path)
+
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "coverage_error"
+    assert reduction["leaves"][0]["selected"] == 3
+    assert reduction["leaves"][0]["executed"] == 2
+    assert (
+        "execution_outcome_count_incomplete" in reduction["leaves"][0]["reason_codes"]
+    )
+    assert reduction["success_token"] is None
+
+
 @pytest.mark.parametrize(
     ("result_kwargs", "classification", "reason"),
     [
@@ -1149,18 +1175,20 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
     ).stdout.strip()
     source.write_text("verified\n")
     subprocess.run(["git", "-C", str(worktree), "commit", "-qam", "fix"], check=True)
-    head = subprocess.run(
-        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+    patch_sha256 = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "candidate-patch-digest",
+            "--worktree",
+            str(worktree),
+            "--expected-base-sha",
+            base,
+        ],
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
-    patch = subprocess.run(
-        ["git", "-C", str(worktree), "diff", base, head, "--"],
-        check=True,
-        capture_output=True,
-    ).stdout
-    patch_sha256 = hashlib.sha256(patch).hexdigest()
 
     requirement = _requirement()
     manifest, manifest_path = _reducer_manifest(tmp_path, [requirement])
@@ -1214,6 +1242,54 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
     assert finalized.returncode != 0
     assert "candidate patch differs from verified patch" in finalized.stderr
     assert (tmp_path / "run.json").read_bytes() == finalized_bytes
+
+
+def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_path):
+    worktree = tmp_path / "worktree"
+    llk = worktree / "tt_metal" / "tt-llk"
+    llk.mkdir(parents=True)
+    (llk / "llk.txt").write_text("base llk\n")
+    (worktree / "metal.txt").write_text("base metal\n")
+    subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.name", "test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(worktree), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qm", "base"], check=True)
+    base = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (llk / "llk.txt").write_bytes(b"changed\x00llk\n")
+    (worktree / "metal.txt").write_text("changed metal\n")
+    (worktree / "new-untracked.txt").write_text("new candidate input\n")
+
+    def digest(path):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "candidate-patch-digest",
+                "--worktree",
+                str(path),
+                "--expected-base-sha",
+                base,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    assert digest(llk) == digest(worktree)
+    run_test_source = RUN_TEST.read_text(encoding="utf-8")
+    assert "candidate-patch-digest" in run_test_source
+    assert "tt-llk-local-patch-v1" not in run_test_source
 
 
 def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
@@ -1595,6 +1671,104 @@ def test_progress_sequence_and_heartbeat_advance_monotonically(tmp_path):
     assert final["progress_sequence"] == 11
 
 
+def test_concurrent_run_json_patches_preserve_every_writer(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "concurrent-run",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "Analyzing",
+    )
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "metric",
+                "--patch-json",
+                json.dumps({f"concurrent.field_{index}": index}),
+                "--log-dir",
+                str(tmp_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(24)
+    ]
+    for writer in writers:
+        stdout, stderr = writer.communicate(timeout=10)
+        assert writer.returncode == 0, stderr or stdout
+
+    final = json.loads((tmp_path / "run.json").read_text())
+    assert final["concurrent"] == {f"field_{index}": index for index in range(24)}
+    assert final["progress_sequence"] == 25
+
+
+def test_state_updates_are_locked_and_phase_sequence_tracks_transitions(tmp_path):
+    state_path = tmp_path / "state.json"
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(STATE),
+                "--file",
+                str(state_path),
+                "set",
+                f"FIELD_{index}",
+                str(index),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(24)
+    ]
+    for writer in writers:
+        stdout, stderr = writer.communicate(timeout=10)
+        assert writer.returncode == 0, stderr or stdout
+    for phase in ("active_compute", "hardware_queue_wait", "finalization"):
+        subprocess.run(
+            [
+                sys.executable,
+                str(STATE),
+                "--file",
+                str(state_path),
+                "set",
+                "SUPERVISOR_PHASE",
+                phase,
+            ],
+            check=True,
+        )
+    subprocess.run(
+        [
+            sys.executable,
+            str(STATE),
+            "--file",
+            str(state_path),
+            "set",
+            "SUPERVISOR_PHASE",
+            "finalization",
+        ],
+        check=True,
+    )
+
+    state = json.loads(state_path.read_text())
+    assert {state[f"FIELD_{index}"] for index in range(24)} == {
+        str(index) for index in range(24)
+    }
+    assert state["SUPERVISOR_PHASE"] == "finalization"
+    assert state["SUPERVISOR_PHASE_SEQUENCE"] == 3
+    assert state["SUPERVISOR_PHASE_CHANGED_AT"]
+
+
 def test_runs_jsonl_upserts_are_locked_across_concurrent_finalizers(tmp_path):
     runs_jsonl = tmp_path / "runs.jsonl"
     logs = []
@@ -1695,6 +1869,37 @@ def test_init_records_audit_lane_provenance(tmp_path, monkeypatch):
         "outcome": "invalidated",
         "reason_code": "attempt_identity_changed",
     }
+
+
+@pytest.mark.parametrize(
+    "queue_env",
+    [
+        {"CODEGEN_ATTEMPT_ID": "attempt-1"},
+        {"CODEGEN_CAMPAIGN_ID": "campaign-1"},
+        {"CODEGEN_RUNNER_POOL": "prod"},
+    ],
+)
+def test_queued_worktree_setup_rejects_missing_exact_base(tmp_path, queue_env):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    command = r"""
+source "$1"
+REPO_ROOT="$2"
+unset CODEGEN_BASE_COMMIT
+resolve_worktree_base
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", command, "bash", str(SETUP_WORKTREE), str(repo)],
+        env={**os.environ, **queue_env},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "queued launch requires an exact CODEGEN_BASE_COMMIT" in result.stderr
 
 
 def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
@@ -1816,6 +2021,7 @@ setup_worktree "${5:-issue-5}"
     assert state["EXPECTED_BASE_COMMIT"] == base
     assert state["SETUP_BASE_COMMIT"] == base
     assert state["BASE_COMMIT_WAS_PINNED"] is True
+    assert state["QUEUE_LAUNCH"] is True
     assert state["QUEUE_ATTEMPT_ID"] == "new-attempt"
     assert state["RESUMED_FROM_RUN_ID"] == source_run_id
     assert state["RESUMED_FROM_ATTEMPT_ID"] == source_attempt
@@ -1984,6 +2190,23 @@ def test_validate_input_rejects_unset_changed_or_drifted_base(tmp_path):
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert f"BASE={base}" in accepted.stdout
 
+    state["QUEUE_LAUNCH"] = True
+    state["BASE_COMMIT_WAS_PINNED"] = False
+    (llk / ".codegen_run_state.json").write_text(json.dumps(state))
+    rejected_queue_fallback = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env={**os.environ, "CODEGEN_BASE_COMMIT": base},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_queue_fallback.returncode == 1
+    assert "queued launch was not created from an exact pinned base" in (
+        rejected_queue_fallback.stdout
+    )
+    state["BASE_COMMIT_WAS_PINNED"] = True
+    (llk / ".codegen_run_state.json").write_text(json.dumps(state))
+
     unset = {
         key: value for key, value in os.environ.items() if key != "CODEGEN_BASE_COMMIT"
     }
@@ -1995,7 +2218,7 @@ def test_validate_input_rejects_unset_changed_or_drifted_base(tmp_path):
         text=True,
     )
     assert rejected_unset.returncode == 1
-    assert "was unset after pinned worktree setup" in rejected_unset.stdout
+    assert "queued launch lost CODEGEN_BASE_COMMIT after setup" in rejected_unset.stdout
 
     rejected_changed = subprocess.run(
         ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],

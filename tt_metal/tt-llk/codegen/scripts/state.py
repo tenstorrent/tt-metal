@@ -31,10 +31,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +104,38 @@ def _atomic_write(path: Path, store: dict[str, Any]) -> None:
         raise
 
 
+def _locked_update(path: Path, mutation) -> None:
+    """Apply one state mutation under the same lock as every other writer."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_name = (
+        f"{path.name}.lock" if path.name.startswith(".") else f".{path.name}.lock"
+    )
+    lock_path = path.parent / lock_name
+    with lock_path.open("a+") as lock:
+        try:
+            os.chmod(lock_path, 0o664)
+        except OSError:
+            pass
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        store = _load(path)
+        previous_phase = store.get("SUPERVISOR_PHASE")
+        mutation(store)
+        current_phase = store.get("SUPERVISOR_PHASE")
+        if current_phase is not None and current_phase != previous_phase:
+            sequence = store.get("SUPERVISOR_PHASE_SEQUENCE", 0)
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 0
+            ):
+                sequence = 0
+            store["SUPERVISOR_PHASE_SEQUENCE"] = sequence + 1
+            store["SUPERVISOR_PHASE_CHANGED_AT"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+        _atomic_write(path, store)
+
+
 def _emit(value: Any) -> None:
     """Print a value for shell capture: strings raw, everything else as JSON."""
     if isinstance(value, str):
@@ -121,12 +155,9 @@ def _cmd_set(path: Path, key: str, value: str, as_json: bool) -> int:
             parsed = json.loads(value)
         except json.JSONDecodeError as exc:
             raise SystemExit(f"state.py: --json value is not valid JSON: {exc}")
-        store = _load(path)
-        store[key] = parsed
     else:
-        store = _load(path)
-        store[key] = value
-    _atomic_write(path, store)
+        parsed = value
+    _locked_update(path, lambda store: store.__setitem__(key, parsed))
     return 0
 
 
@@ -138,9 +169,7 @@ def _cmd_set_many(path: Path) -> int:
         raise SystemExit(f"state.py: set-many stdin is not valid JSON: {exc}")
     if not isinstance(patch, dict):
         raise SystemExit("state.py: set-many expects a JSON object")
-    store = _load(path)
-    store.update(patch)
-    _atomic_write(path, store)
+    _locked_update(path, lambda store: store.update(patch))
     return 0
 
 
@@ -154,10 +183,7 @@ def _cmd_get(path: Path, key: str, default: str) -> int:
 
 
 def _cmd_del(path: Path, key: str) -> int:
-    store = _load(path)
-    if key in store:
-        del store[key]
-        _atomic_write(path, store)
+    _locked_update(path, lambda store: store.pop(key, None))
     return 0
 
 
