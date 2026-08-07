@@ -4,25 +4,26 @@
 (`$advisor-challenger`) ran on **15 decoder cells** to find out — each one a decoder already optimised *without*
 the advisor, so that anything it adds is a real gain and not a re-derivation of work already done.
 
-**How that was answered, and why the numbers read low.** By strict attribution: freeze the incoming decoder as
-the control, never re-tune it, and count only what the advisor's directions add on top. That is a deliberately
-conservative accounting — **but attribution was the method, not the question.** In several places the stage's own
-accounting undercounts the contribution, and where I could measure the difference this file gives the measured
-figure and says which is which. Every number below is from the cells' own artefacts or from my re-measurements on
-the same hardware.
+**How it was answered.** By strict attribution: the incoming decoder is frozen as the control and never
+re-tuned, and only what the advisor's directions add on top is counted. That accounting is deliberately
+conservative and **it undercounts** — it prices in-chain re-grids at zero (§3.6), records the one direction the
+advisor reliably gets right as `kept: 0` (§3.14), and never applies the advised plan as written (§3.27). So §2
+gives two numbers per cell wherever both were measured: what the stage credited, and what was reachable.
+
+Numbers come from the cells' own artefacts or from re-measurements on the same hardware.
 
 **This file is the few-minute version.** The evidence — 29 findings and the method — is in
-[`FINDINGS`](ADVCHAL-V2-FINDINGS.md); **`§`-references below point there** unless they say "of this file". What the
-analysis itself got wrong is in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
+[`FINDINGS`](ADVCHAL-V2-FINDINGS.md). **Section references with a decimal — `§3.11` — are in that file; plain
+`§1`–`§6` are sections of this one.** What the analysis itself got wrong is in
+[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
 
 ---
 
 ## 1. The verdict
 
-**Scope, stated up front.** This corpus measures **stage 02b v2 as implemented**, on 15 cells. Everything about
-the *stage* below is measured. Everything about **`ttnn-advise` itself** is an inference from how it behaved in
-that one setting — a good setting, since 15 independent decoders exercised it, but not a study of the advisor.
-The two are worth separating, because they are not the same verdict.
+Two verdicts, not one. **§1a is about the stage** — measured directly, 15 cells. **§1b is about the advisor
+itself**, inferred from how it behaved inside that stage. Fifteen independent decoders is a fair test of a tool,
+but it is not a study of the tool, and the two answers differ.
 
 ### 1a. What v2 delivered
 
@@ -31,8 +32,8 @@ The two are worth separating, because they are not the same verdict.
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. |
 | **What is the single biggest miss?** | The **screening order**. It builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
 | **Did it follow the advice?** | **7 of 15 cells tried the exact advice**, 6 of them first — and all 7 ended cleanly, shipping it or recording a measured regression. **4 never tried it and recorded no reason.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly not the advisor's. But only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder I swept). **3 are coverage gaps** — nobody could look, so the headroom is *unknown, not zero*. The rest are asserted or partial. Graded in §2 **of this file**. |
-| **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds — the ledger is §3 **of this file**. |
+| **Are the zeros failures?** | Mostly not the advisor's. But only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **3 are coverage gaps** — nobody could look, so the headroom is *unknown, not zero*. The rest are asserted or partial — graded in §2 below. |
+| **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds. The ledger is §3. |
 
 ### 1b. Is `ttnn-advise` a promising thing to build a stage on?
 
@@ -42,29 +43,27 @@ directions:
 | supports it | measured |
 |---|---|
 | Its **direction** on the dominant defect class — widen a starved reduction — was right in **4 of 4** cells where anyone measured it | §3.2, §3.14 |
-| Its **exact plan**, applied verbatim, contained more than the stage extracted: **−10.43 % at PCC 1.0** where the cell shipped −4.88 % | §3.27 — *one cell, the only one with the artefacts to test it* |
+| Its **exact plan**, applied verbatim, contained more than the stage extracted: **−10.43 % at PCC 1.0** where the cell shipped −4.88 % | §3.27 — *one cell; the only one with the artefacts to test it end to end* |
 | It adds **precision** to detection: "and the advisor wants more cores" narrows a 7-cell flag list to 5 with the same recall | §3.14 |
 | It **declares what it cannot place**, with the exact runtime error — a genuinely useful output the stage discards | §3.28 |
 | **Deterministic**, and **~18 s** to run end to end | §3.29 |
 
 | limits it | measured |
 |---|---|
-| **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three ladders I swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %** | §3.3, §3.14 — the sharpest number against it |
-| **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value | §4 **of this file** |
+| **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three ladders that were swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %** | §3.3, §3.14 — the sharpest number against it |
+| **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value | §4 |
 | A detection rule using only the shipped profile, **no advisor**, catches all 4 win cells. So it buys precision, **not recall** | §3.14 |
 | Its per-op hit rate over the 118 rows the corpus measured is **49 %** — but that population is dominated by boundary candidates and structurally excludes the direction it gets right, so it understates the advisor | §3.14 |
 | **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside it — 97 % of one model's | §3.5 |
 | The corpus's **largest single cost** — 191 ms/model — is a graph-shape choice **no layout advisor could reach** | §3.18–3.19 |
 
-**The honest reading.** In v2 the binding constraint on the advisor's usefulness was **not the advisor** — it was
-the stage's use of it (10 cheap defects) plus tracer coverage. That is an encouraging place to be, because both
-are more tractable than the advisor's own cost model. But the 82 %-vs-99.4 % gap is real and is the thing to
-watch: **until `LayoutScore` prices latency, the advisor should be trusted for *where* to look and *which
-direction* to move, and its specific core count treated as one rung on a ladder to sweep, not as an answer.**
+**What limited the advisor in v2 was not the advisor.** It was the stage's use of it — ten cheap defects — plus
+tracer coverage. Both are more tractable than a cost model, which is the encouraging part. The 82 %-vs-99.4 % gap
+is the part to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
+direction* to move, and treat its specific core count as one rung on a ladder to sweep.**
 
-**The one-sentence version:** the advisor is a **defect detector with a broken cost model** — no latency term
-anywhere in its objective — and v2 listened to it selectively enough that half of what it did find was never
-tested.
+In one line: a **defect detector with a broken cost model** — no latency term anywhere in its objective — used by
+a stage that never tested half of what it found.
 
 ---
 
@@ -74,9 +73,9 @@ tested.
 that cell's *incumbent* came from — **all 15 cells ran on the same host**, so no difference below is a
 hardware difference.
 
-The last column is **what I measured to be reachable from the advisor's own directions on that same decoder** —
-the answer to "how much better could this have been if the advice were followed better". It is per-layer on the
-named kind, and **blank means I have no measurement**, not that nothing was available.
+The last column is **what was measured to be reachable from the advisor's own directions on that same decoder**:
+how much better each cell could have been had the advice been followed more closely. It is per-layer on the named
+kind. **A blank is an absence of measurement, not a measured zero.**
 
 | model | cell | control ms/layer | what v2 shipped | v2 result | **reachable (measured)** |
 |---|---|---|---|---|---|
@@ -96,42 +95,38 @@ named kind, and **blank means I have no measurement**, not that nothing was avai
 | north-mini | **B** | 0.6138 / 0.2033 | nothing | 0.0 % | — *all measured geometries slower or stalled* |
 | north-mini | **onA** | 0.2918 / 0.8465 | nothing | 0.0 % | — *sparse MoE untraceable; headroom unknown* |
 
-*Scope: `v2 result` is what the cell reported at its own scope (model-level % where it had one, µs where it did
-not). `reachable` is per-layer on the named kind, from my re-measurements — the two are not directly
-subtractable. The corpus totals that combine them are in §4 and* [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) *§3.11.*
-
-⚠ **"not tested" means exactly that.** I re-measured **5 of the 15 cells** looking for something better than what
-shipped. Of the rest, only **llama-3.1-8B** was swept and confirmed to have nothing further; the other nine were
-never probed for alternatives, so their blanks carry no information either way. **The corpus "reachable" total is
-therefore a lower bound**, and so is the 64 % credited figure derived from it.
-
-**One inference worth having, labelled as an inference.** phi B shipped the *sharded multiply/add* form of the
-rope chain. Measured on **phi FN's** decoder, that form is −6.97 % where the **fully** advised form is −10.43 %.
-If that ordering holds on phi B's own incumbent — untested — phi B has headroom too. It is the most likely place
-to find another win cheaply.
-
-
 **8 shipped, 7 returned zero.**
+
+*`v2 result` is at the cell's own scope — model-level % where it had one, µs where it did not. `reachable` is
+per-layer on the named kind. The two are not directly subtractable; the corpus totals that combine them are in §4
+and* [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) *§3.11.*
+
+⚠ **The reachable column covers 6 of 15 cells.** Five have a measured better configuration; llama-3.1-8B was
+swept and has nothing further. The other nine were never probed. **So the corpus reachable total — and the 64 %
+credited figure derived from it — are lower bounds.**
+
+**The cheapest place to look next is phi B**, on an inference rather than a measurement: it shipped the *sharded
+multiply/add* form of the rope chain, which on phi FN's decoder is worth −6.97 % against −10.43 % for the fully
+advised form. If that ordering holds on phi B's own incumbent — untested — phi B has headroom too.
 
 ### How solid are the zeros?
 
-Worth grading, because "honest zero" was doing more work in earlier drafts than the evidence supports. Only one
-of the seven is verified by measurement:
+A zero can mean three different things — no headroom, no measurement, or no way to look — and they carry very
+different weight. Only one of the seven is verified by measurement:
 
 | cell | zero because | how well established |
 |---|---|---|
-| **llama-3.1-8B** | nothing on its ladder beats the default | **Verified.** I swept the whole achievable ladder — {8, 16, 32, 64}, the only counts its knob can express — and 16 (≈ the advised 22) and 32 are both **inside the noise floor**, 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not even expressible; the knob rounds it to 16. There is no hidden norm win |
-| llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** I never swept its ladder. Its norm arrived well placed and the advisor wanted *fewer* cores, a direction that wins ~half the time — so I have no reason to expect a win, and no measurement either |
+| **llama-3.1-8B** | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win |
+| llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
 | phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
 | qwen3.6-27B B | the geometry hard-failed | **Structurally incomplete.** 97 % of its model decode time is in a `linear_attention` kind the tracer cannot reach, so it was never advised on at all. Its headroom is **unknown, not zero** — and it very likely carries the same ~191 ms/model `retilize` cost qwen B's profile shows |
 | north-mini onA | sparse MoE untraceable | **Structurally incomplete.** Same shape: **unknown, not zero** |
 | north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
 | qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
 
-**So: 1 verified zero, 1 asserted, 1 reasonable, 1 partly, and 3 that are coverage gaps rather than zeros.** The
-corpus's headline "7 of 15 returned zero" is true but should not be read as "7 decoders had no placement
-headroom" — for three of them nobody could look, and that is a
-[tracer-coverage](ADVCHAL-V2-FINDINGS.md) problem, not an advisor result.
+**1 verified, 1 asserted, 1 reasonable, 1 partial, 3 coverage gaps.** "7 of 15 returned zero" is true, but it
+does not mean seven decoders had no placement headroom — for three of them nobody could look, which is a tracer
+problem rather than an advisor result.
 
 Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
 
@@ -139,8 +134,8 @@ Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEAS
 
 ## 3. The ledger: advisor not good enough, vs stage not listening
 
-The single most useful reframing to come out of this corpus. Every defect found, sorted by **whose it is** —
-because the fixes go to different places and cost wildly different amounts.
+Every defect found, sorted by **whose it is**. The split matters because the two groups go to different
+codebases and cost very different amounts to fix.
 
 *`ADV-n` / `STG-n` are IDs local to this table. The bold codes in the last column (`D1`, `C5f`, `F5`…) are
 action points in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).*
@@ -166,7 +161,7 @@ action points in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).*
 | STG-4 | **`unfixable_ops` is ignored.** The advisor names each unplaceable op with the exact runtime `TT_FATAL`; `reconcile.py` reads the field only to annotate the `untraced` bucket. | **54 declarations, 41 screened anyway.** Cells burn measurements rediscovering errors handed to them in writing | **C5g** |
 | STG-5 | **The oracle rule rejects anything that moves PCC at all**, implemented as a differential bar ≈1.0. | Discarded a −13.3 % candidate at PCC 0.9999911 that is *more accurate than what shipped* (§3.1). And note §3.27: **−10.43 % was available at PCC exactly 1.0**, so even the strict rule permitted more than shipped | stage: absolute oracle at the model's own bar |
 | STG-6 | **`agrees_with_shipped` never compares the memory space** — core count or DS-family only. | 1 of phi FN's 2 such rows is wrong | **C5c** |
-| STG-7 | **`pair_confidence: position` is recorded, documented as a guess, then ignored downstream.** | **23.2 % of pairings corpus-wide**; it misled this analysis into reading 7 guesses as findings | **C5e** |
+| STG-7 | **`pair_confidence: position` is recorded, documented as a guess, then ignored downstream.** | **23.2 % of pairings corpus-wide** are guesses that nothing discounts — enough to turn positional artefacts into apparent findings | **C5e** |
 | STG-8 | **It never re-advises**, screening every candidate against one start-of-run capture. | `ttnn-advise` costs **~18 s** — less than a single harness measurement (§3.29) | **F6** |
 | STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
 | STG-10 | **It throws away the perf report it runs.** Only 1 of 15 cells saved a before/after profile pair. | Op-level verification is impossible for 14 cells | **B0** |
@@ -187,8 +182,8 @@ recorded there so nobody files them against the advisor.
 ## 4. What is still on the table
 
 **From placement — ≈9.2 ms/model, across four cells.** All four were located from the advisor's *own* per-op
-output by a one-line static check needing no device time. But only **half** of the total is the advisor's actual
-recommendation; in three of the four it named the right op and a grid that a sweep of the legal ladder beat:
+output, by a one-line static check needing no device time. But only **half** the total is the advisor's actual
+recommendation: in three of the four it named the right op and a grid that a sweep of the legal ladder beat.
 
 | cell | winning change | advised value | µs/model | the advisor's own number? |
 |---|---|---|---|---|
@@ -213,18 +208,19 @@ Itemised with evidence: [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §8. What to change
 
 ## 5. Reading the numbers
 
-The same quantity sometimes appears with slightly different values in different sections. That is **scope or
-run**, not disagreement, and it is worth knowing which is which:
+A few quantities appear with slightly different values in different sections. In every case that is a different
+**scope** or a different **run**, not a disagreement:
 
 | looks inconsistent | why |
 |---|---|
-| phi FN shipped: **−4.91 % / −4.90 % / −4.88 %** | three runs of one configuration — the cell's own `final.json`; my recomputation from its block means; my fresh re-measurement (§3.27). Run-to-run drift ≈0.1 pp |
+| phi FN shipped: **−4.91 % / −4.90 % / −4.88 %** | three runs of one configuration — the cell's own `final.json`, a recomputation from its block means, and a fresh re-measurement (§3.27). Run-to-run drift ≈0.1 pp |
 | phi FN's discarded candidate: **−13.39 % / −13.4 % / −13.30 %** | same, three runs |
 | north-mini FN shipped: **−9.26 % / −10.23 % / −10.37 %** | three **scopes** — its `final.json` (whose `incumbent_ms` is a 27.635 ms multi-layer harness), its own `model_estimate` (24,949 → 22,398 µs), and per-layer on sliding MoE |
 | Δ with no unit qualifier | **per layer**. Model-level figures always say so |
 
-Where a claim is an assumption rather than a measurement it is labelled. Where a claim of mine was refuted,
-[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) records it rather than deleting it.
+Assumptions are labelled as assumptions. Claims that were later refuted are kept in
+[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) rather than deleted, along with the check that would have
+caught each one.
 
 ---
 
@@ -255,6 +251,5 @@ Where a claim is an assumption rather than a measurement it is labelled. Where a
 | [`ADVCHAL-V2-RESULTS.md`](ADVCHAL-V2-RESULTS.md) | the headline table |
 | `advchal-v2-narrative.json`, `advchal-v2-data.json` | machine-readable |
 
-Everything is reconstructed from the cells' own session transcripts and artefacts, not their self-reported
-summaries. Facts are sourced; where something is my inference it says so, and where a claim of mine was later
-refuted it is recorded in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) rather than quietly deleted.
+Everything here is reconstructed from the cells' own session transcripts and artefacts, not from their
+self-reported summaries.
