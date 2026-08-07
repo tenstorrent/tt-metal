@@ -33,11 +33,13 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
 // detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
 template <typename DType>
 inline void WriteToBuffer(const distributed::MeshBuffer& unit_mesh_buffer, const std::vector<DType>& host_buffer) {
+    (void)physical_device_from_unit_mesh(*unit_mesh_buffer.device());
     detail::WriteToBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 template <typename DType>
 inline void ReadFromBuffer(const distributed::MeshBuffer& unit_mesh_buffer, std::vector<DType>& host_buffer) {
+    (void)physical_device_from_unit_mesh(*unit_mesh_buffer.device());
     detail::ReadFromBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
