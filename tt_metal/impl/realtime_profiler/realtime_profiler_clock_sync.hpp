@@ -55,19 +55,24 @@ public:
         double frequency = 0.0;
     };
 
-    // Probes retained per device: 16 seconds of history at the default sync_interval, which is the cadence a running
-    // program's device is probed at, so any program shorter than that still has a pair around its start (768 KB per
-    // device). The pair around an undecoded record's end can never be overwritten regardless: the receiver probes
-    // once per drained batch, and on the idle floor only when nothing is in flight, so a record sees a few dozen
-    // probes at most between ending and being decoded (asserted against the FIFO geometry in the receiver). Only a
-    // start older than the whole ring -- a program that outran it -- is derived from the record's end instead of a
-    // pair of its own.
-    static constexpr size_t kProbeHistoryCapacity = std::chrono::seconds(16) / std::chrono::microseconds(500);
+    // Probes retained per device: 2 seconds of history at the default sync_interval, covering decode latency and the
+    // peek's observation lag with two orders of magnitude to spare (96 KB per device). The pair around an undecoded
+    // record's end can never be overwritten: the receiver probes once per drained batch, and on the idle floor only
+    // when nothing is in flight, so a record sees a few dozen probes at most between ending and being decoded
+    // (asserted against the FIFO geometry in the receiver). A start older than the ring belongs to a long-running
+    // program, whose start the receiver pins while its probes are still fresh -- see pin_start.
+    static constexpr size_t kProbeHistoryCapacity = std::chrono::seconds(2) / std::chrono::microseconds(500);
 
     // Retains `probe`. One that does not advance both clocks past the newest retained probe is dropped -- a real
     // counter and steady_clock cannot produce one -- so the ring is strictly monotone in host and ticks and no reader
     // below has to check a pair's orientation.
     void retain(const Anchor& probe);
+
+    // Pins `ticks` to its placement between the probes around it now, so a record starting there can still be mapped
+    // exactly after those probes are gone. One slot: a single command queue runs one program at a time, so at most
+    // one start is ever in flight, and it is consumed (or superseded) by the next record mapped. Idempotent per
+    // ticks value; a value with no retained probe before it is ignored.
+    void pin_start(uint64_t ticks);
 
     // What to publish a record with. Nullopt only when no retained probe precedes either timestamp, which after
     // warm-up cannot happen to a real record; the caller treats it as corruption and rejects the page.
@@ -142,6 +147,16 @@ private:
     uint64_t probes_end_ = 0;
 
     std::optional<Chord> chord_;
+
+    // A start observed while it was still inside the ring, held for however long its program runs.
+    struct Pin {
+        uint64_t ticks = 0;
+        double host_ns = 0.0;
+        std::chrono::nanoseconds error{};
+    };
+    std::optional<Pin> pinned_start_;
+    uint64_t last_pin_ticks_ = 0;
+
     std::chrono::nanoseconds last_sync_error_{};
 };
 
@@ -216,6 +231,17 @@ public:
         return now - last_probe_at_ >= sync_interval();
     }
 
+    // Points the peek at dispatch_s's kernel_start_a/b fields, through UMD's statically-mapped L1 window on that
+    // core. Without a window (or without dispatch_s) the peek stays disarmed and long-program starts fall back to
+    // the ring-wide rate.
+    void configure_program_start_peek(CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr);
+
+    // Reads the start timestamp of whatever program dispatch_s is currently waiting on and pins its placement while
+    // the probes around it are fresh. dispatch_s holds the field stable for the program's whole run, and the record
+    // it eventually pushes carries these exact bits, so a torn or stale read simply never matches anything. Called
+    // from the idle-floor path: a device running a program drains nothing, which is exactly when this matters.
+    void peek_running_program_start();
+
     [[nodiscard]] std::optional<RecordMapping> map_record(uint64_t start_ticks, uint64_t end_ticks) {
         return mapping_.map_record(start_ticks, end_ticks);
     }
@@ -247,6 +273,10 @@ private:
     std::unique_ptr<tt::umd::TlbWindow> clock_tlb_;
     volatile uint32_t* mapped_clock_lo_ = nullptr;
     volatile uint32_t* mapped_clock_hi_ = nullptr;
+
+    // dispatch_s's kernel_start_{a,b} {hi, lo} words, through UMD's static L1 window; null when the peek is disarmed.
+    volatile uint32_t* peek_start_a_ = nullptr;
+    volatile uint32_t* peek_start_b_ = nullptr;
     // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
     // whole bracket distribution shifts with record load, so a fixed target would never be met under load or never
     // filter when quiet.

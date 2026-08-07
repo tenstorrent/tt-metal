@@ -674,6 +674,13 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
         // has_direct_clock_read.
         dev_state.clock_sync =
             std::make_unique<RealtimeProfilerClockSync>(context_id, device, dev_state.realtime_profiler_core);
+        if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
+            const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
+            dev_state.clock_sync->configure_program_start_peek(
+                device->virtual_core_from_logical_core(CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y), CoreType::WORKER),
+                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_a),
+                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_b));
+        }
         if (!dev_state.clock_sync->has_direct_clock_read()) {
             log_warning(
                 tt::LogMetal,
@@ -877,6 +884,9 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
                 TTZoneScopedDN(RT_PROFILER, "ProbeFloor");
                 TTZoneValueD(RT_PROFILER, dev_state.chip_id);
                 pass_sync_busy_ += dev_state.clock_sync->resync();
+                // An idle device may be idle because a program is running on it; this is what keeps a start that will
+                // outlive the ring mappable.
+                dev_state.clock_sync->peek_running_program_start();
             }
         } catch (const std::exception& e) {
             DeviceTelemetry& telemetry = *dev_state.telemetry;

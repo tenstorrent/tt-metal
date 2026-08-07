@@ -365,6 +365,32 @@ TEST(RealtimeProfilerClockMapping, RecordOutlivingTheRingIsAnchoredAtItsEnd) {
     EXPECT_NEAR(record->frequency, kNominalRate, kNominalRate * 1e-4);
 }
 
+// A start pinned while its probes were fresh maps exactly however long its program then runs: both endpoints are
+// measured, the record takes its own secant, and the claim stays at placement scale instead of the ride estimate.
+TEST(RealtimeProfilerClockMapping, PinnedStartSurvivesTheRing) {
+    RealtimeProfilerClockMapping mapping;
+    const auto first = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    auto probe = first;
+    mapping.retain(probe);
+    probe = anchor_at(probe.host + std::chrono::microseconds(10), kNominalRate, kProbeBracket);
+    mapping.retain(probe);
+    const uint64_t start = first.ticks + 5;
+    mapping.pin_start(start);
+    for (size_t i = 0; i < RealtimeProfilerClockMapping::kProbeHistoryCapacity + 2; ++i) {
+        probe = anchor_at(probe.host + std::chrono::microseconds(10), kNominalRate, kProbeBracket);
+        mapping.retain(probe);
+    }
+
+    const uint64_t end = probe.ticks - static_cast<uint64_t>(kNominalRate * 15'000.0);
+    const auto record = mapping.map_record(start, end);
+
+    ASSERT_TRUE(record.has_value());
+    EXPECT_NEAR(rt_mapped_host_ns(*record, start), static_cast<double>(start) / kNominalRate, 1.0);
+    EXPECT_NEAR(rt_mapped_host_ns(*record, end), static_cast<double>(end) / kNominalRate, 1.0);
+    EXPECT_EQ(record->clock_sync.sync_error, kProbeBracket / 2);
+    EXPECT_NEAR(record->frequency, kNominalRate, kNominalRate * 1e-6);
+}
+
 // A read serviced late puts its anchor at the midpoint of a wide bracket, which moves the span the slope is taken over
 // without touching the ticks -- so the slope it produces looks wrong by (bracket/2)/span while the clock did nothing at
 // all. Refusing that pair is refusing a measurement for being imprecise, and nothing retries a refused pair, so it
@@ -1373,10 +1399,11 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
            "understates the real error";
 }
 
-// A program that spans thousands of probe pairs: its start and end are placed on pairs measured seconds apart, so
-// this is the secant path at full stretch, and historically the class of record the pipeline dropped outright.
-// Outliving the ring itself would take a kernel longer than kProbeHistoryHorizon, which no test should run; that
-// path is covered at the unit level by RecordOutlivingTheRingIsAnchoredAtItsEnd.
+// A ~4s program against a 2s probe ring: its start outlives the ring, so this exercises the peek end to end --
+// dispatch_s holds the start timestamp in its L1 for the program's whole run, the idle-floor path pins it while its
+// probes are fresh, and the record maps through the pinned placement. The sync_error ceiling is the discriminator:
+// the pinned path claims placement-scale (~0.5us), while the unpinned ring-wide fallback would claim
+// ride x brackets/ring-span, well past 1.5us at this length. Historically this record was dropped outright.
 TEST_F(RealtimeProfilerDeviceSanity, LongProgramIsDeliveredIntact) {
     RecordCollector collector;
     constexpr uint32_t kLongRuntimeId = 7201;
@@ -1416,9 +1443,12 @@ void kernel_main() {
     ASSERT_NE(it, records.end()) << "the long-running program's record was dropped";
     EXPECT_GT(it->duration(), std::chrono::seconds(1));
     EXPECT_LT(it->duration(), std::chrono::seconds(30));
+    EXPECT_GE(it->host_start(), window_start - std::chrono::milliseconds(2));
     EXPECT_GE(it->host_end(), window_start);
     EXPECT_LE(it->host_end(), window_end + std::chrono::milliseconds(2));
     EXPECT_GT(it->clock_sync.sync_error, std::chrono::nanoseconds::zero());
+    EXPECT_LT(it->clock_sync.sync_error, std::chrono::nanoseconds(1500))
+        << "a claim past the placement scale means the start was not pinned and fell back to the ride estimate";
     log_info(
         tt::LogTest,
         "[RT profiler sanity] long program: duration={:.3f}s sync_error={}us",

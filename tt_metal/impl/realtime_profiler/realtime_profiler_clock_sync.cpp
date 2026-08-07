@@ -144,6 +144,18 @@ RealtimeProfilerClockMapping::RecordMapping RealtimeProfilerClockMapping::anchor
         frequency};
 }
 
+void RealtimeProfilerClockMapping::pin_start(uint64_t ticks) {
+    if (ticks == 0 || ticks == last_pin_ticks_) {
+        return;
+    }
+    last_pin_ticks_ = ticks;
+    const std::optional<Chord> chord = chord_around(ticks);
+    if (!chord.has_value()) {
+        return;
+    }
+    pinned_start_ = Pin{ticks, host_ns_on(*chord, ticks), chord->sync_error};
+}
+
 std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClockMapping::map_record(
     uint64_t start_ticks, uint64_t end_ticks) {
     if (!chord_.has_value() || start_ticks > chord_->close_ticks) {
@@ -153,23 +165,32 @@ std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClock
     RecordMapping mapping;
     if (!chord_.has_value()) {
         // The start predates every retained probe: the program ran longer than the ring spans. Its end always has a
-        // pair -- see kProbeHistoryCapacity -- so the record is anchored there and the start rides the published rate
-        // backward. That also means the ring is full, so the whole retained history is the widest rate window there
-        // is, and a ride this long gets it: the ride is charged the wide slope's own noise, where a single pair's
-        // noise over seconds of ride would claim milliseconds against a rate that in truth holds to ~ppm.
+        // pair -- see kProbeHistoryCapacity -- so the record stands on measured ground either way.
         const std::optional<Chord> end_chord = chord_around(end_ticks);
         if (!end_chord.has_value()) {
             return std::nullopt;
         }
-        const Anchor& ring_oldest = probe_at(oldest_probe());
-        const Anchor& ring_newest = probe_at(probes_end_ - 1);
-        const double ring_span_ns = static_cast<double>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(ring_newest.host - ring_oldest.host).count());
-        const double frequency = static_cast<double>(ring_newest.ticks - ring_oldest.ticks) / ring_span_ns;
-        const double ride_ns = static_cast<double>(end_ticks - start_ticks) / frequency;
-        const auto ride_noise = std::chrono::nanoseconds(std::llround(
-            ride_ns * static_cast<double>((ring_oldest.bracket + ring_newest.bracket).count()) / ring_span_ns));
-        mapping = anchored(frequency, end_ticks, host_ns_on(*end_chord, end_ticks), end_chord->sync_error + ride_noise);
+        const double end_host_ns = host_ns_on(*end_chord, end_ticks);
+        if (pinned_start_.has_value() && pinned_start_->ticks == start_ticks) {
+            // The peek placed this start while its probes were fresh, so both endpoints are measured and the record
+            // takes its own secant, exactly as if it had never outlived the ring.
+            const double frequency =
+                static_cast<double>(end_ticks - start_ticks) / (end_host_ns - pinned_start_->host_ns);
+            mapping = anchored(
+                frequency, start_ticks, pinned_start_->host_ns, std::max(pinned_start_->error, end_chord->sync_error));
+        } else {
+            // No pin, so the start rides the widest rate window there is -- the whole, by definition full, ring --
+            // charged that slope's own noise. An estimate, not a bound: rate history older than the ring is gone.
+            const Anchor& ring_oldest = probe_at(oldest_probe());
+            const Anchor& ring_newest = probe_at(probes_end_ - 1);
+            const double ring_span_ns = static_cast<double>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(ring_newest.host - ring_oldest.host).count());
+            const double frequency = static_cast<double>(ring_newest.ticks - ring_oldest.ticks) / ring_span_ns;
+            const double ride_ns = static_cast<double>(end_ticks - start_ticks) / frequency;
+            const auto ride_noise = std::chrono::nanoseconds(std::llround(
+                ride_ns * static_cast<double>((ring_oldest.bracket + ring_newest.bracket).count()) / ring_span_ns));
+            mapping = anchored(frequency, end_ticks, end_host_ns, end_chord->sync_error + ride_noise);
+        }
     } else if (const Chord& chord = *chord_; end_ticks <= chord.close_ticks) {
         // Both timestamps sit on this chord and the published rate is its own slope, so both land exactly where the
         // pair places them and the pair's bound is the whole story.
@@ -185,6 +206,11 @@ std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClock
         // The ring is strictly monotone, so the two placements are ordered and the secant is well defined.
         const double frequency = static_cast<double>(end_ticks - start_ticks) / (end_host_ns - start_host_ns);
         mapping = anchored(frequency, start_ticks, start_host_ns, std::max(chord.sync_error, end_chord->sync_error));
+    }
+    // Consumed on match, superseded otherwise: records arrive in tick order, so a start at or past the pin means the
+    // pinned program's record has now been mapped (this one) or will never arrive.
+    if (pinned_start_.has_value() && start_ticks >= pinned_start_->ticks) {
+        pinned_start_.reset();
     }
     last_sync_error_ = mapping.clock_sync.sync_error;
     return mapping;
@@ -241,6 +267,45 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         log_warning(
             tt::LogMetal, "[Real-time profiler] Device {}: could not map the clock register ({})", chip_id_, e.what());
     }
+}
+
+void RealtimeProfilerClockSync::configure_program_start_peek(
+    CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr) {
+    try {
+        const tt_xy_pair tlb_core(dispatch_s_virtual.x, dispatch_s_virtual.y);
+        auto* tlb_manager =
+            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tlb_manager();
+        const uint32_t span = start_b_addr + 2 * sizeof(uint32_t) - start_a_addr;
+        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, start_a_addr, span)) {
+            return;
+        }
+        auto* window = tlb_manager->get_tlb_window(tlb_core);
+        if (window == nullptr) {
+            return;
+        }
+        const uint64_t window_offset = window->get_base_address() - window->handle_ref().get_config().local_offset;
+        auto* base = window->handle_ref().get_base();
+        peek_start_a_ = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_a_addr);
+        peek_start_b_ = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_b_addr);
+    } catch (const std::exception& e) {
+        log_debug(
+            tt::LogMetal,
+            "[Real-time profiler] Device {}: program-start peek disarmed ({}); long-program starts fall back to the "
+            "ring-wide rate",
+            chip_id_,
+            e.what());
+    }
+}
+
+void RealtimeProfilerClockSync::peek_running_program_start() {
+    if (peek_start_a_ == nullptr) {
+        return;
+    }
+    // {time_hi, time_lo}, written by dispatch_s. The banks ping-pong per program, so the running program's start is
+    // the newer of the two; the retired bank's value is stale and pin_start's exact-match consumers ignore it.
+    const uint64_t a = (static_cast<uint64_t>(peek_start_a_[0]) << 32) | peek_start_a_[1];
+    const uint64_t b = (static_cast<uint64_t>(peek_start_b_[0]) << 32) | peek_start_b_[1];
+    mapping_.pin_start(std::max(a, b));
 }
 
 RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
