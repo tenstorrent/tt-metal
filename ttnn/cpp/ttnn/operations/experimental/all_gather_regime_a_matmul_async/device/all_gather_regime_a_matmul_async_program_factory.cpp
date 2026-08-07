@@ -532,6 +532,31 @@ struct FusedGatherContext {
     uint32_t bwd_recv_sem_addr = 0;  // gather_semaphores[1]; the backward stream's own counter
 };
 
+// ---------------------------------------------------------------------------------------------------
+// On-chip ring SLOT SCHEDULE: writer args 17..32, part of the FIXED prefix.
+// ---------------------------------------------------------------------------------------------------
+// A cb0 slot index is a CONSUMPTION-ORDER index, not a physical identity: compute waits cumulatively
+// (`cb_wait_front(in0_cb, (k_block+1)*in0_block_num_tiles)`) and addresses each block by an explicit offset
+// (`k_block * in0_block_num_tiles`), walking k_block ascending. So "the stripe consumed s-th" and "the stripe
+// in slot s" are the same statement, and the only way to change consumption order is to change WHICH STRIPE
+// LANDS IN WHICH SLOT.
+//
+// Today that mapping is implicit in the step counter: the own stripe goes to slot 0, and the forward at step s
+// reads slot s and writes slot s+1 on the successor, so core c consumes position (c-s) at step s -- an order
+// chained to its predecessor's and unrelated to arrival waves. These args make the mapping EXPLICIT and
+// host-chosen, which is the prerequisite for arrival-ordered consumption (spec appendix B, phase 1).
+//
+// In the FIXED prefix rather than the fused block because the on-chip ring runs on every path, including
+// tp == 1 where there is no fused block at all.
+enum RingSlotArg : uint32_t {
+    kRsOwnSlot = 17,   // slot this core's OWN stripe occupies (i.e. the step at which it is consumed)
+    kRsPeerSlot = 18,  // slot it occupies ON THE PEER -- direct-L1's fabric destination. Equal to kRsOwnSlot
+                       // only while every device shares one schedule; an arrival-ordered schedule is
+                       // per-device, so the sender must be told the receiver's slot rather than assume its own.
+    kRsFwdBase = 19,   // (G-1) pairs {src_slot, dst_slot_on_successor}, one per forward step
+    kRsArgCount = kRsFwdBase + 2u * 7u,  // G-1 == 7 forwards; == 33
+};
+
 // Offsets WITHIN the fused-gather writer arg block, i.e. relative to fused_rt_base. The kernel reads this
 // block sequentially, create_at pushes it in this order, and override_runtime_arguments patches the three
 // entries that can change between invocations. All three places must agree, so they name these constants
@@ -1583,7 +1608,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // Index in the writer's runtime args where the fused-gather block begins. MUST mirror the wa push
     // order below exactly: 17 fixed, then bias, ternary, chunk, and reduce-scatter args. Asserted against
     // the real wa.size() at emission time so the two can never silently drift apart.
-    const uint32_t fused_rt_base = 17u + (has_bias ? 1u : 0u) + (has_ternary ? 3u : 0u) +
+    const uint32_t fused_rt_base = kRsArgCount + (has_bias ? 1u : 0u) + (has_ternary ? 3u : 0u) +
                                    ((n_chunks > 1u) ? (2u + (n_chunks - 1u)) : 0u) + (rscatter ? 7u : 0u);
 
     std::vector<uint32_t> wct = {
@@ -1821,6 +1846,25 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             k_valid,                 // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
+        // ---- Ring slot schedule (args 17..32; see RingSlotArg) ----
+        // PHASE 1 emits exactly today's implicit rotation, so the program stays bit-identical: own stripe in
+        // slot 0, and the forward at step s reads slot s and writes slot s+1 on the successor. Phase 3
+        // replaces only the values computed here -- the kernel is already schedule-driven after this.
+        {
+            const uint32_t own_slot = 0u, peer_slot = 0u;
+            wa.push_back(own_slot);
+            wa.push_back(peer_slot);
+            for (uint32_t s = 0; s + 1u < geo.G; ++s) {
+                wa.push_back(s);       // read this slot of mine
+                wa.push_back(s + 1u);  // write that slot on my successor
+            }
+            TT_FATAL(
+                wa.size() == kRsArgCount,
+                "ring slot schedule ends at writer arg {} but RingSlotArg says {}; the push order and the "
+                "kernel's indices have drifted",
+                wa.size(),
+                static_cast<uint32_t>(kRsArgCount));
+        }
         // Fused-epilogue / output-split writer args (index 17+). Order MUST match the writer kernel's fidx
         // reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.
         if (has_bias) {
@@ -2149,7 +2193,7 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
             auto& wa = (*(b ? writerB_args : writerA_args))[core.x][core.y];
             wa[0] = in0_addr;
             wa[1] = out_addr;
-            uint32_t fidx = 17u;
+            uint32_t fidx = kRsArgCount;  // optional args start after the fixed prefix + ring slot schedule
             if (sv.has_bias) {
                 wa[fidx++] = bias_addr;
             }

@@ -123,7 +123,14 @@ void kernel_main() {
     // ONE running index over the optional runtime args, consumed in the exact order the factory pushes them:
     // bias, ternary, chunk info, then reduce-scatter. A single counter is what lets fusion / chunked output /
     // reduce-scatter be active simultaneously (they used to be mutually exclusive at index 17).
-    [[maybe_unused]] uint32_t fidx = 17u;
+    // ---- On-chip ring SLOT SCHEDULE (args 17..32; RingSlotArg on the host) ----
+    // A cb0 slot index is a CONSUMPTION-ORDER index: compute waits cumulatively and addresses each block by an
+    // explicit ascending offset, so "consumed s-th" and "in slot s" are the same statement. The host therefore
+    // controls consumption order by choosing which stripe lands in which slot, and the kernel just follows.
+    const uint32_t ring_own_slot = get_arg_val<uint32_t>(17);   // where MY stripe goes
+    const uint32_t ring_peer_slot = get_arg_val<uint32_t>(18);  // where it goes on the PEER (direct-L1 fabric)
+    constexpr uint32_t kRingFwdBase = 19;                       // (G-1) pairs {src_slot, dst_slot}
+    [[maybe_unused]] uint32_t fidx = 19u + 2u * (G - 1u);       // optional args start after the schedule
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
     const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
@@ -507,12 +514,18 @@ void kernel_main() {
         {
             constexpr uint32_t slot0_tiles = W * in0_blk;
             constexpr uint32_t slot0_bytes = slot0_tiles * tile_bytes;
+            // OUR slot, and the slot the same stripe occupies on the peer. Identical while every device shares
+            // one schedule; an arrival-ordered schedule is per-device, so the sender is TOLD the receiver's
+            // slot rather than assuming its own -- otherwise a relay lands the stripe where the peer is not
+            // expecting to consume it.
+            const uint32_t dl1_my_base = base0 + ring_own_slot * shard_bytes;
+            const uint32_t dl1_peer_base = base0 + ring_peer_slot * shard_bytes;
             volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem_addr);
             if (!dl1_active) {
                 // This ring position lies entirely past the last source rank (tp * rank_span < 8 * W * kb):
                 // its slot is pure zero padding. Nothing to fetch, nothing to forward -- but it must still be
                 // ZEROED, because those tiles are summed into every valid output column.
-                uint32_t q = base0;
+                uint32_t q = dl1_my_base;
                 for (uint32_t t = 0; t < slot0_tiles; ++t) {
                     zero_tile(q);
                     q += tile_bytes;
@@ -522,7 +535,7 @@ void kernel_main() {
                 // shard column stripe_base + (l % rank_span); slots at or past run_len are this rank's zero
                 // padding and are never read (the in1 reader zeroes the same positions, so the product is
                 // 0*0, never 0*NaN).
-                uint32_t q = base0;
+                uint32_t q = dl1_my_base;
                 for (uint32_t wb = 0; wb < W; ++wb) {
                     const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of our own slot
                     for (uint32_t m = 0; m < M_block; ++m) {
@@ -599,10 +612,10 @@ void kernel_main() {
                             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                                 &sender,
                                 hdr[j],
-                                base0 + off,
+                                dl1_my_base + off,
                                 n,
                                 tt::tt_fabric::NocUnicastCommandHeader{
-                                    safe_get_noc_addr(my_x[0], my_y[0], base0 + off, 0)},
+                                    safe_get_noc_addr(my_x[0], my_y[0], dl1_peer_base + off, 0)},
                                 /*num_hops=*/1);
                         }
                         // One flush per batch: the headers (not the source, which is never rewritten) are
@@ -864,16 +877,18 @@ void kernel_main() {
 #endif  // FUSED_GATHER
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
+    // Step `step` consumes SLOT `step` -- slot index is the consumption-order index, see the note at
+    // ring_own_slot. What varies is which stripe the host put there, and that is the whole schedule.
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
-        if (step == 0) {
+        if (step == ring_own_slot) {
 #if defined(DIRECT_L1)
-            // Slot 0 is ALREADY complete: the direct-L1 prologue above either read it from the local in0
+            // This slot is ALREADY complete: the direct-L1 prologue above either read it from the local in0
             // shard (this device owns the rank) or blocked until the upstream device wrote it into L1. There
             // is no DRAM read and no per-shard arrival gate to evaluate here -- the arrival gate IS that
             // block's semaphore wait, which has already returned.
 #else
-            // read our OWN shard (shard index = ring_pos) from DRAM into slot 0 (+ barrier).
+            // read our OWN shard (shard index = ring_pos) from DRAM into our slot (+ barrier).
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
                 const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
@@ -954,11 +969,15 @@ void kernel_main() {
             noc_async_read_barrier();
 #endif  // DIRECT_L1
         } else {
-            noc_semaphore_wait_min(fwd_ptr, step);  // wait for prev to forward a shard into our slot `step`
+            // Received stripes land in ascending slot order, so consuming slot `step` needs this many of
+            // them: every slot up to `step` except our own. (own_slot == 0 makes this `step`, as before.)
+            noc_semaphore_wait_min(fwd_ptr, (ring_own_slot <= step) ? step : (step + 1u));
         }
-        if (step + 1 < G) {  // forward this slot to the next core's slot (step+1) + signal
-            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
-            noc_async_write(slot, dst, shard_bytes);
+        if (step + 1 < G) {  // forward per the schedule: read one of my slots, write one of my successor's
+            const uint32_t fwd_src_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step);
+            const uint32_t fwd_dst_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step + 1u);
+            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + fwd_dst_slot * shard_bytes);
+            noc_async_write(base0 + fwd_src_slot * shard_bytes, dst, shard_bytes);
             // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
             noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
