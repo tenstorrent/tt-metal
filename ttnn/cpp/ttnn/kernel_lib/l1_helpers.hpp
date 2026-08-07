@@ -121,9 +121,13 @@ FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         }
     }
 
+    // Callers must pass a val_size-aligned range; for val_size == 4 the head/tail
+    // loops below compile out entirely, so this is the only enforcement of that contract.
+    ASSERT(start_addr % val_size == 0 && n_bytes % val_size == 0);
+
     // Element-sized stores for unaligned head and tail.
-    // For val_size == 4 these loops compile out: assert that the range is
-    // already val_size-aligned so the bulk writes cover the full region.
+    // For val_size == 4 these loops compile out since start_addr_4B == start_addr
+    // and end_addr_4B == end_addr when the range is already 4-byte aligned.
     if constexpr (val_size < sizeof(uint32_t)) {
         const IntType val_ = static_cast<IntType>(val);
         auto* head = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
@@ -136,8 +140,6 @@ FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         for (; tail < tail_end; ++tail) {
             *tail = val_;
         }
-    } else {
-        ASSERT(start_addr % val_size == 0 && n_bytes % val_size == 0);
     }
 }
 
