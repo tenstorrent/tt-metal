@@ -43,7 +43,7 @@ def test_tt_mel_frontend(device, xtts_state_dict, num_samples, pcc, reset_seeds)
 
     tt_fe = TtMelFrontend(device, reference)
     wav_dev = ttnn.from_torch(
-        wav.reshape(1, num_samples, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+        wav.reshape(1, num_samples).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
     tt_mel = ttnn.to_torch(tt_fe(wav_dev)).float()
 

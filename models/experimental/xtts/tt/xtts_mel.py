@@ -12,8 +12,22 @@ reflect-pad plus contiguous row slices of a ``[rows, hop]`` view of the padded
 signal — see :class:`_Framer`, which replaced a ``ttnn.gather`` that was 84% of
 the demo's whole traced replay time.
 
-Pipeline (all on device): preemphasis conv -> frame -> DFT matmul (basis
-[512, 514]) -> real^2+imag^2 power -> mel-filterbank matmul -> [1, 64, T].
+Pipeline (all on device): preemphasis -> frame -> DFT matmul (basis [512, 514])
+-> square -> mel-filterbank matmul -> [1, 64, T]. The ``real^2+imag^2`` reduction
+is folded into the filterbank (:func:`_stacked_mel_fb`), so it costs no ops.
+
+PERF (traced, p150; both frontends went ~21-25x in one pass):
+
+  * ``[1, L]``, never ``[1, L, 1]`` — a trailing-1 ROW_MAJOR shape means 4-byte
+    pages, and reshaping out of it cost **31.8 ms**, 96% of the conditioning mel.
+    See :func:`_flat_signal`. This was by far the largest term.
+  * framing without ``ttnn.gather`` — see :class:`_Framer`, the fix that took the
+    demo's traced setup from 7.045 s to 0.068 s.
+  * ``real^2+imag^2`` folded into the filterbank — 5 ops become 1.
+  * the tail multiplies by a precomputed reciprocal instead of dividing.
+
+Whole-forward traced: speaker 24.19 -> 1.14 ms, conditioning 33.06 -> 1.34 ms,
+and the demo's traced setup 0.068 -> 0.012 s.
 """
 
 import math
@@ -26,20 +40,61 @@ from models.experimental.xtts.reference.xtts_mel import HOP_LENGTH, N_FFT, N_MEL
 
 N_FREQS = N_FFT // 2 + 1  # 257
 
+# Activations in L1, weights (DFT basis, filterbank, anti-identity) in DRAM — but only from the
+# framing on; the [1, L] flat-signal stage stays in DRAM. The blocker is the ROW_MAJOR reshape
+# [1, N] -> [num_rows, hop] in _Framer: a ROW_MAJOR page is the LAST dim, so [1, N] is ONE page of
+# N*4 bytes (352 KB at the 4 s conditioning chunk) and the reshape's circular buffers are sized by
+# it — ~1.48 MB of the 1.5 MB L1. Anything of real size sitting in L1 across that op dies with
+# "statically allocated circular buffers clash with L1 buffers". Measured with a 256 KB decoy
+# tensor live: the untilize feeding it is fine either way (L1 output included), the reshape fails
+# even with a DRAM output. So everything the reshape can see — the preemphasis, the reflect pad,
+# xpad, the untilized view — is left in DRAM. From the row slices on, every tensor is [T, *],
+# pages across cores normally, and lives in L1.
+# ttnn.matmul defaults its output to DRAM (the eltwise ops inherit the input's config instead), so
+# the matmuls need this passed explicitly or they drag the chain back out to DRAM.
+L1 = ttnn.L1_MEMORY_CONFIG
+
+
+def _flat_signal(wav, length):
+    """Accept the waveform as ``[1, L]`` (what callers should pass) or the legacy ``[1, L, 1]``.
+
+    PASS ``[1, L]``. A ROW_MAJOR tensor's PAGE is its last dim, so ``[1, L, 1]`` is L pages of
+    ONE fp32 each — 4-byte pages — and reshaping that to ``[1, L]`` (a single 274 KB page) has to
+    repack all L of them. Measured on p150 at L=68679: the reshape alone is **31.8 ms**, which
+    was 96% of the conditioning mel and ~45% of the entire traced setup. The tilize everyone
+    suspects is innocent: ``to_layout(TILE)`` of an already-``[1, L]`` tensor is 0.130 ms.
+
+    Placing the waveform as ``[1, L]`` in the first place costs nothing — it is a host-side
+    ``reshape`` before ``from_torch`` — and makes this a no-op view. The rank-3 branch is kept
+    only so older callers/tests still work; it is the slow path, not the intended one.
+    """
+    return wav if len(wav.shape) == 2 else ttnn.reshape(wav, [1, length])
+
 
 class _Framer:
     """Signal ``[1, L]`` -> STFT frame matrix ``[T, n_fft]`` (``center=True`` reflect padding).
 
     Framing used to be a ``ttnn.gather`` per chunk over a ``[1, chunk*n_fft]`` index map, and it
     was **84% of the whole demo's traced replay time** — 5.77 s for the conditioning mel and
-    1.21 s for the speaker mel, against 0.19 ms for the DFT matmul they feed. The reason is the
-    gather kernel's work split: ``gather_program_factory`` splits over ``Ht``, the index tensor's
-    TILE-ROW count, and a flat ``[1, chunk*n_fft]`` index map is ONE tile row — so the whole
-    gather runs on a single core, re-reading the full ``Wt_input``-tile signal row for every
-    output tile. 684 ms per 32-frame chunk. Chunking made it worse, not better: the cost is
-    per-chunk single-core work, so 9 chunks paid it 9 times.
+    1.21 s for the speaker mel, against 0.19 ms for the DFT matmul they feed.
 
-    Framing needs no indexing at all. Consecutive frames start exactly ``hop`` samples apart, so
+    The reason is that ``ttnn.gather`` is QUADRATIC in the audio length on this shape. A general
+    gather cannot assume anything about its indices — any output element may reference any input
+    element — and ``SingleRowMultiCore`` (the factory selected here, since ``Wt_input`` 2147 > the
+    ``GATHER_WT_THRESHOLD`` of 60) gives each core only a TWO-tile input CB. So every output tile
+    streams the whole ``Wt_input``-tile signal row past it. Cost is the PRODUCT of the two tile
+    counts; measured on p150 and linear in each factor independently over a 32x range::
+
+        t ~= 156 ns * Wt_index * Wt_input          (Wt_index = T*n_fft/32, Wt_input = L/32)
+
+    which predicts every observed number to within ~1%: cond 17216*2147 -> 5.75 s (measured
+    5.77), speaker 4992*1558 -> 1.21 s (measured 1.21). Both tile counts grow with the audio
+    length, hence quadratic. NOTE the chunking was NOT the problem and removing it is not the
+    fix: total ``Wt_index`` is the same however you slice it, so one unchunked call measures
+    5.68 s against the chunked 5.77 s — the chunk loop cost only ~7%, from padding the last chunk.
+
+    Framing needs no indexing at all — which removes the ``Wt_input`` factor entirely and makes
+    the cost linear in the OUTPUT size. Consecutive frames start exactly ``hop`` samples apart, so
     reflect-pad the signal once, view it as ``[rows, hop]`` (a free ROW_MAJOR reshape) and frame
     ``m`` is simply rows ``m .. m+ceil(n_fft/hop)-1`` read end to end. So the frame matrix is
     ``ceil(n_fft/hop)`` CONTIGUOUS row slices of that view, concatenated along the columns and
@@ -117,12 +172,28 @@ class _Framer:
 
         # [rows, hop] view -> frame m is rows m .. m+rows_per_frame-1, so each column block is one
         # contiguous row slice. Row slices + a column concat, no indexing.
+        # DRAM, not L1, up to and including this reshape (see the L1 note at the top of the file):
+        # its input is a SINGLE ROW_MAJOR page of num_rows*hop*4 bytes, which sizes its circular
+        # buffers at ~1.48 MB of the 1.5 MB L1 and leaves no room for a live L1 activation.
         rows = ttnn.reshape(ttnn.to_layout(xpad, ttnn.ROW_MAJOR_LAYOUT), [num_rows, self.hop])
-        blocks = [ttnn.slice(rows, [k, 0], [k + frames, self.hop]) for k in range(rows_per_frame)]
-        wide = ttnn.concat(blocks, dim=1) if len(blocks) > 1 else blocks[0]
+        blocks = [ttnn.slice(rows, [k, 0], [k + frames, self.hop], memory_config=L1) for k in range(rows_per_frame)]
+        wide = ttnn.concat(blocks, dim=1, memory_config=L1) if len(blocks) > 1 else blocks[0]
         if wide.shape[1] != self.n_fft:  # hop does not divide n_fft (speaker: 4x160 -> trim to 512)
-            wide = ttnn.slice(wide, [0, 0], [frames, self.n_fft])
-        return ttnn.to_layout(wide, ttnn.TILE_LAYOUT)
+            wide = ttnn.slice(wide, [0, 0], [frames, self.n_fft], memory_config=L1)
+        return ttnn.to_layout(wide, ttnn.TILE_LAYOUT, memory_config=L1)
+
+
+def _stacked_mel_fb(mel_fb: torch.Tensor) -> torch.Tensor:
+    """``[N_FREQS, N_MELS]`` filterbank -> ``[2*N_FREQS, N_MELS]``, folding the power reduction in.
+
+    The mel is ``mel[:, j] = sum_k (real[:, k]^2 + imag[:, k]^2) * fb[k, j]`` and the DFT matmul
+    already emits ``[real | imag]`` side by side, so squaring the WHOLE spectrum and matmul'ing it
+    against ``vstack(fb, fb)`` reproduces that sum exactly — the two halves land on the same output
+    column by construction. That replaces ``slice + slice + mul + mul + add`` with a single
+    ``ttnn.square``: 5 ops become 1, at the cost of doubling the matmul's K (which is cheap — the
+    matmul is 0.029 ms against 0.138 ms for the chain it removes).
+    """
+    return torch.cat([mel_fb, mel_fb], dim=0).contiguous()
 
 
 def _dft_basis(window_400: torch.Tensor) -> torch.Tensor:
@@ -146,34 +217,34 @@ class TtMelFrontend(LightweightModule):
         super().__init__()
         self.device = device
         self.basis = ttnn.from_torch(_dft_basis(ref.window), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
-        self.mel_fb = ttnn.from_torch(ref.mel_fb.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+        # See _stacked_mel_fb: the real^2+imag^2 reduction is folded into the filterbank.
+        self.mel_fb = ttnn.from_torch(
+            _stacked_mel_fb(ref.mel_fb.float()), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+        )  # [2*N_FREQS, N_MELS]
         self.framer = _Framer(device, N_FFT, HOP_LENGTH)
 
-    def _preemphasize(self, wav):  # wav: [1, L, 1] ROW_MAJOR
+    def _preemphasize(self, x, length):  # x: [1, L] ROW_MAJOR
         # y[t] = x[t] - 0.97*x[t-1], with reflect at the start (x[-1] -> x[1]).
         # Done as shift-and-subtract (ttnn.conv1d misreads C_in=1 kernels).
-        length = wav.shape[1]
-        first = ttnn.slice(wav, [0, 1, 0], [1, 2, 1])  # x[1]  (reflect for t=0)
-        head = ttnn.slice(wav, [0, 0, 0], [1, length - 1, 1])  # x[0 .. L-2]
-        prev = ttnn.concat([first, head], dim=1)  # [1, L, 1] = x[t-1]
-        return ttnn.sub(wav, ttnn.mul(prev, PREEMPH))
+        first = ttnn.slice(x, [0, 1], [1, 2])  # x[1]  (reflect for t=0)
+        head = ttnn.slice(x, [0, 0], [1, length - 1])  # x[0 .. L-2]
+        prev = ttnn.concat([first, head], dim=1)  # [1, L] = x[t-1]
+        return ttnn.sub(x, ttnn.mul(prev, PREEMPH))
 
-    def forward(self, wav):  # wav: ttnn [1, L, 1] ROW_MAJOR
+    def forward(self, wav):  # wav: ttnn [1, L] ROW_MAJOR (see _flat_signal)
         length = wav.shape[1]
-        x = self._preemphasize(wav)  # [1, L, 1]
-        x = ttnn.to_layout(ttnn.reshape(x, [1, length]), ttnn.TILE_LAYOUT)
+        x = self._preemphasize(_flat_signal(wav, length), length)  # [1, L] ROW_MAJOR
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # DRAM: one-row-wide (un)tilize, see _Framer
 
         num_frames = self.framer.num_frames(length)
         framed = self.framer(x, length)  # [T, 512] TILE
 
-        spec = ttnn.matmul(framed, self.basis)  # [T, 514]
-        real = ttnn.slice(spec, [0, 0], [num_frames, N_FREQS])
-        imag = ttnn.slice(spec, [0, N_FREQS], [num_frames, 2 * N_FREQS])
-        power = ttnn.add(ttnn.mul(real, real), ttnn.mul(imag, imag))  # [T, 257]
-
-        mel = ttnn.matmul(power, self.mel_fb)  # [T, 257] @ [257, 64] -> [T, 64]
-        mel = ttnn.permute(mel, (1, 0))  # [64, T]
-        return ttnn.reshape(mel, [1, N_MELS, num_frames])
+        spec = ttnn.matmul(framed, self.basis, memory_config=L1)  # [T, 514] = [real | imag]
+        # real^2+imag^2 is folded into the filterbank (see _stacked_mel_fb), so one square + one
+        # matmul replaces slice/slice/mul/mul/add/matmul.
+        mel = ttnn.matmul(ttnn.square(spec, memory_config=L1), self.mel_fb, memory_config=L1)  # [T, 514] -> [T, 64]
+        mel = ttnn.permute(mel, (1, 0), memory_config=L1)  # [64, T]
+        return ttnn.reshape(mel, [1, N_MELS, num_frames], memory_config=L1)
 
 
 # ---------------------------------------------------------------------------
@@ -223,25 +294,32 @@ class TtConditioningMel(LightweightModule):
         fb = librosa.filters.mel(
             sr=C_SR, n_fft=C_NFFT, n_mels=C_NMELS, fmin=C_FMIN, fmax=C_FMAX, htk=True, norm="slaney"
         )
-        self.mel_fb = ttnn.from_torch(
-            torch.from_numpy(fb).t().contiguous().float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
-        )  # [C_NFREQS, 80]
-        self.mel_norms = ttnn.from_torch(
-            mel_norms.float().reshape(1, C_NMELS, 1), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+        self.mel_fb = ttnn.from_torch(  # [2*C_NFREQS, 80] — power reduction folded in
+            _stacked_mel_fb(torch.from_numpy(fb).t().contiguous().float()),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            dtype=ttnn.float32,
+        )
+        # RECIPROCAL of mel_norms: the tail divides by it, and a multiply is cheaper than a
+        # divide for the same result. Reciprocated on host in fp64 so it costs no accuracy.
+        self.mel_norms_recip = ttnn.from_torch(
+            (1.0 / mel_norms.double()).float().reshape(1, C_NMELS, 1),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            dtype=ttnn.float32,
         )  # [1, 80, 1]
         self.framer = _Framer(device, C_NFFT, C_HOP)
 
-    def forward(self, wav):  # wav: ttnn [1, L, 1] ROW_MAJOR fp32
+    def forward(self, wav):  # wav: ttnn [1, L] ROW_MAJOR fp32 (see _flat_signal)
         length = wav.shape[1]
-        x = ttnn.to_layout(ttnn.reshape(wav, [1, length]), ttnn.TILE_LAYOUT)  # no preemphasis for the cond mel
+        # no preemphasis for the cond mel
+        x = ttnn.to_layout(_flat_signal(wav, length), ttnn.TILE_LAYOUT)  # DRAM, see _Framer
         num_frames = self.framer.num_frames(length)
         framed = self.framer(x, length)  # [T, C_NFFT]
 
-        spec = ttnn.matmul(framed, self.basis)  # [T, 2*C_NFREQS]
-        real = ttnn.slice(spec, [0, 0], [num_frames, C_NFREQS])
-        imag = ttnn.slice(spec, [0, C_NFREQS], [num_frames, 2 * C_NFREQS])
-        power = ttnn.add(ttnn.mul(real, real), ttnn.mul(imag, imag))  # [T, C_NFREQS]
-        mel = ttnn.matmul(power, self.mel_fb)  # [T, 80]
-        mel = ttnn.reshape(ttnn.permute(mel, (1, 0)), [1, C_NMELS, num_frames])  # [1, 80, T]
-        mel = ttnn.log(ttnn.clamp(mel, 1e-5, 1e30))  # log(clamp(mel, min=1e-5))
-        return ttnn.divide(mel, self.mel_norms)  # / mel_norms  (broadcast [1,80,1])
+        spec = ttnn.matmul(framed, self.basis, memory_config=L1)  # [T, 2*C_NFREQS] = [real | imag]
+        # real^2+imag^2 folded into the filterbank (see _stacked_mel_fb).
+        mel = ttnn.matmul(ttnn.square(spec, memory_config=L1), self.mel_fb, memory_config=L1)  # -> [T, 80]
+        mel = ttnn.reshape(ttnn.permute(mel, (1, 0), memory_config=L1), [1, C_NMELS, num_frames], memory_config=L1)
+        mel = ttnn.log(ttnn.clamp(mel, 1e-5, 1e30, memory_config=L1), memory_config=L1)  # log(clamp(mel, min=1e-5))
+        return ttnn.multiply(mel, self.mel_norms_recip, memory_config=L1)  # / mel_norms, as a multiply
