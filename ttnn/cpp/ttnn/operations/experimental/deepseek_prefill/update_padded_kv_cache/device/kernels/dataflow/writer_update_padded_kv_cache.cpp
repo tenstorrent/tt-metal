@@ -36,7 +36,8 @@ static void run_writer() {
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(2);
 
     // Common runtime args (same for all cores on this chip). Indices 0-7 are structural; index 8 (and
-    // 9, scalar path) carry the per-request values resolved below.
+    // 9, scalar path) carry the per-request values resolved below; 10/11 are the structural bounds
+    // those two per-request values are clamped against (see below).
     const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local_t = get_common_arg_val<uint32_t>(2);
@@ -97,6 +98,26 @@ static void run_writer() {
         kv_actual_global_t = get_common_arg_val<uint32_t>(9) / tile_height;
     }
 
+    // Bound both per-request values BEFORE they turn into DRAM page ids.
+    //   [10] = num_slots (cache batch dim / num_layers).
+    //   [11] = max_kv_actual_global_t: the largest kv_actual_global, in the page-row unit, that still
+    //          leaves room for this whole chunk -- host-side sp_factor*(cache_seq - input_seq)/tile_height,
+    //          i.e. exactly the scalar-path TT_FATAL `kv_actual_global + chunk_global <= capacity`.
+    // On the SCALAR path the host already enforces both, so these clamps are no-ops and every derived
+    // index is byte-identical. On the METADATA path the values are NoC-read from DRAM tensors that the
+    // host deliberately does not validate (they must stay off the dispatch path for trace safety), so
+    // this is the ONLY bound -- ASSERT() compiles out in release builds and is not one. Clamping (rather
+    // than spinning or skipping) keeps the CB protocol intact: the reader pushes the same page count
+    // regardless, so the writer must still pop every page it was assigned.
+    const uint32_t num_slots = get_common_arg_val<uint32_t>(10);
+    const uint32_t max_kv_actual_global_t = get_common_arg_val<uint32_t>(11);
+    if (slot_idx >= num_slots) {
+        slot_idx = num_slots != 0 ? num_slots - 1 : 0;
+    }
+    if (kv_actual_global_t > max_kv_actual_global_t) {
+        kv_actual_global_t = max_kv_actual_global_t;
+    }
+
     // Cache linearization: users outer, layers inner.
     const uint32_t batch_idx = slot_idx * num_layers + layer_idx;
 
@@ -105,10 +126,13 @@ static void run_writer() {
     // cell; chips before it have already had their pad consumed, so they write into the next slab;
     // the boundary chip writes mid-slab at boundary_offset_t; chips after it write at the current
     // slab base.
+    // chunk_global_t == 0 iff sp_factor == 0 or chunk_local_t == 0, so it is the single guard that
+    // covers all three divisions below (a zero-sized input passes host validation, and a divide-by-zero
+    // on a RISC core is not a trap we can recover from). All three collapse to 0 -> update_idxt == 0.
     const uint32_t chunk_global_t = sp_factor * chunk_local_t;
-    const uint32_t boundary_slab_idx = kv_actual_global_t / chunk_global_t;
-    const uint32_t boundary_chip = (kv_actual_global_t / chunk_local_t) % sp_factor;
-    const uint32_t boundary_offset_t = kv_actual_global_t % chunk_local_t;
+    const uint32_t boundary_slab_idx = chunk_global_t == 0 ? 0 : kv_actual_global_t / chunk_global_t;
+    const uint32_t boundary_chip = chunk_global_t == 0 ? 0 : (kv_actual_global_t / chunk_local_t) % sp_factor;
+    const uint32_t boundary_offset_t = chunk_global_t == 0 ? 0 : kv_actual_global_t % chunk_local_t;
 
     // From the current slab base, chips before the boundary advance a full slab, the boundary chip
     // advances by its pad offset, and chips after it stay at the base.
@@ -118,8 +142,11 @@ static void run_writer() {
 
     const uint32_t input_Ht = chunk_local_t;
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
-    const uint32_t start_id =
-        start_idx + (core_blocks_written / input_Ht) * cache_HtWt + (core_blocks_written % input_Ht) * Wt;
+    // input_Ht is the same common arg as chunk_local_t, so guard this pair of divisions too: with no
+    // page-rows per chunk there is no head/row split to apply.
+    const uint32_t start_id = input_Ht == 0 ? start_idx
+                                            : start_idx + (core_blocks_written / input_Ht) * cache_HtWt +
+                                                  (core_blocks_written % input_Ht) * Wt;
 
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
     CircularBuffer cb(cb_id_out);
