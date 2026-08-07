@@ -4,6 +4,8 @@
 
 #pragma once
 
+// CI repro: no-op comment to flip the tt-metalium-changed path filter and
+// trigger runtime-examples / sdk-examples [wh_n150_civ2] for tt-metal#52290.
 #include <cstdint>
 #include <map>
 #include <vector>
