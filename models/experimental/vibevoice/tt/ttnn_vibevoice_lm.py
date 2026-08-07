@@ -36,6 +36,23 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead of
+# separate wq (1536x1536) + wkv (1536x512).  BYTE-IDENTICAL (validated by wav sha256): the fused output
+# [q|k|v] equals the column concat of the separate matmuls (block matmul; fp32-dest reduction is
+# blocking-invariant), and nlp_create_qkv_heads splits it into the same q/k/v.  Saves one launch + one
+# bias-add per layer on the latency-bound qkv matmuls (~-1.2% frame).  N=2048=64 tiles / 8x4=32 cores.
+_QKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 # bfloat8_b for the SwiGLU FFN weights (gate/up 1536x8960, down 8960x1536) — the large,
 # DRAM-bound decode matmuls, where bf8b halves the weight read. Attention (wq/wkv/wo) stays bf16
 # (small, latency-bound weights). Not bit-exact vs bf16.
@@ -90,39 +107,6 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-
-# Decode-only fused-KV projection (32 x 1536 x 512).  Auto lands this on 16 cores at ~22 µs;
-# 1D mcast_in0 over 8x1=8 cores with in0_block_w=2, per_core_N=2, out_subblock 1x2 and a
-# width-sharded L1 output (plus L1 in0 from the attn rms_norm) reaches ~16 µs.  in0_block_w=2
-# matches auto's K-reduction (maxabsdiff==0), so the whole q/k/v path stays byte-identical.
-# Bias-add then reshard to DRAM for NlpCreateHeads.  Prefill (S>1) keeps auto.
-_WKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
-    in0_block_w=2,
-    out_subblock_h=1,
-    out_subblock_w=2,
-    per_core_M=1,
-    per_core_N=2,
-    fuse_batch=True,
-    fused_activation=None,
-    mcast_in0=True,
-)
-# B=2 fused-KV: the 8x1=8-core / ib2 / per_core_N=2 config measured 25.1 us in the deployed frame
-# = 63 GB/s on a 1.57 MB weight.  2x8=16 cores (per_core_N=1, 16*1 == Nt=16) with in0_block_w=4
-# reaches 15.0 us = 104 GB/s (1.67x, 28 calls/frame => -0.29 ms).  maxabsdiff==0 vs auto and vs
-# the 8-core ib2 config, so the q/k/v path stays byte-identical.
-_WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(2, 8),
-    in0_block_w=4,
-    out_subblock_h=1,
-    out_subblock_w=1,
-    per_core_M=2,
-    per_core_N=1,
-    fuse_batch=True,
-    fused_activation=None,
-    mcast_in0=True,
-)
-_WKV_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
 # Decode-only FFN program configs (S==1).
 #
@@ -206,17 +190,17 @@ def load_vibevoice_lm_weights(model_path: str) -> Dict[str, torch.Tensor]:
 
 @dataclass
 class LayerWeights:
-    wq: ttnn.Tensor  # TILE [1,1,hidden,n_heads*head_dim]
-    wkv: ttnn.Tensor  # TILE [1,1,hidden,2*n_kv*head_dim] — fused wk|wv (byte-ident vs separate)
+    # Fully-fused wq|wk|wv projection (was separate wq + fused wkv).  Byte-identical: the fused
+    # output [q|k|v] is the column concat of the separate matmuls (fp32-dest reduction is
+    # blocking-invariant) and nlp_create_qkv_heads splits it into the same q/k/v.
+    wqkv: ttnn.Tensor  # TILE [1,1,hidden,(n_heads+2*n_kv)*head_dim]
     wo: ttnn.Tensor  # TILE [1,1,n_heads*head_dim,hidden]
     w1: ttnn.Tensor  # [ffn_dim, hidden]  gate
     w2: ttnn.Tensor  # [hidden, ffn_dim]  down
     w3: ttnn.Tensor  # [ffn_dim, hidden]  up
     attn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
     ffn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
-    # Qwen2 qkv biases
-    q_bias: Optional[ttnn.Tensor] = None
-    kv_bias: Optional[ttnn.Tensor] = None  # fused k_bias|v_bias on the out dim
+    qkv_bias: Optional[ttnn.Tensor] = None  # fused q|k|v bias on the out dim (Qwen2)
 
 
 @dataclass
@@ -335,13 +319,13 @@ def preprocess_lm_weights(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Fuse wk|wv (and biases) on the out dim once at load — decode keeps the fast wq
-        # progcfg, while nlp_create_qkv_heads(q, input_kv=kv) drops the runtime concat +
-        # separate K/V matmuls, and is byte-identical.  The fusion is done on host (torch.cat)
-        # so wkv / kv_bias each serialise as a single cached tensor (only wk is RoPE-permuted).
-        wkv_tt = _tile(
+        # Fully-fused wq|wk|wv on the out dim, built once at load (host torch.cat).  Only wq/wk are
+        # RoPE-permuted (wv raw).  Byte-identical to separate wq + wkv matmuls — the fused output
+        # [q|k|v] is their column concat, and nlp_create_qkv_heads splits it identically.
+        wqkv_tt = _tile(
             lambda: torch.cat(
                 [
+                    _rope_perm("attention.wq", state_dict[f"{prefix}.attention.wq.weight"]),
                     _rope_perm("attention.wk", state_dict[f"{prefix}.attention.wk.weight"]),
                     state_dict[f"{prefix}.attention.wv.weight"],
                 ],
@@ -349,24 +333,26 @@ def preprocess_lm_weights(
             ),
             device,
             wc,
-            f"{lk}.wkv",
+            f"{lk}.wqkv",
         )
-        _has_kv_bias = f"{prefix}.attention.wk.bias" in state_dict and f"{prefix}.attention.wv.bias" in state_dict
-        if _has_kv_bias:
-            kv_bias = wc.as_tensor(
-                f"{lk}.kv_bias",
-                lambda: torch.cat([_bias_host("attention.wk"), _bias_host("attention.wv")], dim=3),
+        _has_qkv_bias = all(f"{prefix}.attention.{p}.bias" in state_dict for p in ("wq", "wk", "wv"))
+        qkv_bias_tt = (
+            wc.as_tensor(
+                f"{lk}.qkv_bias",
+                lambda: torch.cat(
+                    [_bias_host("attention.wq"), _bias_host("attention.wk"), _bias_host("attention.wv")], dim=3
+                ),
                 device=device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        else:
-            kv_bias = None
+            if _has_qkv_bias
+            else None
+        )
 
         lw = LayerWeights(
-            wq=_w("attention.wq", "wq"),
-            wkv=wkv_tt,
+            wqkv=wqkv_tt,
             wo=_w("attention.wo", "wo"),
             w1=_w("feed_forward.w1", "w1", dtype=_FFN_WEIGHT_DTYPE),
             w2=_w("feed_forward.w2", "w2", dtype=_FFN_WEIGHT_DTYPE),
@@ -375,8 +361,7 @@ def preprocess_lm_weights(
                 lambda: state_dict[f"{prefix}.attention_norm.weight"], device, wc, f"{lk}.attn_norm"
             ),
             ffn_norm_w=_norm_weight(lambda: state_dict[f"{prefix}.ffn_norm.weight"], device, wc, f"{lk}.ffn_norm"),
-            q_bias=_b("attention.wq", "q_bias"),
-            kv_bias=kv_bias,
+            qkv_bias=qkv_bias_tt,
         )
         layers.append(lw)
 
@@ -919,27 +904,18 @@ class TTVibeVoiceLM:
         # runtime Q|K|V concat (byte-identical vs separate K/V + concat).  wkv uses its
         # own decode progcfg + width-sharded L1 out (S==1); bias-add below returns DRAM
         # for NlpCreateHeads.
-        q = ttnn.linear(
+        # Fused wqkv projection (generic path: prefill S>1 and eager S==1) → auto progcfg; byte-identical.
+        qkv = ttnn.linear(
             x,
-            layer_w.wq,
+            layer_w.wqkv,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
-            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        kv = ttnn.linear(
-            x,
-            layer_w.wkv,
-            compute_kernel_config=_HIFI4,
-            program_config=_WKV_DECODE_PROGCFG if S == 1 else None,
-            memory_config=_WKV_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if layer_w.q_bias is not None:
-            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.kv_bias is not None:
-            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            q,
-            input_kv=kv,
+            qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,
             transpose_k_heads=False,
@@ -1293,27 +1269,18 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        q = ttnn.linear(
+        # Fused wqkv projection (B=1 traced decode / boot) → auto progcfg; byte-identical.
+        qkv = ttnn.linear(
             x,
-            layer_w.wq,
+            layer_w.wqkv,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG,
-            memory_config=_QO_DECODE_OUT_MEMCFG,
+            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        kv = ttnn.linear(
-            x,
-            layer_w.wkv,
-            compute_kernel_config=_HIFI4,
-            program_config=_WKV_DECODE_PROGCFG,
-            memory_config=_WKV_DECODE_OUT_MEMCFG,
-        )
-        if layer_w.q_bias is not None:
-            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.kv_bias is not None:
-            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            q,
-            input_kv=kv,
+            qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,
             transpose_k_heads=False,
@@ -1513,27 +1480,19 @@ class TTVibeVoiceLM:
         n_kv = cfg.num_key_value_heads
 
         # Batched weight-bound projections — read wq/wkv once for both rows.
-        q = ttnn.linear(
+        # Fused wqkv matmul (deployed CFG-b2 decode), split by nlp_create_qkv_heads.  Byte-identical
+        # vs separate wq + wkv (same column values, same split); saves one launch + one bias-add/layer.
+        qkv = ttnn.linear(
             x,
-            layer_w.wq,
+            layer_w.wqkv,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG_B2,
-            memory_config=_QO_DECODE_OUT_MEMCFG,
+            program_config=_QKV_DECODE_PROGCFG_B2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        kv = ttnn.linear(
-            x,
-            layer_w.wkv,
-            compute_kernel_config=_HIFI4,
-            program_config=_WKV_DECODE_PROGCFG_B2,
-            memory_config=_WKV_DECODE_OUT_MEMCFG,
-        )
-        if layer_w.q_bias is not None:
-            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.kv_bias is not None:
-            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            q,
-            input_kv=kv,
+            qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,
             transpose_k_heads=False,
