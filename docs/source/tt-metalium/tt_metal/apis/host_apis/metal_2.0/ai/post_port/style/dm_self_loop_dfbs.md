@@ -82,11 +82,26 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
    then reads as "this one uses the FIFO" for a buffer that never touches it. Attribute every hit to
    its receiver.
 
-   **No hits on that DFB → not a site for this pass.** A self-loop that never calls the FIFO
+   **No hits on that DFB → not a site for this pass.**
+ A self-loop that never calls the FIFO
    machinery is handled by the [sync-free pass](sync_free_dfbs.md) instead, which is a smaller and
    safer change. Exclude that DFB from your site list, note it in your report for the other pass, and
    **carry on surveying the rest** — this is a per-DFB verdict, not a reason to stop the pass. An op
    can easily hold one of each.
+
+5. **Confirm the DFB is not built on borrowed memory.** Check `borrowed_from` on its
+   `DataflowBufferSpec`: it must be **unset**.
+
+   A `ScratchpadSpec` is a *fresh private allocation*. A borrowed DFB is a *window onto memory the op
+   already owns* — a tensor it allocated or was handed. Swapping one for the other does not move the
+   data; it points the kernel at different memory entirely, and nothing complains. Everything
+   compiles, the kernel runs, and whatever the op expected to find in that tensor is not there.
+
+   **If `borrowed_from` is set, stop and report.** The index translation would be unchanged, but the
+   destination cannot be a scratchpad — it would have to be a `LocalTensorAccessor` over the borrowed
+   tensor, and fake-FIFO bookkeeping over borrowed memory is a combination nothing in this suite has
+   examined. Report it as a site this recipe does not cover, with what the buffer borrows from and
+   what the kernel does with it; that is more useful than a guess.
 
 An op with no fake-FIFO DM self-loops is a legitimate zero-site pass.
 
@@ -380,6 +395,8 @@ is closed on purpose.
 
 Per [When the fix doesn't fit](../pass_procedure.md#when-the-fix-doesnt-fit). Specifically here:
 
+- **The DFB is built on borrowed memory** (`borrowed_from` set) — it is a view onto a tensor the op
+  owns, and a scratchpad is not. See survey step 5.
 - **The kernel does `evil_*` pointer surgery on the same DFB.** `evil_get_*` / `evil_set_*` move the
   FIFO pointers outside the four calls, so a local replay does not capture the buffer's state and the
   translation would be silently wrong.
