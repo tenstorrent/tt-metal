@@ -379,6 +379,35 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### SDPA chunk tuning (rejected: inside measurement noise, and changes output)
+
+- After the heads-major layout change, a re-profile shows LAYOUT/MOVE collapsed
+  from 757.1 ms (34.5%) to 111.6 ms (4.0%) and `ReshapeViewDeviceOperation`
+  gone from the top ten. Scaling the remaining categories to 121f (attention
+  quadratic, everything else linear or constant) puts **SDPA at roughly 65% of
+  production device time**, so the exposed `HY_DIT_SDPA_Q_CHUNK` /
+  `HY_DIT_SDPA_K_CHUNK` knobs were swept at 480p/121f/25 steps.
+- k=512 is confirmed best: k=256 is slower and k=1024 fails outright. For q,
+  a first pass suggested q=192 beat the shipped q=128 by 3-9%.
+- **Both halves of that result fail on inspection.** A clean q=128 reference
+  measured 1.67 s/step where an identical earlier run measured 1.76 -- 5.4%
+  run-to-run variance on the same configuration, larger than the ~4% effect
+  being claimed. Single-run 25-step timings cannot resolve sub-10% differences;
+  repeats are required.
+- Worse, q=192 changes the generated sample: frame PCC **0.835** against q=128
+  with max absolute pixel difference 255. The frames are not garbage (per-frame
+  mean/std match to within a fraction of a percent) -- the video has diverged
+  into a different but equally plausible sample, because chunk size alters
+  softmax accumulation order and a 25-step sampler amplifies bf16 rounding.
+  That fails the >=0.99 bar the rest of this pipeline holds to, and it is not
+  comparable to the bit-identical layout change.
+- Conclusion: keep the measured default `(q=128, k=512)`. Larger q is also
+  bounded above by L1 -- q=288 aborts with a circular-buffer clash.
+- Methodological note for future A/Bs on this pipeline: the noise floor of a
+  single 121f/25-step generation is about +/-5%. The heads-major result
+  (-32.2%) is far outside it; anything in single digits needs repeated runs
+  before it can be believed.
+
 ### Elementwise fusion (measured, low yield -- deprioritised)
 
 - Motivation: the 13f device profile puts ELEMENTWISE at 15.7% of device kernel
