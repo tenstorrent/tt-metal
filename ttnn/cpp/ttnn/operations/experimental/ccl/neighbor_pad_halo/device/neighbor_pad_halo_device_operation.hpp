@@ -31,9 +31,7 @@ struct NpHaloDeviceOperation {
 
 namespace ttnn::prim {
 
-// Primitive entry point: runs the standalone halo-only fabric exchange (no conv, no interior copy).
-// halo_buffer must be a pre-allocated compact DRAM buffer sized for
-//   [H-top | H-bot | W-left | W-right] sticks; it is written in place and returned as the output.
+// Primitive entry point: runs the standalone halo-only fabric exchange (no conv, no interior copy)
 Tensor neighbor_pad_halo(
     const Tensor& input,
     const Tensor& halo_buffer,

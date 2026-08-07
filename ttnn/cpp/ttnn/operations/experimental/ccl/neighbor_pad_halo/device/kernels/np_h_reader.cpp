@@ -19,25 +19,17 @@ constexpr uint32_t ct_after_src = src_ct_args.next_compile_time_args_offset();
 // L1 intermediate config
 constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
-// Dedicated send CB for the batched H-halo send (separate ring from cb_output_id so the
-// per-stick recv/is_first pushes don't desync the row reserves).
+// Dedicated send CB for the batched H-halo send
 constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_src + 2);
-// H-send bank-major coalesce factor (0 = row-contiguous). When > 0, gather the H-halo row into send_cb
-// in dst-bank-major order (w=0,8,..; 1,9,..) so the writer ships same-bank sticks as one 4KB packet.
+// H-send bank-major coalesce factor (0 = row-contiguous)
 constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_src + 3);
-// When set (H-mux path), this reader owns the H->W barrier: it signals the W-reader cores only AFTER its
-// incoming H has landed, so the W corner reads (which read this device's H-section) can't race the H
-// exchange. On the direct path (0) np_writer signals the barrier instead.
+// When set (H-mux path), this reader owns the H->W barrier: it signals the W-reader cores only AFTER its incoming H
 constexpr uint32_t H_SIGNAL_W_RECV = get_compile_time_arg_val(ct_after_src + 4);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 constexpr uint32_t MAX_W_BAR_TARGETS = 16;
 
 void kernel_main() {
-    ///////////////////////////////////////////////////
-    // ARGS
-    ///////////////////////////////////////////////////
-    // Common runtime args (uniform across all cores, updated between dispatches). Index 1 (output addr)
-    // is part of the shared CRTA layout but unused by this reader.
+    // ///////////////////////////////////////////////// ARGS /////////////////////////////////////////////////
     const address_t input_tensor_address = get_common_arg_val<address_t>(0);
     const size_t h_neighbor_sem = get_common_arg_val<uint32_t>(2);
 
@@ -52,9 +44,7 @@ void kernel_main() {
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     // Number of corner sticks per pad row in L1 recv buffer (= pad2_left + pad2_right for 2D corners-only)
     const uint32_t num_l1_recv_sticks_per_row = get_arg_val<uint32_t>(arg_idx++);
-    // Rows per input frame for the per-frame stride (num_sticks_per_halo_dim * input_frame_rows). Equals
-    // input_halo_dim_size for a contiguous input; equals the PADDED H for a padded-input (strided) read,
-    // so the frame advance skips the padded border rows while the edge formula still uses the interior H.
+    // Rows per input frame for the per-frame stride (num_sticks_per_halo_dim * input_frame_rows)
     const uint32_t input_frame_rows = get_arg_val<uint32_t>(arg_idx++);
     // Per-core direction args (moved from compile-time for kernel consolidation)
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
@@ -115,11 +105,7 @@ void kernel_main() {
         }
 
         if (!is_last_chip) {
-            // Read the "end" of each slice into the dedicated send CB. Batch the whole row: one
-            // cb_reserve + one barrier for all num_sticks_to_read sticks instead of per stick. The
-            // per-stick path issued ~18k read+barrier pairs and was latency-bound; coalescing the
-            // row makes it bandwidth-bound. send_cb_id holds exactly 2 rows so a row reserve never
-            // wraps mid-batch, and the paired writer drains it one stick at a time.
+            // Read the "end" of each slice into the dedicated send CB
             for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                 uint32_t src_stick_id = 0;
                 if (direction) {
@@ -131,8 +117,7 @@ void kernel_main() {
                 cb_reserve_back(send_cb_id, num_sticks_to_read);
                 uint32_t row_base_l1_addr = get_write_ptr(send_cb_id);
                 if constexpr (H_COALESCE > 0) {
-                    // Bank-major gather: send_cb[m] = column w in dst-bank order (0,8,..; 1,9,..) so the
-                    // writer coalesces same-bank sticks. src is scattered; the batch shares one barrier.
+                    // Bank-major gather: send_cb[m] = column w in dst-bank order
                     uint32_t m = 0;
                     for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
                         for (uint32_t w = j; w < num_sticks_to_read; w += NP_NUM_DRAM_BANKS) {
@@ -158,9 +143,7 @@ void kernel_main() {
 
         outer_dim_offset += (num_sticks_per_halo_dim * input_frame_rows);
 
-        // Per-batch H-commit: pull this od's incoming H-halo from the L1 recv buffer into the CB as
-        // soon as its sender link delivers it (per-core cumulative count, 1 inc/outer_dim), so the
-        // paired writer commits + signals HT/HB this batch rather than after the whole send pass.
+        // Per-batch H-commit: pull this od's incoming H-halo from the L1 recv buffer into the CB as soon
         if constexpr (use_l1_intermediate) {
             if (!is_first_chip) {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim + 1);
@@ -179,8 +162,7 @@ void kernel_main() {
         }
     }
 
-    // Drain the per-core fabric-arrival sem. 2D recvs were interleaved above; 1D wrote straight to
-    // DRAM so just wait for all outer_dims here, then reset.
+    // Drain the per-core fabric-arrival sem
     if (!is_first_chip) {
         if constexpr (use_l1_intermediate) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
@@ -190,9 +172,7 @@ void kernel_main() {
         }
     }
 
-    // H-mux path: the incoming H has now landed (recv drained above). Signal the H->W barrier on each
-    // W-reader core so the W corner reads (which read this device's H-section) see complete H data. Done
-    // here (recv-authority) not in the writer (send-done) so it holds for >2 H-axes and small shapes.
+    // H-mux path: the incoming H has now landed (recv drained above)
     if constexpr (H_SIGNAL_W_RECV) {
         const uint32_t barrier_sem = get_common_arg_val<uint32_t>(3);
         for (uint32_t t = 0; t < num_w_bar; t++) {

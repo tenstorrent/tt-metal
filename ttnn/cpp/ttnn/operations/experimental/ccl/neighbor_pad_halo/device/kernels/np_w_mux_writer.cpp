@@ -84,9 +84,7 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
 
-    // Nothing to send from an outward-facing edge worker (no neighbor this direction). The WRITER's
-    // is_first/is_last args are NOT direction-swapped (unlike the reader's), so the send condition is
-    // direction-dependent: forward sends iff !is_last_chip, backward sends iff !is_first_chip.
+    // Nothing to send from an outward-facing edge worker (no neighbor this direction)
     const bool has_neighbor = direction ? !is_first_chip : !is_last_chip;
 
     // ---- Build + connect the mux endpoint ----
@@ -111,9 +109,7 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(mux_connection);
     }
 
-    // Stateful send headers (matches all_gather's mux usage): configure once with set_state, then update
-    // only the dst addr + payload size per packet with with_state. num_hops = unicast distance to the
-    // immediate W neighbor (dst_chip_id carries the hop count for the 1D line).
+    // Stateful send headers (matches all_gather's mux usage): configure once with set_state
     const uint8_t num_hops = static_cast<uint8_t>(unicast_route_info.dst_chip_id);
     auto pkt_hdr = PacketHeaderPool::allocate_header();
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -123,9 +119,7 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_size});
 
-    // NOTE (bring-up): no separate W startup barrier here. barrier_sem is shared with the reader's H->W
-    // barrier (same core), so a writer inc/reset would clobber the reader's count. H->W ordering is
-    // provided by the reader's barrier wait; buffers are fresh in a single standalone dispatch.
+    // NOTE (bring-up): no separate W startup barrier here
     (void)barrier_sem;
     (void)barrier_sem_noc0_x;
     (void)barrier_sem_noc0_y;
@@ -151,8 +145,7 @@ void kernel_main() {
                     l1_read_addr,
                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
                     static_cast<uint16_t>(g * stick_size));
-                // Flush the non-blocking mux write before releasing the group: the mux reads the payload
-                // out of send_cb asynchronously, so popping first lets the reader overwrite it mid-read.
+                // Flush the non-blocking mux write before releasing the group: the mux reads the payload out
                 noc_async_writes_flushed();
                 cb_pop_front(send_cb_id, g);
                 r += g * NP_NUM_DRAM_BANKS;
