@@ -127,7 +127,13 @@ def test_pipeline_two_stages(
         )
 
     if no_prompt:
-        run(prompt=prompt, number=0, seed=int(os.environ.get("SEED", "10")))
+        seed = int(os.environ.get("SEED", "10"))
+        run(prompt=prompt, number=0, seed=seed)
+        # Traced: gen #0 captures (lazily, on the first step of each stage and each guidance
+        # branch); gen #1 is pure replay — its denoise times are the steady-state measurement.
+        if traced:
+            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
+            run(prompt=prompt, number=1, seed=seed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")

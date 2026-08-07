@@ -20,7 +20,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
-from ...utils.video import export_video_audio
+from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import (
     DEFAULT_NEGATIVE_PROMPT,
     SPATIAL_COMPRESSION,
@@ -357,8 +357,13 @@ class LTXTwoStagesPipeline(LTXPipeline):
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather (the mp4 is
+        # yuv420p either way — this only moves the colour conversion off the host).
+        yuv_export = os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
+        video_pixels = self.decode_latents(
+            s2_video, latent_frames, latent_h, latent_w, output_type="yuv" if yuv_export else "float"
+        )
         t_vae = time.time() - t0
         timings.append(("VAE decode", t_vae))
         logger.info(f"VAE decode: {t_vae:.1f}s — {video_pixels.shape}")
@@ -366,7 +371,12 @@ class LTXTwoStagesPipeline(LTXPipeline):
         t0 = time.time()
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
         timings.append(("Audio decode", time.time() - t0))
-        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
+        t0 = time.time()
+        if yuv_export:
+            export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
+        else:
+            export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
+        logger.info(f"Video export: {time.time() - t0:.1f}s")
 
         self.last_timings = list(timings)
         total_time = time.time() - total_t0
