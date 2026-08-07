@@ -1,8 +1,8 @@
 # Stage: 24-ln2-shard-into-cfc
 
 - source commit: `09c20b5fde7`
-- kernel time (mean of replays 2-10): **10.023 ms**
-- change from the previous stage: **-0.076 ms**
+- kernel time (mean of replays 2-10): **10.016 ms**
+- change from the previous stage: **-0.073 ms**
 - device ops: **296**
 
 ## What this change was
@@ -23,32 +23,27 @@ optimal for `c_fc` in isolation. Together they are the fastest configuration mea
 
 | Op | inst | Δ inst | us each | Δ us each | ms | % |
 |---|---:|---:|---:|---:|---:|---:|
-| MatmulDeviceOperation | 99 | +0 | 53.85 | +0.84 | 5.331 | 53.2 |
-| SDPAOperation | 24 | +0 | 66.98 | -0.75 | 1.607 | 16.0 |
-| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.61 | +0.22 | 1.167 | 11.6 |
-| LayerNormDeviceOperation | 49 | +0 | 19.09 | +0.29 | 0.935 | 9.3 |
-| NLPConcatHeadsDeviceOperation | 24 | +0 | 17.72 | -0.37 | 0.425 | 4.2 |
-| ShardedToInterleavedDeviceOperation | 24 | -24 | 9.60 | +1.57 | 0.230 | 2.3 |
-| BinaryNgDeviceOperation | 50 | +0 | 3.93 | -0.02 | 0.196 | 2.0 |
-| UnaryDeviceOperation | 1 | +0 | 123.71 | -0.10 | 0.124 | 1.2 |
-| InterleavedToShardedDeviceOperation | 1 | +0 | 8.31 | +0.08 | 0.008 | 0.1 |
+| MatmulDeviceOperation | 99 | +0 | 53.74 | +0.76 | 5.320 | 53.1 |
+| SDPAOperation | 24 | +0 | 67.10 | -0.20 | 1.610 | 16.1 |
+| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.35 | -0.12 | 1.160 | 11.6 |
+| LayerNormDeviceOperation | 49 | +0 | 19.01 | +0.19 | 0.931 | 9.3 |
+| NLPConcatHeadsDeviceOperation | 24 | +0 | 18.26 | +0.38 | 0.438 | 4.4 |
+| ShardedToInterleavedDeviceOperation | 24 | -24 | 9.55 | +1.51 | 0.229 | 2.3 |
+| BinaryNgDeviceOperation | 50 | +0 | 3.94 | +0.02 | 0.197 | 2.0 |
+| UnaryDeviceOperation | 1 | +0 | 123.02 | -1.06 | 0.123 | 1.2 |
+| InterleavedToShardedDeviceOperation | 1 | +0 | 7.47 | -0.30 | 0.007 | 0.1 |
 
 ## Matmul instances by shape
 
 | layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | 81.6 | +2.7 | 2.041 | 48 | 35.2 | 18.6 | LoFi |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.1 | +0.1 | 1.324 | 48 | 50.2 | 26.4 | LoFi |
-| attn qkv | 576 x 1024 x 3072 | 24 | 48.8 | +0.5 | 1.170 | 48 | 42.6 | 22.4 | LoFi |
-| attn wo | 576 x 1024 x 1024 | 24 | 18.2 | -0.1 | 0.438 | 48 | 37.9 | 31.2 | LoFi |
-| aligner hidden | 576 x 4096 x 4096 | 1 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
-
-**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
-`fc1` once; they share the shape (576 x 1024 x 4096), so this row averages all 25 instances and its
-`us each` belongs to neither. Later reports tell them apart by position — the aligner runs after
-every block — but that needs the source profile, and this stage's 12 MB CSV is no longer on disk.
-Stage 26 shows the two apart: 24 x 72.4 us and 1 x 236.4 us.
+| mlp c_fc | 576 x 1024 x 4096 | 24 | 78.1 | +2.6 | 1.874 | 48 | 35.4 | 18.7 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.2 | +0.5 | 1.326 | 48 | 50.1 | 26.4 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | 48.4 | +0.1 | 1.162 | 48 | 42.9 | 22.6 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | 18.3 | -0.1 | 0.439 | 48 | 37.8 | 31.1 | LoFi |
+| mlp c_fc | 576 x 1024 x 4096 | 1 | 164.7 | +0.8 | 0.165 | 48 | 29.7 | 18.8 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 312.0 | -0.6 | 0.312 | 48 | 62.8 | 29.2 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 43.5 | -1.2 | 0.043 | 48 | 21.1 | 29.0 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

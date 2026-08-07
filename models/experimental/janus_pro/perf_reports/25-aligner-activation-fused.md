@@ -2,7 +2,7 @@
 
 - source commit: `b24ca03be99`
 - kernel time (mean of replays 2-10): **9.983 ms**
-- change from the previous stage: **-0.040 ms**
+- change from the previous stage: **-0.033 ms**
 - device ops: **295**
 
 ## What this change was
@@ -31,27 +31,27 @@ against its 0.9999 gate.
 
 | Op | inst | Δ inst | us each | Δ us each | ms | % |
 |---|---:|---:|---:|---:|---:|---:|
-| MatmulDeviceOperation | 99 | +0 | 54.69 | +0.84 | 5.414 | 54.2 |
-| SDPAOperation | 24 | +0 | 66.83 | -0.15 | 1.604 | 16.1 |
-| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.53 | -0.08 | 1.165 | 11.7 |
-| LayerNormDeviceOperation | 49 | +0 | 19.11 | +0.02 | 0.937 | 9.4 |
-| NLPConcatHeadsDeviceOperation | 24 | +0 | 17.82 | +0.10 | 0.428 | 4.3 |
-| ShardedToInterleavedDeviceOperation | 24 | +0 | 9.57 | -0.03 | 0.230 | 2.3 |
-| BinaryNgDeviceOperation | 50 | +0 | 3.93 | -0.00 | 0.196 | 2.0 |
-| InterleavedToShardedDeviceOperation | 1 | +0 | 7.63 | -0.68 | 0.008 | 0.1 |
+| MatmulDeviceOperation | 99 | +0 | 54.69 | +0.95 | 5.414 | 54.2 |
+| SDPAOperation | 24 | +0 | 66.83 | -0.27 | 1.604 | 16.1 |
+| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.53 | +0.18 | 1.165 | 11.7 |
+| LayerNormDeviceOperation | 49 | +0 | 19.11 | +0.10 | 0.937 | 9.4 |
+| NLPConcatHeadsDeviceOperation | 24 | +0 | 17.82 | -0.44 | 0.428 | 4.3 |
+| ShardedToInterleavedDeviceOperation | 24 | +0 | 9.57 | +0.02 | 0.230 | 2.3 |
+| BinaryNgDeviceOperation | 50 | +0 | 3.93 | -0.01 | 0.196 | 2.0 |
+| InterleavedToShardedDeviceOperation | 1 | +0 | 7.63 | +0.16 | 0.008 | 0.1 |
 | UnaryDeviceOperation | 0 | -1 | — | gone | 0.000 | 0.0 |
 
 ## Matmul instances by shape
 
 | layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc | 576 x 1024 x 4096 | 24 | 78.2 | — | 1.877 | 48 | 35.4 | 18.6 | LoFi |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.5 | +0.4 | 1.332 | 48 | 49.9 | 26.3 | LoFi |
-| attn qkv | 576 x 1024 x 3072 | 24 | 48.2 | -0.6 | 1.157 | 48 | 43.0 | 22.7 | LoFi |
-| attn wo | 576 x 1024 x 1024 | 24 | 18.3 | +0.1 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
-| mlp c_fc | 576 x 1024 x 4096 | 1 | 236.1 | — | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
-| aligner hidden | 576 x 4096 x 4096 | 1 | 327.5 | +13.6 | 0.327 | 48 | 59.8 | 27.8 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | 44.4 | +0.2 | 0.044 | 48 | 20.7 | 28.5 | HiFi2 |
+| mlp c_fc | 576 x 1024 x 4096 | 24 | 78.2 | +0.1 | 1.877 | 48 | 35.4 | 18.6 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.5 | +0.3 | 1.332 | 48 | 49.9 | 26.3 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | 48.2 | -0.2 | 1.157 | 48 | 43.0 | 22.7 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | 18.3 | +0.0 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
+| mlp c_fc | 576 x 1024 x 4096 | 1 | 236.1 | +71.4 | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 327.5 | +15.5 | 0.327 | 48 | 59.8 | 27.8 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 44.4 | +0.9 | 0.044 | 48 | 20.7 | 28.5 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

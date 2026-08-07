@@ -1,8 +1,8 @@
 # Stage: 23-ln1-shard-into-qkv
 
 - source commit: `c2548366aa5`
-- kernel time (mean of replays 2-10): **10.099 ms**
-- change from the previous stage: **-0.101 ms**
+- kernel time (mean of replays 2-10): **10.089 ms**
+- change from the previous stage: **-0.109 ms**
 - device ops: **320**
 
 ## What this change was
@@ -20,32 +20,27 @@ e2e PCC went *up*.
 
 | Op | inst | Δ inst | us each | Δ us each | ms | % |
 |---|---:|---:|---:|---:|---:|---:|
-| MatmulDeviceOperation | 99 | +0 | 53.01 | +0.33 | 5.248 | 51.9 |
-| SDPAOperation | 24 | +0 | 67.73 | +0.61 | 1.626 | 16.1 |
-| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.39 | +0.28 | 1.161 | 11.5 |
-| LayerNormDeviceOperation | 49 | +0 | 18.80 | +0.10 | 0.921 | 9.1 |
-| NLPConcatHeadsDeviceOperation | 24 | +0 | 18.09 | +0.36 | 0.434 | 4.3 |
-| ShardedToInterleavedDeviceOperation | 48 | -24 | 8.03 | +0.58 | 0.385 | 3.8 |
-| BinaryNgDeviceOperation | 50 | +0 | 3.95 | +0.00 | 0.197 | 2.0 |
-| UnaryDeviceOperation | 1 | +0 | 123.81 | +0.98 | 0.124 | 1.2 |
-| InterleavedToShardedDeviceOperation | 1 | +0 | 8.23 | +0.65 | 0.008 | 0.1 |
+| MatmulDeviceOperation | 99 | +0 | 52.98 | +0.37 | 5.245 | 52.0 |
+| SDPAOperation | 24 | +0 | 67.30 | +0.04 | 1.615 | 16.0 |
+| NlpCreateHeadsDeviceOperation | 24 | +0 | 48.47 | +0.16 | 1.163 | 11.5 |
+| LayerNormDeviceOperation | 49 | +0 | 18.82 | +0.02 | 0.922 | 9.1 |
+| NLPConcatHeadsDeviceOperation | 24 | +0 | 17.88 | -0.16 | 0.429 | 4.3 |
+| ShardedToInterleavedDeviceOperation | 48 | -24 | 8.04 | +0.58 | 0.386 | 3.8 |
+| BinaryNgDeviceOperation | 50 | +0 | 3.92 | -0.04 | 0.196 | 1.9 |
+| UnaryDeviceOperation | 1 | +0 | 124.08 | +0.69 | 0.124 | 1.2 |
+| InterleavedToShardedDeviceOperation | 1 | +0 | 7.77 | +0.19 | 0.008 | 0.1 |
 
 ## Matmul instances by shape
 
 | layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | 78.9 | +0.1 | 1.972 | 64 | 27.6 | 21.9 | LoFi |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.0 | +0.5 | 1.321 | 48 | 50.3 | 26.5 | LoFi |
-| attn qkv | 576 x 1024 x 3072 | 24 | 48.3 | +0.8 | 1.160 | 48 | 42.9 | 22.6 | LoFi |
-| attn wo | 576 x 1024 x 1024 | 24 | 18.3 | +0.0 | 0.440 | 48 | 37.7 | 31.0 | LoFi |
-| aligner hidden | 576 x 4096 x 4096 | 1 | 312.8 | +0.7 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | 42.1 | -2.6 | 0.042 | 48 | 21.8 | 30.0 | HiFi2 |
-
-**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
-`fc1` once; they share the shape (576 x 1024 x 4096), so this row averages all 25 instances and its
-`us each` belongs to neither. Later reports tell them apart by position — the aligner runs after
-every block — but that needs the source profile, and this stage's 12 MB CSV is no longer on disk.
-Stage 26 shows the two apart: 24 x 72.4 us and 1 x 236.4 us.
+| mlp c_fc | 576 x 1024 x 4096 | 24 | 75.5 | +0.3 | 1.812 | 64 | 27.5 | 22.0 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 54.7 | +0.2 | 1.313 | 48 | 50.6 | 26.6 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | 48.3 | +1.0 | 1.158 | 48 | 43.0 | 22.6 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | 18.4 | +0.1 | 0.441 | 48 | 37.7 | 31.0 | LoFi |
+| mlp c_fc | 576 x 1024 x 4096 | 1 | 163.9 | +0.5 | 0.164 | 48 | 29.9 | 18.9 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 312.6 | -1.0 | 0.313 | 48 | 62.7 | 29.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 44.7 | +0.3 | 0.045 | 48 | 20.5 | 28.2 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

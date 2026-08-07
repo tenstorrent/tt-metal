@@ -6,11 +6,11 @@ One page. Full detail in [PERF.md](PERF.md) and [`perf_reports/`](perf_reports/)
 
 | | before | after |
 |---|---:|---:|
-| kernel time, one forward pass | 29.517 ms | **9.841 ms** |
+| kernel time, one forward pass | 29.501 ms | **9.841 ms** |
 | device ops per pass | 393 | 295 |
 | binding accuracy gate (`test_vision_transformer`, 0.99) | 0.998631 | **0.998811** |
 
-**−66.7% of device compute time, and the strictest accuracy gate ended higher than it started.**
+**−66.6% of device compute time, and the strictest accuracy gate ended higher than it started.**
 Wormhole N150. 27 stages, each re-measured through the same harness — same warm-up, same trace,
 same ten replays — so the deltas sum.
 
@@ -43,8 +43,8 @@ per-op and per-matmul breakdown.
 
 | # | layer | change | Δ kernel | kernel after |
 |--:|---|---|---:|---:|
-| 0 | — | **baseline, unoptimized** | — | **29.517** |
-| 1 | whole tower, MLP | [HiFi2 across the tower, fused MLP gelu](perf_reports/01-hifi2-fused-gelu.md) | -3.343 ms | 26.174 |
+| 0 | — | **baseline, unoptimized** | — | **29.501** |
+| 1 | whole tower, MLP | [HiFi2 across the tower, fused MLP gelu](perf_reports/01-hifi2-fused-gelu.md) | -3.327 ms | 26.174 |
 | 2 | SDPA | [SDPA chunk 256 → 192](perf_reports/02-sdpa-chunk-192.md) | -1.729 ms | 24.445 |
 | 3 | MLP `c_fc` | [c_fc as 1D reuse, output in L1](perf_reports/03-cfc-1d-reuse-l1.md) | -0.909 ms | 23.536 |
 | 4 | MLP `c_fc` | [Approximate gelu in c_fc](perf_reports/04-approx-gelu.md) | -2.321 ms | 21.215 |
@@ -65,10 +65,10 @@ per-op and per-matmul breakdown.
 | 19 | attn | [qkv unshard into L1 rather than DRAM](perf_reports/19-qkv-unshard-to-l1.md) | -0.167 ms | 11.570 |
 | 20 | SDPA | [SDPA HiFi4 → HiFi2](perf_reports/20-sdpa-hifi2.md) | -0.170 ms | 11.400 |
 | 21 | SDPA | [fp32 dest accumulation off on SDPA](perf_reports/21-sdpa-no-fp32-acc.md) | -0.509 ms | 10.891 |
-| 22 | `qkv`, `wo`, `c_fc`, `c_proj` | [LoFi on the body matmuls](perf_reports/22-lofi-body-matmuls.md) | -0.691 ms | 10.200 |
-| 23 | `ln_1` + `qkv` | [ln_1's shard fed to qkv in place](perf_reports/23-ln1-shard-into-qkv.md) | -0.101 ms | 10.099 |
-| 24 | `ln_2` + `c_fc` | [ln_2's shard fed to c_fc in place](perf_reports/24-ln2-shard-into-cfc.md) | -0.076 ms | 10.023 |
-| 25 | aligner | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.040 ms | 9.983 |
+| 22 | `qkv`, `wo`, `c_fc`, `c_proj` | [LoFi on the body matmuls](perf_reports/22-lofi-body-matmuls.md) | -0.693 ms | 10.198 |
+| 23 | `ln_1` + `qkv` | [ln_1's shard fed to qkv in place](perf_reports/23-ln1-shard-into-qkv.md) | -0.109 ms | 10.089 |
+| 24 | `ln_2` + `c_fc` | [ln_2's shard fed to c_fc in place](perf_reports/24-ln2-shard-into-cfc.md) | -0.073 ms | 10.016 |
+| 25 | aligner | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.033 ms | 9.983 |
 | 26 | MLP `c_fc` | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | **9.841** |
 
 ## Where to look next

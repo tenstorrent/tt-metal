@@ -104,7 +104,7 @@ target: nothing about it varies at runtime. This section documents how long it t
 device and why.
 
 **Where it stands.** Kernel time — the sum of every op's compute time for one forward pass —
-went from **29.517 ms to 9.841 ms, −66.7%**, and device ops from 393 to 295. Every number here
+went from **29.501 ms to 9.841 ms, −66.6%**, and device ops from 393 to 295. Every number here
 was measured on an N150; none is estimated. Accuracy held: the strictest gate
 (`test_vision_transformer`, 0.99) ended at 0.998811, *higher* than the 0.998631 it started at.
 
@@ -286,7 +286,7 @@ Full report: **[`perf_reports/00-baseline-unoptimized.md`](perf_reports/00-basel
 | NLPConcatHeads | 24 | 0.488 | 24 | 0.425 | −0.063 | −12.9 |
 | ShardedToInterleaved | — | — | 24 | 0.230 | +0.230 | new |
 | InterleavedToSharded | — | — | 1 | 0.008 | +0.008 | new |
-| **total** | **393** | **29.517** | **295** | **9.841** | **−19.676** | **−66.7** |
+| **total** | **393** | **29.501** | **295** | **9.841** | **−19.660** | **−66.6** |
 
 Read the two "new" rows as the price of sharding: 24 unshards were *added*, and they bought back
 many times their cost in the matmuls that follow them.
@@ -365,7 +365,7 @@ optimization, the **delta**, and **what in the profiler selected it**, and links
 explanation.
 
 `kernel after` is the tower's whole kernel time once that change was in, so the column traces the
-arc from 29.517 down to 9.841. `Δ kernel` is what that row alone changed, and `ops` is the device
+arc from 29.501 down to 9.841. `Δ kernel` is what that row alone changed, and `ops` is the device
 op count per forward pass — worth watching, because two rows *add* ops and still come out ahead.
 
 **Every row was measured the same way.** Each stage was checked out and re-run through the harness
@@ -376,8 +376,8 @@ figure against its 0.95 gate. The per-stage breakdowns are in
 
 | # | Layer | Type | Change | Δ kernel | kernel after | ops | PCC after | Selected from profiler by |
 |--:|---|---|---|---:|---:|---:|---:|---|
-| **0** | — | — | **[baseline, unoptimized](#baseline-the-unoptimized-tower)** | — | **29.517** | 393 | 0.995921 | 393 ops; matmul 43.0%, elementwise 19.5%, SDPA 14.9%, gelu 10.4% |
-| 1 | whole tower, MLP | fidelity + fusion | [HiFi2 across the tower, fused MLP gelu](perf_reports/01-hifi2-fused-gelu.md) | -3.343 ms | 26.174 | 345 | 0.995519 | every matmul at HiFi4 by default; Unary 25 inst / 10.4% |
+| **0** | — | — | **[baseline, unoptimized](#baseline-the-unoptimized-tower)** | — | **29.501** | 393 | 0.995921 | 393 ops; matmul 43.0%, elementwise 19.5%, SDPA 14.9%, gelu 10.4% |
+| 1 | whole tower, MLP | fidelity + fusion | [HiFi2 across the tower, fused MLP gelu](perf_reports/01-hifi2-fused-gelu.md) | -3.327 ms | 26.174 | 345 | 0.995519 | every matmul at HiFi4 by default; Unary 25 inst / 10.4% |
 | 2 | SDPA | progcfg | [SDPA chunk 256 → 192](perf_reports/02-sdpa-chunk-192.md) | -1.729 ms | 24.445 | 345 | 0.995034 | SDPA 182.6 us, 3rd largest family; 576 not divisible by 256 |
 | 3 | MLP `c_fc` | strategy + memcfg | [c_fc as 1D reuse, output in L1](perf_reports/03-cfc-1d-reuse-l1.md) | -0.909 ms | 23.536 | 345 | 0.994531 | c_fc worst body matmul at 179.2 us; derived 2D reached only 48 cores |
 | 4 | MLP `c_fc` | precision (SFPU) | [Approximate gelu in c_fc](perf_reports/04-approx-gelu.md) | -2.321 ms | 21.215 | 345 | 0.976968 | c_fc 235 us vs c_proj 125 us for identical FLOPs → gap is SFPU, not matmul |
@@ -398,10 +398,10 @@ figure against its 0.95 gate. The per-stage breakdowns are in
 | 19 | attn | memcfg | [qkv unshard into L1 rather than DRAM](perf_reports/19-qkv-unshard-to-l1.md) | -0.167 ms | 11.570 | 344 | 0.973980 | the unshard's consumer is not a matmul |
 | 20 | SDPA | fidelity | [SDPA HiFi4 → HiFi2](perf_reports/20-sdpa-hifi2.md) | -0.170 ms | 11.400 | 344 | 0.972216 | SDPA the last HiFi4 op; TRISC0/1/2 all at 98.5% → genuinely math-bound |
 | 21 | SDPA | compute cfg | [fp32 dest accumulation off on SDPA](perf_reports/21-sdpa-no-fp32-acc.md) | -0.509 ms | 10.891 | 344 | 0.974919 | same per-RISC read; DST halves under fp32 acc |
-| 22 | `qkv`, `wo`, `c_fc`, `c_proj` | fidelity | [LoFi on the body matmuls](perf_reports/22-lofi-body-matmuls.md) | -0.691 ms | 10.200 | 344 | 0.969802 | all four take bfloat8_b on both sides, so HiFi2's 2nd pass reads absent mantissa bits |
-| 23 | `ln_1` + `qkv` | sharding | [ln_1's shard fed to qkv in place](perf_reports/23-ln1-shard-into-qkv.md) | -0.101 ms | 10.099 | 320 | 0.973980 | ShardedToInterleaved 72 inst / 0.528 ms, and the two grids already matched |
-| 24 | `ln_2` + `c_fc` | sharding | [ln_2's shard fed to c_fc in place](perf_reports/24-ln2-shard-into-cfc.md) | -0.076 ms | 10.023 | 296 | 0.966490 | same census, remaining 48 unshards |
-| 25 | aligner | fusion | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.040 ms | 9.983 | 295 | 0.966489 | the last standalone Unary, 1 inst / 0.124 ms at 1.2% |
+| 22 | `qkv`, `wo`, `c_fc`, `c_proj` | fidelity | [LoFi on the body matmuls](perf_reports/22-lofi-body-matmuls.md) | -0.693 ms | 10.198 | 344 | 0.969802 | all four take bfloat8_b on both sides, so HiFi2's 2nd pass reads absent mantissa bits |
+| 23 | `ln_1` + `qkv` | sharding | [ln_1's shard fed to qkv in place](perf_reports/23-ln1-shard-into-qkv.md) | -0.109 ms | 10.089 | 320 | 0.973980 | ShardedToInterleaved 72 inst / 0.528 ms, and the two grids already matched |
+| 24 | `ln_2` + `c_fc` | sharding | [ln_2's shard fed to c_fc in place](perf_reports/24-ln2-shard-into-cfc.md) | -0.073 ms | 10.016 | 296 | 0.966490 | same census, remaining 48 unshards |
+| 25 | aligner | fusion | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.033 ms | 9.983 | 295 | 0.966489 | the last standalone Unary, 1 inst / 0.124 ms at 1.2% |
 | 26 | MLP `c_fc` | sharding | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | **9.841** | 295 | 0.966489 | per-RISC split: BRISC at 99-100% of every matmul, and c_fc's was the only unsharded output |
 
 The PCC column is the **tower unit test's** (`test_vision_tower_janus`), against its 0.95 gate,
