@@ -14,7 +14,8 @@ void kernel_main() {
         get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
     uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
-    uint32_t mask_h = get_arg(args::mask_h);
+    // args::mask_h is still supplied by the host but no longer read: the ragged last tile is
+    // handled by the partial scaler below rather than by a generated 0/1 mask tile.
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);
@@ -24,13 +25,20 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifdef REDUCE_SCALER
+#ifdef DO_MASK_H
+    // Non-tile-aligned H: emit a full scaler (tile 0) plus a partial scaler (tile 1) holding the
+    // scaler in only the first partial_h rows. Compute applies tile 1 to the last H tile of each
+    // column. partial_h is origin_H % TILE_HEIGHT, so it is always in [1, 31] here.
+    constexpr uint32_t partial_h = get_arg(args::partial_h);
+    dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+        dfb::scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_COL,
+        partial_h>();
+#else
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
-
-#ifdef DO_MASK_H
-    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
-    generate_mask_h(dfb_mask_h_obj, mask_h);
 #endif
 
     const auto s = TensorAccessor(tensor::src);
