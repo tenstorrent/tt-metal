@@ -1,3 +1,15 @@
+> **STATUS BANNER (2026-08-07). READ §N+21 FIRST.**
+> This file is an audit log, not a summary. It contains claims that were later **retracted** —
+> deliberately kept, because the reasoning that killed them is the most useful content here.
+> **§N+21 "CONSOLIDATED STATE" is the current truth and wins any conflict with sections above it.**
+>
+> Dead — do not resurrect: egress bandwidth · ingest/producer delay · cumulative runs · config churn ·
+> NoC choice · host poll pressure · the periodic device read (§N+18) · static-TLB immunity ·
+> degradation-follows-a-hang · knee-as-safety-limit.
+>
+> Three DISTINCT failures, never pool them: **WEDGE** (card `Unknown|63`) · **TEARDOWN** (healthy card,
+> core-wait hangs) · **DEGRADED** (13× MMIO latency, needs a box freeze).
+
 <!--
 SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 SPDX-License-Identifier: Apache-2.0
