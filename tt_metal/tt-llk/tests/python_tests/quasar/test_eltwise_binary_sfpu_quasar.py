@@ -119,7 +119,7 @@ def _run_sfpu_binary_llk_golden(
     is_perf=False,
     perf_report=None,
 ):
-    """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
+    """Shared driver for the LLK-golden binary SFPU ops.
 
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
@@ -129,6 +129,10 @@ def _run_sfpu_binary_llk_golden(
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
     num_faces = MAX_NUM_FACES
+
+    unpack_to_dest = formats.input_format.is_32_bit() == (
+        dest_acc == DestAccumulation.Yes
+    )
 
     src_A, tile_cnt_A, src_B = prepare_stimuli(
         formats, input_dimensions, src0_idx, src1_idx, mathop
@@ -161,7 +165,9 @@ def _run_sfpu_binary_llk_golden(
             SFPU_BINARY_OP(binary_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
-            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            UNPACKER_ENGINE_SEL(
+                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+            ),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
@@ -421,7 +427,7 @@ def test_eltwise_binary_sfpu_float_quasar(
 
 
 # ===========================================================================
-# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
+# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.b
 # Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
 # ===========================================================================
 SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(

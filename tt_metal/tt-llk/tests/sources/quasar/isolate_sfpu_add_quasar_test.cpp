@@ -128,6 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
     const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
 
+    // Give SFPLOAD/SFPSTORE an explicit register-file format instead of sfpmem::DEFAULT (whose width is
+    // resolved from ALU_FORMAT_SPEC_REG / ACC_CTRL_SFPU_Fp32, not programmed by this isolated kernel).
+    // In 32-bit SrcS mode the datum is Float32, so select FP32; 16-bit mode keeps DEFAULT.
+    const std::uint32_t srcs_sfpmem_mode = PARAM_SRCS_32BIT_MODE ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::DEFAULT;
+
     // Load replay buffer
     const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1; // Divide by 2 since SFSPU operates on 2 rows at a time
     const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
@@ -138,17 +143,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0,
         0,
         // Lambda function to load replay buffer
-        [in0_base, in1_base, out_base, num_sfpu_iterations]
+        [in0_base, in1_base, out_base, num_sfpu_iterations, srcs_sfpmem_mode]
         {
 #pragma GCC unroll 4
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_base + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, srcs_sfpmem_mode, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, srcs_sfpmem_mode, ADDR_MOD_7, 0, in1_base + (d << 1));
                 // Add LREG0 + LREG1, store result in LREG2
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
                 // Store result back to output slice
-                TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_base + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG2, srcs_sfpmem_mode, ADDR_MOD_7, 0, out_base + (d << 1));
             }
         });
 

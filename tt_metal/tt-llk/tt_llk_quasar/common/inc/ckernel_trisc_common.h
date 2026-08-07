@@ -412,9 +412,10 @@ struct srcs_dims
 };
 
 // SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
+// Tf32 is stored in a 32-bit (Float32) footprint, so it uses the same 32-bit slice geometry.
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
-    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32 || unpack_S_dst_format == DataFormat::Tf32;
 }
 
 /**

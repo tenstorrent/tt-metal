@@ -192,21 +192,47 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
+    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
+    // as Quasar. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2a_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
-    TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
+    if constexpr (ELTWISE_MATH_ROWS == 8)
+    {
+        TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
+        TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
+    }
+    else // ELTWISE_MATH_ROWS == 4 (4row_arch): 4-row FPU needs 4 MOVs per face
+    {
+        TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_4_ROWS, 0);
+        TTI_MOVD2A(0, 4, addrmod, p_movd2a::MOV_4_ROWS, 4);
+        TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_4_ROWS, 8);
+        TTI_MOVD2A(0, 12, addrmod, p_movd2a::MOV_4_ROWS, 12);
+    }
 }
 
 inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2B src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
+    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
+    // as Quasar. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2b_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
-    TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
-    TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
+    if constexpr (ELTWISE_MATH_ROWS == 8)
+    {
+        TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
+        TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
+    }
+    else // ELTWISE_MATH_ROWS == 4 (4row_arch): 4-row FPU needs 4 MOVs per face
+    {
+        TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_4_ROWS, 0, 0);
+        TTI_MOVD2B(0, 4, addrmod, p_movd2b::MOV_4_ROWS, 0, 4);
+        TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_4_ROWS, 0, 8);
+        TTI_MOVD2B(0, 12, addrmod, p_movd2b::MOV_4_ROWS, 0, 12);
+    }
 }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
