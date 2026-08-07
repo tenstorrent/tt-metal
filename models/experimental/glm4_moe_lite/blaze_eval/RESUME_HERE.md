@@ -1144,3 +1144,48 @@ applies is the other half: **one fused kernel per stage, feeding the next**.
 blaze's multi-host `PipelineBlock`/`model_pipeline` machinery (D2D sockets, `PipelineLayout`,
 `submesh_partition`) is for splitting a model across *processes/galaxies*, which is a different
 axis from what this model needs. Do not reach for it to get a fused stage chain on one Galaxy.
+
+## E2E MEASURED: integration is correct, and it makes the model SLOWER
+
+First actual end-to-end run of a Blaze op inside the model. Same script, same flags, back to back
+in the blaze tree, 32 chips, traced, bs=1:
+
+| | ms/token |
+|---|---:|
+| baseline (no blaze) | **34.6** (min 34.4, max 34.9) |
+| `GLM4_MOE_LITE_BLAZE_QKV_A=1`, `BLAZE_DSM_WORKERS_PER_BANK=4` | **36.8** (min 36.4, max 37.1) |
+
+**+2.2 ms/token, a 6.4% regression** — from an op measured at **1.39x faster** in isolation on the
+same 32-chip mesh. The op definitely executed (`BLAZE_QKV_A first call site hit` in the log).
+
+**The integration itself is correct:** `GENERATED_IDS` are **bit-identical** to baseline. So this is
+not a correctness failure or a plumbing failure — the fused op is a faithful drop-in that is
+simply slower in the traced model than the ttnn op it replaces, despite winning on kernel time.
+
+Trace capture went 7.0 s -> 43.3 s (building 47 Blaze programs), but that is one-time and not part
+of the per-token number.
+
+### This is the third time a cluster win has failed to translate
+
+- removing 23% of all ops under trace: **0.0 ms** (`18479ed4ad0`)
+- `DS_CORE_CAP=8` giving ttnn blaze's core layout: 33.2 -> **33.4 ms**
+- a genuine 1.39x kernel-time win on the real mesh: **+6.4% e2e**
+
+The mechanism recorded in `18479ed4ad0` explains the direction: under trace replay the command
+stream is pre-recorded and per-op firmware setup is *pipelined*, so the profiler serialises what
+trace overlaps. Kernel-time wins measured by the profiler therefore do not map to step time, and a
+`ttnn.generic_op` dispatch that trace cannot overlap the way it overlaps native ttnn ops can cost
+more than the kernel saves.
+
+**Conclusion: do not enable this flag.** The op boundary is not the right unit of optimisation for
+this model under trace. Any future Blaze work here must be gated on a traced e2e measurement, not
+an op-boundary A/B — the two disagree in sign, not just magnitude.
+
+### What would be worth measuring instead
+
+The step is weight-bandwidth-bound and dense weights are **replicated** across all 32 chips
+(`ReplicateTensorToMesh` in layer_weights.py), so at bs=1 every chip reads the full dense weight
+set to compute the same result. `GLM4_MOE_LITE_TP` — which would shard those weights and cut
+per-chip bytes on the serial path — is in `perf_defaults.PINNED_OFF` for a *correctness*
+regression, not a performance one. That is a far larger lever than op fusion and is a bug to fix
+rather than a kernel to write.
