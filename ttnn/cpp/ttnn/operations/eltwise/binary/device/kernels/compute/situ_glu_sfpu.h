@@ -1,0 +1,147 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+//=============================================================================
+// SiTU-GLU activation for SFPU (dedicated fused binary op).
+//
+// Formula (Moonshot Kimi K3):
+//   situ_a  = beta_gate * tanh(gate / beta_gate) * sigmoid(gate)
+//   up_half = beta_up   * tanh(up   / beta_up)                 if Config::cap_up
+//           = up                                               otherwise
+//   result  = situ_a * up_half
+//
+// gate and up are pinned in dst simultaneously, so the whole activation runs in
+// one pass with no intermediate materialized to L1/DRAM. Modeled on the gpt-oss
+// swiglu_sfpu.h; intended to be wired into an expert compute kernel later.
+//
+// Usage:
+//   PACK((llk_math_eltwise_binary_sfpu_situ_glu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false>(gate, up, out)));           // Kimi betas
+//   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false, MyConfig>(gate, up, out))); // custom
+//
+// Init note: this op uses BOTH tanh and sigmoid. tanh_init loads the three
+// vConstFloatPrgm registers with Sollya tanh coefficients, and the stock
+// sfpu_reciprocal_iter reads vConstFloatPrgm0 -- so it cannot be used for the
+// sigmoid here. _situ_glu_reciprocal_ below carries its constant as a literal
+// instead, letting a single tanh_init serve the whole op.
+//=============================================================================
+
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_tanh.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+
+namespace ckernel::sfpu {
+
+struct SituGluConfigKimi {
+    static constexpr float beta_gate = 4.0f;
+    static constexpr float beta_up = 25.0f;
+    static constexpr bool cap_up = true;
+};
+
+// Newton reciprocal carrying its 2.0 as a literal. The stock sfpu_reciprocal_iter
+// reads that constant from vConstFloatPrgm0, which tanh_init has loaded with a tanh
+// coefficient -- borrowing it would corrupt both halves. Structurally identical to
+// sfpu_reciprocal_iter otherwise; keep in sync if recip.h changes.
+template <int MAX_ITER>
+sfpi_inline sfpi::vFloat _situ_glu_reciprocal_(const sfpi::vFloat x) {
+    sfpi::vFloat y = sfpi::approx_recip(x);
+    // t is negated (2.0 - x*y -> x*y - 2.0) so NaN detection is a sign check: every
+    // comparison against NaN is false, leaving the already-correct seed in the
+    // degenerate x=0/inf cases. The trailing `- 0.0f` is SFPMAD shape (no bare
+    // multiply) and preserves signed zero.
+    sfpi::vFloat t = x * y - 2.0f;
+    if constexpr (MAX_ITER > 1) {
+        sfpi::vFloat y1 = y * -t - 0.0f;
+        v_if(t < 0) {
+            t = x * y1 - 2.0f;
+            y = y1 * -t - 0.0f;
+        }
+        v_endif;
+    } else {
+        v_if(t < 0) { y = y * -t - 0.0f; }
+        v_endif;
+    }
+    return y;
+}
+
+// sigmoid(x) = 1 / (1 + exp(-x)); both exp variants are free of vConstFloatPrgm.
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _situ_glu_sigmoid_(sfpi::vFloat x) {
+    sfpi::vFloat exp_neg_x;
+    if constexpr (is_fp32_dest_acc_en) {
+        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
+    } else {
+        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
+    }
+    return _situ_glu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(1.0f + exp_neg_x);
+}
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluConfigKimi>
+inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+    constexpr float beta_gate = Config::beta_gate;
+    constexpr float inv_beta_gate = 1.0f / Config::beta_gate;
+    constexpr float beta_up = Config::beta_up;
+    constexpr float inv_beta_up = 1.0f / Config::beta_up;
+    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+
+        // gate half: beta_gate * tanh(gate / beta_gate) * sigmoid(gate). sigmoid takes
+        // the raw gate, not the capped value.
+        sfpi::vFloat situ_a =
+            (_sfpu_tanh_polynomial_(gate * inv_beta_gate) * beta_gate) * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(gate);
+
+        // up half: softcapped by beta_up when requested, otherwise passed through.
+        sfpi::vFloat up_half = up;
+        if constexpr (Config::cap_up) {
+            up_half = _sfpu_tanh_polynomial_(up * inv_beta_up) * beta_up;
+        }
+
+        sfpi::vFloat result = situ_a * up_half;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+inline void situ_glu_init() {
+    // tanh owns all three vConstFloatPrgm registers; the sigmoid half borrows none
+    // (see _situ_glu_reciprocal_), so one tanh init serves the whole op.
+    tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
+}
+
+}  // namespace ckernel::sfpu
+
+namespace ckernel {
+
+inline void llk_math_eltwise_binary_sfpu_situ_glu_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::situ_glu_init);
+}
+
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SituGluConfigKimi>
+inline void llk_math_eltwise_binary_sfpu_situ_glu(
+    uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_situ_glu,
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        vector_mode);
+}
+
+}  // namespace ckernel
+
+#endif  // TRISC_PACK || TRISC_MATH
