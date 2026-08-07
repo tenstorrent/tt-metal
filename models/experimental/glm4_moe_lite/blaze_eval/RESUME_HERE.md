@@ -1189,3 +1189,52 @@ set to compute the same result. `GLM4_MOE_LITE_TP` — which would shard those w
 per-chip bytes on the serial path — is in `perf_defaults.PINNED_OFF` for a *correctness*
 regression, not a performance one. That is a far larger lever than op fusion and is a bug to fix
 rather than a kernel to write.
+
+## STAGE FUSION: the thesis is right, the building blocks are not there yet
+
+Measured the two-matmul Q stage (`bench_e_fused_stage.py`) standalone, across worker counts:
+
+| W | cores | fused stage | intra-stage L1 boundary | ttnn same 2 matmuls |
+|---|---:|---:|---:|---:|
+| 1 | 8 | 63.4 µs | — | 18.8 |
+| 2 | 16 | 39.6 µs | **0.5 µs** | 18.8 |
+| 4 | 32 | **31.9 µs** | **1.0 µs** | 18.8 |
+
+Two things are now established:
+
+1. **Bigger stages are the right direction.** Chaining ops inside one program costs **0.5-1.0 µs**.
+   Crossing back to the model's tensor boundary costs **~40 µs**. Fusing the two matmuls took the
+   unfused pair from 92.3 -> 63.4 µs at W=1 (1.46x), purely by deleting one boundary crossing.
+2. **The widening compounds with it:** 63.4 -> 31.9 µs (2.0x) from W=1 to W=4.
+
+But the stage is still **1.7x slower than ttnn's 18.8 µs** for the same two matmuls, and W=4 makes
+it worse in one respect: N pads 1536 -> 2048, 33% work ttnn never does. Note this bench's ttnn
+reference is much faster relative to blaze than the q_kv_a one was (where blaze won 1.39x), so the
+two ttnn references are not configured alike — do not average them.
+
+### The Q stage HANGS in the model, but not standalone
+
+`GLM4_MOE_LITE_BLAZE_Q_STAGE=1` deadlocks the device during the first decode token, at **both W=1
+and W=4** — so the widening is not the cause. Evidence:
+
+- all 47 layers prepare (`BLAZE_Q_STAGE prep` x47) and the stage is invoked once
+- JIT compile of `glm_q_stage_*.cpp` completes, including the `GatherRowToDRAM` instantiation
+- then host CPU time stays at **0 s** for 19+ minutes with the log frozen -> host blocked on the
+  device, i.e. a device-side deadlock, not a slow kernel and not compile latency
+- the same stage runs clean standalone in 13 s
+
+So it is **model-context specific**: trace capture, 47 sequential layer programs, the shared
+`_PROGRAM_SEMAPHORES` dict, or interaction with SDPA's static L1 region. `blaze_ops.py` already
+documents two related fragilities (shared semaphores across layers; the shared-scratch arena
+wedging the *second* `_build_q_stage_program`).
+
+**Next diagnostic:** `BLAZE_DEBUG_KERNELS=1` names the stalling phase. Do NOT kill the process
+before triaging — `TT_METAL_INSPECTOR=1` writes `generated/inspector/*.yaml`, but
+`triage.py --run=dump_callstacks` wants the **live RPC** at localhost:50051 and reports
+"Inspector unavailable" from serialized logs alone.
+
+### Recovery needs TWO resets
+
+After this hang a single `tt-smi -r` left the control plane broken:
+`Physical chip id 0 not found in control plane chip mapping`, and the control failed 6/6. A second
+`tt-smi -r` restored it (6 passed, 11 s). Do not conclude the machine is broken after one reset.
