@@ -38,6 +38,12 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     // kernels so they can assert ceil_tile(counts[id]) <= max_dispatched_tokens_per_expert.
     const uint32_t max_output_tiles =
         (operation_attributes.max_dispatched_tokens_per_expert / tt::constants::TILE_HEIGHT) * tiles_per_row;
+    // Number of experts addressable by start/counts (validate() has already
+    // enforced that the two agree). The kernels look up global_expert_id from
+    // device memory at runtime and use it to index their start/counts L1
+    // scratch pages, so they need this bound to reject an out-of-range id
+    // before it turns into an OOB L1 read.
+    const uint32_t num_experts = counts.logical_shape()[-1];
 
     // NOTE: We do NOT verify the inter-expert layout invariant
     //   start[id] + counts[id] <= start[id + 1]
@@ -135,6 +141,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
         global_num_tiles,
         max_output_tiles,
         num_cores,
+        num_experts,
     };
     tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_compile_time_args);
@@ -151,6 +158,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
         tiles_per_row,
         max_output_tiles,
         num_cores,
+        num_experts,
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
