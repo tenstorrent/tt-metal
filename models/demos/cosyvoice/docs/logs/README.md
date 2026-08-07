@@ -1,7 +1,7 @@
 # Raw validation logs (R4)
 
-Unedited pytest output, kept because the review of PR #50781 asked for raw logs rather than
-summarised numbers.
+Unedited pytest output, kept raw rather than summarised so every result can be checked
+at source.
 
 | file | tier | result |
 |---|---|---|
