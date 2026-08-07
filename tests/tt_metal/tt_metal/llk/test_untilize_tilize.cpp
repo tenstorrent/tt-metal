@@ -603,7 +603,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .num_entries = std::max(2u, test_config.num_tiles_c),
         .data_format_metadata = test_config.input_fmt,
     };
-    const std::uint32_t scaler_tile_size = tt::datum_size(test_config.input_fmt) * 32 * 32;
+    const std::uint32_t scaler_tile_size = tt::tile_size(test_config.input_fmt);
     experimental::DataflowBufferSpec inp_scaler_dfb_spec{
         .unique_id = INP_SCALER_DFB,
         .entry_size = scaler_tile_size,
@@ -616,6 +616,9 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .num_entries = std::max(2u, test_config.num_tiles_c),
         .data_format_metadata = test_config.output_fmt,
     };
+    const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    inp_data_dfb_spec.unpack_face_geometry_metadata = fg;
+    out_dfb_spec.unpack_face_geometry_metadata = fg;
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
@@ -1423,6 +1426,42 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
                     .golden_function = ::unit_tests::compute::gold_standard_tilize_w_reduce_col_max};
                 unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_reduce_program(
                     this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+// Quasar Unpack TilizeA_B (tilize + reduce col max) for tiny tiles (1x32, 2x32)
+// Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_BTinyTile) {
+    vector<vector<std::uint32_t>> test_config_values = {{1, 1, 2, 1}, {1, 2, 2, 1}, {1, 1, 2, 2}, {1, 2, 2, 2}};
+    std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    for (auto test_config_value : test_config_values) {
+        std::uint32_t num_faces_per_tile = test_config_value[2];
+        std::uint32_t face_r_dim = test_config_value[3];
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                for (tt::DataFormat input_data_format : {tt::DataFormat::Float16_b}) {
+                    tt::DataFormat output_data_format =
+                        fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+                    unit_tests::compute::tilize::TestConfig test_config = {
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .input_single_tile_size =
+                            tt::datum_size(input_data_format) * num_faces_per_tile * face_r_dim * face_c_dim,
+                        .output_single_tile_size =
+                            tt::datum_size(output_data_format) * num_faces_per_tile * face_r_dim * face_c_dim,
+                        .num_tiles_r = test_config_value[0],
+                        .num_tiles_c = test_config_value[1],
+                        .num_faces_per_tile = num_faces_per_tile,
+                        .face_r_dim = face_r_dim,
+                        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
+                        .input_fmt = input_data_format,
+                        .output_fmt = output_data_format,
+                        .golden_function = ::unit_tests::compute::gold_standard_tilize_w_reduce_col_max};
+                    unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_reduce_program(
+                        this->devices_.at(0), test_config);
+                }
             }
         }
     }
