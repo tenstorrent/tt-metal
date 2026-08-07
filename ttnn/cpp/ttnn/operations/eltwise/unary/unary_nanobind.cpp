@@ -2023,7 +2023,7 @@ void py_module(nb::module_& mod) {
         "The beta parameter. Bounds the output to +/-beta. Must be non-zero.",
         "Bounds the input smoothly to +/-beta: near-linear for |input| << beta, saturating at the limits. Known as "
         "soft capping (e.g. Gemma logit softcapping); also the up half of Moonshot's SiTU activation.",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
         "",
         R"doc(\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|))doc");
 
