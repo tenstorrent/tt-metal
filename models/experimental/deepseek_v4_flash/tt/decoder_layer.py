@@ -105,9 +105,10 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
     def prefetch_weights(self):
         """Stage this layer's attention weights ahead of the :meth:`decode` that uses them.
 
-        Delegates to the attention block; the MoE path has no prefetcher weights. Under the
-        prefetcher the layers on a device share GCBs, so the requests queued here must be
-        consumed by this layer's own decode before any later layer queues its own.
+        Delegates to the attention block, which covers its compressor too; neither the MoE path
+        nor the hyper-connections have prefetcher weights. Under the prefetcher the layers on a
+        device share GCBs, so the requests queued here must be consumed by this layer's own
+        decode before any later layer queues its own.
         """
         self.self_attn.prefetch_weights()
 

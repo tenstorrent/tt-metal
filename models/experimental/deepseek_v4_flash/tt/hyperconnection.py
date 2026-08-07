@@ -23,7 +23,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
     The learned ``base`` / ``scale`` parameters are split host-side into their
     ``pre`` / ``post`` / ``comb`` parts; ``fn`` runs as a single fused matmul whose
-    output is split into the three parts via ``ttnn.split``.
+    output is split into the three parts inside ``fused_hyperconnection``.
     See ``modular_deepseek_v4.py`` for the reference math.
     """
 
@@ -48,11 +48,19 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
         # The pre [H] / post [H] / comb [H*H] projections are contiguous slices of
         # the packed ``fn`` weight, so fuse them into one matmul ([(2+H)*H, H*D])
-        # and split the output back into the three parts via ``ttnn.split``.
-        # TODO: this fn matmul ([T, H*D] @ [H*D, (2+H)*H], large K / small N) would
-        # benefit from a DRAM HEIGHT_SHARDED (K-split) weight, but no matmul kernel
-        # supports a K-split DRAM reduction yet -- see Linear's docstring. Use a plain
-        # interleaved Linear for now.
+        # and split the output back into the three parts inside the fused op.
+        #
+        # TODO: this fn matmul ([T, H*D] @ [H*D, (2+H)*H], large K / small N) would benefit from
+        # a DRAM HEIGHT_SHARDED (K-split) weight, but no matmul kernel supports a K-split DRAM
+        # reduction yet -- see Linear's docstring. Use a plain interleaved Linear for now.
+        #
+        # In particular ``LinearDecode``'s ``partial_width_sharded`` mode is NOT that kernel,
+        # though the name invites the mistake: it splits the *weight* across K and gathers the
+        # *whole* activation onto every core, so its full_in0 CB is K_tiles * tile_size no matter
+        # how K is blocked. At K = H*D = 16384 in bf16 that is 512 tiles = 1 MB per core, which
+        # overflows L1 before the weight is even considered (measured: the program's static CB
+        # region ends at 1293248, past the L1 buffer floor). Prefetching this weight therefore
+        # needs the real K-split reduction, not a re-blocking of the existing op.
         self.fn = Linear(lambda: fn()[: 2 * hc + hc * hc], device, cache.file("fn"))
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),

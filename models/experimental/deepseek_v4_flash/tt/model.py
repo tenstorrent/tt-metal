@@ -236,12 +236,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         locally-computed RoPE rotate matrix have no tile cache by design and are
         always materialised, so they are exempt.
 
-        ``use_prefetcher`` puts the attention projections on DRISC-prefetched weights
-        instead of a DRAM->L1 copy per call; it defaults to whether the device supports it.
-        Decode must then run inside :meth:`prefetcher_session`. The GCBs are built once per
-        device and shared by every layer on it (see
-        :func:`make_attention_prefetch_buffers`), so the cost is ~342 KB of L1 per receiver
-        core for the whole model rather than per layer.
+        ``use_prefetcher`` puts the attention projections (and their compressor) on
+        DRISC-prefetched weights instead of a DRAM->L1 copy per call; it defaults to whether the
+        device supports it. Decode must then run inside :meth:`prefetcher_session`. The GCBs are
+        built once per device and shared by every layer on it (see
+        :func:`make_attention_prefetch_buffers`), so the cost is ~342 KB of L1 per receiver core
+        for the whole model rather than per layer.
         """
         self.config = config
         self.loader = loader
@@ -481,12 +481,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return None
 
     def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_slabs) -> Optional[dict]:
-        """The attention GCBs for ``device``, built on first use and reused after.
+        """The GCBs for ``device``, built on first use and reused after.
 
         One set per device rather than per layer: a GCB is a permanent L1 allocation, and
-        every layer's projections have the same shapes, so they can all prefetch through the
+        every layer's weights have the same shapes, so they can all prefetch through the
         same buffers. Building them per layer would multiply ~342 KB per receiver core by the
-        layer count and exhaust L1.
+        layer count and exhaust L1 -- and long before that, the DRISC senders' state zone, which
+        holds only about six GCBs per device however small they are.
         """
         if not self.use_prefetcher:
             return None
@@ -511,19 +512,37 @@ class DeepSeekV4Model(DeepSeekV4Module):
         per submesh. Entry fences against the weight uploads already on the command queue
         with ``wait_for_cq_on_tensor_prefetcher``, so a sender cannot read a weight buffer
         before its write has landed.
+
+        A failure anywhere inside the session -- not just a rejected ``matmul_decode``, but any
+        op that throws while building or launching its program -- leaves the requests that
+        ``prefetch_weights`` hoisted for the next layer sitting with the DRISC senders, with no
+        matmul left to drain them. A clean stop cannot retire that: its sentinel queues behind
+        the orphaned requests, so the kernel blocks on a full GCB and never reaches it. The
+        exception path therefore force-stops (abandoning the kernels) and skips the device sync,
+        both of which would otherwise hang and bury the error. Forcing leaves DRISC kernels
+        running, so the device must be closed or reset before another session is opened -- which
+        is fine, because this path only runs when the caller is already unwinding.
         """
         if not self.use_prefetcher:
             yield
             return
         devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
-        with contextlib.ExitStack() as stack:
-            for device in devices:
-                ttnn.experimental.start_tensor_prefetcher(device)
-                stack.callback(ttnn.synchronize_device, device)
-                stack.callback(ttnn.experimental.stop_tensor_prefetcher, device)
-            for device in devices:
-                ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        for device in devices:
+            ttnn.experimental.start_tensor_prefetcher(device)
+        for device in devices:
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        try:
             yield
+        except BaseException:
+            for device in devices:
+                # Already stopped if the failure came out of LinearDecode.forward, which
+                # retires the senders itself; stopping twice is a no-op.
+                with contextlib.suppress(Exception):
+                    ttnn.experimental.stop_tensor_prefetcher(device, force=True)
+            raise
+        for device in devices:
+            ttnn.experimental.stop_tensor_prefetcher(device)
+            ttnn.synchronize_device(device)
 
     def _expert_provider(self, layer_idx: int):
         def provider(e: int):

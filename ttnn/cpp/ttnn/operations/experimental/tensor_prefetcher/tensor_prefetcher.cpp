@@ -61,8 +61,8 @@ void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
 }
 
-void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StopTensorPrefetcher(*mesh_device);
+void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool force) {
+    tt::tt_metal::experimental::StopTensorPrefetcher(*mesh_device, force);
 }
 
 }  // namespace ttnn::operations::experimental
