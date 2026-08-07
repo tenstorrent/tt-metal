@@ -12,8 +12,8 @@
 
 #else
 
-#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr))) = (val))
-#define NOC_READ_REG(addr) (*((volatile uint32_t*)(addr)))
+#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
+#define NOC_READ_REG(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
 
 #endif
 

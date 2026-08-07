@@ -8,7 +8,6 @@
 #include "factories/untilize_with_unpadding_single_core_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
-#include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
 #include <variant>
@@ -19,14 +18,13 @@ namespace ttnn::prim {
 struct UntilizeWithUnpaddingDeviceOperation {
     using operation_attributes_t = UntilizeWithUnpaddingParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
         UntilizeWithUnpaddingSingleCoreProgramFactory,
         UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
-        UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory>;
 
@@ -51,7 +49,6 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& output_mem_config,
     bool use_multicore,
     bool fp32_dest_acc_en,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids);
 

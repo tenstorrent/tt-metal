@@ -513,6 +513,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
+inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
+    // Added for compatability with V2, no local cmd buffers in V1
+}
+
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
@@ -1516,7 +1520,7 @@ template <
 inline __attribute__((always_inline)) void noc_read_with_state(
     uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (send && noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
@@ -1542,7 +1546,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    // Only a call that issues a transaction has a response to account for. ncrisc_noc_reads_flushed() compares this
+    // counter against NIU_MST_RD_RESP_RECEIVED, so counting a call that merely programs state would leave
+    // noc_async_read_barrier() waiting on a response that was never requested.
+    if constexpr (send && noc_mode == DM_DEDICATED_NOC) {
         noc_reads_num_issued[noc] += 1;
     }
 }

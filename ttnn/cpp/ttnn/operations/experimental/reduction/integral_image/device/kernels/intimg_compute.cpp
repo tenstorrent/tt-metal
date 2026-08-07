@@ -5,8 +5,8 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -22,22 +22,16 @@
 
 #include "api/compute/bcast.h"
 
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
 #include "common.hpp"
 
 namespace {
 
+// The DFB indices that used to live in this struct are now Metal 2.0 DFB bindings, referenced as
+// dfb::<name> at the call sites; only the scalar CTAs remain here.
 struct IntImgComputeCTAs {
-    const uint32_t start_cb;
-    const uint32_t input_cb;
-    const uint32_t acc_cb;
-    const uint32_t cumsum_stage_0_cb;
-    const uint32_t cumsum_stage_1_cb;
-    const uint32_t cumsum_stage_2_cb;
-    const uint32_t output_cb;
-    const uint32_t axis_2_buffer_cb;    // covers entire propagation
-    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
-                                        // upper block across all rows of a given tile using `add_bcast_rows`.
-
     const uint32_t tile_height;
     const uint32_t tile_width;
     const uint32_t block_depth;
@@ -50,25 +44,16 @@ struct IntImgComputeCTAs {
 };
 
 FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
-    return {
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
+    return IntImgComputeCTAs{
+        get_arg(args::tile_height),
+        get_arg(args::tile_width),
+        get_arg(args::block_depth),
+        get_arg(args::num_channels),
+        get_arg(args::input_height),
+        get_arg(args::input_depth),
+        get_arg(args::num_batches),
+        get_arg(args::cores_x),
+        get_arg(args::cores_y),
     };
 }
 
@@ -80,6 +65,8 @@ FORCE_INLINE void cumsum_cube_axis_2(
     uint32_t cb_axis_2_buffer,
     bool save_last_tile,
     uint32_t block_depth) {
+    DataflowBuffer input_cb(cb_input);
+    DataflowBuffer acc_cb(cb_acc);
     ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};
 
     bool enable_reload = false;
@@ -89,29 +76,29 @@ FORCE_INLINE void cumsum_cube_axis_2(
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
         const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
-        cb_wait_front(cb_input, ONE_TILE);
+        input_cb.wait_front(ONE_TILE);
 
         add_tiles_init(cb_input, cb_op);
         add_tiles(cb_input, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
-        cb_pop_front(cb_input, ONE_TILE);
+        input_cb.pop_front(ONE_TILE);
         if (enable_reload) {
-            cb_pop_front(cb_acc, ONE_TILE);
+            acc_cb.pop_front(ONE_TILE);
         }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_acc, ONE_TILE);
+        acc_cb.reserve_back(ONE_TILE);
         pack_reconfig_data_format(cb_acc);
         pack_tile(WORKING_REG, cb_acc);
-        cb_push_back(cb_acc, ONE_TILE);
+        acc_cb.push_back(ONE_TILE);
 
         tile_regs_release();
 
         tile_regs_acquire();
 
-        cb_wait_front(cb_acc, ONE_TILE);
+        acc_cb.wait_front(ONE_TILE);
         copy_tile_init(cb_acc);
         copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
 
@@ -132,7 +119,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
         enable_reload = true;
     }
 
-    cb_pop_front(cb_acc, ONE_TILE);
+    acc_cb.pop_front(ONE_TILE);
 }
 
 FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
@@ -162,7 +149,8 @@ FORCE_INLINE void propagate_tile_into_cube(
     uint32_t cb_cumsum_stage_b,
     bool save_last_tile,
     uint32_t block_depth) {
-    cb_wait_front(cb_axis_2_buffer, ONE_TILE);
+    DataflowBuffer axis_2_buffer_cb(cb_axis_2_buffer);
+    axis_2_buffer_cb.wait_front(ONE_TILE);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, ONE_TILE};
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
@@ -179,7 +167,7 @@ FORCE_INLINE void propagate_tile_into_cube(
         if ((tile_i == block_depth - 1)) {  // when last tile in block gets propagated on, finally release the axis 2
                                             // buffer CB and save last tile only when there's a specific request. it
                                             // must be released to get ready for the processing of the next row chunk.
-            cb_pop_front(cb_axis_2_buffer, ONE_TILE);
+            axis_2_buffer_cb.pop_front(ONE_TILE);
             if (save_last_tile) {
                 WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
                 pack_reconfig_data_format(cb_axis_2_buffer);
@@ -227,37 +215,35 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
         const bool save_last_tile_after_tile_into_cube_propagation =
             (column_block_i > 0) && (column_block_i != (num_blocks_in_row - 1));
         cumsum_cube_axis_2(
-            ctas.start_cb,
-            ctas.acc_cb,
-            ctas.input_cb,
-            ctas.cumsum_stage_0_cb,
-            ctas.axis_2_buffer_cb,
+            dfb::start,
+            dfb::acc,
+            dfb::input,
+            dfb::cumsum_stage_0,
+            dfb::axis_2_buffer,
             save_last_tile_after_cumsum_cube_axis_2,
             block_depth);
         if (column_block_i > 0) {
             // axis 2/4's propagation
             propagate_tile_into_cube(
-                ctas.axis_2_buffer_cb,
-                ctas.cumsum_stage_0_cb,
-                ctas.cumsum_stage_1_cb,
+                dfb::axis_2_buffer,
+                dfb::cumsum_stage_0,
+                dfb::cumsum_stage_1,
                 save_last_tile_after_tile_into_cube_propagation,
                 block_depth);  // working with cb_axis_2_buffer
             if (rows_block_i > 0) {
                 // axis 3/4's propagation
-                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
-                get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(dfb::cumsum_stage_1, dfb::cumsum_stage_2, block_depth);
+                get_and_propagate_adder_cube(dfb::cumsum_stage_2, dfb::axis_3_buffer, dfb::output, block_depth);
             } else {
-                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(dfb::cumsum_stage_1, dfb::output, block_depth);
             }
         } else {
             if (rows_block_i > 0) {
                 // axis 3/4's propagation
-                cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
-                get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(dfb::cumsum_stage_0, dfb::cumsum_stage_1, block_depth);
+                get_and_propagate_adder_cube(dfb::cumsum_stage_1, dfb::axis_3_buffer, dfb::output, block_depth);
             } else {
-                cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(dfb::cumsum_stage_0, dfb::output, block_depth);
             }
         }
     }

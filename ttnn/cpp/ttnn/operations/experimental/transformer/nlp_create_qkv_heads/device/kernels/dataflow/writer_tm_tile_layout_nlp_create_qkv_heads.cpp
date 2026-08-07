@@ -5,8 +5,14 @@
 #include <stdint.h>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     // WRITER RUNTIME ARGS
     uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
     uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
@@ -37,6 +43,12 @@ void kernel_main() {
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
     const auto sv = TensorAccessor(v_args, v_tensor_addr);
 
+    CircularBuffer cb_qv(cb_id_qv);
+    CircularBuffer cb_k(cb_id_k);
+
+    const uint32_t tile_bytes_qv = get_tile_size(cb_id_qv);
+    const uint32_t tile_bytes_k = get_tile_size(cb_id_k);
+
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     // TODO: This might negatively impact perf
     constexpr uint32_t out_num_tiles_read = block_size;  // always read and pop by micro-block size for generality
@@ -52,12 +64,17 @@ void kernel_main() {
         for (uint32_t c_dim = 0; c_dim < q_out_c; c_dim++) {
             q_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                cb_wait_front(cb_id_qv, out_num_tiles_read);
-                l1_read_addr = get_read_ptr(cb_id_qv);
-                noc_async_write_tile(q_out_tensor_current_tile_id, sq, l1_read_addr);
+                cb_qv.wait_front(out_num_tiles_read);
+                l1_read_addr = cb_qv.get_read_ptr();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr),
+                    sq,
+                    tile_bytes_qv,
+                    {},
+                    {.page_id = q_out_tensor_current_tile_id});
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_qv, out_num_tiles_read);
+                noc.async_write_barrier();
+                cb_qv.pop_front(out_num_tiles_read);
 
                 q_out_tensor_current_tile_id++;
             }
@@ -75,12 +92,17 @@ void kernel_main() {
             k_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
 #endif
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                cb_wait_front(cb_id_k, out_num_tiles_read);
-                l1_read_addr = get_read_ptr(cb_id_k);
-                noc_async_write_tile(k_out_tensor_current_tile_id, sk, l1_read_addr);
+                cb_k.wait_front(out_num_tiles_read);
+                l1_read_addr = cb_k.get_read_ptr();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr),
+                    sk,
+                    tile_bytes_k,
+                    {},
+                    {.page_id = k_out_tensor_current_tile_id});
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_k, out_num_tiles_read);
+                noc.async_write_barrier();
+                cb_k.pop_front(out_num_tiles_read);
 
 #ifndef TRANSPOSE_K_HEADS
                 k_out_tensor_current_tile_id++;
@@ -98,12 +120,17 @@ void kernel_main() {
         for (uint32_t c_dim = 0; c_dim < kv_out_c; c_dim++) {
             v_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                cb_wait_front(cb_id_qv, out_num_tiles_read);
-                l1_read_addr = get_read_ptr(cb_id_qv);
-                noc_async_write_tile(v_out_tensor_current_tile_id, sv, l1_read_addr);
+                cb_qv.wait_front(out_num_tiles_read);
+                l1_read_addr = cb_qv.get_read_ptr();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr),
+                    sv,
+                    tile_bytes_qv,
+                    {},
+                    {.page_id = v_out_tensor_current_tile_id});
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_qv, out_num_tiles_read);
+                noc.async_write_barrier();
+                cb_qv.pop_front(out_num_tiles_read);
 
                 v_out_tensor_current_tile_id++;
             }

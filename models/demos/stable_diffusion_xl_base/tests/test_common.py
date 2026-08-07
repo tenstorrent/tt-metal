@@ -128,7 +128,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
             device=ttnn_device,
             mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
         )
-        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device)
+        _, _ = tt_text_encoder(tt_tokens_1)
 
     dummy_ids_2 = tokenizer_2(
         dummy_prompt,
@@ -144,7 +144,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         device=ttnn_device,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device)
+    _, _ = tt_text_encoder_2(tt_tokens_2)
     ttnn.synchronize_device(ttnn_device)
 
 
@@ -340,7 +340,7 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens)
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
@@ -427,7 +427,7 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device)
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens)
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),

@@ -23,7 +23,7 @@ void UniformDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-TensorSpec UniformDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UniformDeviceOperation::compute_output_specs(
     const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.input.tensor_spec();
 }
@@ -32,12 +32,6 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
     const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Since this is an in-place operation, return the input tensor to be updated directly
     return tensor_args.input;
-}
-
-ttsl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::operations::uniform

@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+
 import ttnn
 
 from ...layers.conv2d import Conv2d
@@ -14,11 +17,16 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import GroupNorm
 from ...parallel.config import VAEParallelConfig, vae_all_gather
 from ...parallel.manager import CCLManager
+from ...utils import tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from diffusers.models.autoencoders import vae as diffusers_vae
+
+    from ...parallel.config import VAEParallelConfig
+    from ...parallel.manager import CCLManager
 
 
 class ResnetBlock(Module):
@@ -60,6 +68,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.conv2 = Conv2d(
             out_channels,
@@ -69,6 +78,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.conv_shortcut = (
             Conv2d(
@@ -79,6 +89,7 @@ class ResnetBlock(Module):
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                use_barrier=False,
             )
             if in_channels != out_channels
             else None
@@ -140,6 +151,7 @@ class Upsample2D(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
 
     # Fix to align with constructor
@@ -280,7 +292,7 @@ class Attention(Module):
     # TODO: Standardize this usage
     def gather_if_sharded(self, x):
         if x.shape[3] < self.to_q.in_features:
-            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis)
+            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis, use_barrier=False)
         return x
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -412,6 +424,7 @@ class VAEDecoder(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.mid_block = UnetMidBlock2D(
             in_channels=block_out_channels[-1],
@@ -491,6 +504,76 @@ class VAEDecoder(Module):
             x = up_block(x)
         x = self.conv_norm_out(x)
         x = ttnn.silu(x)
-        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis)
+        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis, use_barrier=False)
         x = self.conv_out(x)
         return x
+
+
+class VAEDecoderAdapter:
+    """Torch-in (NHWC), torch-out (BCHW) VAE decoder for the SD3.5-family VAE.
+
+    Applies an optional pre-decode unpack, then scaling/shift inversion. Supports both the
+    PyTorch and TT-NN implementations; the TT-NN backend supports tracing and dynamic load /
+    unload of weights via ``deallocate_weights``/``reload_weights``.
+    """
+
+    def __init__(
+        self,
+        *,
+        checkpoint_name: str,
+        parallel_config: VAEParallelConfig,
+        ccl_manager: CCLManager,
+        use_torch: bool,
+        skip_shift: bool = False,
+        unpack_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> None:
+        torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
+        assert isinstance(torch_vae, AutoencoderKL)
+
+        self.device = ccl_manager.mesh_device
+        self.scaling_factor = torch_vae.config["scaling_factor"]
+        self.shift_factor = 0.0 if skip_shift else torch_vae.config["shift_factor"]
+        self._unpack_fn = unpack_fn
+
+        if use_torch:
+            self._torch_vae = torch_vae
+            self._decoder = None
+            self._tracer = None
+            self._decoder_state_dict = None
+        else:
+            self._torch_vae = None
+            self._decoder = VAEDecoder.from_torch(
+                torch_vae.decoder,
+                mesh_device=self.device,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
+            self._tracer = Tracer(self._decoder.forward, device=self.device, prep_run=False)
+            self._decoder_state_dict = torch_vae.decoder.state_dict()
+
+    @torch.no_grad()
+    def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
+        if self._unpack_fn is not None:
+            latents = self._unpack_fn(latents)
+
+        latents = latents / self.scaling_factor + self.shift_factor
+
+        if self._torch_vae is not None:
+            return self._torch_vae.decode(latents.permute(0, 3, 1, 2).float()).sample
+
+        tt_latents = tensor.from_torch(latents, device=self.device)
+        forward = self._tracer if traced else self._decoder.forward
+        tt_out = forward(tt_latents)
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
+
+    def is_loaded(self) -> bool:
+        return self._torch_vae is not None or self._decoder.is_loaded()
+
+    def deallocate_weights(self) -> None:
+        if self._decoder is not None:
+            self._decoder.deallocate_weights()
+
+    def reload_weights(self) -> None:
+        if self._decoder is None or self._decoder.is_loaded():
+            return
+        self._decoder.load_torch_state_dict(self._decoder_state_dict)

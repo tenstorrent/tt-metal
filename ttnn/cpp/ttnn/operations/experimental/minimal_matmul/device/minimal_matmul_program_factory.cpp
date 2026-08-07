@@ -129,7 +129,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler,
+    bool fuse_swiglu) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
@@ -255,16 +256,40 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
+    uint32_t padded_N_tiles;
+    uint32_t N_tiles_per_core;
+    if (fuse_swiglu) {
+        // Partition on gate/up PAIRS (= output tiles), so every core's weight-tile range is
+        // 2 * (pairs per core): even, and never splitting a pair across cores.
+        uint32_t out_N_tiles = N_tiles / 2;
+        uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
+        padded_N_tiles = 2 * padded_out_N_tiles;
+        N_tiles_per_core = 2 * (padded_out_N_tiles / in1_parallel_axis_cores);
+    } else {
+        padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+        N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
+    }
+
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
-    uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+
+    if (fuse_swiglu) {
+        // The gate/up tile pairs are interleaved along N (gate=2p, up=2p+1). Every core's
+        // N range and every N block must start on an even tile and span an even number of
+        // tiles so a pair is never split across cores or blocks.
+        TT_FATAL(
+            N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
+            "minimal_matmul fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and N_block_tiles ({}) all even",
+            N_tiles,
+            N_tiles_per_core,
+            N_block_tiles);
+    }
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -280,7 +305,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
     // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    // SwiGLU emits half the N tiles per block (one per gate/up pair), so the output CB only
+    // needs to hold half a block. The intermediate CB still holds the full (2N) block.
+    uint32_t out_block_num_tiles_written = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;
+    uint32_t out_cb_num_tiles = out_block_num_tiles_written * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -381,6 +409,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> in0_injector_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
+    }
+
+    if (fuse_swiglu) {
+        defines["FUSE_SWIGLU"] = "1";
     }
 
     if (use_fused_ternary) {
@@ -854,7 +886,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
+    bool fuse_swiglu) {
     std::vector<Tensor> output_tensors = {output_tensor};
     return minimal_matmul_factory_helper_common(
         program,
@@ -870,7 +903,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        srs_fused_op_signaler);
+        srs_fused_op_signaler,
+        fuse_swiglu);
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -895,7 +929,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         operation_attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
         tensor_args.fused_ternary_input_b,
-        empty_srs_fused_op_signaler);
+        empty_srs_fused_op_signaler,
+        operation_attributes.fuse_swiglu);
 
     return {std::move(program), std::move(shared_vars)};
 }

@@ -4,6 +4,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
@@ -43,6 +44,7 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include "tt_metal/distributed/mesh_trace.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
@@ -53,22 +55,22 @@ namespace {
 
 // Helper functions that return MeshCoordinateRange spanning various parts of the T3000 device.
 const MeshCoordinateRange& t3k_bottom_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
     return bottom_row.get();
 }
 
 const MeshCoordinateRange& t3k_top_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
     return top_row.get();
 }
 
 const MeshCoordinateRange& t3k_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
     return full_grid.get();
 }
 
 const MeshCoordinateRange& tg_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
     return full_grid.get();
 }
 
@@ -514,7 +516,14 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
         1, mesh_device_->compute_with_storage_grid_size(), seed);
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
+    try {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true);
+        FAIL() << "Expected EnqueueMeshWorkload to fail while tracing uncached program binaries";
+    } catch (const std::runtime_error& e) {
+        const std::string error_message = e.what();
+        EXPECT_NE(error_message.find("Cannot load new binaries during trace capture."), std::string::npos);
+        EXPECT_NE(error_message.find("Warm up before capturing a trace."), std::string::npos);
+    }
     EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
     mesh_device_->end_mesh_trace(0, trace_id);
 }
@@ -835,6 +844,74 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     Finish(mesh_device_->mesh_command_queue());
 
     mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMaxHighWaterMark) {
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    MeshWorkload workload;
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 321);
+    workload.add_program(all_devices, std::move(*programs[0]));
+
+    const auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
+    SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}))});
+    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device}, 0);
+
+    // Warm up the workload under both managers before trace capture.
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->clear_loaded_sub_device_manager();
+
+    // First measure where an otherwise identical trace is placed and how much per-bank address space it occupies.
+    // Releasing this calibration trace restores the allocator to the state used by the traces under test.
+    auto calibration_trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    mesh_device_->end_mesh_trace(0, calibration_trace_id);
+    auto calibration_trace = mesh_device_->get_mesh_trace(calibration_trace_id);
+    auto* calibration_backing_buffer = calibration_trace->mesh_buffer->get_backing_buffer();
+
+    const DeviceAddr trace_buffer_address = calibration_trace->mesh_buffer->address();
+    const DeviceAddr dram_alignment = calibration_backing_buffer->alignment();
+    mesh_device_->release_mesh_trace(calibration_trace_id);
+    calibration_trace.reset();
+
+    // Find the lowest allocatable DRAM address. The HWM buffer is sized to occupy the address range from this
+    // address up to, but not including, trace_buffer_address.
+    const uint32_t num_dram_banks = mesh_device_->allocator()->get_num_banks(BufferType::DRAM);
+    ReplicatedBufferConfig probe_config{.size = dram_alignment * num_dram_banks};
+    DeviceLocalBufferConfig lowest_address_config{
+        .page_size = dram_alignment, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    auto probe = MeshBuffer::create(probe_config, lowest_address_config, mesh_device_.get());
+    const DeviceAddr dram_base_address = probe->address();
+    probe.reset();
+
+    const DeviceAddr hwm_size_per_bank = trace_buffer_address - dram_base_address;
+    ReplicatedBufferConfig hwm_buffer_config{.size = hwm_size_per_bank * num_dram_banks};
+
+    // Trace A records a high water mark at the start of its own top-down trace buffer. This is valid for A.
+    auto trace_a_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    auto hwm_buffer = MeshBuffer::create(hwm_buffer_config, lowest_address_config, mesh_device_.get());
+    hwm_buffer.reset();
+    mesh_device_->end_mesh_trace(0, trace_a_id);
+
+    // Trace B belongs to another manager and has no DRAM activity of its own. Its address is immediately lower than
+    // A's, inside A's replay footprint.
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+    auto trace_b_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    EXPECT_THAT(
+        [&]() { mesh_device_->end_mesh_trace(0, trace_b_id); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("maximum live trace high water mark")));
+
+    mesh_device_->release_mesh_trace(trace_b_id);
+    mesh_device_->clear_loaded_sub_device_manager();
+    mesh_device_->release_mesh_trace(trace_a_id);
+    mesh_device_->remove_sub_device_manager(sub_device_manager);
 }
 
 TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {

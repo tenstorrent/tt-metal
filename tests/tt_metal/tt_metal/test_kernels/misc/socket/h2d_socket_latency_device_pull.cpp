@@ -9,7 +9,7 @@
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    // arg 1 (local_l1_buffer_addr) reserved for ABI compatibility
+    constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     // arg 3 (measurement_buffer_addr) reserved for ABI compatibility; latency measured on host
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
@@ -24,10 +24,12 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < WARMUP_ITERS + num_iterations; i++) {
         socket_wait_for_pages(receiver_socket, 1);
+        // DEVICE_PULL: the FIFO lives in pinned host memory (read_ptr/fifo_addr are
+        // FIFO offsets); land the page in the local L1 buffer.
         noc_read_page_chunked(
             pcie_xy_enc,
             pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
-            receiver_socket.read_ptr,
+            local_l1_buffer_addr,
             page_size);
         socket_pop_pages(receiver_socket, 1);
         noc_async_read_barrier();

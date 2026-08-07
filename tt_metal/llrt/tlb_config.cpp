@@ -90,6 +90,11 @@ void configure_static_tlbs(
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
+    // Setup static TLBs for dispatch-engine cores (Quasar soc dispatch tiles). Required for FetchQ
+    // writes via get_static_tlb_window in SD/FD prefetch paths once prefetch runs on CoreType::DISPATCH.
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED)) {
+        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
+    }
 
     if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS &&
         include_dram_tlbs) {

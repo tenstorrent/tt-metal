@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/device_print.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -22,9 +22,9 @@ void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
-    // DEVICE_PRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
-    // DEVICE_PRINT("src0={:#x} src1={:#x}\n", src0_addr, src1_addr);
-    // DEVICE_PRINT("batch={}\n", batch);
+    // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DPRINT("src0={:#x} src1={:#x}\n", src0_addr, src1_addr);
+    // DPRINT("batch={}\n", batch);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -51,7 +51,7 @@ void kernel_main() {
             {  // Read A's tile at (mt, kt)
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                noc_async_read_page(itileA, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
             }
@@ -59,11 +59,11 @@ void kernel_main() {
             {  // Read B's tile at (kt, nt)
                 cb_reserve_back(cb_id_in1, onetile);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                noc_async_read_page(itileB, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
             }
-            // DEVICE_PRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
+            // DPRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

@@ -887,7 +887,7 @@ def _make_sram_assigner(formats=("bfp8", "bfp4"), threshold: float = 0.993):
 
 
 def _make_sram_l1_per_core_mem_config(K: int, N: int, core_grid: ttnn.CoreRangeSet) -> ttnn.MemoryConfig:
-    """Build a WIDTH_SHARDED L1 mem_config matching ``_build_l1_compressed_tensor`` shape rules."""
+    """Build a WIDTH_SHARDED L1 mem_config matching ``build_sram_routed_proj_ct`` shape rules."""
     num_cores = core_grid.num_cores()
     assert N % num_cores == 0, f"N ({N}) must divide num_cores ({num_cores})"
     per_core_N = N // num_cores

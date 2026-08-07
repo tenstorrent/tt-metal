@@ -62,7 +62,5 @@ void kernel_main() {
         cb_push_back(cb_out0, 1);
         cb_pop_front(cb_in0, 1);
         cb_pop_front(cb_in1, 1);
-        // Release the held register
-        release_dst();
     }
 }

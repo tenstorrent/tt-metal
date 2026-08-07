@@ -9,7 +9,13 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
+
+# ``AutoModelForImageTextToText`` (the replacement for ``AutoModelForVision2Seq``,
+# which was removed in transformers 5.x) is only consumed by the
+# ``GeneratorChat``/``GeneratorText`` constructors below — defer the imports
+# so loading this module doesn't break every downstream import chain
+# (e.g. ``tt_transformers.tt.generator``, used by every TT vLLM bridge)
+# under transformers >= 5.
 
 
 class Role(Enum):
@@ -164,6 +170,8 @@ def encode_content(content, images, image_token):
 
 class GeneratorChat:
     def __init__(self, model_name, max_batch_size=1):
+        from transformers import pipeline
+
         self.pipe = pipeline("image-text-to-text", model=model_name, batch_size=max_batch_size)
 
     def chat_completion(
@@ -184,8 +192,10 @@ class GeneratorChat:
 
 class GeneratorText:
     def __init__(self, model_name):
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name)
 
     def text_completion(
         self,

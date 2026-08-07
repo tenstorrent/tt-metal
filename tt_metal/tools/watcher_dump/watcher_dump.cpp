@@ -64,7 +64,7 @@ void dump_data(
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
                 std::make_unique<SystemMemoryManager>(DEFAULT_CONTEXT_ID, id, num_hw_cqs);
-            internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
+            ::internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }
 

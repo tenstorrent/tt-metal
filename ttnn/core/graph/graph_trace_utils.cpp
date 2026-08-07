@@ -33,7 +33,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     std::string_view shape_values = shape_string.substr(start, end - start);
 
     // Vector to hold the parsed shape values
-    SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     const char* str = shape_values.data();
     const char* end_str = str + shape_values.size();
 
@@ -161,6 +161,7 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
 
 std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     std::vector<std::string> op_calls;
+    op_calls.reserve(trace.size());
     size_t i = 0;
 
     while (i < trace.size()) {
@@ -182,6 +183,7 @@ nlohmann::json extract_levelized_graph(const nlohmann::json& trace, size_t max_l
 
 std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
     std::vector<OperationInfo> operations;
+    operations.reserve(trace.size());
     size_t i = 0;
     while (i < trace.size()) {
         const auto& v = trace[i];
@@ -190,7 +192,7 @@ std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
         if (!v[kArguments].empty()) {
             info.operation_name = v[kParams][kName];
             info.arguments = v[kArguments];
-            operations.push_back(info);
+            operations.push_back(std::move(info));
         }
     }
 
@@ -238,6 +240,7 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
     std::vector<TensorInfo> output;
     auto output_tensors = extract_output_tensors(trace);
+    output.reserve(output_tensors.size());
 
     for (const auto& node : trace) {
         if (node[kNodeType] != kNodeBuffer) {

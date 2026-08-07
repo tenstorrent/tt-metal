@@ -7,6 +7,7 @@ from datetime import datetime
 import hashlib
 import requests
 import json
+import math
 import torch
 import pytest
 import os
@@ -23,6 +24,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -95,6 +100,73 @@ def load_inputs(user_input, len_per_batch, instruct):
     return in_prompt, all_prompts
 
 
+class TokenAccuracy:
+    def __init__(self, model_name):
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
+        logger.info(f"Loading reference data from {reference_data_file}")
+        reference_data = torch.load(reference_data_file)
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
+        self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
+        self.maxindex = len(self.reference_tokens) - 1
+
+    def prepare_ref_tokens(self, tokenizer):
+        return tokenizer.decode(self.input_prompt.tolist())
+
+    def collect_predicted_tokens(self, token):
+        token = token.item() if hasattr(token, "item") else token
+        self.store_predicted_tokens.append(int(token))
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+
+    def compute_accuracy(self):
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        assert matching_sz > 0, "No tokens collected for token accuracy"
+        for i in range(matching_sz):
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
+                count += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
+
+        return count / matching_sz, count_t5 / matching_sz
+
+
+def get_accuracy_thresholds(model_args):
+    """Parse token accuracy thresholds from the common PERF.md Performance table."""
+    perf_file = "models/tt_transformers/PERF.md"
+    with open(perf_file, "r") as f:
+        content = f.read()
+
+    sections = content.split("## ")
+    target_section = next(s for s in sections if s.lower().startswith("performance\n"))
+
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()
+    )
+    rows = [line.split("|")[1:] for line in target_section.split("\n") if correct_line(line)]
+    if not rows:
+        raise ValueError(f"Could not find accuracy data for {base_model_name} on {device_name} in {perf_file}")
+
+    assert len(rows) == 1, f"Found multiple rows for {base_model_name} on {device_name} in {perf_file}"
+    row = rows[0]
+    top1_acc = float(row[2].strip())
+    top5_acc = float(row[3].strip())
+
+    return top1_acc - 0.5, top5_acc - 0.5
+
+
 def load_demo_targets(filename, galaxy_type):
     """
     Load expected demo targets from a JSON file.
@@ -113,20 +185,6 @@ def load_demo_targets(filename, galaxy_type):
     demo_targets = demo_targets["targets"][galaxy_type]
 
     return demo_targets
-
-
-def assert_perf_within_tolerance(metric_name, measured_value, target_value, tolerance_percentage):
-    """
-    Allow a small symmetric variation around the target to account for normal run-to-run variance.
-    """
-    tolerance_percentage /= 100
-    lower_bound = target_value * (1 - tolerance_percentage)
-    upper_bound = target_value * (1 + tolerance_percentage)
-    assert lower_bound <= measured_value <= upper_bound, (
-        f"{metric_name} {measured_value:.2f} is outside the allowed +/-{tolerance_percentage * 100:.2f}% range "
-        f"around target {target_value:.2f}: [{lower_bound:.2f}, {upper_bound:.2f}]."
-    )
-    logger.info(f"{metric_name} {measured_value:.2f} is inside the performance range.")
 
 
 def create_tt_model(
@@ -203,13 +261,14 @@ def create_tt_model(
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
+# token_accuracy (bool): Whether to run teacher-forced top-1/top-5 token matching against reference outputs
 # is_cur_pos_sharded (bool): Whether to replicate the cur pos tensor on sub core grid as an optimization
 # is_page_table_sharded (bool):  Whether to replicate the page table tensor on sub core grid as an optimization (Currently page table sharding is only supported for BS=32)
 
 
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded, use_prefix_caching, prefix_cached_ratio",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, token_accuracy, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded, use_prefix_caching, prefix_cached_ratio",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -224,6 +283,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -253,6 +313,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -279,6 +340,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -300,6 +362,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -321,6 +384,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -342,6 +406,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -363,6 +428,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -384,6 +450,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -405,6 +472,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -426,6 +494,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -447,6 +516,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -468,6 +538,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -489,6 +560,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -510,6 +582,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -531,6 +604,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             True,  # prefill-only profile
             1,  # num layers
             False,  # print_outputs
@@ -552,6 +626,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             True,  # prefill-only profile
             1,  # num layers
             False,  # print_outputs
@@ -573,6 +648,29 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # apc_test
             True,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
+        (  # ci-token-matching - CI Run for teacher-forced top-1/top-5 token accuracy
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            True,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -594,6 +692,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             True,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -615,6 +714,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -636,6 +736,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             True,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
@@ -643,6 +744,37 @@ def create_tt_model(
             False,  # is_page_table_sharded
             True,  # use_prefix_caching
             0.5,  # prefix_cached_ratio
+        ),
+        (  # seqlen-sweep - Sweeps all powers-of-two seqlens up to model's max (128k), one prefill+decode per batch
+            [
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts (list of files, one per sweep step)
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step; adjusted dynamically by sweep logic)
+            128 * 1024,  # max_seq_len (model maximum; filters out files that exceed this)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill succeeds at each length)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
     ],
     ids=[
@@ -663,9 +795,11 @@ def create_tt_model(
         "prefill-profile-standard",  # prefill-only profile run
         "prefill-profile-prefix-caching",  # prefill-only, Phase 2 (prefix-cached) only, 50% cache
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
+        "ci-token-matching",  # CI performs token accuracy matching with precomputed reference tokens
         "pcc-80L",  # pcc check for 80L + teacher forced
         "batch-1-prefix-caching-perf",  # 1 user, prefix caching (performance)
         "batch-1-prefix-caching-pcc",  # 1 user, prefix caching with PCC (correctness)
+        "seqlen-sweep",  # Sweep prefill across all powers-of-two seqlens up to model's max (128k)
     ],
 )
 @pytest.mark.parametrize(
@@ -682,7 +816,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 216580672,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy",
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
@@ -717,6 +851,7 @@ def test_demo_text(
     prefill_profile,
     num_layers,
     pcc_check,
+    token_accuracy,
     pcc_decode_len,
     reset_seeds,
     request,
@@ -770,9 +905,20 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
+    token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
+
+    if token_accuracy and pcc_check:
+        raise ValueError("Token accuracy and PCC check are separate demo modes")
+    if token_accuracy and batch_size != 1:
+        raise ValueError("Token accuracy mode only supports batch_size=1")
+
+    test_id = request.node.callspec.id
+    is_seqlen_sweep = "seqlen-sweep" in test_id
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True
+    if token_accuracy:
+        enable_trace = False  # Teacher forcing uses fresh host tokens each iteration.
+    prefill_enable_trace = not is_seqlen_sweep  # disable only for sweep to avoid 80MB trace budget
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -814,11 +960,22 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, all_prompts = load_inputs(
-        input_prompts,
-        input_lengths,
-        instruct,
-    )
+    sweep_prompt_files = None
+    if is_seqlen_sweep:
+        # In seqlen-sweep mode, input_prompts is a list of file paths (one per sweep step).
+        # Load the first file now for initial setup; per-step loading happens later.
+        sweep_prompt_files = input_prompts
+        input_prompts, all_prompts = load_inputs(
+            sweep_prompt_files[0],
+            input_lengths,
+            instruct,
+        )
+    else:
+        input_prompts, all_prompts = load_inputs(
+            input_prompts,
+            input_lengths,
+            instruct,
+        )
     profiler.end("loading_inputs")
 
     # Load expected outputs for comparison
@@ -861,10 +1018,30 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append(
-            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+    if is_seqlen_sweep:
+        # Seqlen sweep: load each prompt file individually, filtering out lengths that exceed the model's max.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> stem "input_data_long_16k" -> "16k" -> 16384).
+        filtered_files = []
+        for f in sweep_prompt_files:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
+                    filtered_files.append(f)
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
+        repeat_batches = len(filtered_files)
+        logger.info(
+            f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}"
         )
+        for f in filtered_files:
+            batch_prompts, _ = load_inputs(f, input_lengths, instruct)
+            repeat_batch_prompts.append(batch_prompts[:batch_size])
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+            )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,
@@ -884,6 +1061,12 @@ def test_demo_text(
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
+    token_acc = None
+    acc = None
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_args.model_name)
+        repeat_batch_prompts = [[token_acc.prepare_ref_tokens(tokenizer)]]
+
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -901,7 +1084,7 @@ def test_demo_text(
                 input_prompts,
                 tokenizer,
                 [model_args],
-                instruct,
+                False if token_accuracy else instruct,
                 max_generated_tokens,
             )
 
@@ -1122,6 +1305,8 @@ def test_demo_text(
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
+        if token_accuracy:
+            out_tok = token_acc.collect_predicted_tokens(out_tok[0].item())
 
         if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
@@ -1142,6 +1327,11 @@ def test_demo_text(
         tt_out_toks = []
 
         while users_decoding:
+            if token_accuracy and iteration > 0:
+                out_tok = token_acc.collect_predicted_tokens(out_tok[0].item())
+                if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                    out_tok = out_tok.repeat(32, 1)
+
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
@@ -1157,14 +1347,15 @@ def test_demo_text(
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward(
+                decode_async_read = not token_accuracy
+                decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=is_enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
-                    async_read=True,
+                    async_read=decode_async_read,
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
@@ -1173,8 +1364,12 @@ def test_demo_text(
                     prompt_tokens=input_tokens_prefill_pt,
                     output_tokens=prefilled_token,
                 )
-                read_events.append(read_event)
-                tt_out_toks.append(tt_out_tok)
+                if decode_async_read:
+                    tt_out_tok, read_event = decode_output
+                    read_events.append(read_event)
+                    tt_out_toks.append(tt_out_tok)
+                else:
+                    tt_out_tok, tt_log_probs = decode_output
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
@@ -1192,9 +1387,10 @@ def test_demo_text(
                 and num_layers == 80
             )
 
-            if iteration > 0:
-                ttnn.event_synchronize(read_events.pop(0)[0])
-                tt_out_tok, tt_log_probs = generator.process_decode_output_host(tt_out_toks.pop(0))
+            if iteration > 0 or token_accuracy:
+                if not token_accuracy:
+                    ttnn.event_synchronize(read_events.pop(0)[0])
+                    tt_out_tok, tt_log_probs = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 if teacher_forcing:
                     out_tok = ref_tokens[max_encoded_prompt_len + iteration + 1]
@@ -1272,29 +1468,32 @@ def test_demo_text(
                         logger.info("[User {}] {}".format(user, text))
 
                 # The e2e decode inference accounts for device execution + host post-processing time
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                # Always print perf after every iteration
-                tokens_per_second_per_user = 1 / decode_iteration_time
-
-                logger.info(
-                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
-                )
-                if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
-                    # Check if the throughput is within the expected range
-                    lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
-                    upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
-                    # TODO: Enable once experimentaly established avg and absolute margin
-                    assert_message = (
-                        f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
-                        f"Update text_demo_targets.json file with the expected throughput.\n"
-                        f"See the comment on the text_demo.py by the assert for instructions."
+                if iteration > 0:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=batch_idx
                     )
-                    assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
-                    # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
-                    # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
-                    # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
+                    # Always print perf after every iteration
+                    tokens_per_second_per_user = 1 / decode_iteration_time
+
+                    logger.info(
+                        f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                    )
+                    if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
+                        # Check if the throughput is within the expected range
+                        lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
+                        upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
+                        # TODO: Enable once experimentaly established avg and absolute margin
+                        assert_message = (
+                            f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
+                            f"Update text_demo_targets.json file with the expected throughput.\n"
+                            f"See the comment on the text_demo.py by the assert for instructions."
+                        )
+                        assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
+                        # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
+                        # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
+                        # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+                        # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
             current_pos += 1
             iteration += 1
@@ -1385,6 +1584,10 @@ def test_demo_text(
                     logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+        if token_accuracy:
+            acc = token_acc.compute_accuracy()
+            logger.info("=== Top1 and Top5 Token Accuracy ===")
+            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1431,6 +1634,22 @@ def test_demo_text(
         measurements["Top 1 Accuracy"] = sum(top_1_accs) / len(top_1_accs)
         measurements["Top 5 Accuracy"] = sum(top_5_accs) / len(top_5_accs)
 
+    if token_accuracy:
+        assert acc is not None, "Token accuracy mode completed without accuracy results"
+        total_top1_acc = math.ceil(acc[0] * 100)
+        total_top5_acc = math.ceil(acc[1] * 100)
+        measurements["Top 1 Accuracy"] = total_top1_acc
+        measurements["Top 5 Accuracy"] = total_top5_acc
+
+        min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args)
+        assert (
+            total_top1_acc >= min_top1_acc
+        ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+        assert (
+            total_top5_acc >= min_top5_acc
+        ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+        logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
     tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
@@ -1468,38 +1687,34 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    PERFORMANCE_TARGETS = {
-        "TG_Llama-3.1-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 71.5},
-        "TG_Llama-3.3-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 71.5},
-    }
-
-    model_key = f"{model_args.device_name}_{model_args.base_model_name}"
-
-    if model_key in PERFORMANCE_TARGETS:
-        test_id = request.node.callspec.id
-        if "repeat2" in test_id:
-            PERF_TOLERANCE_PERCENTAGE = 2.2
-            model_perf_targets = PERFORMANCE_TARGETS[model_key]
-            assert_perf_within_tolerance(
-                "TTFT (ms)",
-                avg_time_to_first_token * 1000,
-                model_perf_targets["ttft"],
-                PERF_TOLERANCE_PERCENTAGE,
-            )
-            assert_perf_within_tolerance(
-                "Decode throughput (tok/s/user)",
-                decode_tok_s_user,
-                model_perf_targets["tsu"],
-                PERF_TOLERANCE_PERCENTAGE,
+    test_id = request.node.callspec.id
+    if "repeat2" in test_id:  #  test_id will be changed to eval-1 and eval-32 in the future
+        sku = get_current_device_sku_name()
+        resolved_targets = resolve_perf_targets(
+            model_name=model_args.base_model_name,
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=len(input_prompts[0]),
+        )
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s/u": True,
+                },
+                model_name=model_args.base_model_name,
+                sku=sku,
+                batch_size=batch_size,
+                seq_len=len(input_prompts[0]),
             )
         else:
-            logger.info(
-                f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks..."
+            logger.warning(
+                f"No centralized performance targets found for model={model_args.base_model_name}, "
+                f"sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
             )
     else:
-        logger.warning(
-            f"Model '{model_args.base_model_name}' currently doesn't have performance targets on {model_args.device_name} device!"
-        )
+        logger.info(f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks...")
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:
@@ -1507,12 +1722,30 @@ def test_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+            "time_to_token",
+            avg_time_to_first_token,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,  # use the last batch iteration (the one with an end timestamp)
+            "inference_decode",
+            "tokens/s",
+            decode_tok_s,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,
+            "inference_decode",
+            "tokens/s/user",
+            decode_tok_s_user,
+        )
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            run_type="demo_perf",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=len(input_prompts[0]),
+            output_sequence_length=num_tokens_generated_decode[0],
         )

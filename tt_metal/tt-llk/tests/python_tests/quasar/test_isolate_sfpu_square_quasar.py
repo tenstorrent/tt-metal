@@ -18,14 +18,15 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
     format_elem_max,
+    generate_stimuli,
 )
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -51,7 +52,7 @@ SFPU_SQUARE_FORMATS = input_output_formats(
 )
 
 SFPU_SQUARE_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, input_dimensions)
+    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
@@ -71,7 +72,7 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
 
     torch.manual_seed(42)
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

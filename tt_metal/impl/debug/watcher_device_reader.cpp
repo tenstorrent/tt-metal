@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -30,6 +31,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
@@ -100,6 +102,16 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 core_type);
             return names[processor_index];
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            auto num_processors = hal.get_num_risc_processors(core_type);
+            TT_FATAL(
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                processor_index,
+                core_type,
+                num_processors - 1);
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");
@@ -121,6 +133,13 @@ tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& 
     if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
         translated_dram_cores.end()) {
         return tt::CoreType::DRAM;
+    }
+
+    const std::vector<tt::umd::CoreCoord>& translated_dispatch_cores =
+        soc_desc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED);
+    if (std::find(translated_dispatch_cores.begin(), translated_dispatch_cores.end(), virtual_coord) !=
+        translated_dispatch_cores.end()) {
+        return tt::CoreType::DISPATCH;
     }
 
     tt::CoreType core_type =
@@ -169,6 +188,7 @@ string get_noc_target_str(
         }
         switch (core_type) {
             case tt::CoreType::DRAM: return {"DRAM", "DRAM"};
+            case tt::CoreType::DISPATCH: return {"Dispatch", "L1"};
             case tt::CoreType::ETH: return {"Ethernet", "L1"};
             case tt::CoreType::PCIE: return {"PCIe", "PCIE"};
             case tt::CoreType::WORKER: return {"Tensix", "L1"};
@@ -282,8 +302,10 @@ private:
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
-    void DumpTileCountersBypass() const;
-    void DumpTileCountersWithRemapper() const;
+    // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
+    // programmed remapper pairs so the bypass dump can skip them.
+    std::unordered_set<uint32_t> DumpTileCountersWithRemapper() const;
+    void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -418,9 +440,22 @@ void WatcherDeviceReader::Dump(FILE* file) {
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+            // get_metal_dram_cores omits the syseng-owned NOC0 endpoints (no Metal DRISC firmware),
+            // whose launch message / debug mailbox is never initialized and would read as garbage.
+            for (const auto& logical_dram_core : soc_d.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+                Core::Create(logical_dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
+            }
+        }
+    }
+
+    // Dump dispatch-engine cores (Quasar only)
+    {
+        const auto& hal = env.get_hal();
+        if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+            const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
+            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
+                     soc_d)) {
+                Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }
     }
@@ -533,6 +568,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_type_str = "idleth";
     } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         core_type_str = "dram";
+    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+        core_type_str = "dispatch";
     } else {
         core_type_str = "worker";
     }
@@ -577,6 +614,7 @@ void WatcherDeviceReader::Core::Dump() const {
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
+    bool is_dispatch_core = (programmable_core_type_ == HalProgrammableCoreType::DISPATCH);
 
     ValidateKernelIDs();
 
@@ -599,8 +637,8 @@ void WatcherDeviceReader::Core::Dump() const {
             DumpWaypoints();
         }
         // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
-        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
-        if (!is_eth_core && !is_dram_core) {
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM, DISPATCH).
+        if (!is_eth_core && !is_dram_core && !is_dispatch_core) {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
@@ -753,6 +791,13 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
+        case dev_msgs::DebugSanitizeNocInvalidTxnId:
+            error_msg = fmt::format(
+                "{} used invalid NoC transaction id {} (exceeds max {}).",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                san.l1_addr(),
+                san.len());
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -903,6 +948,10 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'D';
     } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
+    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+        code = 'H';
+    } else if (state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
     } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
     } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
@@ -913,14 +962,19 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
+            "{})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
             dev_msgs::RUN_MSG_GO,
             dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_MSG_RESET_READ_PTR,
+            dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST,
+            dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
     } else {
         fprintf(reader_.f, "%c", code);
     }
@@ -1049,6 +1103,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
     std::vector<std::string> risc_status;
+    risc_status.reserve(debug_waypoint.size());
 
     for (auto cpu : debug_waypoint) {
         auto& status = risc_status.emplace_back();
@@ -1101,25 +1156,24 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         }
     }
 
-    // Reads posted/acked tile counters used in DFB synchronization
-    // Mismatch indicates a stalled producer/consumer relationship
+    // Reads posted/acked tile counters used in DFB synchronization.
+    // Mismatch indicates a stalled producer/consumer relationship.
+    // Remapper may be globally enabled while STRIDED DFBs still use default mirroring, and a core
+    // can mix remapped + plain TCs — dump both, skipping remapper-covered TCs in the bypass path.
     if (hal.has_tile_counter_registers()) {
-        bool remapper_enabled = false;
+        std::unordered_set<uint32_t> remapped_tc_keys;
         if (hal.has_remapper()) {
             auto data = reader_.env.get_cluster().read_core(
                 reader_.device_id, virtual_coord_, hal.get_remapper_global_control_addr(), sizeof(uint32_t));
-            remapper_enabled = (data[0] & 0x1) != 0;
+            if ((data[0] & 0x1) != 0) {
+                remapped_tc_keys = DumpTileCountersWithRemapper();
+            }
         }
-
-        if (remapper_enabled) {
-            DumpTileCountersWithRemapper();
-        } else {
-            DumpTileCountersBypass();
-        }
+        DumpTileCountersBypass(remapped_tc_keys);
     }
 }
 
-void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
+void WatcherDeviceReader::Core::DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys) const {
     const auto& hal = reader_.env.get_hal();
 
     // NEO side for reading tiles_available directly
@@ -1131,6 +1185,9 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+        if (skip_tc_keys.contains(i)) {
+            continue;
+        }
         uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
         uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
 
@@ -1153,13 +1210,15 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     }
 }
 
-// Dump tile counter mismatches when remapper is enabled.
+// Dump tile counter mismatches for programmed remapper pairs.
 // Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
 //   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
 //   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
 // tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
-void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
+// Returns NEO TC keys covered by valid pairs so DumpTileCountersBypass can skip them.
+std::unordered_set<uint32_t> WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     const auto& hal = reader_.env.get_hal();
+    std::unordered_set<uint32_t> remapped_tc_keys;
 
     uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
     uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
@@ -1167,8 +1226,18 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
+    auto claim_neo_tc = [&](uint32_t client_id, uint32_t tc_id) {
+        // Bypass dump only scans NEO overlay TC banks (tc_id < 16 per Neo). Tensix-only TCs
+        // (>= 16) are not in that scan, so they need no skip entry.
+        if (client_id < overlay::NEO_0 || tc_id >= dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM) {
+            return;
+        }
+        uint32_t neo_id = client_id - overlay::NEO_0;
+        remapped_tc_keys.insert(neo_id * dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id);
+    };
+
     auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
-        uint32_t neo_id = client_id % NEO_0;
+        uint32_t neo_id = client_id % overlay::NEO_0;
         uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
         auto capacity_data = reader_.env.get_cluster().read_core(
             reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
@@ -1188,8 +1257,8 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
         auto clientR_data =
             reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientR_addr, sizeof(uint32_t));
 
-        tClientL_Config_Reg_u clientL;
-        tClientR_Config_Reg_u clientR;
+        overlay::tClientL_Config_Reg_u clientL;
+        overlay::tClientR_Config_Reg_u clientR;
         clientL.val = clientL_data[0];
         clientR.val = clientR_data[0];
 
@@ -1205,6 +1274,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
             uint32_t prod_id = clientL.f.id_L;
             uint32_t prod_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(prod_id, prod_tc_id);
 
             for (uint32_t slot = 0; slot < 4; slot++) {
                 if (!(clientL.f.valid & (1 << slot))) {
@@ -1212,6 +1282,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
                 }
                 uint32_t cons_id = id_R[slot];
                 uint32_t cons_tc_id = cnt_sel_R[slot];
+                claim_neo_tc(cons_id, cons_tc_id);
 
                 auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
                 if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1226,6 +1297,14 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
             uint32_t cons_id = clientL.f.id_L;
             uint32_t cons_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(cons_id, cons_tc_id);
+
+            for (uint32_t slot = 0; slot < 4; slot++) {
+                if (!(clientL.f.valid & (1 << slot))) {
+                    continue;
+                }
+                claim_neo_tc(id_R[slot], cnt_sel_R[slot]);
+            }
 
             auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
             if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1243,6 +1322,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             }
         }
     }
+    return remapped_tc_keys;
 }
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {

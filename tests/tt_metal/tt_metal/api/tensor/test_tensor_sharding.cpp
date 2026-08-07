@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
 using namespace tt::tt_metal;
 
@@ -185,7 +186,7 @@ TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
     // Two configs both created with nd_shard_spec should compare equal on nd_shard_spec alone,
     // even if one has a legacy shard_spec prepopulated and the other does not.
     MemoryConfig user_config(BufferType::L1, nd_shard_spec_a_);
-    MemoryConfig tensor_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
@@ -198,7 +199,7 @@ TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
     // Two configs both created with legacy shard_spec should compare equal on shard_spec alone,
     // even if one has an nd_shard_spec prepopulated and the other does not.
     MemoryConfig user_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
-    MemoryConfig tensor_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
         shard_spec_a_,
@@ -210,13 +211,13 @@ TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
     // One created with nd_shard_spec, the other with legacy shard_spec.
     // Equality falls through to comparing both fields.
-    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
         /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
@@ -226,13 +227,13 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
 }
 
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
-    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
         /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
@@ -243,13 +244,13 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
 }
 
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
-    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
         /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_b_,

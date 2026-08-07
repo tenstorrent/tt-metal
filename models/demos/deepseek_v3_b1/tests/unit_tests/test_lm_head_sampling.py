@@ -15,6 +15,7 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 """
 import os
 import struct
+import time
 
 import pytest
 import torch
@@ -23,10 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
-from models.demos.deepseek_v3_b1.demo.pipeline import (
-    create_single_galaxy_spec_decode_pipeline_configuration,
-    create_single_pod_spec_decode_no_decoder_pipeline_configuration,
-)
+from models.demos.deepseek_v3_b1.demo.pipeline import create_spec_decode_pipeline_configuration
 from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -76,24 +74,20 @@ def _per_shard_quantize(tensor: torch.Tensor, *, num_shards: int, shard_dim: int
     return torch.cat(quantized_shards, dim=shard_dim)
 
 
-def compute_lm_head_sampling_golden(iterations: int):
-    """Compute expected (base_token, spec_token) pairs for the MTP pipeline.
+def compute_lm_head_sampling_golden(iterations: int, num_mtp_levels: int = 1):
+    """Compute expected token tuples for the MTP-N pipeline.
 
-    Golden chain per iteration:
-      1. Base LM head sampling → base_token
+    Returns a list of (N+1)-tuples: (base_token, spec1_token, ..., specN_token).
+
+    Golden chain per iteration, for each level k=0..N-1:
+      1. LM head sampling on hidden → token_k
       2. MTP forward (RMSNorm → concat → per-shard EH projection) → mtp_logits
-      3. Spec LM head sampling on mtp_logits → spec_token
+    Then one final LM head sampling → terminal spec token_N.
 
-    Per-shard quantization in step 2 replicates the hardware path where
-    ShardTensorToMesh splits before block-float conversion.
-
-    Weights match SyntheticWeightProvider:
-      - Embedding: one-hot (emb[i, i % K] = 1)
-      - LM head / norms / eh_proj: seeded randn, block-float quantized
+    Weights match SyntheticWeightProvider seeded by layer index.
     """
     K = _EMBED_HIDDEN
 
-    # One-hot embedding (same as SyntheticWeightProvider.load_embedding)
     base_embed_w = torch.zeros(_VOCAB_SIZE, K, dtype=torch.bfloat16)
     base_embed_w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
 
@@ -105,62 +99,64 @@ def compute_lm_head_sampling_golden(iterations: int):
 
     indices = torch.arange(_VOCAB_SIZE, dtype=torch.int32).reshape(1, _VOCAB_SIZE)
 
-    # MTP weights: fold e/h norms into eh_proj, per-shard quantize
-    mtp_sd = _build_synthetic_mtp_state_dict()
-    gamma_eh = torch.cat(
-        [mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"], mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"]],
-        dim=0,
-    ).unsqueeze(1)
-    eh_proj_raw = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.eh_proj.weight"].T.contiguous()
-    eh_proj = _per_shard_quantize(eh_proj_raw * gamma_eh, num_shards=8, shard_dim=0, dtype=ttnn.bfloat4_b)
+    # Build MTP + spec weights for each level
+    mtp_weights_per_level = []  # (eh_proj, k_slice_size) per level
+    spec_lm_weights = []  # folded spec LM head per level
+    for level in range(num_mtp_levels):
+        mtp_sd = _build_synthetic_mtp_state_dict(_MTP_LAYER_IDX)
+        gamma_eh = torch.cat(
+            [mtp_sd[f"model.layers.{layer_idx}.enorm.weight"], mtp_sd[f"model.layers.{layer_idx}.hnorm.weight"]],
+            dim=0,
+        ).unsqueeze(1)
+        eh_proj_raw = mtp_sd[f"model.layers.{layer_idx}.eh_proj.weight"].T.contiguous()
+        eh_proj = _per_shard_quantize(eh_proj_raw * gamma_eh, num_shards=8, shard_dim=0, dtype=ttnn.bfloat4_b)
+        mtp_weights_per_level.append(eh_proj.float())
 
-    # Spec LM head weights with folded norm, per-shard quantized
-    spec_lm_w_folded = mtp_sd["lm_head.weight"] * mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.shared_head.norm.weight"]
-    spec_lm_w = _per_shard_quantize(spec_lm_w_folded.T.contiguous(), num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
+        spec_lm_w_folded = mtp_sd["lm_head.weight"] * mtp_sd[f"model.layers.{layer_idx}.shared_head.norm.weight"]
+        spec_lm_weights.append(
+            _per_shard_quantize(spec_lm_w_folded.T.contiguous(), num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
+        )
 
-    k_slice_size = (K * 2) // 8  # concat dim (e_norm + h_norm) split across 8 devices
-    eh_proj_f = eh_proj.float()
+    k_slice_size = (K * 2) // 8
     sampling_kwargs = dict(indices=indices, k=1, p=1.0, temperature=0.6)
+
+    def _mtp_forward(hidden: torch.Tensor, token_id: int, eh_proj_f: torch.Tensor) -> torch.Tensor:
+        """MTP forward: RMSNorm hidden + embedding, per-shard EH projection."""
+        h_input = hidden.float()
+        h_norm = h_input * torch.rsqrt(h_input.pow(2).mean(-1, keepdim=True) + 1e-6)
+        tok_emb = base_embed_w[token_id, :].unsqueeze(0).float()
+        e_norm = tok_emb * torch.rsqrt(tok_emb.pow(2).mean(-1, keepdim=True) + 1e-6)
+        concat = torch.cat([e_norm, h_norm], dim=-1).to(torch.bfloat16).to(torch.float32)
+        logits = torch.zeros(1, K, dtype=torch.float32)
+        for dev_idx in range(8):
+            k_start = dev_idx * k_slice_size if dev_idx < 4 else K + (dev_idx - 4) * k_slice_size
+            act_slice = concat[0, k_start : k_start + k_slice_size]
+            partial = act_slice.unsqueeze(0) @ eh_proj_f[k_start : k_start + k_slice_size, :]
+            logits += partial.to(torch.bfloat16).to(torch.float32)
+        return logits.to(torch.bfloat16).to(torch.float32)
 
     results = []
     for iteration in range(iterations):
         row_idx = iteration % K
         hidden = base_embed_w[row_idx : row_idx + 1, :].clone()
+        tokens = []
 
-        # Stage 1: Base LM head → base_token
-        base_token_tensor, _ = LMHeadSampling.golden(
-            hidden.float(),
-            None,
-            base_lm_w.float().unsqueeze(0),
-            **sampling_kwargs,
+        # Chain: for each level k, sample then MTP forward
+        for level in range(num_mtp_levels):
+            lm_w_for_level = base_lm_w if level == 0 else spec_lm_weights[level - 1]
+            token_tensor, _ = LMHeadSampling.golden(
+                hidden.float(), None, lm_w_for_level.float().unsqueeze(0), **sampling_kwargs
+            )
+            token = token_tensor.to(torch.uint32).item()
+            tokens.append(token)
+            hidden = _mtp_forward(hidden, token, mtp_weights_per_level[level])
+
+        # Terminal spec LM head → final token
+        token_tensor, _ = LMHeadSampling.golden(
+            hidden.float(), None, spec_lm_weights[num_mtp_levels - 1].float().unsqueeze(0), **sampling_kwargs
         )
-        base_token = base_token_tensor.to(torch.uint32).item()
-
-        # Stage 2: MTP forward — per-shard EH projection to match hardware quantization
-        h_input = hidden.float()
-        h_norm = h_input * torch.rsqrt(h_input.pow(2).mean(-1, keepdim=True) + 1e-6)
-        tok_emb = base_embed_w[iteration, :].unsqueeze(0).float()
-        e_norm = tok_emb * torch.rsqrt(tok_emb.pow(2).mean(-1, keepdim=True) + 1e-6)
-        concat = torch.cat([e_norm, h_norm], dim=-1).to(torch.bfloat16).to(torch.float32)
-
-        mtp_logits = torch.zeros(1, K, dtype=torch.float32)
-        for dev_idx in range(8):
-            k_start = dev_idx * k_slice_size if dev_idx < 4 else K + (dev_idx - 4) * k_slice_size
-            act_slice = concat[0, k_start : k_start + k_slice_size]
-            partial = act_slice.unsqueeze(0) @ eh_proj_f[k_start : k_start + k_slice_size, :]
-            mtp_logits += partial.to(torch.bfloat16).to(torch.float32)
-        mtp_logits = mtp_logits.to(torch.bfloat16).to(torch.float32)
-
-        # Stage 3: Spec LM head → spec_token
-        spec_token_tensor, _ = LMHeadSampling.golden(
-            mtp_logits,
-            None,
-            spec_lm_w.float().unsqueeze(0),
-            **sampling_kwargs,
-        )
-        spec_token = spec_token_tensor.to(torch.uint32).item()
-
-        results.append((base_token, spec_token))
+        tokens.append(token_tensor.to(torch.uint32).item())
+        results.append(tuple(tokens))
     return results, []
 
 
@@ -1729,14 +1725,22 @@ def test_d2d_to_d2h_pipeline(
 
 
 def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
-    """Parse a 256-byte DeepseekMetadata output page into a dict.
+    """Parse a 512-byte DeepseekMetadata output page into a dict.
 
-    Layout (64 uint32 words = 256 bytes):
-      words  0-15 : header (tok0_id, tok0_type, tok0_pos, tok1_id, tok1_type, tok1_pos,
-                             slot_id, token_id, position_id, prefill_token_id,
-                             temperature, k, probability_mass_threshold, _pad0-2)
+    Layout (128 uint32 words = 512 bytes), mirroring `metadata.hpp::DeepseekMetadata`:
+      word  0     : lane_id
+      word  1     : slot_id
+      word  2     : token_id
+      word  3     : position_id
+      words  4-8  : output_token_ids[5]
+      words  9-12 : prefill_token_ids[4]
+      word  13    : temperature (f32 bits)
+      word  14    : k
+      word  15    : p (f32 bits)
       words 16-47 : p_indices[32]  (uint32)
       words 48-63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
+      words 64-95 : q_indices[32]  (uint32)
+      words 96-111: q_scores[32]   (bf16 packed as uint16, 2 per uint32)
     """
     raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
     assert (
@@ -1749,55 +1753,70 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     p_indices = raw[16:48].tolist()
     scores_packed = raw[48:64].contiguous().view(torch.bfloat16)
     p_scores = scores_packed.float().tolist()
+    q_indices = raw[64:96].tolist()
+    q_scores_packed = raw[96:112].contiguous().view(torch.bfloat16)
+    q_scores = q_scores_packed.float().tolist()
+
+    output_token_ids = [int(raw[4 + i].item()) for i in range(5)]
+    prefill_token_ids = [int(raw[9 + i].item()) for i in range(4)]
 
     return {
-        "tok0_id": int(raw[0].item()),
-        "tok0_type": int(raw[1].item()),
-        "tok0_pos": int(raw[2].item()),
-        "tok1_id": int(raw[3].item()),
-        "tok1_type": int(raw[4].item()),
-        "tok1_pos": int(raw[5].item()),
-        "slot_id": int(raw[6].item()),
-        "token_id": int(raw[7].item()),
-        "position_id": int(raw[8].item()),
-        "prefill_token_id": int(raw[9].item()),
-        "temperature": _u32_to_f32(raw[10].item()),
-        "k": int(raw[11].item()),
-        "probability_mass_threshold": _u32_to_f32(raw[12].item()),
+        "lane_id": int(raw[0].item()),
+        "slot_id": int(raw[1].item()),
+        "token_id": int(raw[2].item()),
+        "position_id": int(raw[3].item()),
+        "output_token_ids": output_token_ids,
+        "prefill_token_ids": prefill_token_ids,
+        "temperature": _u32_to_f32(raw[13].item()),
+        "k": int(raw[14].item()),
+        "p": _u32_to_f32(raw[15].item()),
         "p_indices": p_indices,
         "p_scores": p_scores,
+        "q_indices": q_indices,
+        "q_scores": q_scores,
     }
 
 
 def create_input_page(
     token_id: int,
     position_id: int,
-    prefill_token_id: int,
-    slot_id: int,
+    slot_id: int = 0,
+    lane_id: int = 0,
     temperature: float = 0.0,
     top_k: int = 0,
-    probability_mass_threshold: float = 0.0,
+    top_p: float = 0.0,
+    prefill_token_ids: list[int] | None = None,
 ) -> ttnn.Tensor:
-    """Build a TOKEN_PAGE_SIZE_BYTES input page matching the DeepseekMetadata input layout.
+    """Build a 512-byte input page matching `metadata.hpp::DeepseekMetadata`.
 
-    Word indices (from model.py InputField):
-      [1] token_type  [2] tok0_position_id  [6] slot_id (user_id)
-      [7] token_id    [8] position_id       [9] prefill_token_id
-      [10] temperature (f32 bits)  [11] top_k  [12] probability_mass_threshold (f32 bits)
+    Word layout:
+      [0] lane_id  [1] slot_id  [2] token_id  [3] position_id
+      [4..8] output_token_ids[5]  [9..12] prefill_token_ids[4]
+      [13] temperature  [14] k  [15] p
+
+    `prefill_token_ids` defaults to [-1]*4 (decode mode); set entries to
+    ground-truth tokens for MTP prefill.
     """
+    if prefill_token_ids is None:
+        prefill_token_ids = [-1, -1, -1, -1]
+    while len(prefill_token_ids) < 4:
+        prefill_token_ids.append(-1)
+
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
-    page[0, 2] = position_id
-    page[0, 6] = slot_id
-    page[0, 7] = token_id
-    page[0, 8] = position_id
-    page[0, 9] = prefill_token_id
-    page[0, 10] = float_to_uint32(temperature)
-    page[0, 11] = top_k
-    page[0, 12] = float_to_uint32(probability_mass_threshold)
+    page[0, 0] = lane_id
+    page[0, 1] = slot_id
+    page[0, 2] = token_id
+    page[0, 3] = position_id
+    for i in range(4):
+        page[0, 9 + i] = prefill_token_ids[i]
+    page[0, 13] = float_to_uint32(temperature)
+    page[0, 14] = top_k
+    page[0, 15] = float_to_uint32(top_p)
     return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize("num_mtp_levels", [1, 2, 3, 4])
 @pytest.mark.parametrize(
     "mesh_device",
     [(4, 2)],
@@ -1809,50 +1828,36 @@ def create_input_page(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1453716,
+            "worker_l1_size": 1457396,
         }
     ],
     indirect=True,
 )
-# TODO(#43012): Root-cause this 4x2 FABRIC_2D mesh setup timeout and remove the temporary skip.
-@pytest.mark.skip(
-    reason="[SKIP REASON]: persistent LM-head spec-decode mesh_device setup hits Fabric Router Sync timeout "
-    "after 10000 ms on bh_galaxy. Device 3: Expected status 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43012"
-)
-def test_persistent_mode_spec_decode(mesh_device, use_fp32):
-    """4-stage 4x2 single-galaxy pipeline with MTP + verification:
-    P1(Embedding + SpecLMHead) -> P2(BaseLMHead+EH Matmul) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Passthrough ACTIVATION_W_TOKEN_META) -> P1(D2H TOKEN_META).
+def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
+    """Spec-decode pipeline with MTP-N + verification.
 
-    The verification stage (P1) receives gathered logits + token metadata, runs its
-    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
-
-    TOKEN_META page layout (uint32 words):
-      [0] num_tokens  (0=stale, 1=accept, 2=reject)
-      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
-      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
+    Works on any supported process count (4 = single galaxy, 16 = single pod).
+    The unified config auto-detects process count and places stages:
+      P0: SpecLMHead+Embed  →  P1..P_N: BaseLMHead  →  rest: Passthrough.
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
     num_procs = int(ttnn.distributed_context_get_size())
+    max_mtp = min(num_procs - 1, 4)
+    if num_mtp_levels > max_mtp:
+        pytest.skip(f"num_mtp_levels={num_mtp_levels} exceeds max {max_mtp} " f"for {num_procs} processes")
 
     iterations = 50
     run_golden = False
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs == 4:
-        config = create_single_galaxy_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(fold_rmsnorm_weights=True),
-            fp32_dest_acc_en=use_fp32,
-        )
-    elif num_procs == 16:
-        config = create_single_pod_spec_decode_no_decoder_pipeline_configuration(
-            SyntheticWeightProvider(fold_rmsnorm_weights=True),
-            fp32_dest_acc_en=use_fp32,
-        )
-    else:
-        raise ValueError(f"Test does not support {num_procs} distributed processes")
+    print(f"num_mtp_levels: {num_mtp_levels}", flush=True)
+    config = create_spec_decode_pipeline_configuration(
+        SyntheticWeightProvider(),
+        fp32_dest_acc_en=use_fp32,
+        num_mtp_levels=num_mtp_levels,
+    )
 
     print(f"[TEST] config created, building pipeline", flush=True)
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(True)
@@ -1876,10 +1881,14 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
     raw_indices = []
     raw_scores = []
+    write_latencies = []
+    read_latencies = []
+    round_trip_latencies = []
+
     if pipeline.my_mesh_id == 0:
         if run_golden:
             logger.debug(f"[TEST] computing golden...")
-            golden, golden_debug = compute_lm_head_sampling_golden(iterations)
+            golden, golden_debug = compute_lm_head_sampling_golden(iterations, num_mtp_levels=num_mtp_levels)
             logger.debug(f"[TEST] golden computed, creating config")
         else:
             logger.debug(f"[TEST] skipping golden computation")
@@ -1892,30 +1901,35 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
         for iteration in range(iterations):
             logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
+
+            prefill_ids = [10 if lvl < num_mtp_levels else -1 for lvl in range(4)]
+            logger.info(f"[TEST P{pid}] iter {iteration} prefill_ids={prefill_ids}")
             token_tensor = create_input_page(
                 token_id=10,
                 position_id=iteration,
-                prefill_token_id=10,
                 slot_id=slot_id,
+                lane_id=0,
                 temperature=0.6,
-                top_k=32,
-                probability_mass_threshold=1.0,
+                top_k=1,
+                top_p=0.95,
+                prefill_token_ids=prefill_ids,
             )
+
+            t0 = time.perf_counter()
             pipeline.write_token(token_tensor)
-            logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
             pipeline.read_output(output_tensor)
+            t1 = time.perf_counter()
+
+            logger.info(f"[TEST P{pid}] iter {iteration} raw_latency={1000*(t1-t0):.3f} ms")
 
             page = parse_output_page(output_tensor)
-            type_name = {0: "BASE", 1: "SPEC"}
 
-            if run_golden:
-                expected_base, expected_spec = golden[iteration]
-            else:
-                expected_base = None
-                expected_spec = None
+            expected_tokens = golden[iteration] if run_golden else None
 
             nonzero_p_idx = [(i, v) for i, v in enumerate(page["p_indices"]) if v != 0]
             nonzero_p_sc = [(i, v) for i, v in enumerate(page["p_scores"]) if v != 0.0]
+            nonzero_q_idx = [(i, v) for i, v in enumerate(page["q_indices"]) if v != 0]
+            nonzero_q_sc = [(i, v) for i, v in enumerate(page["q_scores"]) if v != 0.0]
 
             if iteration < 50:
                 raw_dump = ttnn.to_torch(output_tensor).flatten().tolist()
@@ -1928,17 +1942,33 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 print(f"[RAW P{pid}] iter {iteration} IDX={idx}", flush=True)
                 print(f"[RAW P{pid}] iter {iteration} SCR={scr}", flush=True)
 
+            out_toks = page["output_token_ids"]
+            tok_parts = [f"out[{k}]={out_toks[k]}" for k in range(num_mtp_levels + 1)]
             logger.info(
                 f"[TEST P{pid}] iter {iteration} | "
-                f"t0={page['tok0_id']}/{type_name.get(page['tok0_type'], '?')} pos={page['tok0_pos']} | "
-                f"t1={page['tok1_id']}/{type_name.get(page['tok1_type'], '?')} pos={page['tok1_pos']} | "
-                f"slot_id={page['slot_id']} token_id={page['token_id']} "
-                f"position_id={page['position_id']} prefill_token_id={page['prefill_token_id']} | "
-                f"temperature={page['temperature']:.4f} k={page['k']} "
-                f"prob_mass_threshold={page['probability_mass_threshold']:.4f} | "
+                f"{' | '.join(tok_parts)} | "
+                f"lane_id={page['lane_id']} slot_id={page['slot_id']} "
+                f"token_id={page['token_id']} position_id={page['position_id']} | "
+                f"temperature={page['temperature']:.4f} k={page['k']} p={page['p']:.4f} | "
                 f"p_indices(nonzero)={nonzero_p_idx} | "
                 f"p_scores(nonzero)={nonzero_p_sc} | "
-                f"golden base={expected_base} spec={expected_spec}"
+                f"q_indices(nonzero)={nonzero_q_idx} | "
+                f"q_scores(nonzero)={nonzero_q_sc} | "
+                f"golden={expected_tokens}"
+            )
+
+    if pipeline.my_mesh_id == 0 and write_latencies:
+        skip = min(5, len(write_latencies))
+        w = write_latencies[skip:]
+        r = read_latencies[skip:]
+        rt = round_trip_latencies[skip:]
+        if w:
+            print(
+                f"\n[LATENCY SUMMARY P{pid}] (skipping first {skip} warmup iterations)\n"
+                f"  write_token : min={min(w):.3f}ms  avg={sum(w)/len(w):.3f}ms  max={max(w):.3f}ms\n"
+                f"  read_output : min={min(r):.3f}ms  avg={sum(r)/len(r):.3f}ms  max={max(r):.3f}ms\n"
+                f"  round_trip  : min={min(rt):.3f}ms  avg={sum(rt)/len(rt):.3f}ms  max={max(rt):.3f}ms\n",
+                flush=True,
             )
 
     # check if all raw scores and indices are the same – selection may vary based on random seed

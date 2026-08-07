@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 
@@ -26,29 +27,14 @@ uint32_t compute_weight_count_offset(
 
 namespace ttnn::operations::data_movement {
 
-MoeRoutingRemapDeviceOperation::SingleCore::cached_mesh_workload_t
-MoeRoutingRemapDeviceOperation::SingleCore::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, cached_program.shared_variables);
-    }
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
-}
+using namespace tt::tt_metal;
 
-ttnn::device_operation::CachedProgram<MoeRoutingRemapDeviceOperation::SingleCore::shared_variables_t>
-MoeRoutingRemapDeviceOperation::SingleCore::create_at(
+ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto routing_weights = tensor_args.input_routing_weights;
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& routing_weights = tensor_args.input_routing_weights;
     const auto non_zero_weight_size = operation_attributes.non_zero_weight_size;
     const auto expert_parallel_size = operation_attributes.expert_parallel_size;
     const auto cluster_axis = operation_attributes.cluster_axis;
@@ -61,18 +47,23 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
     const auto aligned_routing_weight_page_size_bytes = tt::align(routing_weight_page_size_bytes, l1_alignment);
 
     // single core is fine
-    CoreRange total_cores({0, 0}, {0, 0});
-    Program program{};
+    const CoreRangeSet total_cores{CoreRange{{0, 0}, {0, 0}}};
+    const CoreCoord utilized_core{0, 0};
 
-    using tt::tt_metal::CircularBufferConfig;
+    ProgramDescriptor desc;
 
     // input routing weight buffer
     const auto routing_weights_cb_id = tt::CBIndex::c_0;
     const auto routing_weights_format = datatype_to_dataformat_converter(routing_weights.dtype());
-    CircularBufferConfig cb_routing_weights_config =
-        CircularBufferConfig(aligned_routing_weight_page_size_bytes, {{routing_weights_cb_id, routing_weights_format}})
-            .set_page_size(routing_weights_cb_id, aligned_routing_weight_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_routing_weights_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_routing_weight_page_size_bytes,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(routing_weights_cb_id),
+            .data_format = routing_weights_format,
+            .page_size = aligned_routing_weight_page_size_bytes,
+        }}},
+    });
 
     // store indices of per device non-zero weights
     const auto local_weights_idxs_cb_id = tt::CBIndex::c_1;
@@ -81,11 +72,15 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         tt::align(non_zero_per_device * sizeof(local_weights_idxs_t), l1_alignment);
     const auto local_weights_idxs_dataformat =
         datatype_to_dataformat_converter(tt::tt_metal::convert_to_data_type<local_weights_idxs_t>());
-    CircularBufferConfig cb_local_weights_idxs_config =
-        CircularBufferConfig(
-            aligned_local_weights_idxs_page_size_bytes, {{local_weights_idxs_cb_id, local_weights_idxs_dataformat}})
-            .set_page_size(local_weights_idxs_cb_id, aligned_local_weights_idxs_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_local_weights_idxs_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_local_weights_idxs_page_size_bytes,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(local_weights_idxs_cb_id),
+            .data_format = local_weights_idxs_dataformat,
+            .page_size = aligned_local_weights_idxs_page_size_bytes,
+        }}},
+    });
 
     // output routing weight buffer
     const auto local_weights_cb_id = tt::CBIndex::c_2;
@@ -96,10 +91,18 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
 
     TT_FATAL(local_weights_format == routing_weights_format, "Input and output datatypes need to be the same");
 
-    CircularBufferConfig cb_local_weights_config =
-        CircularBufferConfig(aligned_local_weights_page_size_bytes, {{local_weights_cb_id, local_weights_format}})
-            .set_page_size(local_weights_cb_id, aligned_local_weights_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_local_weights_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_local_weights_page_size_bytes,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(local_weights_cb_id),
+            .data_format = local_weights_format,
+            .page_size = aligned_local_weights_page_size_bytes,
+        }}},
+    });
+
+    auto* const routing_weights_buffer = routing_weights.buffer();
+    auto* const local_weights_buffer = tensor_return_value.buffer();
 
     const auto input_datum_size_bytes = tt::datum_size(local_weights_format);
     std::vector<uint32_t> reader_ct_args = {
@@ -108,13 +111,15 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*routing_weights.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*routing_weights_buffer).append_to(reader_ct_args);
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/reader_moe_routing_remap.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/reader_moe_routing_remap.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = total_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {
         routing_weights_cb_id,
@@ -123,59 +128,33 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    TensorAccessorArgs(*local_weights_buffer).append_to(writer_ct_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/"
-        "writer_moe_routing_remap.cpp",
-        total_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        "writer_moe_routing_remap.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = total_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    const auto routing_weights_addr = routing_weights.buffer()->address();
-    const auto local_weights_addr = tensor_return_value.buffer()->address();
-
+    // device_weights_count_offset is per-coord; baked into each program in the
+    // mesh workload (one descriptor per coord). Cache hits patch buffer addresses
+    // via BufferBinding and keep the per-coord offset intact.
+    TT_FATAL(mesh_dispatch_coordinate.has_value(), "MoeRoutingRemap requires a mesh dispatch coordinate");
     const auto device_weights_count_offset =
-        compute_weight_count_offset(mesh_coordinate, cluster_axis, non_zero_per_device);
+        compute_weight_count_offset(*mesh_dispatch_coordinate, cluster_axis, non_zero_per_device);
 
-    constexpr auto num_reader_rt_args = 2, num_writer_rt_args = 1;
-    const std::array<uint32_t, num_reader_rt_args> reader_runtime_args = {
-        routing_weights_addr, device_weights_count_offset};
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, *total_cores.begin(), reader_runtime_args);
+    // Buffer* triggers a binding entry; the framework patches the address on
+    // cache hits without rebuilding the descriptor.
+    reader_desc.emplace_runtime_args(utilized_core, {routing_weights_buffer, device_weights_count_offset});
+    writer_desc.emplace_runtime_args(utilized_core, {local_weights_buffer});
 
-    const std::array<uint32_t, num_writer_rt_args> writer_runtime_args = {local_weights_addr};
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, *total_cores.begin(), writer_runtime_args);
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id,
-         .unary_writer_kernel_id = unary_writer_kernel_id,
-         .utilized_core = *total_cores.begin()}};
+    return desc;
 }
 
-void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
-
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        const auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
-        const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
-        const auto& utilized_core = shared_variables.utilized_core;
-
-        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, utilized_core);
-        auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, utilized_core);
-
-        reader_runtime_args.at(0) = tensor_args.input_routing_weights.buffer()->address();
-        writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-    }
-}
 }  // namespace ttnn::operations::data_movement

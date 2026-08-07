@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -159,7 +159,7 @@ std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_addr
 
     The above parameters are usually obtained using get_compile_time_arg_val.
     In the program factory you can create an vector containing the above parameters in order using the function
-    shard_builder:generate_compile_time_args(const tt::tt_metal::Tensor& t)
+    shard_builder:generate_compile_time_args(const ttnn::Tensor& t)
     defined in ttnn/operations/ccl/sharding_addrgen_helper.cpp
 
     It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::get_shard_map
@@ -170,7 +170,7 @@ const shard_array_map = mapping.first;
 rt_index += mapping.second;//contains the size of the map hence how much to increment the rt values
 
 In the program factory you can create an vector containing the runtime arguments extracted by this function using the
-function shard_builder:generate_run_time_args(const tt::tt_metal::Tensor& t)
+function shard_builder:generate_run_time_args(const ttnn::Tensor& t)
     defined in ttnn/operations/ccl/sharding_addrgen_helper.cpp
 
 
@@ -263,6 +263,10 @@ struct ShardedAddrGen {
         return return_val;
     }
 
+    // Uses the legacy noc_async_read primitive because get_sharded_addr
+    // produces a precomposed 64-bit noc address.
+    // Consumers migrating to Device 2.0 should use get_noc_addr() / its
+    // components together with Noc::async_read directly.
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {

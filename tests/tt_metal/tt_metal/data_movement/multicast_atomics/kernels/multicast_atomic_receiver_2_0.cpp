@@ -4,16 +4,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Compile-time arguments
-    constexpr uint32_t sem_id = get_compile_time_arg_val(0);
-    constexpr uint32_t expected_value = get_compile_time_arg_val(1);
-    constexpr uint32_t test_id = get_compile_time_arg_val(2);
+    constexpr uint32_t expected_value = get_arg(args::expected_value);
+    constexpr uint32_t test_id = get_arg(args::test_id);
 
-    // Create NOC 2.0 API objects
     Noc noc(noc_index);
-    Semaphore semaphore(sem_id);
+    Semaphore semaphore(sem::sem_name);
 
     {
         DeviceZoneScopedN("RISCV1");

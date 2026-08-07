@@ -61,6 +61,7 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       # Step 2: Install SFPI (required to compile LLK ELFs even for ttsim).
       - name: Install SFPI
@@ -113,6 +114,14 @@ jobs:
           if [[ -f "${RESULTS_DIR}/latest.html" ]]; then
             cp -L "${RESULTS_DIR}/latest.html" "${ARTIFACT_DIR}/ttsim-${{ matrix.architecture }}.html"
           fi
+          # Record how many tests were *enumerated* (collected) so downstream
+          # jobs can compute crashed = enumerated − finished without re-running
+          # collection. A tiny count file keeps the artifact lean (the full
+          # node-id list can be tens of thousands of lines).
+          if [[ -f "${RESULTS_DIR}/latest.collected.txt" ]]; then
+            wc -l < "${RESULTS_DIR}/latest.collected.txt" | tr -d ' ' \
+              > "${ARTIFACT_DIR}/ttsim-${{ matrix.architecture }}.enumerated"
+          fi
           # Include the version pin so the weekly digest can read the
           # simulator version from the artifact (no extra checkout needed).
           VERSION_FILE="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/ttsim-version"
@@ -145,6 +154,7 @@ jobs:
         env:
           ARCH: ${{ matrix.architecture }}
           XML_PATH: ttsim-report-${{ matrix.architecture }}/ttsim-${{ matrix.architecture }}.xml
+          ENUM_PATH: ttsim-report-${{ matrix.architecture }}/ttsim-${{ matrix.architecture }}.enumerated
         run: |
           set -euo pipefail
 
@@ -159,7 +169,7 @@ jobs:
 
           if [[ ! -f "$XML_PATH" ]]; then
             echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"
-            for k in total passed failed errored skipped pass_pct; do
+            for k in total ran passed failed errored skipped pass_pct enumerated finished crashed; do
               echo "${k}=0" >> "$GITHUB_OUTPUT"
             done
             echo "status=no-report" >> "$GITHUB_OUTPUT"
@@ -182,14 +192,34 @@ jobs:
               total   += int(s.attrib.get("tests",    0) or 0)
               failed  += int(s.attrib.get("failures", 0) or 0)
               skipped += int(s.attrib.get("skipped",  0) or 0)
-          passed = max(total - failed - skipped, 0)
-          pass_pct = (100.0 * passed / total) if total else 0.0
+          ran = max(total - skipped, 0)
+          passed = max(ran - failed, 0)
+          pass_pct = (100.0 * passed / ran) if ran else 0.0
+
+          # "finished" = tests that produced a JUnit testcase (== total here);
+          # "crashed" = enumerated − finished, i.e. tests that were collected
+          # but whose worker died before recording a result. enumerated comes
+          # from the count file staged alongside the XML; if it is missing we
+          # leave both blank so the summary shows "n/a" rather than a wrong 0.
+          enumerated = None
+          enum_path = os.environ.get("ENUM_PATH", "")
+          if enum_path and os.path.isfile(enum_path):
+              try:
+                  enumerated = int(open(enum_path).read().strip())
+              except (ValueError, OSError):
+                  enumerated = None
+          finished = total
+          crashed = max(enumerated - finished, 0) if enumerated is not None else None
 
           print(f"total={total}")
+          print(f"ran={ran}")
           print(f"passed={passed}")
           print(f"failed={failed}")
           print(f"skipped={skipped}")
           print(f"pass_pct={pass_pct:.1f}")
+          print(f"enumerated={'' if enumerated is None else enumerated}")
+          print(f"finished={finished}")
+          print(f"crashed={'' if crashed is None else crashed}")
           print("status=parsed")
           PY
 
@@ -197,6 +227,9 @@ jobs:
 
           # shellcheck source=/dev/null
           source /tmp/ttsim-summary.env
+
+          enumerated_disp="${enumerated:-}"; [[ -z "$enumerated_disp" ]] && enumerated_disp="n/a"
+          crashed_disp="${crashed:-}";       [[ -z "$crashed_disp" ]] && crashed_disp="n/a"
 
           {
             echo "## ttsim regression: ${ARCH}"
@@ -206,10 +239,13 @@ jobs:
             echo "| Metric | Value |"
             echo "|---|---:|"
             echo "| 🏷️ ttsim version | v${TTSIM_VERSION} |"
-            echo "| 🔢 Total | ${total} |"
+            echo "| 🧮 Enumerated | ${enumerated_disp} |"
+            echo "| 🏁 Finished | ${finished} |"
+            echo "| ▶️ Ran | ${ran} |"
             echo "| ✅ Passed | ${passed} |"
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
+            echo "| 💥 Crashed | ${crashed_disp} |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."

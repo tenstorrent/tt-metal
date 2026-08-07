@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
- *
- * Type ids shared between the debug print server and on-device debug prints.
- *
- */
-
 #pragma once
+
+#include <atomic>
+#include <cstdint>
 
 enum class DevicePrintRiscCoreState : uint8_t {
     KernelNotPrinted = 0,
@@ -16,24 +13,17 @@ enum class DevicePrintRiscCoreState : uint8_t {
     PrintingDisabled = 2,
 };
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
-
-#include "core_config.h"
-
-struct DevicePrintMemoryLayout {
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
-#elif defined(COMPILE_FOR_DRISC)
-    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
-#else
-    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
-#endif
+template <uint32_t BufferSize, uint32_t ProcessorCount, uint32_t ProcessorOffset = 0>
+struct DevicePrintBuffer {
+    static constexpr uint32_t buffer_size = BufferSize;
+    static constexpr uint32_t processor_count = ProcessorCount;
+    static constexpr uint32_t processor_offset = ProcessorOffset;
 
     struct Aux {
         // current writer offset in buffer
         uint32_t wpos;
         uint32_t rpos;
-        DevicePrintRiscCoreState risc_state[PROCESSOR_COUNT];  // Has kernel printed since starting
+        DevicePrintRiscCoreState risc_state[ProcessorCount];  // Has kernel printed since starting
 #if defined(ARCH_WORMHOLE)
         uint32_t lock;  // Lock for synchronizing access to the buffer. 0 means free, other values indicate locked by
                         // that processor.
@@ -42,17 +32,12 @@ struct DevicePrintMemoryLayout {
 #endif
     } aux;
     static_assert(
-        sizeof(Aux) == 4 + 4 + (PROCESSOR_COUNT * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4 + 4,
+        sizeof(Aux) == sizeof(uint32_t) + sizeof(uint32_t) +
+                           (ProcessorCount * sizeof(DevicePrintRiscCoreState) + sizeof(uint32_t) - 1) /
+                               sizeof(uint32_t) * sizeof(uint32_t) +
+                           sizeof(uint32_t),
         "Aux struct size must be correct");
     static_assert(sizeof(Aux) % 4 == 0, "Aux struct must be a multiple of 4 bytes for proper alignment of data");
-    uint8_t data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(Aux)];
+    uint8_t data[BufferSize - sizeof(Aux)];
     static_assert(sizeof(data) % 4 == 0, "Data array size must be a multiple of 4 bytes for proper alignment");
 };
-static_assert(
-    sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * DevicePrintMemoryLayout::PROCESSOR_COUNT,
-    "DevicePrintMemoryLayout size must match total buffer size");
-static_assert(
-    sizeof(DevicePrintMemoryLayout) % 4 == 0,
-    "DevicePrintMemoryLayout size must be a multiple of 4 bytes for proper alignment");
-
-#endif

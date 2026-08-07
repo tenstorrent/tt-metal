@@ -23,6 +23,14 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
         return torch.rand(shape, dtype=torch.bfloat16)
+    # FP8 types need to be created in float32 first, then converted
+    if dtype == ttnn.fp8_e4m3:
+        # Create as float32 first, then convert to torch FP8 format
+        # The test will handle conversion to ttnn FP8 format
+        return torch.rand(shape, dtype=torch.float32).to(torch.float8_e4m3fn)
+    # Block floating-point formats - use bfloat16 as proxy for testing
+    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
+        return torch.rand(shape, dtype=torch.bfloat16)
     assert False, f"Unsupported dtype {dtype}"
 
 

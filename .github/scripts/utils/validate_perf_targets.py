@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
-import yaml
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -21,6 +23,7 @@ except ModuleNotFoundError:
     from models.demos.utils import model_targets
 
 LOWER_IS_BETTER_METRICS = {
+    "prefill_time_to_first_token",
     "prefill_time_to_token",
     "compile_prefill",
     "compile_decode",
@@ -41,6 +44,7 @@ METRIC_NAME_MAP = {
     "compile_decode": ("compile_decode", "time(s)"),
     "prefill_t/s": ("inference_prefill", "tokens/s"),
     "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
     "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
     "decode_t/s": ("inference_decode", "tokens/s"),
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
@@ -56,13 +60,29 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "prefill_decode_t/s/u",
     "prefill_t/s",
     "prefill_time_to_token",
+    "prefill_time_to_first_token",
     "top1",
     "top5",
 }
-TOLERANCE_FAMILY_ALIASES = {
-    "decode_t/s": "decode_tolerance",
-    "decode_t/s/u": "decode_tolerance",
-}
+
+PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
+PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
+
+# Accuracy target metric names, and the measurement names a token-matching run emits.
+# A benchmark run is treated as an accuracy (token-matching) run iff it reports these
+# measurements; otherwise it is a perf (eval) run. This lets us validate only the
+# relevant metric family per run: perf numbers from token-matching runs are teacher-
+# forcing artifacts (not real perf), and eval runs do not measure token accuracy.
+ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
+ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
+
+# Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
+# target metric name. Used to report measured values that have no matching target entry so
+# the summary can still surface them. The first key wins for pairs shared by multiple metric
+# names (e.g. prefill_time_to_token / prefill_time_to_first_token both map to time_to_token).
+_MEASUREMENT_TO_METRIC_NAME: dict[tuple[str, str], str] = {}
+for _metric_name, _pair in METRIC_NAME_MAP.items():
+    _MEASUREMENT_TO_METRIC_NAME.setdefault(_pair, _metric_name)
 
 
 def _is_number(value: Any) -> bool:
@@ -102,6 +122,16 @@ def _measurement_lookup(benchmark_json: dict[str, Any]) -> dict[tuple[str, str],
     return lookup
 
 
+def _is_accuracy_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
+    """True for token-matching (accuracy) runs, identified by top1/top5 measurements.
+
+    The benchmark JSON carries no explicit test-type field (run_type is always
+    "demo"), so we key off the measurements: only token-matching runs emit
+    top1/top5 token accuracy.
+    """
+    return any(name in ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
+
+
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
     """Resolve a metric value, failing on ambiguous unqualified metric names."""
     if metric_name in METRIC_NAME_MAP:
@@ -125,52 +155,121 @@ def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]
     return matches[0][2]
 
 
-def _metric_tolerance(metric_name: str, thresholds: dict[str, Any], default_high_tolerance: float) -> float:
-    """Resolve effective tolerance for a metric using explicit and family aliases."""
-    explicit_candidates = [
-        f"{metric_name}_tolerance",
-        f"{metric_name.replace('/', '_')}_tolerance",
-    ]
-    metric_family_alias = TOLERANCE_FAMILY_ALIASES.get(metric_name)
-    if metric_family_alias:
-        explicit_candidates.append(metric_family_alias)
-    for explicit_key in explicit_candidates:
-        explicit = thresholds.get(explicit_key)
-        if _is_number(explicit):
-            return float(explicit)
-    generic = thresholds.get("tolerance")
-    if _is_number(generic):
-        return float(generic)
-    return default_high_tolerance
+def _normalize_ttft_thresholds(
+    thresholds: dict[str, Any],
+    benchmark_file_name: str,
+    model_name: str,
+    sku: str,
+) -> dict[str, Any]:
+    """
+    Normalize TTFT aliases in thresholds and enforce `prefill_time_to_first_token` precedence.
+
+    `prefill_time_to_first_token` targets are stored in milliseconds and converted to seconds
+    for comparison with benchmark payload `time_to_token`.
+    """
+    normalized_thresholds = dict(thresholds)
+    has_ttft_ms = _is_number(normalized_thresholds.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY))
+    has_ttft_s = _is_number(normalized_thresholds.get(PREFILL_TIME_TO_TOKEN_KEY))
+
+    if has_ttft_ms and has_ttft_s:
+        print(
+            "::warning::"
+            f"{benchmark_file_name}: both {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and {PREFILL_TIME_TO_TOKEN_KEY} are set "
+            f"for model={model_name}, sku={sku}; using {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and ignoring "
+            f"{PREFILL_TIME_TO_TOKEN_KEY}"
+        )
+        normalized_thresholds.pop(PREFILL_TIME_TO_TOKEN_KEY, None)
+
+    if has_ttft_ms:
+        normalized_thresholds[PREFILL_TIME_TO_FIRST_TOKEN_KEY] = (
+            float(normalized_thresholds[PREFILL_TIME_TO_FIRST_TOKEN_KEY]) / 1000.0
+        )
+
+    return normalized_thresholds
 
 
 def _check_metric(
     metric_name: str,
     expected_value: float,
     measured_value: float,
-    high_tolerance: float,
+    tolerance: float,
 ) -> str | None:
-    """Compare measured and expected values using asymmetric regression bounds."""
-    if metric_name in LOWER_IS_BETTER_METRICS:
-        if measured_value > expected_value:
-            return f"{metric_name}: measured={measured_value} > expected={expected_value}"
-        lower_bound = expected_value * (2 - high_tolerance)
-        if measured_value < lower_bound:
-            return (
-                f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
-                f"(expected={expected_value}, high_tolerance={high_tolerance})"
-            )
+    """Compare measured vs expected using a symmetric +/- tolerance band.
+
+    A measurement passes when it lies within +/- ``tolerance`` of ``expected_value``,
+    independent of whether the metric is higher- or lower-is-better (e.g. an
+    expected 100 ms TTFT with tolerance 0.1 accepts any value in [90, 110] ms).
+    Outside the band it fails: on the "worse" side that is a regression, on the
+    "better" side it signals the target is stale and should be refreshed. The
+    lower/higher-is-better classification only affects the wording.
+    """
+    lower_bound = expected_value * (1 - tolerance)
+    upper_bound = expected_value * (1 + tolerance)
+    if lower_bound <= measured_value <= upper_bound:
         return None
 
-    if measured_value < expected_value:
-        return f"{metric_name}: measured={measured_value} < expected={expected_value}"
-    upper_bound = expected_value * high_tolerance
+    lower_is_better = metric_name in LOWER_IS_BETTER_METRICS
     if measured_value > upper_bound:
+        note = "regression" if lower_is_better else "much better than expected, update target"
         return (
             f"{metric_name}: measured={measured_value} > upper_bound={upper_bound} "
-            f"(expected={expected_value}, high_tolerance={high_tolerance})"
+            f"(expected={expected_value}, tolerance={tolerance}) [{note}]"
         )
-    return None
+    note = "much better than expected, update target" if lower_is_better else "regression"
+    return (
+        f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
+        f"(expected={expected_value}, tolerance={tolerance}) [{note}]"
+    )
+
+
+def _display_values(
+    metric_name: str,
+    measured: float | None,
+    expected: float | None,
+) -> tuple[float | None, float | None, str]:
+    """Return (display_measured, display_expected, unit) for the human summary.
+
+    `prefill_time_to_first_token` targets are normalized to seconds for comparison, so both
+    measured and expected are converted back to milliseconds here to match how the target is
+    authored and read. Every other metric is reported in its raw benchmark unit.
+    """
+    if metric_name == PREFILL_TIME_TO_FIRST_TOKEN_KEY:
+        disp_measured = round(measured * 1000.0, 4) if measured is not None else None
+        disp_expected = round(expected * 1000.0, 4) if expected is not None else None
+        return disp_measured, disp_expected, "ms"
+
+    unit = METRIC_NAME_MAP.get(metric_name, (None, ""))[1]
+    disp_measured = round(measured, 4) if measured is not None else None
+    disp_expected = round(expected, 4) if expected is not None else None
+    return disp_measured, disp_expected, unit
+
+
+def _make_report_record(
+    *,
+    model_name: str,
+    sku: str,
+    batch_size: int | None,
+    seq_len: int | None,
+    metric_name: str,
+    measured: float | None,
+    expected: float | None,
+    tolerance: float | None,
+    status: str,
+) -> dict[str, Any]:
+    """Build one row of the perf/accuracy report."""
+    disp_measured, disp_expected, unit = _display_values(metric_name, measured, expected)
+    return {
+        "model": model_name,
+        "sku": sku,
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "metric_name": metric_name,
+        "measured": disp_measured,
+        "expected": disp_expected,
+        "tolerance": tolerance,
+        "unit": unit,
+        "status": status,
+    }
 
 
 def _benchmark_files(benchmark_dir: Path) -> list[Path]:
@@ -224,19 +323,15 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                         )
                         continue
                     for metric_name, metric_value in block.items():
-                        is_tolerance_key = (
-                            metric_name == "tolerance"
-                            or metric_name == "decode_tolerance"
-                            or metric_name.endswith("_tolerance")
-                        )
+                        is_tolerance_key = model_targets.is_tolerance_key(metric_name)
                         if is_tolerance_key:
                             if not _is_number(metric_value):
                                 errors.append(
                                     f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-numeric tolerance '{metric_name}'"
                                 )
-                            elif float(metric_value) <= 1.0:
+                            elif not (0.0 <= float(metric_value) <= 1.0):
                                 errors.append(
-                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has tolerance '{metric_name}' <= 1.0"
+                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has tolerance '{metric_name}' outside [0.0, 1.0]"
                                 )
                             continue
                         if metric_name not in ALLOWED_TARGET_METRIC_NAMES:
@@ -348,11 +443,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sku", default=None, help="Override SKU for this job (recommended in CI matrix jobs)")
     # TODO: Enable strict-missing by default in CI once model targets migration is complete.
     parser.add_argument("--strict-missing", action="store_true", help="Fail when matching target is TODO or missing")
-    parser.add_argument("--high-tol-percentage", type=float, default=1.15)
-    args = parser.parse_args()
-    if args.high_tol_percentage <= 1.0:
-        parser.error("--high-tol-percentage must be > 1.0")
-    return args
+    return parser.parse_args()
 
 
 def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
@@ -364,51 +455,82 @@ def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
     return targets_yaml_path, benchmark_dir, tests_yaml_path
 
 
-def main() -> int:
-    """Run centralized target validation over benchmark artifacts."""
-    args = parse_args()
-    path_profile = PathProfile(args.path_profile)
-    targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
+class ValidationResult:
+    """Structured findings from a validation run.
+
+    Holds raw findings only — no printing and no exit-code policy. Callers
+    (CI ``main()`` and the local pytest hook) format output and decide how to
+    treat ``missing_entries`` (strict vs warning-only). ``schema_errors`` is
+    fatal: when present, no benchmark comparison is performed.
+
+    Implemented as a plain class (not a dataclass) on purpose: this module uses
+    ``from __future__ import annotations`` and is loaded via
+    ``importlib.util.module_from_spec`` (by the CI tests and the local pytest
+    hook) without being registered in ``sys.modules``, which breaks dataclass
+    field-type resolution.
+    """
+
+    def __init__(self) -> None:
+        self.schema_errors: list[str] = []
+        self.gap_warnings: list[str] = []
+        self.hard_failures: list[str] = []
+        self.missing_entries: list[str] = []
+        self.reported_metrics: list[dict[str, Any]] = []
+        self.num_benchmark_files: int = 0
+
+
+def validate(
+    targets_yaml_path: Path,
+    benchmark_dir: Path,
+    tests_yaml_path: Path | None = None,
+    sku_override: str | None = None,
+) -> ValidationResult:
+    """Validate benchmark artifacts against centralized perf/accuracy targets.
+
+    Reads files but performs no stdout side effects and makes no exit-code
+    decision — it returns a :class:`ValidationResult` for the caller to act on.
+    This is the shared core used by both the CI entrypoint (``main()``) and the
+    local opt-in pytest hook so the two can never diverge.
+
+    ``tests_yaml_path`` is only used for the active-combo gap report; pass
+    ``None`` (e.g. for local runs) to skip it.
+    """
+    result = ValidationResult()
+
     # Keep resolver path controlled from this module to avoid passing dynamic file paths
     # into model_targets APIs (Cycode SAST: unsanitized dynamic input in file path).
     model_targets.TARGETS_YAML_PATH_DEFAULT = str(targets_yaml_path)
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):
-        print(f"::error::Invalid YAML document at {targets_yaml_path}: expected top-level mapping")
-        return 1
+        result.schema_errors.append(f"Invalid YAML document at {targets_yaml_path}: expected top-level mapping")
+        return result
+
     schema_errors = _validate_targets_schema(targets_yaml)
     if schema_errors:
-        for error in schema_errors:
-            print(f"::error::{error}")
-        return 1
+        result.schema_errors = schema_errors
+        return result
 
-    gap_warnings = _validate_gap_coverage(tests_yaml_path, targets_yaml)
-    for warning in gap_warnings:
-        print(f"::warning::{warning}")
+    if tests_yaml_path is not None and tests_yaml_path.exists():
+        result.gap_warnings = _validate_gap_coverage(tests_yaml_path, targets_yaml)
 
     benchmark_files = _benchmark_files(benchmark_dir)
-    if not benchmark_files:
-        print(f"::warning::No benchmark JSON files found under {benchmark_dir}")
-        return 0
-
-    hard_failures: list[str] = []
-    missing_entries: list[str] = []
+    result.num_benchmark_files = len(benchmark_files)
 
     for benchmark_file in benchmark_files:
         run = _load_json(benchmark_file)
         model_name = run.get("ml_model_name")
         if not isinstance(model_name, str):
-            hard_failures.append(f"{benchmark_file.name}: missing ml_model_name")
+            result.hard_failures.append(f"{benchmark_file.name}: missing ml_model_name")
             continue
 
-        sku = args.sku
+        sku = sku_override
         if sku is None:
             device_info = run.get("device_info", {})
             if isinstance(device_info, dict):
                 sku = device_info.get("card_type")
         if not isinstance(sku, str) or not sku.strip():
-            hard_failures.append(f"{benchmark_file.name}: missing sku (pass --sku in workflow)")
+            result.hard_failures.append(f"{benchmark_file.name}: missing sku (pass --sku in workflow)")
             continue
 
         batch_size = run.get("batch_size")
@@ -424,18 +546,19 @@ def main() -> int:
             include_todo=True,
         )
         if entry is None:
-            missing_entries.append(
+            result.missing_entries.append(
                 f"{benchmark_file.name}: no target entry for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
             continue
 
         if str(entry.get("status", "active")).lower() == "todo":
-            missing_entries.append(
+            result.missing_entries.append(
                 f"{benchmark_file.name}: target entry is TODO for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
             continue
 
         measured = _measurement_lookup(run)
+        is_accuracy_run = _is_accuracy_run(measured)
         thresholds: dict[str, Any] = {}
         perf = entry.get("perf", {})
         accuracy = entry.get("accuracy", {})
@@ -443,49 +566,212 @@ def main() -> int:
             thresholds.update(perf)
         if isinstance(accuracy, dict):
             thresholds.update(accuracy)
+        thresholds = _normalize_ttft_thresholds(
+            thresholds=thresholds,
+            benchmark_file_name=benchmark_file.name,
+            model_name=model_name,
+            sku=sku,
+        )
 
+        hard_failures_prefix = (
+            f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
+        )
+
+        # Benchmark measurement pairs already covered by a target so the no-target pass below
+        # does not re-report them.
+        covered_pairs: set[tuple[str, str]] = set()
         for metric_name, expected in thresholds.items():
-            if metric_name.endswith("_tolerance") or metric_name in {"tolerance", "decode_tolerance"}:
+            if model_targets.is_tolerance_key(metric_name):
                 continue
             if not _is_number(expected):
                 continue
+            # Validate accuracy metrics only on accuracy (token-matching) runs, and
+            # perf metrics only on perf (eval) runs. This prevents teacher-forcing
+            # throughput/latency from a token-matching run being checked against perf
+            # targets (and vice versa).
+            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+                continue
+            if metric_name in METRIC_NAME_MAP:
+                covered_pairs.add(METRIC_NAME_MAP[metric_name])
+            tolerance = model_targets.resolve_metric_tolerance(
+                metric_name=metric_name,
+                thresholds=thresholds,
+                default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
+            )
             try:
                 measured_value = _extract_metric_value(metric_name, measured)
             except ValueError as exc:
-                hard_failures.append(
-                    f"{benchmark_file.name}: ambiguous metric '{metric_name}' for model={model_name}, sku={sku}: {exc}"
-                )
+                result.hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
                 continue
             if measured_value is None or math.isnan(measured_value):
-                hard_failures.append(
-                    f"{benchmark_file.name}: metric '{metric_name}' missing in benchmark payload for "
-                    f"model={model_name}, sku={sku}"
+                result.hard_failures.append(
+                    f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
+                )
+                result.reported_metrics.append(
+                    _make_report_record(
+                        model_name=model_name,
+                        sku=sku,
+                        batch_size=batch_size,
+                        seq_len=seq_len,
+                        metric_name=metric_name,
+                        measured=None,
+                        expected=float(expected),
+                        tolerance=tolerance,
+                        status="missing-measurement",
+                    )
                 )
                 continue
-            tolerance = _metric_tolerance(metric_name, thresholds, args.high_tol_percentage)
             metric_failure = _check_metric(
                 metric_name=metric_name,
                 expected_value=float(expected),
                 measured_value=float(measured_value),
-                high_tolerance=tolerance,
+                tolerance=tolerance,
             )
             if metric_failure:
-                hard_failures.append(f"{benchmark_file.name}: {metric_failure}")
+                result.hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
+            result.reported_metrics.append(
+                _make_report_record(
+                    model_name=model_name,
+                    sku=sku,
+                    batch_size=batch_size,
+                    seq_len=seq_len,
+                    metric_name=metric_name,
+                    measured=float(measured_value),
+                    expected=float(expected),
+                    tolerance=tolerance,
+                    status="fail" if metric_failure else "pass",
+                )
+            )
 
-    for failure in hard_failures:
+        # Always surface measured e2e numbers, even when no target exists for them, so the
+        # report is a single place to read results. Only known metrics are reported (service
+        # measurements are skipped), and the accuracy/perf run split is respected.
+        for pair, value in measured.items():
+            if pair in covered_pairs:
+                continue
+            metric_name = _MEASUREMENT_TO_METRIC_NAME.get(pair)
+            if metric_name is None:
+                continue
+            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+                continue
+            covered_pairs.add(pair)
+            result.reported_metrics.append(
+                _make_report_record(
+                    model_name=model_name,
+                    sku=sku,
+                    batch_size=batch_size,
+                    seq_len=seq_len,
+                    metric_name=metric_name,
+                    measured=float(value),
+                    expected=None,
+                    tolerance=None,
+                    status="no-target",
+                )
+            )
+
+    return result
+
+
+_SUMMARY_HEADER = "| Model | SKU | batch | seq | Metric | Measured | Target | Tolerance | Unit | Status |"
+_SUMMARY_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+
+
+def _render_summary(result: ValidationResult) -> str:
+    """Render measured perf/accuracy numbers (and targets, when present) as a Markdown table.
+
+    Always includes every reported metric so results are readable from a single CI step
+    instead of scanning the full run log. Deterministically ordered for stable output.
+    """
+    lines = ["## Report and Validate Perf and Accuracy targets", ""]
+    if not result.reported_metrics:
+        lines.append("_No perf/accuracy measurements reported._")
+        return "\n".join(lines) + "\n"
+
+    def _fmt(value: Any) -> str:
+        return "-" if value is None else str(value)
+
+    lines.append(_SUMMARY_HEADER)
+    lines.append(_SUMMARY_SEPARATOR)
+    for record in sorted(
+        result.reported_metrics,
+        key=lambda r: (str(r["model"]), str(r["sku"]), str(r["metric_name"])),
+    ):
+        tolerance = record["tolerance"]
+        tolerance_disp = "-" if tolerance is None else f"±{round(float(tolerance) * 100, 2)}%"
+        lines.append(
+            "| {model} | {sku} | {batch} | {seq} | {metric} | {measured} | {target} | {tol} | {unit} | {status} |".format(
+                model=_fmt(record["model"]),
+                sku=_fmt(record["sku"]),
+                batch=_fmt(record["batch_size"]),
+                seq=_fmt(record["seq_len"]),
+                metric=record["metric_name"],
+                measured=_fmt(record["measured"]),
+                target=_fmt(record["expected"]),
+                tol=tolerance_disp,
+                unit=_fmt(record["unit"]),
+                status=record["status"],
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _write_step_summary(summary: str) -> None:
+    """Append the summary to the GitHub Actions step summary file when running in CI."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write(summary)
+    except OSError as exc:
+        print(f"::warning::Failed to write GITHUB_STEP_SUMMARY: {exc}")
+
+
+def main() -> int:
+    """Run centralized target validation over benchmark artifacts (CI entrypoint)."""
+    args = parse_args()
+    path_profile = PathProfile(args.path_profile)
+    targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
+
+    result = validate(
+        targets_yaml_path=targets_yaml_path,
+        benchmark_dir=benchmark_dir,
+        tests_yaml_path=tests_yaml_path,
+        sku_override=args.sku,
+    )
+
+    if result.schema_errors:
+        for error in result.schema_errors:
+            print(f"::error::{error}")
+        return 1
+
+    for warning in result.gap_warnings:
+        print(f"::warning::{warning}")
+
+    # Always report measured perf/accuracy numbers so they are visible directly in the CI
+    # step output (and the GitHub step summary) without scanning the full run log.
+    summary = _render_summary(result)
+    print(summary)
+    _write_step_summary(summary)
+
+    if result.num_benchmark_files == 0:
+        print(f"::warning::No benchmark JSON files found under {benchmark_dir}")
+        return 0
+
+    for failure in result.hard_failures:
         print(f"::error::{failure}")
 
-    for missing in missing_entries:
+    for missing in result.missing_entries:
         level = "::error::" if args.strict_missing else "::warning::"
         print(f"{level}{missing}")
 
-    if hard_failures:
+    if result.hard_failures:
         return 1
-    if args.strict_missing and missing_entries:
+    if args.strict_missing and result.missing_entries:
         return 1
     print(
-        f"Validation completed: {len(benchmark_files)} benchmark file(s), "
-        f"{len(hard_failures)} hard failures, {len(missing_entries)} missing/TODO entries"
+        f"Validation completed: {result.num_benchmark_files} benchmark file(s), "
+        f"{len(result.hard_failures)} hard failures, {len(result.missing_entries)} missing/TODO entries"
     )
     return 0
 

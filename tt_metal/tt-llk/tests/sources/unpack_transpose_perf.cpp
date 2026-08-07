@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -35,25 +36,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT            = params.TILE_CNT;
     const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-        _llk_unpack_A_init_<>(UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<>(
+            UNPACK_TRANSPOSE_FACES,
+            UNPACK_TRANSPOSE_WITHIN_FACE,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
         PROFILER_SYNC();
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
-        for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
+            for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
+            }
         }
         PROFILER_SYNC();
     }
@@ -72,10 +82,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -89,28 +100,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
-            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
             return;
         }
 
-        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
-            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-            for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                LLK_ASSERT(
-                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Block tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                    block_tile, formats.math, formats.math);
+                std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+                {
+                    LLK_ASSERT(
+                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                        "Block tile index exceeds maximum destination tiles");
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        block_tile, formats.math, formats.math);
+                }
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
-            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
     }
@@ -130,10 +144,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
@@ -141,25 +156,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return;
         }
 
-        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
-            _llk_packer_wait_for_math_done_();
-            for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                LLK_ASSERT(
-                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Block tile index exceeds maximum destination tiles");
-                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                _llk_packer_wait_for_math_done_();
+                for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+                {
+                    LLK_ASSERT(
+                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                        "Block tile index exceeds maximum destination tiles");
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                }
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
-            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
     }

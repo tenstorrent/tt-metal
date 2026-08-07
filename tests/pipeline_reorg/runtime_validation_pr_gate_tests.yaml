@@ -1,0 +1,12 @@
+# tt-metalium-validation-smoke (deb) for PR gate.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (runtime -> pr_gate).
+
+- name: runtime validation smoke
+  cmd: /usr/bin/tt-metalium-validation-smoke
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar

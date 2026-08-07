@@ -22,16 +22,20 @@ void kernel_main() {
 
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
-                acquire_dst();
+                tile_regs_acquire();
 
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 
                 BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+
+                tile_regs_commit();
+                tile_regs_wait();
+
                 pack_tile(0, tt::CBIndex::c_16);
 
                 cb_pop_front(tt::CBIndex::c_0, onetile);
 
-                release_dst();
+                tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);
                 cb_pop_front(tt::CBIndex::c_1, onetile);

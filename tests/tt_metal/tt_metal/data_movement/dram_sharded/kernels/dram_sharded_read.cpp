@@ -7,19 +7,16 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
-// #include "api/debug/dprint.h"
-// #include "api/debug/dprint_pages.h"
-
 // DRAM to L1 read
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_addr = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
-    constexpr uint32_t num_banks = get_compile_time_arg_val(1);
-    constexpr uint32_t pages_per_bank = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t test_id = get_compile_time_arg_val(4);
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
+    constexpr uint32_t pages_per_bank = get_named_compile_time_arg_val("pages_per_bank");
+    constexpr uint32_t page_size_bytes = get_named_compile_time_arg_val("page_size");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", num_banks * pages_per_bank * page_size_bytes);

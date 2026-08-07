@@ -53,8 +53,8 @@ void kernel_main() {
         // They are used to determine the address to read the tiles from. i is the index of the tile to read.
         // cb_in0_addr and cb_in1_addr are the circular buffer addresses to write the tiles to.
         // These are non-blocking calls, so they both proceed in parallel.
-        noc_async_read_tile(i, in0_addr_gen, cb_in0_addr);
-        noc_async_read_tile(i, in1_addr_gen, cb_in1_addr);
+        noc_async_read_page(i, in0_addr_gen, cb_in0_addr);
+        noc_async_read_page(i, in1_addr_gen, cb_in1_addr);
 
         // Wait until both reads are done before signaling the circular buffers that the tiles are ready.
         noc_async_read_barrier();

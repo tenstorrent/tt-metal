@@ -66,8 +66,7 @@ constexpr auto receiver_socket_config_addrs =
     fill_ct_args_array<upstream_socket_addrs_start_idx, num_upstream_sockets>();
 
 void kernel_main() {
-    DPRINT << "Starting d2h multi-upstream sender kernel" << ENDL();
-    DEVICE_PRINT("Starting d2h multi-upstream sender kernel\n");
+    DPRINT("Starting d2h multi-upstream sender kernel\n");
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(send_socket_config_addr);
     set_sender_socket_page_size(sender_socket, d2h_page_size);

@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <cstdlib>
 #include <limits>
 
 namespace ttnn::operations::experimental::ccl {
@@ -381,6 +382,26 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_pages,
         metadata_page_size,
         aligned_metadata_page_size);
+    if (std::getenv("GPT_OSS_A2A_METADATA_PAGE_TRACE")) {
+        log_warning(
+            tt::LogOp,
+            "A2A metadata pages: indices is_dram={} page={} aligned={} pages={} shape={} scores is_dram={} page={} "
+            "aligned={} pages={} shape={} metadata_out page={} aligned={} scores_out page={} aligned={}",
+            indices_tensor.buffer()->is_dram(),
+            indices_page_size,
+            aligned_indices_page_size,
+            indices_pages,
+            indices_tensor.logical_shape(),
+            scores_tensor.buffer()->is_dram(),
+            scores_page_size,
+            aligned_scores_page_size,
+            scores_pages,
+            scores_tensor.logical_shape(),
+            metadata_page_size,
+            aligned_metadata_page_size,
+            output_scores_page_size,
+            aligned_output_scores_page_size);
+    }
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
         input_tensor, metadata_tensor, scores_out_tensor, mapping_tensor, num_links, operation_attributes.axis);
@@ -495,6 +516,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);
 
     // New mapping format: [devices, experts]
     // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
@@ -570,6 +593,10 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
+    std::map<std::string, std::string> reader_defines = {};
+    if (std::getenv("GPT_OSS_A2A_METADATA_LOGICAL_ROUTER_READ")) {
+        reader_defines["A2A_METADATA_LOGICAL_ROUTER_READ"] = "1";
+    }
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -579,7 +606,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel
@@ -710,6 +738,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     std::vector<CoreCoord> termination_master_virtual_cores;
     std::vector<uint32_t> termination_master_semaphore_ids;
     if (use_mux) {
+        termination_master_cores.reserve(num_links);
+        termination_master_virtual_cores.reserve(num_links);
+        termination_master_semaphore_ids.reserve(num_links);
         for (uint32_t link = 0; link < num_links; link++) {
             uint32_t master_worker_idx = link * workers_per_link;  // First worker on this link
             const auto& master_core = sender_cores[master_worker_idx];
@@ -773,9 +804,11 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
             // Calculate payload split parameters
             // Worker 0 sends first portion, worker 1 sends second portion, etc.
+            // Round up chunks to aligned addresses, final worker gets remainder.
             uint32_t full_payload_size = input_page_size;
-            uint32_t payload_size = full_payload_size / workers_per_link;
-            uint32_t payload_offset = worker_idx_within_link * payload_size;
+            uint32_t payload_chunk = tt::round_up(tt::div_up(full_payload_size, workers_per_link), payload_alignment);
+            uint32_t payload_offset = std::min(worker_idx_within_link * payload_chunk, full_payload_size);
+            uint32_t payload_size = std::min(payload_chunk, full_payload_size - payload_offset);
             // Primary worker (worker 0) sends metadata + atomic_inc and is also termination master
             bool is_primary_payload_worker = (worker_idx_within_link == 0);
 

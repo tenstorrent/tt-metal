@@ -13,13 +13,17 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeEndpointPlacement;
+    using tt::tt_metal::internal::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeStageHostBinding;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodePipelineAllocation;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodeStageAllocation;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -33,10 +37,66 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
             return repr.str();
         });
 
+    nb::class_<BlitzDecodeStageHostBinding>(mod, "BlitzDecodeStageHostBinding")
+        .def_ro("rank", &BlitzDecodeStageHostBinding::rank)
+        .def_ro("mesh_host_rank", &BlitzDecodeStageHostBinding::mesh_host_rank)
+        .def("__repr__", [](const BlitzDecodeStageHostBinding& host_binding) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeStageHostBinding(rank=" << host_binding.rank
+                 << ", mesh_host_rank=" << host_binding.mesh_host_rank << ")";
+            return repr.str();
+        });
+
+    nb::class_<BlitzDecodeEndpointPlacement>(mod, "BlitzDecodeEndpointPlacement")
+        .def_ro("host_binding", &BlitzDecodeEndpointPlacement::host_binding)
+        .def_ro("mesh_coord", &BlitzDecodeEndpointPlacement::mesh_coord)
+        .def("__repr__", [](const BlitzDecodeEndpointPlacement& endpoint) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeEndpointPlacement(host_binding=BlitzDecodeStageHostBinding(rank="
+                 << endpoint.host_binding.rank << ", mesh_host_rank=" << endpoint.host_binding.mesh_host_rank
+                 << "), mesh_coord=" << endpoint.mesh_coord << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodeStageAllocation>(mod, "ResolvedBlitzDecodeStageAllocation")
+        .def_ro("logical_stage_index", &ResolvedBlitzDecodeStageAllocation::logical_stage_index)
+        .def_ro("mesh_id", &ResolvedBlitzDecodeStageAllocation::mesh_id)
+        .def_ro("host_bindings", &ResolvedBlitzDecodeStageAllocation::host_bindings)
+        .def_ro("entry_endpoint", &ResolvedBlitzDecodeStageAllocation::entry_endpoint)
+        .def_ro("exit_endpoint", &ResolvedBlitzDecodeStageAllocation::exit_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodeStageAllocation& stage) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodeStageAllocation(logical_stage_index=" << stage.logical_stage_index
+                 << ", mesh_id=" << stage.mesh_id << ", host_bindings=" << stage.host_bindings.size()
+                 << ", entry_endpoint_mesh_coord=" << stage.entry_endpoint.mesh_coord
+                 << ", exit_endpoint=" << (stage.exit_endpoint.has_value() ? "set" : "None") << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodePipelineAllocation>(mod, "ResolvedBlitzDecodePipelineAllocation")
+        .def_ro("initialize_loopback", &ResolvedBlitzDecodePipelineAllocation::initialize_loopback)
+        .def_ro("stages", &ResolvedBlitzDecodePipelineAllocation::stages)
+        .def_ro("loopback_entry_stage_index", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_stage_index)
+        .def_ro("loopback_entry_endpoint", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_endpoint)
+        .def_ro("host_egress_stage_index", &ResolvedBlitzDecodePipelineAllocation::host_egress_stage_index)
+        .def_ro("host_egress_endpoint", &ResolvedBlitzDecodePipelineAllocation::host_egress_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodePipelineAllocation& pipeline) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodePipelineAllocation(initialize_loopback=" << pipeline.initialize_loopback
+                 << ", stages=" << pipeline.stages.size() << ", loopback_entry_stage_index=";
+            if (pipeline.loopback_entry_stage_index.has_value()) {
+                repr << *pipeline.loopback_entry_stage_index;
+            } else {
+                repr << "None";
+            }
+            repr << ", host_egress_stage_index=" << pipeline.host_egress_stage_index << ")";
+            return repr.str();
+        });
+
     mod.def(
         "generate_blitz_decode_pipeline",
         [](bool initialize_loopback) {
-            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(initialize_loopback);
+            return tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(initialize_loopback);
         },
         nb::arg("initialize_loopback") = true,
         R"doc(
@@ -51,6 +111,29 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
 
             Returns:
                 List[BlitzDecodePipelineStage]: Ordered pipeline stages for Blitz decode.
+        )doc");
+
+    mod.def(
+        "resolve_blitz_decode_pipeline_allocation",
+        [](bool initialize_loopback) {
+            return tt::tt_metal::internal::blitz::resolve_blitz_decode_pipeline_allocation(initialize_loopback);
+        },
+        nb::arg("initialize_loopback") = true,
+        R"doc(
+            Resolve the Blitz decode pipeline allocation.
+
+            Returns the logical stage-to-host bindings plus the chosen entry/exit endpoint
+            placements for each stage. The legacy `generate_blitz_decode_pipeline()` API is a
+            projection of this richer resolved allocation.
+
+            Args:
+                initialize_loopback: When True (default), includes the loopback entry and host
+                    egress placements for the return path onto stage 0. When False, resolves a
+                    linear pipeline with host egress on the last stage.
+
+            Returns:
+                ResolvedBlitzDecodePipelineAllocation: Resolved stage allocations and pipeline-level
+                endpoint placements for Blitz decode.
         )doc");
 }
 
@@ -153,10 +236,13 @@ void bind_pipeline_builder(nb::module_& mod) {
     mod.def(
         "resolve_graph_layout",
         [](const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
-           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips)
-            -> tt::tt_fabric::GraphLayoutResult { return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips); },
+           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
+           const std::map<std::string, uint32_t>& node_chip_counts) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips, node_chip_counts);
+        },
         nb::arg("edges"),
         nb::arg("submesh_chips"),
+        nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
         R"(
             Auto-discover the physical layout of a pipeline graph.
 
@@ -170,6 +256,12 @@ void bind_pipeline_builder(nb::module_& mod) {
                                edge from the last stage back to stage 0.
                 submesh_chips: For each submesh, a list of (mesh_id, chip_id, row, col)
                                tuples (obtained from submesh.get_fabric_node_id()).
+                node_chip_counts: Optional {node_name: expected_chip_count} map. When a
+                               node is present, it may only be assigned to a submesh with
+                               exactly that many chips (rows*cols of its declared shape),
+                               so e.g. a 4x2 stage cannot land on a 1x2 submesh. Nodes
+                               absent from the map are unconstrained; an empty map (default)
+                               disables the shape filter.
 
             Returns:
                 GraphLayoutResult with physical coords for every edge and the H2D/D2H

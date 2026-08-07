@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include "embedding_backward_device_operation_types.hpp"
-#include "embedding_backward_program_factory.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::prim {
@@ -16,9 +16,13 @@ namespace ttnn::prim {
 struct EmbeddingBackwardDeviceOperation {
     using operation_attributes_t = EmbeddingBackwardParams;
     using tensor_args_t = EmbeddingBackwardInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<EmbeddingBackwardProgramFactory>;
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

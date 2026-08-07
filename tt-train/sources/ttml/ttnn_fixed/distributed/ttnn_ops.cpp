@@ -15,6 +15,7 @@
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -82,8 +83,7 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 
 }  // namespace
 
-tt::tt_metal::Tensor all_gather(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -111,7 +111,7 @@ tt::tt_metal::Tensor all_gather(
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
-tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -163,8 +163,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
     }
 }
 
-tt::tt_metal::Tensor reduce_scatter(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
@@ -187,10 +186,14 @@ tt::tt_metal::Tensor reduce_scatter(
         /* cluster_axis */ cluster_axis);
 }
 
-tt::tt_metal::Tensor ring_shift(
-    const tt::tt_metal::Tensor& tensor,
-    const std::optional<uint32_t> cluster_axis,
-    const RingShiftDirection direction) {
+ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
+    // so no single-device guard is needed here.
+    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+}
+
+ttnn::Tensor ring_shift(
+    const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();

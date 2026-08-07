@@ -92,7 +92,7 @@ void kernel_main() {
 
         auto [page, offset] = get_page_and_offset(start_row + i, tiled_H);
 
-        auto noc_async_target_indexes_page_addr = get_noc_addr(page, target_indexes_address_generator, offset);
+        auto noc_async_target_indexes_page_addr = target_indexes_address_generator.get_noc_addr(page, offset);
         noc_async_read(
             noc_async_target_indexes_page_addr,
             l1_target_indexes_write_addr,

@@ -56,7 +56,11 @@ void kernel_main() {
     // Input: cb_in0 [block_ht x block_wt tiles]
     // Output: cb_partial [block_ht tiles] - one reduced tile per row
 
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_partial);
+    constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_in0);
+    }
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, cb_partial);
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_partial, block_ht);
 
@@ -66,7 +70,7 @@ void kernel_main() {
         // Reduce across width for this row
         for (uint32_t col = 0; col < num_reduce_tiles_per_row; ++col) {
             uint32_t tile_idx = row * block_wt + col;
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, tile_idx, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, tile_idx, scaler0, dst0);
         }
 
         tile_regs_commit();
@@ -86,7 +90,10 @@ void kernel_main() {
     // Input: cb_external [num_rows_per_worker * num_blocks tiles]
     // Output: cb_reduced [num_rows_per_worker tiles]
 
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_external, cb_scaler, cb_reduced);
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_external);
+    }
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_external, cb_scaler, cb_reduced);
     cb_reserve_back(cb_reduced, num_rows_per_worker);
 
     for (uint32_t row = 0; row < num_rows_per_worker; ++row) {
@@ -96,7 +103,7 @@ void kernel_main() {
         // Reduce across all cores' partials for this row
         for (uint32_t core = 0; core < num_blocks; ++core) {
             cb_wait_front(cb_external, 1);
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_external, cb_scaler, 0, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_external, cb_scaler, 0, scaler0, dst0);
             cb_pop_front(cb_external, 1);
         }
 

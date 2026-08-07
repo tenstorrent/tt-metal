@@ -135,7 +135,7 @@ template <
     uint32_t block_width,
     bool skip_signalling = false>
 inline void _calculate_sdpa_reduce_row_8x32_(uint src_index) {
-    static_assert(reduce_dim == REDUCE_ROW, "Only row reduction (REDUCE_ROW) is currently supported");
+    static_assert(reduce_dim == ReduceDim::REDUCE_ROW, "Only row reduction (REDUCE_ROW) is currently supported");
     static_assert(
         pool_type == PoolType::MAX || pool_type == PoolType::SUM,
         "Unsupported pool type. Supported pool types: MAX, SUM");

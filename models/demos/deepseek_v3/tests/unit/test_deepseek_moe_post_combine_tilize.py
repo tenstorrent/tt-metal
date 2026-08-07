@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 
 
 @pytest.mark.requires_device(["TG"])
@@ -15,8 +16,8 @@ from models.common.utility_functions import comp_pcc
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 135168,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

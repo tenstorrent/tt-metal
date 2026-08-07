@@ -40,7 +40,6 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> cmddat_q_pages;
     std::optional<uint32_t> my_upstream_cb_sem_id;
     std::optional<uint32_t> cmddat_q_log_page_size;
-    std::optional<uint32_t> cmddat_q_blocks;
 
     // Used for prefetch_d <--> dispatch_s data path
     std::optional<uint32_t> dispatch_s_buffer_base;
@@ -51,6 +50,9 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> fabric_header_rb_base;
     std::optional<uint32_t> fabric_header_rb_entries;
     std::optional<uint32_t> my_fabric_sync_status_addr;
+
+    std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<bool> dispatch_telemetry_disabled;
 
     std::optional<bool> is_2d_fabric;
 

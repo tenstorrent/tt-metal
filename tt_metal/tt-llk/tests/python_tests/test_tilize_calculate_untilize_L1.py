@@ -12,11 +12,13 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -50,7 +52,7 @@ def test_tilize_calculate_untilize_L1(
 ):
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -61,6 +63,8 @@ def test_tilize_calculate_untilize_L1(
     golden_tensor = generate_golden(
         mathop, tilize(src_A), tilize(src_B), formats.output_format, math_fidelity
     )
+    num_blocks = 32
+    golden_tensor = golden_tensor.repeat(num_blocks)
 
     configuration = TestConfig(
         "sources/tilize_calculate_untilize_L1.cpp",
@@ -70,7 +74,11 @@ def test_tilize_calculate_untilize_L1(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(1),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -79,7 +87,7 @@ def test_tilize_calculate_untilize_L1(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=tile_cnt_A * num_blocks,
         ),
         dest_acc=dest_acc,
         L1_to_L1_iterations=2,

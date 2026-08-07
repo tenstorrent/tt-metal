@@ -5,6 +5,7 @@
 #include "moe_group_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "moe_group_program_factory.hpp"
@@ -16,7 +17,7 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto check =
         [](const ttnn::Tensor& t, const char* name, tt::tt_metal::Layout layout, tt::tt_metal::DataType dtype) {
-            TT_FATAL(t.storage_type() == tt::tt_metal::StorageType::DEVICE, "moe_group: {} must be on device", name);
+            TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "moe_group: {} must be on device", name);
             TT_FATAL(t.buffer() != nullptr, "moe_group: {} buffer is null", name);
             TT_FATAL(
                 t.layout() == layout,
@@ -82,35 +83,35 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t MoeGroupDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto dram = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
+    auto dram = ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
     // grouped: [1, 1, T_cap, H]  TILE  bf16
-    ttnn::TensorSpec grouped_spec(
+    tt::tt_metal::TensorSpec grouped_spec(
         ttnn::Shape{1U, 1U, attrs.t_cap, attrs.h},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, dram));
 
     // grouped_scores: [1, 1, 1, T_cap]  ROW_MAJOR  bf16
-    ttnn::TensorSpec grouped_scores_spec(
+    tt::tt_metal::TensorSpec grouped_scores_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
     // k_slot: [1, 1, 1, T_cap]  ROW_MAJOR  uint16
-    ttnn::TensorSpec k_slot_spec(
+    tt::tt_metal::TensorSpec k_slot_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
     // counts: [1, 1, 1, E_local]  ROW_MAJOR  uint32
-    ttnn::TensorSpec counts_spec(
+    tt::tt_metal::TensorSpec counts_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.e_local},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
     // offsets: [1, 1, 1, E_local+1]  ROW_MAJOR  uint32
-    ttnn::TensorSpec offsets_spec(
+    tt::tt_metal::TensorSpec offsets_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.e_local + 1U},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
     // plan: [1, 1, 1, T_cap]  ROW_MAJOR  uint32
-    ttnn::TensorSpec plan_spec(
+    tt::tt_metal::TensorSpec plan_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
@@ -122,19 +123,13 @@ tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
     auto specs = compute_output_specs(attrs, args);
     auto* device = args.dispatched.device();
     return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device),
-        create_device_tensor(specs[3], device),
-        create_device_tensor(specs[4], device),
-        create_device_tensor(specs[5], device),
+        ttnn::create_device_tensor(specs[0], device),
+        ttnn::create_device_tensor(specs[1], device),
+        ttnn::create_device_tensor(specs[2], device),
+        ttnn::create_device_tensor(specs[3], device),
+        ttnn::create_device_tensor(specs[4], device),
+        ttnn::create_device_tensor(specs[5], device),
     };
-}
-
-ttsl::hash::hash_t MoeGroupDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<MoeGroupDeviceOperation>(
-        attrs, args.dispatched.dtype(), args.dispatched.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::moe_group::device
@@ -162,7 +157,9 @@ ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_valu
     uint32_t num_total_cores = grid.x * grid.y;
     uint32_t l1_align_bytes = tt::tt_metal::hal::get_l1_alignment();
     uint32_t cursor_align = l1_align_bytes / sizeof(uint16_t);
-    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + (cursor_align - 1U) * num_total_cores);
+    uint32_t t_cap_unaligned = std::min(e_local, k) * d * b * s +
+                               e_local * (tt::constants::TILE_HEIGHT + (cursor_align - 1U) * num_total_cores);
+    uint32_t t_cap = tt::round_up(t_cap_unaligned, tt::constants::TILE_HEIGHT);
 
     auto attrs = Op::operation_attributes_t{
         .e_local = e_local,

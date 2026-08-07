@@ -8,6 +8,7 @@ the all_to_all-based throughput experts implementation.
 """
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -184,12 +185,32 @@ def load_throughput_expert_weights(
             w2 = torch.nn.functional.pad(w2, (0, w2_pad_size), "constant", value=0.0)
             w2_bias = torch.nn.functional.pad(w2_bias, (0, w2_pad_size), "constant", value=0.0)
 
+    cache_suffix = "_reordered" if (mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1) else ""
+
+    if state_dict and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        mesh_cols = mesh_device.shape[1]
+        experts_per_cluster = num_experts // mesh_cols
+        E = config.num_experts_per_device
+        reorder_indices = []
+        for d in range(num_devices):
+            r = d // mesh_cols
+            c = d % mesh_cols
+            start = c * experts_per_cluster + r * E
+            reorder_indices.extend(range(start, start + E))
+
+        w1 = w1[:, reorder_indices, ...] if w1 is not None else None
+        w3 = w3[:, reorder_indices, ...] if w3 is not None else None
+        w2 = w2[:, reorder_indices, ...] if w2 is not None else None
+        w1_bias = w1_bias[:, reorder_indices, ...] if w1_bias is not None else None
+        w3_bias = w3_bias[:, reorder_indices, ...] if w3_bias is not None else None
+        w2_bias = w2_bias[:, reorder_indices, ...] if w2_bias is not None else None
+
     w2_tt = _shard_experts_by_device(
         w2,
         num_devices,
         mesh_device,
         weight_dtype,
-        get_cache_file_name(tensor_cache_path, f"throughput_w2{w2_cache_suffix}"),
+        get_cache_file_name(tensor_cache_path, f"throughput_w2{w2_cache_suffix}{cache_suffix}"),
     )
 
     w2_bias_tt = _shard_experts_by_device(
@@ -197,7 +218,7 @@ def load_throughput_expert_weights(
         num_devices,
         mesh_device,
         ttnn.bfloat16,
-        get_cache_file_name(tensor_cache_path, "throughput_w2_bias"),
+        get_cache_file_name(tensor_cache_path, f"throughput_w2_bias{cache_suffix}"),
         shard_dim=-3,  # Expert dimension after reshape
     )
 
@@ -252,7 +273,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, weights_cache_suffix),
+            get_cache_file_name(tensor_cache_path, f"{weights_cache_suffix}{cache_suffix}"),
         )
 
         w1_w3_bias_fused_tt = _shard_experts_by_device(
@@ -260,7 +281,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, bias_cache_suffix),
+            get_cache_file_name(tensor_cache_path, f"{bias_cache_suffix}{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
     else:
@@ -272,7 +293,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, "throughput_w1"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w1{cache_suffix}"),
         )
 
         w3_tt = _shard_experts_by_device(
@@ -280,7 +301,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, "throughput_w3"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w3{cache_suffix}"),
         )
 
         # Load and shard bias (use bfloat16 for better precision)
@@ -289,7 +310,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, "throughput_w1_bias"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w1_bias{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
 
@@ -298,7 +319,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, "throughput_w3_bias"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w3_bias{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
 
@@ -871,41 +892,60 @@ def create_fused_moe_gpt_config(
     N = config.intermediate_size
     E = experts_per_device
 
+    # If the cached fused weights for this layer already exist on disk,
+    # ``ttnn.as_tensor`` below will load them via ``load_tensor_flatbuffer``
+    # and the torch_w0_w1 / torch_w2 inputs are discarded. Skip the
+    # expensive state_dict prep (bfloat16→float32 expansion + per-device
+    # permute/cat across 32 chips × 128 experts) in that case — for
+    # gpt-oss-120b this saves ~15-20s per layer on a warm cache.
+    def _tensor_cache_file_path(cache_base, dtype, layout):
+        return f"{cache_base}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
+
+    def _tensor_cache_exists(cache_base, dtype, layout):
+        return cache_base is not None and os.path.isfile(_tensor_cache_file_path(cache_base, dtype, layout))
+
+    _w0_w1_base = get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}")
+    _w2_base = get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}")
+    _fused_caches_exist = _tensor_cache_exists(_w0_w1_base, weight_dtype, ttnn.TILE_LAYOUT) and _tensor_cache_exists(
+        _w2_base, weight_dtype, ttnn.TILE_LAYOUT
+    )
+
     # --- Extract ALL expert weights from state_dict ---
     # Each device owns E = experts_per_device unique experts.
     # Device d (row-major: d = row * mesh_cols + col) owns experts [d*E : (d+1)*E].
     # Weights are organized as [rows*num_cores, cols*L, ...] and sharded via
     # ShardTensor2dMesh(dims=(0, 1)) so each device gets [num_cores, L, ...].
-    if "gate_up_proj" in state_dict:
-        gate_up_all = state_dict["gate_up_proj"]  # [num_experts, K, 2N]
-        w0_all = gate_up_all[..., ::2].contiguous().float()  # [num_experts, K, N]
-        w1_all = gate_up_all[..., 1::2].contiguous().float()  # [num_experts, K, N]
-    else:
-        w0_all = state_dict["gate_proj"].contiguous().float()
-        w1_all = state_dict["up_proj"].contiguous().float()
-    w2_all = state_dict["down_proj"].contiguous().float()  # [num_experts, N, K]
+    if state_dict and not _fused_caches_exist:
+        if "gate_up_proj" in state_dict:
+            gate_up_all = state_dict["gate_up_proj"]  # [num_experts, K, 2N]
+            w0_all = gate_up_all[..., ::2].contiguous().float()  # [num_experts, K, N]
+            w1_all = gate_up_all[..., 1::2].contiguous().float()  # [num_experts, K, N]
+        else:
+            w0_all = state_dict["gate_proj"].contiguous().float()
+            w1_all = state_dict["up_proj"].contiguous().float()
+        w2_all = state_dict["down_proj"].contiguous().float()  # [num_experts, N, K]
 
-    # --- Extract bias tensors ---
-    if "gate_up_proj_bias" in state_dict:
-        gate_up_bias = state_dict["gate_up_proj_bias"]
-        b0_all = gate_up_bias[..., ::2].contiguous().float()  # [num_experts, N]
-        b1_all = gate_up_bias[..., 1::2].contiguous().float()  # [num_experts, N]
-    elif "gate_up_proj" in state_dict:
-        b0_all = torch.zeros(w0_all.shape[0], N, dtype=torch.float32)
-        b1_all = torch.zeros(w1_all.shape[0], N, dtype=torch.float32)
-    else:
-        b0_all = state_dict.get("gate_proj_bias", torch.zeros(w0_all.shape[0], N)).contiguous().float()
-        b1_all = state_dict.get("up_proj_bias", torch.zeros(w1_all.shape[0], N)).contiguous().float()
-    b2_all = state_dict.get("down_proj_bias", torch.zeros(w2_all.shape[0], K)).contiguous().float()
+        # --- Extract bias tensors ---
+        if "gate_up_proj_bias" in state_dict:
+            gate_up_bias = state_dict["gate_up_proj_bias"]
+            b0_all = gate_up_bias[..., ::2].contiguous().float()  # [num_experts, N]
+            b1_all = gate_up_bias[..., 1::2].contiguous().float()  # [num_experts, N]
+        elif "gate_up_proj" in state_dict:
+            b0_all = torch.zeros(w0_all.shape[0], N, dtype=torch.float32)
+            b1_all = torch.zeros(w1_all.shape[0], N, dtype=torch.float32)
+        else:
+            b0_all = state_dict.get("gate_proj_bias", torch.zeros(w0_all.shape[0], N)).contiguous().float()
+            b1_all = state_dict.get("up_proj_bias", torch.zeros(w1_all.shape[0], N)).contiguous().float()
+        b2_all = state_dict.get("down_proj_bias", torch.zeros(w2_all.shape[0], K)).contiguous().float()
 
-    # Reshape biases: [num_experts, dim] -> [num_experts, 1, dim] for tile row (32-row padding)
-    # Pad to 32 rows (one tile row): [num_experts, 32, dim]
-    b0_all = b0_all.unsqueeze(1)  # [num_experts, 1, N]
-    b0_all = torch.nn.functional.pad(b0_all, (0, 0, 0, 31), "constant", 0.0)  # [num_experts, 32, N]
-    b1_all = b1_all.unsqueeze(1)
-    b1_all = torch.nn.functional.pad(b1_all, (0, 0, 0, 31), "constant", 0.0)
-    b2_all = b2_all.unsqueeze(1)
-    b2_all = torch.nn.functional.pad(b2_all, (0, 0, 0, 31), "constant", 0.0)  # [num_experts, 32, K]
+        # Reshape biases: [num_experts, dim] -> [num_experts, 1, dim] for tile row (32-row padding)
+        # Pad to 32 rows (one tile row): [num_experts, 32, dim]
+        b0_all = b0_all.unsqueeze(1)  # [num_experts, 1, N]
+        b0_all = torch.nn.functional.pad(b0_all, (0, 0, 0, 31), "constant", 0.0)  # [num_experts, 32, N]
+        b1_all = b1_all.unsqueeze(1)
+        b1_all = torch.nn.functional.pad(b1_all, (0, 0, 0, 31), "constant", 0.0)
+        b2_all = b2_all.unsqueeze(1)
+        b2_all = torch.nn.functional.pad(b2_all, (0, 0, 0, 31), "constant", 0.0)  # [num_experts, 32, K]
 
     # --- Prepare fused kernel weights (DRAM HEIGHT_SHARDED) ---
     ring2cores = _build_ring2cores(mesh_device)
@@ -924,25 +964,29 @@ def create_fused_moe_gpt_config(
     # ShardTensor2dMesh(dims=(0, 1)) gives each device [num_cores, L, E, groups, K, tile].
     mesh_cols = total_devices // ring_devices
     experts_per_cluster = config.num_experts // mesh_cols
-    w0_w1_rows = []
-    w2_rows = []
-    for r in range(ring_devices):
-        w0_w1_cols = []
-        w2_cols = []
-        for c in range(mesh_cols):
-            start = c * experts_per_cluster + r * E
-            w0_d = w0_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
-            w1_d = w1_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
-            w2_d = w2_all[start : start + E].unsqueeze(0)  # [1, E, N, K]
-            b0_d = b0_all[start : start + E].unsqueeze(0)  # [1, E, 32, N]
-            b1_d = b1_all[start : start + E].unsqueeze(0)  # [1, E, 32, N]
-            b2_d = b2_all[start : start + E].unsqueeze(0)  # [1, E, 32, K]
-            w0_w1_cols.append(_prepare_w0_b0_w1_b1_tensor(w0_d, b0_d, w1_d, b1_d, L, E, K, N, ring2cores))
-            w2_cols.append(_prepare_w2_b2_tensor(w2_d, b2_d, L, E, N, K, ring2cores))
-        w0_w1_rows.append(torch.cat(w0_w1_cols, dim=1))  # cat cols on dim 1
-        w2_rows.append(torch.cat(w2_cols, dim=1))
-    torch_w0_w1 = torch.cat(w0_w1_rows, dim=0)  # cat rows on dim 0
-    torch_w2 = torch.cat(w2_rows, dim=0)
+    if state_dict and not _fused_caches_exist:
+        w0_w1_rows = []
+        w2_rows = []
+        for r in range(ring_devices):
+            w0_w1_cols = []
+            w2_cols = []
+            for c in range(mesh_cols):
+                start = c * experts_per_cluster + r * E
+                w0_d = w0_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
+                w1_d = w1_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
+                w2_d = w2_all[start : start + E].unsqueeze(0)  # [1, E, N, K]
+                b0_d = b0_all[start : start + E].unsqueeze(0)  # [1, E, 32, N]
+                b1_d = b1_all[start : start + E].unsqueeze(0)  # [1, E, 32, N]
+                b2_d = b2_all[start : start + E].unsqueeze(0)  # [1, E, 32, K]
+                w0_w1_cols.append(_prepare_w0_b0_w1_b1_tensor(w0_d, b0_d, w1_d, b1_d, L, E, K, N, ring2cores))
+                w2_cols.append(_prepare_w2_b2_tensor(w2_d, b2_d, L, E, N, K, ring2cores))
+            w0_w1_rows.append(torch.cat(w0_w1_cols, dim=1))  # cat cols on dim 1
+            w2_rows.append(torch.cat(w2_cols, dim=1))
+        torch_w0_w1 = torch.cat(w0_w1_rows, dim=0)  # cat rows on dim 0
+        torch_w2 = torch.cat(w2_rows, dim=0)
+    else:
+        torch_w0_w1 = None
+        torch_w2 = None
 
     K_bias = K + 32  # K + 1 bias tile row (32 rows)
     w0_w1_mem_config = ttnn.MemoryConfig(
@@ -1016,7 +1060,8 @@ def create_fused_moe_gpt_config(
     )
 
     # --- Pre-allocate dispatch output tensors ---
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    dispatch_drain_core = ttnn.CoreCoord(min(6, compute_grid.x - 1), min(9, compute_grid.y - 1))
 
     # Sparse buffer: [ring_devices, total_tokens, K] → each device gets [1, total_tokens, K]
     tt_dispatch_sparse = ttnn.from_torch(

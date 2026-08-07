@@ -23,7 +23,7 @@ from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .transformer import Qwen3Block, Qwen3RMSNorm
-from .autograd_ops import ConcatLastDim, RMSNormFunction
+from .safetensors_loader import load_from_safetensors
 
 
 @dataclass(frozen=True)
@@ -204,13 +204,12 @@ class Qwen3(AbstractModuleBase):
 from .flops import calculate_flops_per_token
 
 __all__ = [
-    "ConcatLastDim",
     "Qwen3",
     "Qwen3Block",
     "Qwen3Config",
     "Qwen3RMSNorm",
     "Qwen3RopeScalingConfig",
-    "RMSNormFunction",
     "calculate_flops_per_token",
     "create_qwen3_config_from_hf",
+    "load_from_safetensors",
 ]

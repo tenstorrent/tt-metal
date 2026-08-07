@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -43,6 +43,7 @@ class WanAttention(Module):
         is_fsdp: bool = False,
         is_self: bool = True,
         sdpa_chunk_size_overrides: dict | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -82,10 +83,11 @@ class WanAttention(Module):
             "fsdp_mesh_axis": fsdp_mesh_axis,
             "ccl_manager": ccl_manager,
         }
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
         if is_self:
             # Fused QKV for self-attention: single matmul split into 3 outputs
-            self.to_qkv = ColParallelLinear(
+            self.to_qkv = ColCls(
                 dim,
                 3 * dim,
                 chunks=3,
@@ -93,16 +95,16 @@ class WanAttention(Module):
             )
         else:
             # Cross-attention: Q from spatial, K/V from prompt
-            self.to_q = ColParallelLinear(dim, dim, **col_parallel_kwargs)
+            self.to_q = ColCls(dim, dim, **col_parallel_kwargs)
             # Fused KV: single matmul split into 2 outputs
-            self.to_kv = ColParallelLinear(
+            self.to_kv = ColCls(
                 dim,
                 2 * dim,
                 chunks=2,
                 **col_parallel_kwargs,
             )
 
-        self.to_out = ColParallelLinear(
+        self.to_out = ColCls(
             dim,
             dim,
             bias=True,
@@ -236,6 +238,15 @@ class WanAttention(Module):
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
+
+        # Reads to_out.weight.data directly, so runtime-mode LoRA (which keeps
+        # the delta in self._runtime_A/B) would silently no-op. Fuse mode is
+        # fine — the delta lives in weight.data.
+        if getattr(to_out, "lora_mode", None) == "runtime" and getattr(to_out, "is_lora_active", False):
+            raise RuntimeError(
+                "runtime LoRA mode is incompatible with WanAttention._to_out_fused_addcmul; "
+                "construct to_out with lora_mode='fuse'"
+            )
 
         # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:

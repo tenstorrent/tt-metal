@@ -88,18 +88,22 @@ download_logs_for_all_jobs() {
     jobs_data=$(get_jobs_with_pagination_fallback "$repo" "$workflow_run_id" "$attempt_number")
 
     # Process the jobs data
-    echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
+    # is_civ2 is true when any runs-on label starts with tt-ubuntu- (CIv2 runners)
+    echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion, is_civ2: ([.labels[]? | select(startswith("tt-ubuntu-"))] | length > 0)}' | while read -r job; do
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
+        is_civ2=$(echo "$job" | jq -r '.is_civ2')
         echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
         # https://github.com/tenstorrent/tt-metal/issues/12966
         # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
         # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
         gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
-        # Only download annotations for failed jobs
-        if [[ "$job_conclusion" == "failure" ]]; then
-            echo "[info] downloading annotations for failed job $job_id"
+        # Download annotations for failed jobs (failure reason) and for CIv2 runner jobs.
+        # CIv2 runners emit node-name and card-serial notice annotations at job start
+        # (see tenstorrent/github-ci-infra#1408) which we use to identify the physical node/card.
+        if [[ "$job_conclusion" == "failure" || "$is_civ2" == "true" ]]; then
+            echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion, civ2=$is_civ2)"
             gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
         fi
     done

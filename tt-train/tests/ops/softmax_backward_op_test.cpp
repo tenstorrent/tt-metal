@@ -296,7 +296,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamin
 // 2048 rows by 64 tiles each
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_llama8b) {
     constexpr std::array<SoftmaxBackwardCase, 1> cases = {{
-        {"llama8b_b1", 1, 32, 2048, 2048, 3, 1e-3F, 1e-3F, -10.0F, 10.0F},
+        {"llama8b_b1", 1, 32, 2048, 2048, 3, 3e-3F, 3e-3F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);

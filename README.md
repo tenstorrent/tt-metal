@@ -123,6 +123,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 ## Scaleout Tech Reports
 
 - [Programming Mesh of Devices (Scale-Up)](./tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) (updated Jan 6th, 2026)
+- [CCL Performance Tuning Tips](./tech_reports/Programming_Mesh_of_Devices/CCL_Performance_Best_Practices.md) (updated Jul 10th, 2026)
 - [Programming Multiple Meshes (Scale-Out)](./tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md) (updated Jan 19th, 2026)
 - [TT-Fabric Architecture](./tech_reports/TT-Fabric/TT-Fabric-Architecture.md) (updated Dec 1st, 2025)
 - [TT-Distributed Architecture](./tech_reports/TT-Distributed/TT-Distributed-Architecture-1219.md) (updated Oct 20th, 2025)
@@ -177,8 +178,8 @@ The Model Explorer is an intuitive and hierarchical visualization tool using mod
 #### [Tracy Profiler](https://github.com/tenstorrent/tracy)
 The Tracy Profiler is a real-time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
 
-#### [Kernel Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html)
-DPRINT can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
+#### [Device Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/device_print.html)
+`DPRINT` can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
 
 #### [Watcher](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/watcher.rst)
 Watcher monitors firmware and kernels for common programming errors, and overall device status. If an error or hang occurs, Watcher displays log data of that occurrence.

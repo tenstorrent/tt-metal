@@ -144,6 +144,7 @@ struct NOCDebugIssue {
     // Get all issues with a specific base type
     std::vector<NOCDebugIssueType> get_issues_by_base(NOCDebugIssueBaseType base_type) const {
         std::vector<NOCDebugIssueType> result;
+        result.reserve(issues.size());
         for (const auto& issue : issues) {
             if (issue.base_type == base_type) {
                 result.push_back(issue);

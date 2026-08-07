@@ -84,10 +84,10 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
 
-    std::vector<TensorSpec> final_output_spec = {
+    std::vector<tt::tt_metal::TensorSpec> final_output_spec = {
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
-    std::vector<TensorSpec> intermediate_specs;
+    std::vector<tt::tt_metal::TensorSpec> intermediate_specs;
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
@@ -97,7 +97,7 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
                        (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
     Shape intermediate_shape = Shape{shape_0, shape_1};
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
     intermediate_specs.push_back(intermediate_spec);
 
     return {intermediate_specs, final_output_spec};

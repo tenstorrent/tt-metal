@@ -137,6 +137,55 @@ def test_uniform_callback(shape, rand_range, dtype, seed, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+def test_uniform_seed_distinguishes_cache_entries(device):
+    """Regression guard for uniform's seed static/dynamic contract.
+
+    uniform writes in-place into its input tensor (output aliases input). `seed` is excluded from
+    compute_program_hash (so calls differing only in seed cache-hit) but must be re-applied to the
+    cached program on every dispatch. Pins both halves:
+      * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
+      * different seed must change the output    -> guards against the frozen-runtime-arg bug on
+        the in-place fast path (only reachable now that resolve_bindings allows input==output).
+      * same seed must reproduce the output      -> guards against wrongly re-randomizing.
+      * different from/to range on a hit         -> must NOT grow the cache and must be re-applied
+        (from/to are also hash-excluded and re-derived by override_runtime_arguments).
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    npu = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32), device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn.uniform(npu, 0.0, 1.0, 1234)
+    out_a = ttnn.to_torch(npu).float().clone()
+    entries_a = device.num_program_cache_entries()
+
+    ttnn.uniform(npu, 0.0, 1.0, 1234)
+    out_a2 = ttnn.to_torch(npu).float().clone()
+    entries_b = device.num_program_cache_entries()
+
+    ttnn.uniform(npu, 0.0, 1.0, 5678)
+    out_c = ttnn.to_torch(npu).float().clone()
+    entries_c = device.num_program_cache_entries()
+
+    ttnn.uniform(npu, 5.0, 10.0, 1234)
+    out_d = ttnn.to_torch(npu).float().clone()
+    entries_d = device.num_program_cache_entries()
+
+    assert entries_b == entries_a, "same seed must reuse the cached program"
+    assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert (
+        entries_d == entries_a
+    ), "a different from/to range must NOT add a cache entry -- range is dynamic, not hashed"
+    assert torch.equal(out_a, out_a2), "same seed must reproduce identical output"
+    assert not torch.equal(out_a, out_c), "a different seed must change the output (seed re-patched on the fast path)"
+    assert out_d.min() >= 5.0 and out_d.max() < 10.0, "a different from/to range must be re-applied on the cache hit"
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],

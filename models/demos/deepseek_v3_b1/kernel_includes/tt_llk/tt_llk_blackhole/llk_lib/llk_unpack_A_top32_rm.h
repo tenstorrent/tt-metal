@@ -25,12 +25,6 @@ inline void _llk_unpack_A_top32_rm_init_(
     const std::uint32_t within_face_16x16_transpose,
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format) {
-    if constexpr (unpack_to_dest) {
-        if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
-            _llk_unpack_dbg_feature_disable_();
-        }
-    }
-
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
     TTI_SETADCXX(p_setadc::UNP_A, 16 - 1, 0x0);
@@ -141,7 +135,7 @@ inline void _llk_unpack_A_top32_rm_(
 
     if (unpack_to_dest) {
         if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
 

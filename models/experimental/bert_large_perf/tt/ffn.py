@@ -150,6 +150,7 @@ def summarize_stats(t, name):
 def run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     tt_ffn_model = TtFeedForwardModel(0, hugging_face_reference_model.state_dict(), device)
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)

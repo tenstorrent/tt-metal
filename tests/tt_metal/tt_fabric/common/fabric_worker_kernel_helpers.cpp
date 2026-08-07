@@ -48,7 +48,7 @@ WorkerMemoryLayout allocate_worker_memory() {
 
 std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     const FabricNodeId& dest_fabric_node,
     const WorkerMemoryLayout& mem_layout) {
 
@@ -60,7 +60,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     FabricNodeId src_fabric_node = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device->id());
     // Target core on remote chip for traffic destination
-    CoreCoord remote_logical_core(0, 0);
+    tt::tt_metal::CoreCoord remote_logical_core(0, 0);
 
     // Get remote buffer address from HAL (use unreserved L1 space on remote core)
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -121,7 +121,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
 void signal_worker_teardown(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     uint32_t teardown_signal_address) {
 
     // Write WORKER_TEARDOWN (1) to the teardown signal mailbox in L1

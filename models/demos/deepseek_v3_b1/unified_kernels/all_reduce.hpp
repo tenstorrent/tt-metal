@@ -452,7 +452,7 @@ private:
         // TODO: Fix this to account for actual dst size
         static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
 
-        reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
+        reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_local, CTArgs::cb_remote);
         pack_reconfig_data_format<true>(CTArgs::cb_out);
         pack_block_contiguous_init(CTArgs::cb_out);
 

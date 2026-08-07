@@ -24,6 +24,15 @@ using namespace ckernel::packer;
  * tiles are expected to be split into top and bottom faces in separate halves of the active dest bank
  *************************************************************************/
 
+/**
+ * @brief Configure the ADDR_MOD slots used by the fast-tilize pack MOP.
+ *
+ * Programs the src Y increment/clear patterns that step the packer to the next row, to the same face
+ * in the next tile, and back to the start of a unit. The per-row stride in ADDR_MOD_0 depends on the
+ * number of contiguous faces loaded by a single unpacker instruction, which is set by unit_dim.
+ *
+ * @param unit_dim: Number of tiles processed per iteration (1, 2, or 3); selects the row stride.
+ */
 inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
 {
     // first two address mods move to the next row, the stride depends on the number of contiguous faces loaded in the single unpacker instruction
@@ -63,6 +72,14 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
         .set(ADDR_MOD_3);
 }
 
+/**
+ * @brief Build and program the packer MOP template for fast tilize.
+ *
+ * Programs an unpack-style MOP whose loop body issues the common-packer PACR instructions (using
+ * ADDR_MOD_0 and ADDR_MOD_2) that pack rows of the interleaved face layout into tilized L1 output.
+ *
+ * @note @ref _llk_pack_fast_tilize_addrmod_config_ must have programmed the ADDR_MOD slots.
+ */
 inline void _llk_pack_fast_tilize_mop_config_()
 {
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -79,6 +96,23 @@ inline void _llk_pack_fast_tilize_mop_config_()
     tmp.program();
 }
 
+/**
+ * @brief Initialize the packer for a fast-tilize pack op.
+ *
+ * Sets the 32-bit dest read mode, programs the per-tile L1 address offset, programs the per-packer
+ * dest offsets for the interleaved top/bottom-half face layout, selects the dest registers, and
+ * configures the ADDR_MODs and MOP. Only DstSync::SyncHalf is supported; supported output formats are
+ * FP32, FP16_B, BFP8_B, and BFP4_B.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull> (only SyncHalf supported)
+ * @param use_32bit_dest: True to read dest as 32-bit data (set when the unpack source format is TF32).
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param unit_dim: Number of tiles processed per iteration, valid values = <1, 2, 3>
+ * @param num_faces: Faces per tile, valid values = <2, 4>
+ * @param l1_tile_elements: Number of datums per output tile, used to size the per-tile L1 offset.
+ * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ and on the math thread with @ref _llk_math_fast_tilize_init_ (same unit_dim).
+ * @note Pair with @ref _llk_pack_fast_tilize_uninit_ after the matching @ref _llk_pack_fast_tilize_block_ execute calls.
+ */
 template <DstSync Dst>
 inline void _llk_pack_fast_tilize_init_(
     const std::uint32_t use_32bit_dest,
@@ -173,6 +207,22 @@ inline void _llk_pack_fast_tilize_init_(
     _llk_pack_fast_tilize_mop_config_();
 }
 
+/**
+ * @brief Tear down the packer after a fast-tilize pack op and restore default pack state.
+ *
+ * Restores the 32-bit dest read mode to the original is_fp32_dest_acc_en value, restores the default
+ * packer dest offsets and X/counter state, and re-runs the standard packer init with default settings
+ * so a subsequent (non fast-tilize) pack starts from a clean configuration.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @param pack_dst_format: Destination (L1) data format used to re-run the default packer init.
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
+ */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
@@ -189,8 +239,6 @@ inline void _llk_pack_fast_tilize_uninit_(
     // restore default packer dest offsets
     _llk_init_packer_dest_offset_registers_<Dst>();
 
-    // packers pack a whole face by default, restore it
-    TTI_SETADCXX(p_setadc::PAC, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     // reset counters
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
 
@@ -200,6 +248,23 @@ inline void _llk_pack_fast_tilize_uninit_(
     _llk_pack_init_<PackMode::Default, false /* zero_output */>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
+/**
+ * @brief Fast-tilize-pack a block of units from the destination register to L1.
+ *
+ * Programs the L1 destination address and the packer counters (using the Z counter, whose stride is a
+ * single face, to seek to the start tile), then packs num_units units, advancing the dest and L1
+ * destination per unit. Each unit covers unit_dim tiles; the per-unit PACR sequence is selected by
+ * unit_dim (1, 2, or 3).
+ *
+ * @param tile_index: Index of the first source tile in the destination register.
+ * @param address: L1 destination base address (16B-aligned, typically the start of the tile row).
+ * @param unit_dim: Number of tiles processed per unit, valid values = <1, 2, 3>
+ * @param num_units: Number of units to pack in this call.
+ * @param num_faces: Faces per tile, valid values = <2, 4>
+ * @note Call @ref _llk_pack_fast_tilize_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_fast_tilize_uninit_ once all fast-tilize-pack calls are complete.
+ * @note On the math thread, @ref _llk_math_fast_tilize_block_ must have written the split top/bottom-half faces into dest.
+ */
 inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {

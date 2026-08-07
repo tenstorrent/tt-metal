@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from fuser.fused_operand import Operand
+from helpers.format_config import DataFormat
+from helpers.llk_params import L1Accumulation
+
+
+def hw_configure_pack(
+    output: Operand,
+    dest_acc: str,
+    pack_src: DataFormat,
+    pack_dst: DataFormat,
+    pack_mode: str = "PackMode::Default",
+) -> str:
+    desc = output.cpp_desc_name
+    return (
+        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
+        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
+    )
+
+
+def configure_pack(
+    output: Operand,
+    dest_acc: str,
+    pack_src: DataFormat,
+    pack_dst: DataFormat,
+) -> str:
+    desc = output.cpp_desc_name
+    return (
+        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
+        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
+    )
+
+
+def relu_config(relu_config_val: int, dest_acc: str) -> str:
+    return f"_llk_pack_relu_config_<p_pacr::PACK0, {dest_acc}>(ReluConfig::from_packed({relu_config_val}));\n"
+
+
+def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
+    l1_acc = "true" if pack_l1_accumulation == L1Accumulation.Yes else "false"
+    return f"_llk_pack_set_l1_acc_<p_pacr::PACK0>({l1_acc});\n"
+
+
+def pack_dest_init(
+    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False, **kwargs
+) -> str:
+    if quasar_use_dvalid:
+        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+    return f"_llk_pack_dest_init_<p_pacr::PACK0, {dest_sync}>();\n"
+
+
+def packer_wait_for_math(quasar_use_dvalid: bool = False) -> str:
+    if quasar_use_dvalid:
+        return ""
+    return "_llk_packer_wait_for_math_done_();\n"
+
+
+def packer_dest_section_done(
+    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False
+) -> str:
+    if quasar_use_dvalid:
+        return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
+    return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
+
+
+def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
+    if has_pack_consumer:
+        return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
+    return ""
+
+
+def pack_reduce_mask_config(operation) -> str:
+    if operation.reduce_dim is None:
+        return ""
+    reduce_dim = operation.reduce_dim.cpp_enum_value
+    tensor_shape = operation.tile_shape.cpp_value
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({tensor_shape});\n"
+
+
+def pack_reduce_mask_clear(operation) -> str:
+    if operation.reduce_dim is None:
+        return ""
+    return "_llk_pack_reduce_mask_clear_();\n"

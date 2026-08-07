@@ -170,6 +170,55 @@ def test_rand_different_from_to_values(device):
     device.disable_and_clear_program_cache()
 
 
+def test_rand_different_seed_values(device):
+    """Regression guard for the seed static/dynamic contract (see PR #45350, which hacked this).
+
+    `seed` is a DYNAMIC runtime value: it is deliberately excluded from compute_program_hash
+    (so calls that differ only in seed still cache-hit) BUT must be re-applied to the cached
+    program on every dispatch. This test pins BOTH halves of that contract so neither can
+    regress:
+
+      * `seed` must NOT grow the program cache  -> guards against re-adding seed to the hash
+        (the recompile-per-seed hack). Asserting `== 1` fails the moment seed re-enters the key.
+      * a different seed must change the output  -> guards against the freeze bug, where a
+        cache hit reuses the first call's baked-in seed and silently returns identical data.
+      * the same seed must reproduce the output  -> guards against the dynamic patch wrongly
+        re-randomizing on a deterministic (seed != 0) call.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    dtype = ttnn.float32
+
+    data_seed_a = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=1234)).float()
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Expected 1 cache entry after first rand, got {device.num_program_cache_entries()}"
+
+    # Same seed, same shape: must reuse the cached program AND reproduce the exact values.
+    data_seed_a_again = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=1234)).float()
+    assert device.num_program_cache_entries() == 1, "same seed must reuse the cached program (no new cache entry)"
+    assert torch.equal(
+        data_seed_a, data_seed_a_again
+    ), "same seed must reproduce identical output (deterministic seed path)"
+
+    # Different seed, same shape: seed is excluded from the hash, so it must STILL be a cache
+    # hit (no new entry) and yet produce different values (seed re-patched on the cache hit).
+    data_seed_b = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=5678)).float()
+    assert device.num_program_cache_entries() == 1, (
+        "a different seed must NOT create a new cache entry -- seed is dynamic, not part of the "
+        "program hash. A new entry here means seed was (re-)added to compute_program_hash (the "
+        "recompile-per-seed hack)."
+    )
+    assert not torch.equal(data_seed_a, data_seed_b), (
+        "a different seed must change the output -- otherwise the cache hit silently reused the "
+        "first call's baked-in seed (the frozen-runtime-arg bug)."
+    )
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],

@@ -49,3 +49,6 @@
     } while (0)
 
 #endif // ENABLE_LLK_ASSERT
+
+// Inverse of LLK_ASSERT: Triggers when the condition is true (failure condition)
+#define LLK_PANIC(condition, message) LLK_ASSERT(!(condition), message)

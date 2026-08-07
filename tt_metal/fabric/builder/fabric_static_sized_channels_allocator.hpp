@@ -47,6 +47,7 @@ public:
         std::vector<uint32_t>& ct_args,
         size_t num_used_vc0_sender_channels,
         size_t num_used_vc1_sender_channels,
+        size_t num_used_vc2_sender_channels,
         size_t num_used_receiver_channels) const;
 
     /**

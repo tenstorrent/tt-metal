@@ -4,35 +4,25 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct UntilizeWithHaloProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::CBHandle src_cb{};
-        tt::tt_metal::CBHandle out_cb{};
-        tt::tt_metal::CBHandle padding_config_cb0{};
-        tt::tt_metal::CBHandle padding_config_cb1{};
-        tt::tt_metal::CBHandle gather_config_cb0{};
-        tt::tt_metal::CBHandle gather_config_cb1{};
-        tt::tt_metal::DeviceStorage padding_config_storage0;
-        tt::tt_metal::DeviceStorage padding_config_storage1;
-        tt::tt_metal::DeviceStorage gather_config_storage0;
-        tt::tt_metal::DeviceStorage gather_config_storage1;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const HaloParams& operation_attributes, const Tensor& tensor_args, Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // create_workload_descriptor() allocates the four sliding-window halo
+    // config tensors (pad_config0/1, gather_config0/1) on device and parks
+    // them on the returned WorkloadDescriptor so their backing buffers
+    // outlive the cached programs.  The buffers are bound to the
+    // CBDescriptor entries that the reader kernels stream from.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const HaloParams& operation_attributes,
         const Tensor& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim

@@ -538,11 +538,12 @@ def test_maximum(device):
 
 
 def test_outer(device):
-    # Create two tensors for outer product
-    tensor1 = ttnn.from_torch(torch.rand([1, 1, 32, 1], dtype=torch.bfloat16), device=device)
-    tensor2 = ttnn.from_torch(torch.rand([1, 1, 1, 32], dtype=torch.bfloat16), device=device)
+    # Create two 1D tensors for outer product.
+    # Last dim of each input is the vector; leading dims (if any) are batch dims.
+    tensor1 = ttnn.from_torch(torch.rand([32], dtype=torch.bfloat16), device=device)
+    tensor2 = ttnn.from_torch(torch.rand([32], dtype=torch.bfloat16), device=device)
 
-    # Compute outer product of the tensors
+    # Compute outer product of the tensors -> shape [32, 32]
     output = ttnn.outer(tensor1, tensor2)
     logger.info(f"Outer product result: {output}")
 

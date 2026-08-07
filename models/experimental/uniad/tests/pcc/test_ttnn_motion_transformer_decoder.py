@@ -37,7 +37,7 @@ import ttnn
 
 sys.modules["mmdet3d"] = sys.modules["models"]
 sys.modules["mmdet3d.core.bbox.structures.lidar_box3d"] = utils
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 def custom_preprocessor(model, name):

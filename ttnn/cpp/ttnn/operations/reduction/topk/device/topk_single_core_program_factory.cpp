@@ -22,9 +22,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const auto& args = operation_attributes;
     auto& output_tensors = tensor_return_value;
     // Tensor references
-    const auto& input_tensor = tensor_args.input;
-    const auto& value_tensor = std::get<0>(output_tensors);
-    const auto& index_tensor = std::get<1>(output_tensors);
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    const auto& value_tensor = std::get<0>(output_tensors).mesh_tensor();
+    const auto& index_tensor = std::get<1>(output_tensors).mesh_tensor();
 
     // Determine index output format based on dimension size constraints
     const ttnn::Shape input_shape = input_tensor.padded_shape();
@@ -42,6 +42,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
     // elements in that block encode to 0, corrupting the sort result).
+    // fp32 is kept as-is: with fp32_dest_acc_en + UnpackToDestFp32 the value CBs stay fp32 and the
+    // sort's default SFPLOAD mode resolves to FP32 under fp32 dest-acc, so no downcast is needed.
+    const bool is_fp32_input = input_cb_data_format == tt::DataFormat::Float32;
     const tt::DataFormat compute_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::DataFormat::Float16_b
@@ -52,11 +55,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
-
-    // Device memory buffer pointers for kernel runtime arguments
-    auto* const input_buffer = input_tensor.buffer();
-    auto* const values_buffer = value_tensor.buffer();
-    auto* const index_buffer = index_tensor.buffer();
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -73,6 +71,11 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
          num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
          num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
     ] = tt::tt_metal::split_work_to_cores(args.sub_core_grids, Ht, true);
+    TT_FATAL(
+        args.sub_core_grids.contains(core_range),
+        "TopK single-core program core grid {} must be contained in sub_core_grids {}",
+        core_range,
+        args.sub_core_grids);
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
@@ -184,16 +187,18 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
 
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                       // Input values
-        index_cb_index,                       // Generated indices
-        Ht,                                   // Height in tiles
-        Wt,                                   // Width in tiles
-        total_number_of_cores,                // Total number of cores
-        static_cast<uint32_t>(uint16_output)  // Index format flag
+        input_cb_index,         // Input values
+        index_cb_index,         // Generated indices
+        Ht,                     // Height in tiles
+        Wt,                     // Width in tiles
+        total_number_of_cores,  // Total number of cores
+        // Index width must match the index tensor dtype: fp32 requires 32-bit iota.
+        // 16-bit iota packs two indices per word, producing incorrect INT32 reads.
+        static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)  // Index format flag
     };
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
     if (tensor_args.indices.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->mesh_tensor()).append_to(reader_compile_time_args);
     }
     const std::map<std::string, std::string> reader_defines_map = {
         {"GENERATE_INDICES", "1"},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329
@@ -216,8 +221,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         Ktiles,                // K value in tiles
         total_number_of_cores  // Total number of cores
     };
-    tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -240,6 +245,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
+        static_cast<std::uint32_t>(args.stable),   // Stable sort: ties keep the lowest index
     };
 
     KernelDescriptor compute_desc;
@@ -247,9 +253,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_range;
     compute_desc.compile_time_args = compute_args;
+    // fp32 input: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
+    // default SFPLOAD mode resolves to FP32 and compares full-precision values.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_to_dest_mode[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[transposed_val_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[result_prep_val_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = !uint16_output,
+        .fp32_dest_acc_en = !uint16_output || is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
     uint32_t id = 0;  // Offset for the next core in the group
@@ -259,17 +276,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
                 reader_desc.emplace_runtime_args(
                     core,
                     {
-                        input_buffer,
+                        input_tensor,
                         id,
                         work_per_core,
-                        tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address()
-                                                        : 0u,  // Optional indices tensor
+                        tensor_args.indices.has_value()
+                            ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(
+                                  tensor_args.indices->mesh_tensor())}
+                            : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // Optional indices
+                                                                                                     // tensor
                     });
                 writer_desc.emplace_runtime_args(
                     core,
                     {
-                        values_buffer,
-                        index_buffer,
+                        value_tensor,
+                        index_tensor,
                         id,
                         work_per_core,
                     });

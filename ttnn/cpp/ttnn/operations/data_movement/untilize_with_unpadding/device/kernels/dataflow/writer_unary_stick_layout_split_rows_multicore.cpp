@@ -5,10 +5,15 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -18,16 +23,23 @@ void kernel_main() {
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    // Per-shard page size in bytes: shard width for BLOCK/WIDTH-sharded output (a logical row
+    // spans multiple shards), full unpadded row otherwise. Feeds noc_async_write_sharded's
+    // multi-shard row split, same mechanism used by the ROW_MAJOR-input factory.
+    constexpr uint32_t writer_page_size = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(dst_args, dst_addr, writer_page_size);
+
+    Noc noc;
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_wait_front(cb_id_out0, num_tiles_per_row);
-            cb_pop_front(cb_id_out0, num_tiles_per_row);
+            dfb_out0.wait_front(num_tiles_per_row);
+            dfb_out0.pop_front(num_tiles_per_row);
         }
     };
 
@@ -35,18 +47,18 @@ void kernel_main() {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_wait_front(cb_id_out0, num_tiles_per_row * has_rows);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        dfb_out0.wait_front(num_tiles_per_row * has_rows);
+        uint32_t l1_read_addr = dfb_out0.get_read_ptr();
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = s.get_noc_addr(base_stick_id + k);
+            // Splits the write across shards for B/W-sharded outputs; falls through to a single
+            // noc_async_write for interleaved / HEIGHT-sharded.
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, l1_read_addr, s, base_stick_id + k, /*offset=*/0, /*size=*/unpadded_X_size);
 
-            // Write out tmp buffer
-            noc_async_write(l1_read_addr, dst_noc_addr, unpadded_X_size);
-
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             l1_read_addr += padded_X_size;
         }
-        cb_pop_front(cb_id_out0, num_tiles_per_row * has_rows);
+        dfb_out0.pop_front(num_tiles_per_row * has_rows);
     };
 
     uint32_t stick_id = start_stick_id;

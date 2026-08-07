@@ -45,28 +45,19 @@ void HCSumReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
 }
 
-TensorSpec HCSumReduceDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec HCSumReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = tensor_args.input;
     const auto& shape_a = input_tensor_a.padded_shape();
     Shape output_shape({shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent});
-    return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
 Tensor HCSumReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
-    operation::Hash hash = operation::hash_operation<HCSumReduceDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), args.math_fidelity, input_shape.volume());
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

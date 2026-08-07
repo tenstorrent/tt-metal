@@ -113,3 +113,29 @@ def test_model_targets_resolver_none_query_prefers_generic_entry(tmp_path: Path,
 
     generic_entry = resolve_target_entry("demo-model", "wh_n150", batch_size=None, seq_len=None)
     assert generic_entry["perf"]["decode_t/s/u"] == 10
+
+
+def test_model_targets_resolver_blackhole_alias_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "bh_p150": {
+                        "entries": [
+                            {"batch_size": 1, "seq_len": 128, "status": "active", "perf": {"decode_t/s/u": 42.0}}
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    yaml_path = tmp_path / "targets.yaml"
+    yaml_path.write_text(yaml.safe_dump(targets), encoding="utf-8")
+    monkeypatch.setattr(model_targets, "TARGETS_YAML_PATH_DEFAULT", str(yaml_path))
+
+    p150_alias = resolve_perf_targets("demo-model", "P150", 1, 128)
+    canonical = resolve_perf_targets("demo-model", "bh_p150", 1, 128)
+    assert p150_alias["decode_t/s/u"] == 42.0
+    assert canonical["decode_t/s/u"] == 42.0

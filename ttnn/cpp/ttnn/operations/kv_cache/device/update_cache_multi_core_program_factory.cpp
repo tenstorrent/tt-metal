@@ -3,11 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "update_cache_multi_core_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -16,8 +21,8 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgramFactory::create(
-    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*output_tensor*/) {
+UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto update_idx = operation_attributes.update_idx;
@@ -25,7 +30,97 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config is required");
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
 
-    Program program{};
+    tt::tt_metal::IDevice* device = input_tensor.device();
+
+    // Mirror the shape/dtype-derived geometry and work-split from create_descriptor exactly so the
+    // per-core cache_start_id values, the two op-wide offsets, and the core ordering are identical
+    // on cache miss and hit.
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    uint32_t Wt = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    // Width size after untilize
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.padded_shape()[-1] * sizeof(float)
+                                       : cache_tensor.padded_shape()[-1] * sizeof(::bfloat16);
+
+    uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
+    uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.padded_shape()[0];
+    uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.padded_shape()[1];
+
+    uint32_t B = input_tensor.padded_shape()[-2];
+    uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
+
+    UpdateCacheDynamicArgs result;
+    result.tile_update_offset = update_idx % tt::constants::TILE_HEIGHT * Wbytes;
+    result.batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
+    result.Wbytes = Wbytes;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    bool row_major;
+    uint32_t num_cores, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2;
+
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
+
+    if (shard_spec.has_value()) {
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        all_cores = shard_spec.value().grid;
+        num_cores = all_cores.num_cores();
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+        num_batched_heads_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        num_batched_heads_per_core_group_2 = 0;
+        auto bbox = all_cores.bounding_box();
+        num_cores_x = bbox.end_coord.x + 1;
+        num_cores_y = bbox.end_coord.y + 1;
+    } else {
+        row_major = true;
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_batched_heads_per_core_group_1,
+            num_batched_heads_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
+    }
+
+    uint32_t g1_numcores = core_group_1.num_cores();
+    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+
+    uint32_t cache_tile_idx = update_idx / tt::constants::TILE_HEIGHT * Wt;
+    uint32_t total_batched_heads = 0;
+    result.cache_start_ids.reserve(num_cores);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord& core = cores.at(i);
+        uint32_t num_batched_heads_per_core;
+        if (i < g1_numcores) {
+            num_batched_heads_per_core = num_batched_heads_per_core_group_1;
+        } else {
+            num_batched_heads_per_core = num_batched_heads_per_core_group_2;
+        }
+        uint32_t batch_start_id = (total_batched_heads * TILE_HEIGHT) % B;
+        // Batch Offset + Head Offset + Index Offset
+        uint32_t cache_start_id = batch_start_id * cache_batch_num_tiles +
+                                  ((total_batched_heads * tt::constants::TILE_HEIGHT) / B) * cache_head_num_tiles;
+        cache_start_id += cache_tile_idx;
+        result.cache_start_ids.emplace_back(core, cache_start_id);
+        total_batched_heads += num_batched_heads_per_core;
+    }
+    return result;
+}
+
+ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*tensor_return_value*/) {
+    const auto& cache_tensor = tensor_args.cache;
+    const auto& input_tensor = tensor_args.input;
+    TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config is required");
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
 
     tt::DataFormat cache_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
     uint32_t cache_single_tile_size = tt::tile_size(cache_cb_data_format);
@@ -61,8 +156,6 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
     uint32_t Bcache = cache_tensor.padded_shape()[0];
     const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance
     uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
-    uint32_t tile_update_offset = update_idx % tt::constants::TILE_HEIGHT * Wbytes;
-    uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -100,64 +193,116 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
         num_input_tiles = 2 * Wt;  // double buffered
     }
+
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
+
+    // ---- Build the ProgramDescriptor ----
+
+    ProgramDescriptor desc;
+
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_cache_tiles = 2 * granularity * Wt;  // double buffered
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_cache_tiles * cache_single_tile_size, {{src0_cb_index, cache_cb_data_format}})
-            .set_page_size(src0_cb_index, cache_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cache_tiles * cache_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cache_cb_data_format,
+            .page_size = cache_single_tile_size,
+        }}},
+    });
 
+    // For sharded inputs, set CBDescriptor::buffer so the framework refreshes the dynamic
+    // CB address (equivalent to the old set_globally_allocated_address +
+    // UpdateDynamicCircularBufferAddress pair).
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, input_single_tile_size);
-    if (shard_spec.has_value()) {
-        cb_src1_config = cb_src1_config.set_globally_allocated_address(*input_tensor.buffer());
-    }
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * input_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src1_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+        .buffer = shard_spec.has_value() ? src_buffer : nullptr,
+    });
+
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
     uint32_t interm1_cb_index = tt::CBIndex::c_25;
 
     uint32_t num_interm_tiles = 2 * granularity * Wt;  // double buffered
-    std::map<uint8_t, tt::DataFormat> interim_data_format_spec = {
-        {interm0_cb_index, interm_cb_data_format}, {interm1_cb_index, interm_cb_data_format}};
-    tt::tt_metal::CircularBufferConfig cb_interm0_config =
-        tt::tt_metal::CircularBufferConfig(num_interm_tiles * interm_single_tile_size, interim_data_format_spec)
-            .set_page_size(interm0_cb_index, interm_single_tile_size)
-            .set_page_size(interm1_cb_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * interm_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{
+            CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(interm0_cb_index),
+                .data_format = interm_cb_data_format,
+                .page_size = interm_single_tile_size,
+            },
+            CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(interm1_cb_index),
+                .data_format = interm_cb_data_format,
+                .page_size = interm_single_tile_size,
+            },
+        }},
+    });
 
     uint32_t interm2_cb_index = tt::CBIndex::c_26;
-    tt::tt_metal::CircularBufferConfig cb_interm2_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_interm_tiles * interm_single_tile_size, {{interm2_cb_index, interm_cb_data_format}})
-            .set_page_size(interm2_cb_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm2_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * interm_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(interm2_cb_index),
+            .data_format = interm_cb_data_format,
+            .page_size = interm_single_tile_size,
+        }}},
+    });
 
     // Output is same tensor as cache input, so cb/tile size is same
     uint32_t output_cb_index = tt::CBIndex::c_16;
 
     // Must buffer all tiles for a single head
     uint32_t num_output_tiles = B * Wt;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * cache_single_tile_size, {{output_cb_index, cache_cb_data_format}})
-            .set_page_size(output_cb_index, cache_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    auto* src_buffer = input_tensor.buffer();
-    auto* dst_buffer = cache_tensor.buffer();
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * cache_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = cache_cb_data_format,
+            .page_size = cache_single_tile_size,
+        }}},
+    });
 
     const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range / granularity;
 
+    // Reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index, (std::uint32_t)src1_cb_index, (std::uint32_t)granularity, (std::uint32_t)u_count};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
+    std::map<std::string, std::string> reader_kernel_defines_map;
+    if (shard_spec.has_value()) {
+        reader_kernel_defines_map["INPUT_SHARDED"] = "1";
+    }
+    KernelDescriptor::Defines reader_kernel_defines;
+    for (auto& kv : reader_kernel_defines_map) {
+        reader_kernel_defines.emplace_back(kv.first, kv.second);
+    }
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = reader_kernel_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    // Writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)interm0_cb_index,
@@ -167,23 +312,16 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
         (std::uint32_t)u_count};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    std::map<std::string, std::string> reader_kernel_defines;
-    if (shard_spec.has_value()) {
-        reader_kernel_defines["INPUT_SHARDED"] = "1";
-    }
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
+    // Compute kernel(s) — group_1 has num_batched_heads_per_core_group_1, optional group_2
+    // gets a second compute kernel with the group_2 count baked into compile-time args.
     std::vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
@@ -195,33 +333,51 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
         Wt,
         granularity,
         u_count};
+    const auto make_compute_config = [&]() {
+        return ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+        };
+    };
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
-        core_group_1,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+    KernelDescriptor compute_desc_g1;
+    compute_desc_g1.kernel_source = "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp";
+    compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_g1.core_ranges = core_group_1;
+    compute_desc_g1.compile_time_args = compute_kernel_args;
+    compute_desc_g1.config = make_compute_config();
 
+    std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {
-        compute_kernel_args[6] = num_batched_heads_per_core_group_2;
-        tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+        std::vector<uint32_t> compute_kernel_args_g2 = compute_kernel_args;
+        compute_kernel_args_g2[6] = num_batched_heads_per_core_group_2;
+        KernelDescriptor desc_g2;
+        desc_g2.kernel_source = "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp";
+        desc_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        desc_g2.core_ranges = core_group_2;
+        desc_g2.compile_time_args = std::move(compute_kernel_args_g2);
+        desc_g2.config = make_compute_config();
+        compute_desc_g2 = std::move(desc_g2);
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    uint32_t cache_tile_idx = update_idx / tt::constants::TILE_HEIGHT * Wt;
-    uint32_t cache_start_id = 0;
+    // Per-core runtime args. src/dst base addresses are declared as Buffer* bindings so the
+    // descriptor carries the buffer identity; on a cache hit override_runtime_arguments below
+    // re-applies the (possibly reallocated) addresses. cache_start_id, tile_update_offset and
+    // batch_read_offset depend on operation_attributes (update_idx, batch_offset) which
+    // UpdateKVCacheOperation::compute_program_hash deliberately excludes from the program-cache key,
+    // so they are NOT stable across cache hits either. compute_update_cache_dynamic_args is the
+    // single source of truth for the work-split and those formulas, shared with the override.
+    // input_start_id and batch_start_id are shape-only (in the hash), so they stay computed inline here.
+    const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
     uint32_t input_start_id = 0;
     uint32_t batch_start_id = 0;
     uint32_t total_batched_heads = 0;
-    std::vector<uint32_t> cache_start_ids;
-    cache_start_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_batched_heads_per_core;
@@ -233,16 +389,11 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
         input_start_id = total_batched_heads * Wt;
         batch_start_id = (total_batched_heads * TILE_HEIGHT) % B;
         // Batch Offset + Head Offset + Index Offset
-        cache_start_id = batch_start_id * cache_batch_num_tiles +
-                         ((total_batched_heads * tt::constants::TILE_HEIGHT) / B) * cache_head_num_tiles;
-        cache_start_ids.push_back(cache_start_id);
-        cache_start_id += cache_tile_idx;
-        SetRuntimeArgs(
-            program,
-            unary_reader_kernel_id,
+        const uint32_t cache_start_id = dyn.cache_start_ids.at(i).second;
+        reader_desc.emplace_runtime_args(
             core,
-            {dst_buffer->address(),
-             src_buffer->address(),
+            {dst_buffer,
+             src_buffer,
              Wt,
              Bcache,
              num_batched_heads_per_core,
@@ -253,11 +404,9 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
              input_start_id,
              batch_start_id});
 
-        SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
+        writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer->address(),
+            {dst_buffer,
              Wt,
              Bcache,
              num_batched_heads_per_core,
@@ -266,67 +415,80 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
              cache_head_num_tiles,
              cache_start_id,
              batch_start_id,
-             Wbytes,
-             tile_update_offset,
-             batch_read_offset});
+             dyn.Wbytes,
+             dyn.tile_update_offset,
+             dyn.batch_read_offset});
         total_batched_heads += num_batched_heads_per_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .unary_reader_kernel_id = unary_reader_kernel_id,
-            .unary_writer_kernel_id = unary_writer_kernel_id,
-            .cores = cores,
-            .Wbytes = Wbytes,
-            .Wt = Wt,
-            .cache_start_ids = cache_start_ids,
-            .cb_src1 = cb_src1,
-        }};
+    // Stable kernel order (reader, writer, compute, [optional second compute]) — this is
+    // the kernel index the framework uses when applying runtime args on cache hits.
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_g1));
+    if (compute_desc_g2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_g2));
+    }
+
+    return desc;
 }
 
 void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const KvCacheParams& operation_attributes,
     const KvCacheInputs& tensor_args,
-    Tensor& /*output_tensor*/) {
-    auto& program = cached_program.program;
-    const auto Wbytes = cached_program.shared_variables.Wbytes;
-    const auto Wt = cached_program.shared_variables.Wt;
-    const auto& cache_start_ids = cached_program.shared_variables.cache_start_ids;
-    const auto& cb_src1 = cached_program.shared_variables.cb_src1;
-    const auto& cores = cached_program.shared_variables.cores;
-    const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    const auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    const auto update_idx = operation_attributes.update_idx;
+    Tensor& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Runs on EVERY program-cache hit, so it patches the cached program in place and never calls
+    // create_descriptor(): that would pay the cache-miss host cost (work-split, CoreRangeSet,
+    // get_compute_kernel_config_args, TensorAccessorArgs, kernel-source strings, a fresh per-core arg
+    // vector) on a hit.
+    // Kernel push order in create_descriptor: reader(0), writer(1), compute group_1(2),
+    // [compute group_2(3)]. The compute kernels take no runtime args.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderDstAddrArgIdx = 0;
+    constexpr uint32_t kReaderSrcAddrArgIdx = 1;
+    constexpr uint32_t kReaderCacheStartIdArgIdx = 8;
+    constexpr uint32_t kWriterDstAddrArgIdx = 0;
+    constexpr uint32_t kWriterCacheStartIdArgIdx = 7;
+    constexpr uint32_t kWriterWbytesArgIdx = 9;
+    constexpr uint32_t kWriterTileUpdateOffsetArgIdx = 10;
+    constexpr uint32_t kWriterBatchReadOffsetArgIdx = 11;
 
-    uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
-    uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
-
+    // Buffer-address slots: create_descriptor emplaces these as Buffer*, and this hook supersedes
+    // resolve_bindings, so re-applying them is ours. The reader reads BOTH tensors (cache first, then
+    // input); the writer only writes the cache, which is also the output (in-place).
     auto* src_buffer = tensor_args.input.buffer();
-
     auto* dst_buffer = tensor_args.cache.buffer();
+    const uint32_t src_addr = src_buffer->address();
+    const uint32_t dst_addr = dst_buffer->address();
 
-    if (tensor_args.input.is_sharded()) {
-        UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
+    // Same helper create_descriptor uses: identical core set, order and formulas. Everything else
+    // (Wt, Bcache, num_batched_heads_per_core, cache_*_num_tiles, input_start_id, batch_start_id) is
+    // derived from the tensor specs and the shape-driven work split, which the hash covers.
+    const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
+    for (const auto& [core, cache_start_id] : dyn.cache_start_ids) {
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader_args[kReaderDstAddrArgIdx] = dst_addr;
+        reader_args[kReaderSrcAddrArgIdx] = src_addr;
+        reader_args[kReaderCacheStartIdArgIdx] = cache_start_id;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[kWriterDstAddrArgIdx] = dst_addr;
+        writer_args[kWriterCacheStartIdArgIdx] = cache_start_id;
+        writer_args[kWriterWbytesArgIdx] = dyn.Wbytes;
+        writer_args[kWriterTileUpdateOffsetArgIdx] = dyn.tile_update_offset;
+        writer_args[kWriterBatchReadOffsetArgIdx] = dyn.batch_read_offset;
     }
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores.at(i);
-        uint32_t curr_cache_start_id = cache_start_ids[i] + cache_tile_idx;
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            runtime_args[1] = src_buffer->address();
-            runtime_args[8] = curr_cache_start_id;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            runtime_args[7] = curr_cache_start_id;
-            runtime_args[10] = tile_update_offset;
-        }
+    // desc.cbs[1] (the input CB) is globally allocated on the input buffer for sharded inputs (whether
+    // the input is sharded is hashed, so the cached program has the dynamic CB iff we take this
+    // branch); cbs[0]/[2]/[3]/[4] are plain L1 scratch. CB positions in program.circular_buffers()
+    // match desc.cbs, as in apply_descriptor_runtime_args.
+    if (tensor_args.input.shard_spec().has_value()) {
+        constexpr uint32_t kSrc1CbPos = 1;
+        UpdateDynamicCircularBufferAddress(program, program.circular_buffers()[kSrc1CbPos]->id(), *src_buffer);
     }
 }
 

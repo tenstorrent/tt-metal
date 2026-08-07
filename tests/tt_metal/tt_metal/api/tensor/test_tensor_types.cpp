@@ -24,6 +24,7 @@ TEST(TensorTypesTileSizeTest, MatchesDataFormatTileSize) {
         DataType::UINT8,
         DataType::UINT16,
         DataType::INT32,
+        DataType::INT8,
     };
 
     for (DataType dtype : kDataTypes) {

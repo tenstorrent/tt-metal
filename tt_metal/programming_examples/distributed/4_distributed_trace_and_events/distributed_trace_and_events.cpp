@@ -102,7 +102,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         *program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         cores_for_program,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 

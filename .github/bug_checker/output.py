@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from urllib.parse import quote
 
 from .llm import Finding
 from .logger import logger
+
+REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
+DEFAULT_RULE_REF = "main"
 
 
 # --- SARIF ---
@@ -125,9 +130,7 @@ def print_findings(findings: list[Finding]) -> None:
         if f.suggested_fix:
             logger.opt(colors=True).info("<green>  Suggested fix:</green>")
             for fix_line in f.suggested_fix.splitlines():
-                logger.opt(colors=True).info(
-                    "<green>    {fix_line}</green>", fix_line=fix_line
-                )
+                logger.opt(colors=True).info("<green>    {fix_line}</green>", fix_line=fix_line)
 
     if blocking:
         logger.opt(colors=True).info(
@@ -143,37 +146,73 @@ def print_findings(findings: list[Finding]) -> None:
         )
 
 
+def print_failure(message: str, failed_rules: list[str] | None = None) -> None:
+    """Print a CLI failure message without implying analysis passed."""
+    logger.opt(colors=True).error("<red><bold>[FAILED]</bold></red> {message}", message=message)
+    if failed_rules:
+        logger.opt(colors=True).error(
+            "<red>Failed rule(s):</red> {rules}",
+            rules=", ".join(failed_rules),
+        )
+
+
 # --- PR Comments ---
 
 
-def format_pr_comment(finding: Finding) -> str:
+def format_pr_comment(finding: Finding, rule_path: str | None = None) -> str:
     """Format a single finding as a PR comment body."""
-    severity_emoji = "!!!" if finding.severity == "blocking" else "?"
+    severity_emoji = ":red_circle:" if finding.severity == "blocking" else ":black_circle:"
+    rule_label = _format_rule_label(finding.rule_id, rule_path)
     parts = [
-        f"{severity_emoji} **Bug Checker [{finding.severity.upper()}]** `{finding.rule_id}`\n",
+        f"**Bug Checker [{finding.severity.upper()}]** {severity_emoji} {rule_label}\n",
         finding.message,
     ]
     if finding.suggested_fix:
-        parts.append(
-            f"\n**Suggested fix:**\n```suggestion\n{finding.suggested_fix}\n```"
-        )
+        parts.append(f"\n**Suggested fix:**\n```suggestion\n{finding.suggested_fix}\n```")
     return "\n".join(parts)
+
+
+def _format_rule_label(rule_id: str, rule_path: str | None = None) -> str:
+    """Format a rule id, linking to its markdown definition when available."""
+    if not rule_path:
+        return f"`{rule_id}`"
+
+    quoted_path = quote(rule_path, safe="/")
+    quoted_ref = quote(_rule_link_ref(), safe="")
+    return f"[`{rule_id}`](https://github.com/{REPO}/blob/{quoted_ref}/{quoted_path})"
+
+
+def _rule_link_ref() -> str:
+    """Return the Git ref used in rule definition links."""
+    return (
+        os.environ.get("BUG_CHECKER_RULE_REF")
+        or os.environ.get("GITHUB_SHA")
+        or os.environ.get("GITHUB_REF_NAME")
+        or DEFAULT_RULE_REF
+    )
 
 
 def format_summary_comment(
     findings: list[Finding],
     comment_failures: int = 0,
-    skipped_rules: list[str] | None = None,
+    failed_rules: list[str] | None = None,
     truncated_rules: list[str] | None = None,
+    skipped_rules: list[str] | None = None,
 ) -> str:
     """Format a summary comment for the PR."""
+    if failed_rules is None:
+        failed_rules = skipped_rules
     blocking = [f for f in findings if f.severity == "blocking"]
     warnings = [f for f in findings if f.severity == "warning"]
 
-    lines = ["## Bug Checker Results\n"]
-    if not findings:
+    lines = ["## Bug Checker Failed\n" if failed_rules else "## Bug Checker Results\n"]
+    if failed_rules and not findings:
+        lines.append("The analysis did not complete, so this run cannot be treated as a pass.")
+    elif not findings:
         lines.append("No issues found.")
     else:
+        if failed_rules:
+            lines.append("Partial findings were produced before the checker failed. Treat this run as failed.\n")
         if blocking:
             lines.append(f"**{len(blocking)} blocking issue(s) found.**\n")
         if warnings:
@@ -189,16 +228,14 @@ def format_summary_comment(
             f"truncated before their matched files: {rule_list}. Consider breaking this PR into smaller pieces."
         )
 
-    if skipped_rules:
-        rule_list = ", ".join(f"`{r}`" for r in skipped_rules)
+    if failed_rules:
+        rule_list = ", ".join(f"`{r}`" for r in failed_rules)
         lines.append(
-            f"\n> **Warning:** {len(skipped_rules)} rule(s) were skipped due to errors "
-            f"and may not have been checked: {rule_list}. Results may be incomplete."
+            f"\n> **Failure:** {len(failed_rules)} rule(s) failed during LLM analysis: "
+            f"{rule_list}. The GitHub check exits non-zero so this is not silently accepted."
         )
 
     if comment_failures:
-        lines.append(
-            f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors."
-        )
+        lines.append(f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors.")
 
     return "\n".join(lines)

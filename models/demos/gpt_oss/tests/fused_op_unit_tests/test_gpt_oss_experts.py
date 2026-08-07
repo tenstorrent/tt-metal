@@ -41,12 +41,13 @@ from models.demos.gpt_oss.tt.experts_throughput.config import (
 )
 from models.demos.gpt_oss.tt.experts_throughput.decode import decode_forward
 from models.demos.gpt_oss.tt.experts_throughput.weights import load_throughput_expert_weights
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_EXPERTS_DEVICE_PERF"
-PERF_WARMUP_ITERS = 10
-PERF_MEASURE_ITERS = 100
+PERF_WARMUP_ITERS = 0
+PERF_MEASURE_ITERS = 1
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 # TODO: Set device perf targets based on measured baselines
@@ -98,7 +99,8 @@ def gpt_oss_experts_reference(
         Output tensor [batch, seq_len, hidden_size]
     """
     # Convert to float32 for reference computation (HuggingFace model uses float32 weights)
-    hidden_states_fp32 = hidden_states.float()
+    original_shape = hidden_states.shape
+    hidden_states_fp32 = hidden_states.view(-1, original_shape[-1]).float()
     routing_weights_fp32 = routing_weights.float()
 
     with torch.no_grad():
@@ -107,7 +109,7 @@ def gpt_oss_experts_reference(
             router_indices=router_indices,
             routing_weights=routing_weights_fp32,
         )
-    return output
+    return output.view(original_shape)
 
 
 def gpt_oss_experts_ttnn(
@@ -122,6 +124,7 @@ def gpt_oss_experts_ttnn(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """TTNN implementation for gpt_oss_experts.
 
@@ -139,10 +142,13 @@ def gpt_oss_experts_ttnn(
         combine_config: AllToAllCombineConfig
         program_config: ThroughputProgramConfig
         mesh_device: TTNN mesh device
-
-    Returns:
-        Output tensor [1, 1, batch_per_device * seq_len, hidden_size]
+        ccl_manager: Optional Communication manager
     """
+    if ccl_manager is None:
+        from models.demos.gpt_oss.tt.ccl import CCLManager
+        from models.demos.gpt_oss.utils.general_utils import get_default_num_links
+
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
     return decode_forward(
         hidden_states,
         topk_expert_indices,
@@ -155,6 +161,7 @@ def gpt_oss_experts_ttnn(
         combine_config,
         program_config,
         mesh_device,
+        ccl_manager=ccl_manager,
     )
 
 
@@ -437,7 +444,7 @@ def _run_experts_test(
 
     # Create reference experts and get weights (same weights for both models)
     reference_experts, state_dict = _create_reference_experts_and_weights(config, num_experts)
-    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, routing_weights, reference_experts)
+    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, topk_weights_dense, reference_experts)
 
     # Create TTNN configs
     num_devices = mesh_device.get_num_devices()
@@ -460,6 +467,7 @@ def _run_experts_test(
         num_devices=num_devices,
         num_experts_per_device=throughput_config.num_experts_per_device,
         mesh_device=mesh_device,
+        new_format=True,
     )
 
     # Create remap topk mask (rows is dispatch dimension)
@@ -616,7 +624,7 @@ def _run_experts_test(
         return pcc
 
     # Standard e2e performance measurement
-    if not trace_mode or program_cache_enabled:
+    if expected_perf_us > 0.0 and (not trace_mode or program_cache_enabled):
         perf_profiler = BenchmarkProfiler()
         benchmark_data = BenchmarkData()
         trace_suffix = "trace" if trace_mode else "no_trace"
@@ -694,7 +702,7 @@ def _skip_single_device_ccl():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -785,7 +793,7 @@ def test_gpt_oss_experts(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

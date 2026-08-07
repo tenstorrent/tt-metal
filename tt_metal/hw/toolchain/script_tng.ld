@@ -97,8 +97,11 @@ PHDRS {
 /* If not defined data is placed per-cpu after TLS.  */
 IF_KERNEL(IF_TLS(PROVIDE_HIDDEN(DATA_START = 0);))
 SECTIONS {
-  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
-  .device_print_strings 0x6400000 :
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000.
+     (INFO) keeps section data in the ELF for the host parser to read via
+     section headers, but strips SHF_ALLOC so the linker doesn't expect it
+     in a PT_LOAD segment ("allocated section ... not in segment" warning). */
+  .device_print_strings 0x6400000 (INFO) :
   {
     __device_print_strings_start = .;
     KEEP(*(.device_print_strings))
@@ -107,7 +110,7 @@ SECTIONS {
   }
 
   /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
-  .device_print_strings_info 0x6500000 :
+  .device_print_strings_info 0x6500000 (INFO) :
   {
       __device_print_strings_info_start = .;
       KEEP(*(.device_print_strings_info))

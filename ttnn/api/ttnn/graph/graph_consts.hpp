@@ -60,6 +60,8 @@ constexpr auto kReportDevices = "devices";
 constexpr auto kReportMetadata = "metadata";
 constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
+constexpr auto kReportRank = "rank";
+constexpr auto kReportWorldSize = "world_size";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

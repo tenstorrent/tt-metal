@@ -34,7 +34,12 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     int32_t chunks,
-    int32_t dim) {
+    int32_t dim,
+    std::optional<uint32_t> fsdp_cluster_axis,
+    const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_weight_buffer,
+    std::optional<ttnn::ccl::Topology> fsdp_topology,
+    bool fuse_swiglu) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -57,7 +62,12 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         num_workers_per_link,
         num_buffers_per_channel,
         chunks,
-        dim);
+        dim,
+        fsdp_cluster_axis,
+        fsdp_multi_device_global_semaphore,
+        persistent_weight_buffer,
+        fsdp_topology,
+        fuse_swiglu);
 }
 
 }  // namespace ttnn

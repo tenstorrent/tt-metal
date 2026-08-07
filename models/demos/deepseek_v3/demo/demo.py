@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 )
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 
 def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
@@ -536,23 +537,13 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        # NOTE:
-        # The base trace region size below (~36.3 MiB) was empirically determined from
-        # vLLM decode workloads to be sufficient to keep the trace buffer from
-        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
-        # length, and mesh configuration). We add 20% headroom as a conservative
-        # safety margin to accommodate variability across models / prompts without
-        # repeatedly re-tuning this value.
-        #
-        # If you are optimizing memory usage, this can be reduced after verifying
-        # that tracing completes without buffer exhaustion for your target workload.
-        BASE_TRACE_REGION_BYTES = 38_070_272
-        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
-        if enable_mtp:
-            trace_region_size = max(trace_region_size, 134_217_728)
-        logger.info(f"Trace region size set to {trace_region_size}")
+        # trace_region_size=0 (deepseek-v3 YAML) lets the runtime allocate trace buffers dynamically.
+        trace_open_params = build_trace_device_params("deepseek-v3")
+        logger.info(f"Trace region size set to {trace_open_params['trace_region_size']}")
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+            mesh_shape=mesh_shape,
+            **trace_open_params,
+            dispatch_core_config=dispatch_core_config,
         )
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
@@ -851,7 +842,6 @@ def run_demo(
                     agg_top1_matches / agg_total_tokens,
                     agg_top5_matches / agg_total_tokens,
                 )
-
             statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:

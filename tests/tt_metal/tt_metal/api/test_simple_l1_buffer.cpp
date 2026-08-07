@@ -145,78 +145,66 @@ bool SimpleTiledL1WriteCBRead(
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, TestSimpleL1BufferLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = this->devices_.at(id)->l1_size_per_core() -
-                            this->devices_.at(id)->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 1));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 2));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 4));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 8));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 16));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 32));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 1024));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), lo_address, 16 * 1024));
+    for (auto& device : this->devices_) {
+        size_t lo_address =
+            device->l1_size_per_core() - device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 1));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 2));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 4));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 8));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 16));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 32));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 1024));
+        ASSERT_TRUE(SimpleL1Loopback(device, lo_address, 16 * 1024));
     }
 }
 TEST_F(MeshDeviceFixture, TestSimpleL1BufferHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (16 * 1024);
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 1));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 2));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 4));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 8));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 16));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 32));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 1024));
-        ASSERT_TRUE(SimpleL1Loopback(this->devices_.at(id), hi_address, 16 * 1024));
+    for (auto& device : this->devices_) {
+        size_t hi_address = device->l1_size_per_core() - (16 * 1024);
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 1));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 2));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 4));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 8));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 16));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 32));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 1024));
+        ASSERT_TRUE(SimpleL1Loopback(device, hi_address, 16 * 1024));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWriteTileLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         size_t lo_address = 768 * 1024;
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWriteTileHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
+    for (auto& device : this->devices_) {
+        size_t hi_address = device->l1_size_per_core() - (24 * 1024);
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWritex2y2TileLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         size_t lo_address = 768 * 1024;
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWritex2y2TileHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
+    for (auto& device : this->devices_) {
+        size_t hi_address = device->l1_size_per_core() - (24 * 1024);
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(device, {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
     }
 }
 

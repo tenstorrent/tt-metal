@@ -14,18 +14,24 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // Custom init for the blocked sub+bcast(col) unpack flow.
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_()
+// @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
-    // Force both unpackers to unpack the full 32x32 tile for the blocked path.
-    TTI_SETADCXX(p_setadc::UNP0, 1023, 0x0);
-    TTI_SETADCXX(p_setadc::UNP1, 1023, 0x0);
+    // Force both unpackers to unpack all faces of the operand for the blocked path. Full 32x32
+    // tile = 4 faces = 1024 datums, 16x32 tiny tile = 2 faces = 512 datums.
+    const std::uint32_t x_end = tensor_shape.total_tensor_size() - 1;
+    TT_SETADCXX(p_setadc::UNP0, x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP1, x_end, 0x0);
 }
 
 // Custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
@@ -35,7 +41,7 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program SrcA and SrcB base addresses.
-    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     // Wait for a free unpack config context before programming the next block.
     wait_for_next_context(2);
     _llk_unpack_configure_addresses_(address_a, address_b, cfg);
@@ -64,7 +70,6 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
 inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
 {
-    // Restore the default full-face unpack X span used by the generic unpack
-    // helpers. The custom blocked path forces both unpackers to full 32x32.
-    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    // No state to restore: the multi-face unpack X span set in the custom init is transient — every
+    // generic unpack op re-establishes its own X span (config_unpacker_x_end / SETADCXX) in its init.
 }

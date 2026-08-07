@@ -8,7 +8,7 @@
 
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 /**
  * Internal implementation header for HostTensor.

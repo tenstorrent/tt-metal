@@ -13,6 +13,8 @@ void kernel_main() {
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
     constexpr bool pull_from_host = get_compile_time_arg_val(5);
+    // L1 landing slot (page_size bytes) for DEVICE_PULL; unused for HOST_PUSH.
+    constexpr uint32_t scratch_l1_addr = get_compile_time_arg_val(6);
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
 
@@ -31,6 +33,10 @@ void kernel_main() {
             // Wait for pages in H2D socket
             socket_wait_for_pages(receiver_socket, 1);
 
+            // DEVICE_PULL: H2D FIFO lives in pinned host memory (read_ptr/fifo_addr are
+            // FIFO offsets); land the page in the L1 scratch slot, then loop it back from
+            // there. HOST_PUSH: data already sits in the device FIFO at read_ptr.
+            uint32_t local_page_addr = pull_from_host ? scratch_l1_addr : receiver_socket.read_ptr;
             if constexpr (pull_from_host) {
                 // Pages available in H2D socket - read over PCIe
                 noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
@@ -38,7 +44,7 @@ void kernel_main() {
                     pcie_xy_enc,
                     ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + receiver_socket.read_ptr -
                         receiver_socket.fifo_addr,
-                    receiver_socket.read_ptr,
+                    local_page_addr,
                     page_size);
                 noc_async_read_barrier();
             }
@@ -48,7 +54,7 @@ void kernel_main() {
             // Space available in D2H socket - write to host over PCIe
             noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
                 NOC_INDEX,
-                receiver_socket.read_ptr,
+                local_page_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,

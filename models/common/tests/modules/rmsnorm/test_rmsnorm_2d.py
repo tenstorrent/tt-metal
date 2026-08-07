@@ -18,7 +18,11 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
+    from transformers.initialization import no_init_weights
+except ImportError:  # transformers < 5
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -109,13 +113,13 @@ def test_rmsnorm_2d_config_power_user_overrides():
     assert config.compute_kernel_config_prefill == mock_kernel_config
 
 
-def test_rmsnorm_2d_rejects_non_tg():
+def test_rmsnorm_2d_rejects_non_tg(expect_error):
     """Test that RMSNorm2D.from_model_args raises error for non-TG mesh shapes."""
     mock_args = MagicMock()
     mock_mesh_device = MagicMock()
     mock_mesh_device.shape = [1, 8]  # Not TG
 
-    with pytest.raises(ValueError, match="requires Galaxy topology"):
+    with expect_error(ValueError, "requires Galaxy topology"):
         RMSNorm2D.from_model_args(
             mesh_device=mock_mesh_device,
             tt_ccl=MagicMock(),

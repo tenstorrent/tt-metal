@@ -17,8 +17,12 @@ from .process_ops_logs import process_ops
 from .common import (
     TT_METAL_HOME,
     PROFILER_BIN_DIR,
+    PROFILER_LOGS_DIR,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_SCRIPTS_ROOT,
+    PROFILER_WASM_DIR,
+    PROFILER_WASM_TRACE_FILE_NAME,
+    PROFILER_WASM_TRACES_DIR,
     TRACY_MODULE_PATH,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
@@ -26,6 +30,7 @@ from .common import (
     TRACY_CAPTURE_TOOL,
     TRACY_CSVEXPROT_TOOL,
     generate_logs_folder,
+    resolve_tracy_tool_path,
 )
 
 import tracy.tracy_state
@@ -83,11 +88,10 @@ def runctx(cmd, globals, locals, partialProfile):
 
 
 def run_report_setup(verbose, outputFolder, binFolder, port):
-    toolsReady = True
-
     logger.info("Verifying tracy profiling tools")
-    toolsReady &= os.path.exists(binFolder / TRACY_CAPTURE_TOOL)
-    toolsReady &= os.path.exists(binFolder / TRACY_CSVEXPROT_TOOL)
+    capture_exe = resolve_tracy_tool_path(binFolder, TRACY_CAPTURE_TOOL)
+    csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
+    toolsReady = capture_exe is not None and csvexport_exe is not None
 
     logsFolder = generate_logs_folder(outputFolder)
     captureProcess = None
@@ -103,7 +107,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (f"{binFolder / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
+        captureCommand = (f"{capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -115,7 +119,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         logger.error(f"Tracy tools were not found. Please make sure you are on a Tracy-enabled build (default).")
         sys.exit(1)
 
-    return toolsReady, captureProcess
+    return captureProcess
 
 
 def generate_report(
@@ -136,6 +140,10 @@ def generate_report(
             sys.exit(1)
         timeCount += 1
         time.sleep(1)
+    csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
+    if csvexport_exe is None:
+        logger.error(f"tracy-csvexport was not found under {binFolder}")
+        sys.exit(1)
     with open(logsFolder / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
         childCallStr = ""
         childCallsList = DEFAULT_CHILD_CALLS
@@ -144,7 +152,7 @@ def generate_report(
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{binFolder / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{csvexport_exe} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -155,7 +163,7 @@ def generate_report(
 
     with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'{binFolder / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
+            f'{csvexport_exe} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,

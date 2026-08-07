@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+from diffusers.models import AutoencoderKLMochi
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -17,6 +18,7 @@ from ...layers.normalization import GroupNorm
 from ...parallel.config import MochiVAEParallelConfig, vae_neighbor_pad, vae_slice_reshard
 from ...parallel.manager import CCLManager
 from ...utils.substate import rename_substate
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -99,7 +101,7 @@ class Conv1x1(Module):
         """
         # Convert to tile layout for efficient computation
         x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(x_NTHWC)
+        del x_NTHWC
 
         # Apply linear transformation
         x_tile_NTHWO = ttnn.linear(
@@ -1206,3 +1208,94 @@ class MochiVAEDecoder(Module):
         x_NCTHW_torch = self.postprocess_output(tt_x_NTHWC, input_shape)
 
         return [x_NCTHW_torch]
+
+
+class MochiVAEDecoderAdapter:
+    """Torch-in (BCTHW), torch-out (BCTHW) VAE decoder for the Mochi VAE.
+
+    Applies per-channel mean/std denormalize and scaling_factor inversion before decoding.
+    Supports both the PyTorch reference VAE and the TT-NN implementation; the TT-NN backend
+    supports tracing.
+    """
+
+    def __init__(
+        self,
+        *,
+        checkpoint_name: str,
+        parallel_config: MochiVAEParallelConfig,
+        ccl_manager: CCLManager,
+        use_torch: bool,
+    ) -> None:
+        torch_vae = AutoencoderKLMochi.from_pretrained(checkpoint_name, subfolder="vae", torch_dtype=torch.float32)
+
+        self.device = ccl_manager.mesh_device
+        self._scaling_factor = torch_vae.config.scaling_factor
+
+        latents_mean = torch_vae.config.latents_mean
+        latents_std = torch_vae.config.latents_std
+        if latents_mean is not None and latents_std is not None:
+            self._latents_mean = torch.tensor(latents_mean).view(1, -1, 1, 1, 1)
+            self._latents_std = torch.tensor(latents_std).view(1, -1, 1, 1, 1)
+        else:
+            self._latents_mean = None
+            self._latents_std = None
+
+        if use_torch:
+            self._torch_vae = torch_vae
+            self._decoder = None
+            self._tracer = None
+            self._decoder_state_dict = None
+        else:
+            self._torch_vae = None
+            self._decoder = MochiVAEDecoder(
+                mesh_device=self.device,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+                out_channels=torch_vae.config.out_channels,
+                base_channels=torch_vae.config.decoder_block_out_channels[0],
+                channel_multipliers=[
+                    x // torch_vae.config.decoder_block_out_channels[0]
+                    for x in torch_vae.config.decoder_block_out_channels
+                ],
+                temporal_expansions=torch_vae.config.temporal_expansions,
+                spatial_expansions=torch_vae.config.spatial_expansions,
+                num_res_blocks=torch_vae.config.layers_per_block,
+                latent_dim=torch_vae.config.latent_channels,
+                has_attention=[False, False, False, False, False],
+                nonlinearity=torch_vae.config.act_fn,
+                output_nonlinearity=torch_vae.config.act_fn,
+                latents_mean=latents_mean,
+                latents_std=latents_std,
+                scaling_factor=torch_vae.config.scaling_factor,
+            )
+            self._tracer = Tracer(self._decoder.forward, device=self.device, prep_run=False)
+            self._decoder_state_dict = torch_vae.decoder.state_dict()
+
+    def is_loaded(self) -> bool:
+        return self._torch_vae is not None or self._decoder.is_loaded()
+
+    def deallocate_weights(self) -> None:
+        if self._decoder is not None:
+            self._decoder.deallocate_weights()
+
+    def reload_weights(self) -> None:
+        if self._decoder is None or self._decoder.is_loaded():
+            return
+        self._decoder.load_torch_state_dict(self._decoder_state_dict)
+
+    @torch.no_grad()
+    def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
+        if self._latents_mean is not None and self._latents_std is not None:
+            mean = self._latents_mean.to(latents.device, latents.dtype)
+            std = self._latents_std.to(latents.device, latents.dtype)
+            latents = latents * std / self._scaling_factor + mean
+        else:
+            latents = latents / self._scaling_factor
+
+        if self._torch_vae is not None:
+            return self._torch_vae.decode(latents, return_dict=False)[0]
+
+        tt_latents = self._decoder.prepare_input(latents)
+        forward = self._tracer if traced else self._decoder.forward
+        tt_output = forward(tt_latents)
+        return self._decoder.postprocess_output(tt_output, latents.shape)

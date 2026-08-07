@@ -28,7 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/kernels/cq_prefetch.hpp"
@@ -50,6 +50,15 @@ bool wrap_ge(uint32_t a, uint32_t b) {
     return diff >= 0;
 }
 
+void advance_simulator_cq_wait(MetalContext& ctx, uint32_t device_id) {
+    if (!ctx.rtoptions().get_simulator_enabled()) {
+        return;
+    }
+    for (uint32_t i = 0; i < ctx.rtoptions().get_simulator_cq_wait_clocks(); ++i) {
+        ctx.get_cluster().advance_device_execution(device_id);
+    }
+}
+
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 // GetProgress is optional - if provided, timeout only triggers if BOTH wait_condition is true AND no progress made
@@ -59,7 +68,8 @@ void loop_and_wait_with_timeout(
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
-    const GetProgress& get_progress) {
+    const GetProgress& get_progress,
+    std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -70,6 +80,10 @@ void loop_and_wait_with_timeout(
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
+
             func_body();
 
             // Check if operation is finished
@@ -101,11 +115,18 @@ void loop_and_wait_with_timeout(
         }
     } else {
         do {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
             func_body();
         } while (wait_condition());
     }
 }
 }  // namespace
+
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
+    return !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
+}
 
 SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs) :
     context_id(context_id),
@@ -204,6 +225,16 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     // Two TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
     static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
+    if (d2h_uses_hugepage_fallback(ctx)) {
+        per_cq_reduction += tt::align(
+            (DispatchSettings::HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES + num_hw_cqs - 1) / num_hw_cqs,
+            DispatchSettings::TRANSFER_PAGE_SIZE);
+    }
+    TT_FATAL(
+        this->cq_size > per_cq_reduction,
+        "Command queue size {} B is too small for the {} B aux reservation",
+        this->cq_size,
+        per_cq_reduction);
     this->cq_size -= per_cq_reduction;
 
     uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
@@ -217,15 +248,17 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
 
 void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel) {
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type =
-        ctx.get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t completion_q_rd_ptr = ctx.dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-    const uint32_t prefetch_q_base = ctx.dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::UNRESERVED);
-    const uint32_t cq_start =
-        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    const uint32_t cq_start = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    const auto& mem_map = ctx.dispatch_mem_map();
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+        // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
+        // CQ's
+        const uint32_t completion_q_rd_ptr =
+            mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
+        const uint32_t prefetch_q_base =
+            mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
+
         tt_cxy_pair prefetcher_core =
             ctx.get_dispatch_core_manager().prefetcher_core(device_id, channel, cq_id);
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -265,9 +298,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
         // before we reserve space in the prefetch queue
         TT_FATAL(
-            ctx.dispatch_mem_map().max_prefetch_command_size() *
-                    (ctx.dispatch_mem_map().prefetch_q_entries() + 1U +
-                     PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
+            mem_map.max_prefetch_command_size() *
+                    (mem_map.prefetch_q_entries() + 1U + PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
                 this->get_issue_queue_size(cq_id),
             "Issue queue for cq_id {} has size of {} which is too small",
             cq_id,
@@ -275,8 +307,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes();
+        this->prefetch_q_dev_fences[cq_id] =
+            prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
 
@@ -673,7 +705,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     const uint32_t prefetch_q_rd_ptr =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -681,14 +713,13 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
         }
-        ZoneScopedN("wait_for_fetch_q_space");
+        TTZoneScopedDN(DISPATCH, "wait_for_fetch_q_space");
 
         // Body of the operation
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-            ctx.get_cluster().advance_device_execution(this->device_id);
+            advance_simulator_cq_wait(ctx, this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -713,10 +744,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    uint32_t prefetch_q_base =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes());
+    const auto& mem_map = ctx.dispatch_mem_map();
+    uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
+    uint32_t prefetch_q_limit =
+        prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -733,14 +764,45 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_ptr;
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    const bool cq_wait_trace_enabled = std::getenv("TT_METAL_CQ_WAIT_TRACE") != nullptr;
+    const uint64_t cq_wait_trace_interval = [] {
+        const char* env = std::getenv("TT_METAL_CQ_WAIT_TRACE_INTERVAL");
+        return env == nullptr ? 1000ULL : std::max(1ULL, std::strtoull(env, nullptr, 0));
+    }();
+    uint64_t cq_wait_trace_count = 0;
 
     // Body of the operation to be timed out
-    auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
+    auto wait_operation_body = [this,
+                                cq_id,
+                                &cq_interface,
+                                cq_wait_trace_enabled,
+                                cq_wait_trace_interval,
+                                &cq_wait_trace_count,
+                                &write_ptr_and_toggle,
+                                &write_ptr,
+                                &write_toggle]() {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
+        if (cq_wait_trace_enabled && ((cq_wait_trace_count++ % cq_wait_trace_interval) == 0)) {
+            auto* non_const_this = const_cast<SystemMemoryManager*>(this);
+            std::fprintf(
+                stderr,
+                "CQ_WAIT_TRACE dev=%u cq=%u rd=0x%x/%u wr=0x%x/%u raw=0x%x progress=0x%x current_event=%u "
+                "last_completed=%u\n",
+                this->device_id,
+                cq_id,
+                cq_interface.completion_fifo_rd_ptr,
+                cq_interface.completion_fifo_rd_toggle,
+                write_ptr,
+                write_toggle,
+                write_ptr_and_toggle,
+                get_cq_dispatch_progress(this->device_id, cq_id),
+                non_const_this->get_current_event(cq_id),
+                non_const_this->get_last_completed_event(cq_id));
+            std::fflush(stderr);
+        }
+        advance_simulator_cq_wait(tt::tt_metal::MetalContext::instance(this->context_id), this->device_id);
     };
 
     // Condition to check if the operation should continue
@@ -767,7 +829,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         wait_condition,
         on_timeout,
         tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+        get_dispatch_progress,
+        &exit_condition);
 
     return write_ptr_and_toggle;
 }

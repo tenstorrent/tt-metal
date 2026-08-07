@@ -51,4 +51,9 @@ inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #endif
 }
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+inline __attribute__((always_inline)) uint32_t get_trisc_id() { return ckernel::csr_read<ckernel::CSR::TRISC_ID>(); }
+inline __attribute__((always_inline)) uint32_t get_neo_id() { return ckernel::csr_read<ckernel::CSR::NEO_ID>(); }
+#endif
+
 }  // namespace internal_

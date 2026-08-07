@@ -15,11 +15,50 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_mesh_shape,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    program_config_grid_bounds,
     reconcile_golden_to_actual,
 )
+
+# The device is opened per-vector (not by the fixture) so each vector can use the
+# dispatch axis its traced SDPAProgramConfig grid needs: some grids touch x=7
+# (need ROW), others touch y=9 / use sub_core_grids up to y=9 (need COL), and no
+# single per-suite axis serves both. The device is cached and only reopened when
+# the required axis changes between consecutive vectors, so agnostic runs reuse it.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
+def _vector_dispatch_axis(kwargs):
+    pc = kwargs.get("program_config")
+    pc_val = pc.get("value", "") if isinstance(pc, dict) else str(pc or "")
+    return dispatch_axis_for_grid(*program_config_grid_bounds(pc_val))
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -69,12 +108,10 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
-    del device
+    # Device is opened per-vector in run() (see _ensure_vector_device) so each
+    # vector can pick the dispatch axis its program_config grid needs.
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
@@ -213,6 +250,38 @@ def _paged_sdpa_decode_golden(
     return out
 
 
+def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale, sliding_window=None):
+    """Causal paged attention for ONE batch from device-resident shards.
+
+    q_heads [NQH, D]; k_chip/v_chip [num_blocks, n_kv_heads, block, D]; page_row
+    maps logical->physical pages; pos = most-recent cache index (inclusive).
+    Returns [NQH, D]. GQA/MQA: q head h attends KV head h // (NQH // n_kv_heads),
+    so the golden must NOT collapse to KV head 0 (that ignores heads 1..n_kv-1
+    and yields a wrong result for multi-KV-head configs).
+    """
+    d = q_heads.shape[-1]
+    nqh = q_heads.shape[0]
+    nkvh = k_chip.shape[1]
+    n_active = int(pos) + 1
+    n_blocks = (n_active + block - 1) // block
+    pages = page_row[:n_blocks].long().clamp_(0, k_chip.shape[0] - 1)
+    rep = max(1, nqh // max(1, nkvh))
+    out = torch.empty((nqh, d), dtype=torch.float32)
+    for h in range(nqh):
+        kvh = min(h // rep, nkvh - 1)
+        k_seq = k_chip[pages, kvh].reshape(-1, d)[:n_active].float()
+        v_seq = v_chip[pages, kvh].reshape(-1, d)[:n_active].float()
+        # Sliding-window (local) attention: the query at position pos attends to
+        # only the last `sliding_window` tokens (gemma sliding layers). Without
+        # this the golden does full attention -> wrong vs the windowed device op.
+        if sliding_window and n_active > int(sliding_window):
+            k_seq = k_seq[-int(sliding_window) :]
+            v_seq = v_seq[-int(sliding_window) :]
+        w = torch.softmax((q_heads[h].float() @ k_seq.t()) * scale, dim=-1)
+        out[h] = w @ v_seq
+    return out
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -237,6 +306,10 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # traced program_config grid. fixture yielded None; we own the device here.
+    device = _ensure_vector_device(_vector_dispatch_axis(kwargs))
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
@@ -339,10 +412,37 @@ def run(
     # Derive proper ranges from the K-cache shape: dim 0 = num_pages, dim 2 = page_size.
     _num_pages = int(shape_b[0]) if len(shape_b) >= 4 else 1
     _page_size = int(shape_b[2]) if len(shape_b) >= 4 else 1
-    _max_pages_per_user = int(shape_d[-1]) if len(shape_d) >= 2 else _num_pages
+    _max_pages_per_user = int(shape_d[-1]) if len(shape_d) >= 1 else _num_pages
     _seq_len_max = max(2, min(_num_pages, _max_pages_per_user) * _page_size)
-    torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
-    torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
+    # page_table is a paged-KV virtual->physical block map and MUST be a valid
+    # (1-to-1) mapping into [0, num_pages). Filling it with arbitrary randint
+    # values makes the decode kernel dereference garbage physical blocks -> a NoC
+    # transaction that never completes -> device HANG (this is exactly why the
+    # BS=32 sharded-page-table configs 83ebb7ca / c8c59223 hung). Build
+    # b sequences x max_pages_per_user UNIQUE physical blocks, then stack one
+    # identical copy per core (sharded page tables replicate the (b,mbps) map
+    # across the leading dim; ordinary page tables are just (b,mbps)). cur_pos is
+    # one bounded position per user, replicated the same way.
+    _b = int(shape_a[1]) if len(shape_a) >= 2 else 1
+    _mbps = int(_max_pages_per_user)
+    try:
+        _n_virt = _b * _mbps
+        if 0 < _n_virt <= _num_pages:
+            _valid_map = torch.randperm(_num_pages)[:_n_virt].reshape(_b, _mbps).to(torch.int32)
+        else:
+            _valid_map = torch.randint(0, max(_num_pages, 1), (_b, _mbps), dtype=torch.int32)
+        _pt_rows = int(shape_d[0]) if len(shape_d) >= 1 else _b
+        _rep_pt = max(1, _pt_rows // max(_b, 1))
+        torch_input_d = _valid_map.repeat(_rep_pt, 1)[:_pt_rows].reshape(tuple(shape_d))
+        _cp_b = torch.randint(1, _seq_len_max, (_b,), dtype=torch.int32)
+        if int(shape_e[-1]) == _b:
+            torch_input_e = _cp_b.reshape((1,) * (len(shape_e) - 1) + (_b,)).expand(tuple(shape_e)).contiguous()
+        else:
+            torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
+    except Exception:
+        # Best-effort fallback: at least keep values within the valid range.
+        torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
+        torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
 
     if len(shape_a) == 4:
         try:
@@ -409,13 +509,45 @@ def run(
         except Exception:
             return False
 
+    # --- paged_sdpa decode Q padding fix --------------------------------------
+    # The decode kernel reads padded_num_heads (= nearest_pow_2(nearest_n(H_q,32)))
+    # rows per core. The master trace records Q as ROW_MAJOR with shard height =
+    # H_q (e.g. 8), so only user 0 aligns and the rest read padding (PCC ~0.06),
+    # and the resulting placement also trips \"not on_dispatch_core\". Rebuild Q
+    # as TILE with shard height = padded_num_heads so all users align, then take
+    # the direct from_torch path (which pads heads up to the shard height).
+    _q_pad_override = False
+    try:
+        if len(shape_a) == 4 and _is_sharded_memory_config(mem_config_a):
+            _spec = mem_config_a.shard_spec
+            _hq = int(shape_a[2])
+
+            def _nn(x, n):
+                return ((x + n - 1) // n) * n
+
+            def _np2(x):
+                p = 1
+                while p < x:
+                    p *= 2
+                return p
+
+            _padded = _np2(_nn(_hq, 32))
+            if int(_spec.shape[0]) < _padded:
+                _new_spec = ttnn.ShardSpec(_spec.grid, [_padded, int(_spec.shape[1])], _spec.orientation)
+                mem_config_a = ttnn.MemoryConfig(mem_config_a.memory_layout, mem_config_a.buffer_type, _new_spec)
+                layout_a = ttnn.TILE_LAYOUT
+                _q_pad_override = True
+    except Exception:
+        _q_pad_override = False
+    # --------------------------------------------------------------------------
+
     if is_mesh_device and input_a_tensor_placement:
         # When the destination memory_config is sharded, ttnn.from_torch
         # promotes the per-chip logical shape to the shard height (e.g. 8 -> 32).
         # The master trace records the production logical shape (8), so we
         # create the tensor in DRAM first and then to_memory_config into the
         # sharded L1 layout to preserve the logical shape.
-        if _is_sharded_memory_config(mem_config_a):
+        if _is_sharded_memory_config(mem_config_a) and not _q_pad_override:
             tensor_a_dram = create_tensor_on_mesh(
                 torch_input_a, device, dtype_a, layout_a, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
             )
@@ -545,17 +677,40 @@ def run(
             import re
 
             val = traced_pc.get("value", "")
-            gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+            # Grid is recorded either as "(x=8,y=8)" or "8-9" (a grid SIZE).
+            gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", val) or re.search(
+                r"compute_with_storage_grid_size=(\d+)-(\d+)", val
+            )
             qm = re.search(r"q_chunk_size=(\d+)", val)
             km = re.search(r"k_chunk_size=(\d+)", val)
             em = re.search(r"exp_approx_mode=(\w+)", val)
-            if gm and qm and km:
-                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
-                    q_chunk_size=int(qm.group(1)),
-                    k_chunk_size=int(km.group(1)),
-                    exp_approx_mode=em.group(1).lower() == "true" if em else False,
+            mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
+            # sub_core_grids: {[x1-y1 - x2-y2], ...} — the explicit kernel
+            # placement that keeps the op off dispatch cores. Must be preserved;
+            # dropping it caused "not on_dispatch_core". std::nullopt when absent.
+            sub_core_grids = None
+            if "sub_core_grids=std::nullopt" not in val:
+                ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
+                if ranges:
+                    sub_core_grids = ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                            for a, b, c, d in ranges
+                        }
+                    )
+            if gm:
+                pc_kwargs = dict(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(int(gm.group(1)), int(gm.group(2))),
+                    q_chunk_size=int(qm.group(1)) if qm else 0,
+                    k_chunk_size=int(km.group(1)) if km else 0,
                 )
+                if em:
+                    pc_kwargs["exp_approx_mode"] = em.group(1).lower() == "true"
+                if mcm:
+                    pc_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+                if sub_core_grids is not None:
+                    pc_kwargs["sub_core_grids"] = sub_core_grids
+                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**pc_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc
 
@@ -574,21 +729,72 @@ def run(
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )
-    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
-    if is_mesh_device and output_tensor.shape != torch_output_tensor.shape:
-        dev_tensors = ttnn.get_device_tensors(ttnn_output)
-        output_tensor = ttnn.to_torch(dev_tensors[0])
     e2e_perf = stop_measuring_time(start_time)
 
-    if torch_output_tensor.shape != output_tensor.shape:
-        # Trim padded heads/users and align shapes
-        ot = output_tensor
-        gt = torch_output_tensor
-        if gt.ndim == ot.ndim == 4:
-            gt = gt[: ot.shape[0], : ot.shape[1], : ot.shape[2], : ot.shape[3]]
-        elif gt.numel() == ot.numel():
-            gt = gt.reshape(ot.shape)
-        torch_output_tensor = gt
-        output_tensor = ot
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    # Per-chip paged-attention golden from DEVICE-RESIDENT inputs. The op pads
+    # query heads to 32 and packs each batch into those head-rows, so each chip's
+    # output [1, X, Y, D] holds b_eff = X*Y//32 active batches (batch k's valid
+    # heads [0:Y] at dim1 slot k*(32//Y)). Build the golden from that chip's own
+    # Q/K/V/cur_pos/page_table (read back) so it's robust to mesh-shard ordering
+    # and matches what the chip actually computed. (cf. the standalone repro.)
+    _scale = op_kwargs.get("scale")
+    out_dts = ttnn.get_device_tensors(ttnn_output) if is_mesh_device else [ttnn_output]
+    q_dts = ttnn.get_device_tensors(tensor_a) if is_mesh_device else [tensor_a]
+    k_dts = ttnn.get_device_tensors(tensor_b) if is_mesh_device else [tensor_b]
+    v_dts = ttnn.get_device_tensors(tensor_c) if is_mesh_device else [tensor_c]
+    pt_dts = ttnn.get_device_tensors(tensor_d) if is_mesh_device else [tensor_d]
+    cp_dts = ttnn.get_device_tensors(tensor_e) if is_mesh_device else [tensor_e]
+
+    o0 = ttnn.to_torch(out_dts[0])
+
+    X, Y, D = o0.shape[1], o0.shape[2], o0.shape[3]
+    PADDED = 32
+    NH = Y
+    # Two output layouts:
+    #  - [1, B, NH, D]: dim1 is the batch (one row per batch), dim2 the query
+    #    heads. Detected when dim1 == #batches (cur_pos count). Iterate batches
+    #    directly (stride 1) — the head-packing formula below mis-strides this
+    #    whenever NH < 32 and B > 1 (it processed B*NH//32 rows at stride 32//NH,
+    #    comparing batch k's golden against output row (32//NH)*k -> ~0 PCC).
+    #  - head-packed: NH padded to 32 with 32//NH batches per 32-row block.
+    # The per-chip batch is the LAST dim of cur_pos, not its element count:
+    # sharded cur_pos is (num_cores, batch) so .numel() (=cores*batch) inflated
+    # _nbatch and forced the head-packed branch (b_eff=2, stride=4) -> ~0.43 PCC.
+    _cp0 = ttnn.to_torch(cp_dts[0])
+    _nbatch = int(_cp0.shape[-1]) if _cp0.ndim >= 1 else int(_cp0.numel())
+    if X == _nbatch:
+        b_eff = X
+        stride = 1
+    else:
+        b_eff = max(1, (X * Y) // PADDED)
+        stride = max(1, PADDED // Y)
+    if _scale in (None, "__ABSENT__"):
+        _scale = float(D) ** -0.5
+    _scale = float(_scale)
+    block = ttnn.to_torch(k_dts[0]).shape[2]
+
+    all_g, all_d = [], []
+    for i in range(len(out_dts)):
+        ot = ttnn.to_torch(out_dts[i])
+        qc = ttnn.to_torch(q_dts[i]).float().reshape(-1, NH, D)
+        kc = ttnn.to_torch(k_dts[i]).float()
+        vc = ttnn.to_torch(v_dts[i]).float()
+        cp = ttnn.to_torch(cp_dts[i]).reshape(-1)
+        pt = ttnn.to_torch(pt_dts[i])
+        pt = pt.reshape(pt.shape[-2], -1) if pt.ndim >= 2 else pt.reshape(1, -1)
+        for k in range(b_eff):
+            _sw = op_kwargs.get("sliding_window_size")
+            g = _batch_paged_golden(
+                qc[k % qc.shape[0]],
+                kc,
+                vc,
+                pt[k % pt.shape[0]],
+                int(cp[k % cp.numel()].item()),
+                block,
+                _scale,
+                sliding_window=_sw,
+            )
+            all_g.append(g)
+            all_d.append(ot[0, stride * k, :NH, :].float())
+    pcc = check_with_pcc(torch.stack(all_g), torch.stack(all_d), 0.99)
     return [pcc, e2e_perf]

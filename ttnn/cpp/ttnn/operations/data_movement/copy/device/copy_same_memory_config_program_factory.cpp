@@ -59,6 +59,10 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
 
     const bool tilized = output.layout() == Layout::TILE;
     const bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
+    // The tilized reader/writer kernels use the unified TensorAccessor, which addresses both
+    // interleaved and sharded tensors, so they no longer need the ShardedAddrGen path. The
+    // row-major (stick) kernels still rely on ShardedAddrGen for sharded tensors.
+    const bool use_sharded_addrgen = sharded && !tilized;
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size =
         tilized ? tt::tile_size(input_cb_data_format) : input.padded_shape()[-1] * input.element_size();
@@ -131,7 +135,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), static_cast<uint32_t>(output_unit_size)};
     }
     std::map<std::string, std::string> kernel_defines;
-    if (sharded) {
+    if (use_sharded_addrgen) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input, writer_compile_time_args);
         shard_builder::extend_sharding_compile_time_args(input, reader_compile_time_args);
@@ -179,7 +183,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             writer_ra.push_back(dst_buffer);
             writer_ra.push_back(num_units_per_core);
             writer_ra.push_back(start_id);
-            if (sharded) {
+            if (use_sharded_addrgen) {
                 std::vector<uint32_t> reader_tail;
                 std::vector<uint32_t> writer_tail;
                 shard_builder::extend_sharding_run_time_args(input, reader_tail);
@@ -202,7 +206,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             writer_ra.push_back(num_units_per_core);
             writer_ra.push_back(start_id);
             writer_ra.push_back(full_output_row / output_unit_size);
-            if (sharded) {
+            if (use_sharded_addrgen) {
                 std::vector<uint32_t> reader_tail;
                 std::vector<uint32_t> writer_tail;
                 shard_builder::extend_sharding_run_time_args(input, reader_tail);

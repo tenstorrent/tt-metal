@@ -48,6 +48,7 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto pcie_devices = cluster.number_of_pci_devices();
     std::vector<int> device_ids;
+    device_ids.reserve(std::min<size_t>(pcie_devices, number_of_devices));
 
     // Assumes PCIe device IDs are iterated first
     for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
@@ -70,6 +71,7 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto pcie_devices = cluster.number_of_pci_devices();
     std::vector<int> device_ids;
+    device_ids.reserve(std::min<size_t>(pcie_devices, number_of_devices));
     std::unordered_set<uint32_t> numa_nodes;
 
     for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {

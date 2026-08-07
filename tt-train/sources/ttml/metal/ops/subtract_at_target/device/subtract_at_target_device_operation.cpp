@@ -18,7 +18,7 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
                            tt::tt_metal::Layout required_layout,
                            tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SubtractAtTarget: '{}' must be on DEVICE, got '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -36,7 +36,7 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(required_dtype),
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SubtractAtTarget: '{}' must use INTERLEAVED memory layout, got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -85,7 +85,7 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(

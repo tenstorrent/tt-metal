@@ -15,7 +15,7 @@
 #include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,15 +25,15 @@ void kernel_main() {
 
     constexpr float M_PI = 3.14159265358979323846f;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
+    DataflowBuffer dfb_in(cb_input);
+    DataflowBuffer dfb_out(cb_output);
 
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
 
         // copy input to dst 0 and 1
         copy_tile_to_dst_init_short(cb_input);
@@ -100,8 +100,8 @@ void kernel_main() {
 
         pack_tile(0, cb_output);
 
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
 
         tile_regs_release();
     }

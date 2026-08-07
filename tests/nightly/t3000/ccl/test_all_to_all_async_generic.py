@@ -335,3 +335,158 @@ def test_all_to_all(
         reuse_inputs=False,
         cluster_axis=cluster_axis,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_all_to_all_fabric_1d_ring(mesh_device):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        [1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    (
+        "cluster_axis,num_links,logical_shape,in_dim,out_dim,topology,input_mem_config,"
+        "output_mem_config,trace_mode,reuse_inputs"
+    ),
+    [
+        pytest.param(
+            1,
+            1,
+            [1, 32, 128, 576],
+            2,
+            1,
+            None,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link1-auto-2to1-dram",
+        ),
+        pytest.param(
+            1,
+            2,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            True,
+            True,
+            id="axis1-link2-linear-1to2-dram-trace",
+        ),
+        pytest.param(
+            1,
+            2,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.Topology.Ring,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link2-ring-1to2-dram",
+        ),
+        pytest.param(
+            0,
+            2,
+            [1, 2, 256, 768],
+            3,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            False,
+            False,
+            id="axis0-link2-linear-3to2-l1-width-sharded",
+        ),
+        pytest.param(
+            0,
+            2,
+            [1, 2, 256, 768],
+            3,
+            2,
+            ttnn.Topology.Ring,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis0-link2-ring-3to2-dram",
+        ),
+    ],
+)
+def test_all_to_all_fabric_2d(
+    mesh_device,
+    cluster_axis,
+    num_links,
+    logical_shape,
+    in_dim,
+    out_dim,
+    topology,
+    input_mem_config,
+    output_mem_config,
+    trace_mode,
+    reuse_inputs,
+):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=logical_shape,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        num_links=num_links,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=topology,
+        num_iters=2,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
+        do_check=True,
+        trace_mode=trace_mode,
+        reuse_inputs=reuse_inputs,
+        cluster_axis=cluster_axis,
+    )

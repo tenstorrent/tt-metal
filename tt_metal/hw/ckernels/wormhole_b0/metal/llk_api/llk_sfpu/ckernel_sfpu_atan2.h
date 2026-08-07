@@ -20,10 +20,10 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     sfpi::vFloat q;
     sfpi::vFloat s;
 
-    // Note: if x or y is ±NaN, this ensures that max=NaN, which is important for special case handling.
-    sfpi::vFloat min = sfpi::setsgn(x, 0);
-    sfpi::vFloat max = sfpi::setsgn(y, 0);
-    sfpi::vec_min_max(min, max);
+    // Note: if x or y is ±NaN, the use of setsgn, ensures that
+    // max=NaN, which abs does not.  This is important for special
+    // case handling.
+    auto [min, max] = sfpi::min_max(sfpi::setsgn(x, 0), sfpi::setsgn(y, 0));
 
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
@@ -62,10 +62,10 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     // Special cases:
 
-    v_if(sfpi::reinterpret<sfpi::vInt>(min) >= sfpi::reinterpret<sfpi::vInt>(x_abs)) {
+    v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(x_abs)) {
         // if |y| ≥ |x| then r = π/2 - r
         r = half_pi - r;
-        v_if(sfpi::reinterpret<sfpi::vInt>(min) >= sfpi::reinterpret<sfpi::vInt>(max)) {
+        v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(max)) {
             // if |x| = |y| (including both infinite), then r = π/4
             r = sfpi::addexp(half_pi, -1);
             v_if(min == 0.0f) {
@@ -88,14 +88,14 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
+        r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
     }
 
     r = sfpi::copysgn(r, y);
 
     // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
     sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
-    v_if(sfpi::reinterpret<sfpi::vInt>(infinity) < sfpi::reinterpret<sfpi::vInt>(max)) {
+    v_if(sfpi::as<sfpi::vInt>(infinity) < sfpi::as<sfpi::vInt>(max)) {
         // if |x| = NaN or |y| = NaN, then r = NaN
         r = std::numeric_limits<float>::quiet_NaN();
     }

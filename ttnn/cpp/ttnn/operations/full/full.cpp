@@ -11,7 +11,7 @@
 namespace ttnn {
 
 Tensor moreh_full(
-    const ttnn::SmallVector<uint32_t>& shape,
+    const ttsl::SmallVector<uint32_t>& shape,
     const std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,

@@ -13,11 +13,8 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
 #include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
@@ -40,16 +37,18 @@ inline void _sfpu_configure_addrmod_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_7);
 }
 
 /**
  * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate the write address
  * @param tile_index: Use to index to a tile in Destination register
  */
+template <trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
+    _set_dst_write_addr_<TILE_SHAPE>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 
@@ -88,29 +87,6 @@ inline void _llk_math_sfpu_init_()
     _init_sfpu_config_reg_();
     _sfpu_configure_addrmod_();
     _reset_counters_<p_setrwc::SET_ABD_F>();
-}
-
-/**
- * @brief Runs SFPU operation for a tile (default 32x32)
- * @param: sfpu_func: function pointer to the sfpu functions to run, can look at list of functions here: common/inc/sfpu/cmath_sfpu*
- * @param: dst_tile_index: Starting tile index in the destination register, values = 0 - 15
- * @param: args: variable number of args can be passed into this function, that will be passed
- * to the SFPU function pointer
- */
-template <class F, class... ARGS>
-inline void _llk_math_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
-{
-    _llk_math_sfpu_start_(dst_tile_index);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
-        sfpu_func(std::forward<ARGS>(args)...);
-
-        // Move to the next face
-        _llk_math_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_sfpu_done_();
 }
 
 } // namespace ckernel

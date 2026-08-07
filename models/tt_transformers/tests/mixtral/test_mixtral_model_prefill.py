@@ -72,7 +72,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
         "1layer",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 250000000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,

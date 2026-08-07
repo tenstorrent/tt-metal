@@ -77,23 +77,23 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
     const auto num_groups = operation_attributes.num_groups;
     Shape mean_rstd_shape({1, 1, N, num_groups});
 
-    std::vector<std::optional<TensorSpec>> result;
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result;
     result.reserve(3);
 
     // output
     if (tensor_args.output.has_value()) {
         result.push_back(tensor_args.output->tensor_spec());
     } else {
-        result.push_back(
-            TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     }
 
     // mean
     if (tensor_args.mean.has_value()) {
         result.push_back(tensor_args.mean->tensor_spec());
     } else if (operation_attributes.are_required_outputs[1]) {
-        result.push_back(
-            TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
         result.push_back(std::nullopt);
     }
@@ -102,8 +102,8 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
     if (tensor_args.rstd.has_value()) {
         result.push_back(tensor_args.rstd->tensor_spec());
     } else if (operation_attributes.are_required_outputs[2]) {
-        result.push_back(
-            TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
         result.push_back(std::nullopt);
     }
@@ -143,36 +143,6 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
         result.push_back(std::nullopt);
     }
     return result;
-}
-
-ttsl::hash::hash_t MorehGroupNormOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Hash everything that affects the program: shape/dtype/layout of every tensor + all
-    // operation_attributes. This is more conservative than the framework's default
-    // (which only hashes the descriptor's compile_time_args / CB sizes / kernel paths)
-    // and ensures eps is part of the cache key — required for the BufferBinding fast
-    // cache-hit path to be correctness-safe (cache hit guarantees identical attrs).
-    const auto& input = tensor_args.input;
-    return ttsl::hash::hash_objects_with_default_seed(
-        // Shape/dtype/layout of input — frame these as a tuple for the hasher
-        input.padded_shape(),
-        input.logical_shape(),
-        input.dtype(),
-        input.layout(),
-        input.memory_config(),
-        // Optional inputs — has_value flags + (if present) shape/dtype/layout
-        tensor_args.gamma.has_value(),
-        tensor_args.gamma.has_value() ? tensor_args.gamma->dtype() : tt::tt_metal::DataType::INVALID,
-        tensor_args.beta.has_value(),
-        tensor_args.beta.has_value() ? tensor_args.beta->dtype() : tt::tt_metal::DataType::INVALID,
-        // Attribute knobs
-        operation_attributes.num_groups,
-        operation_attributes.eps,
-        operation_attributes.are_required_outputs,
-        operation_attributes.memory_config,
-        operation_attributes.mean_memory_config,
-        operation_attributes.rstd_memory_config,
-        operation_attributes.compute_kernel_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm
 

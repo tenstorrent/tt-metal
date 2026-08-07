@@ -30,7 +30,7 @@ ttnn::Tensor fast_reduce_nc(
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
-    ttnn::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
+    ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
     const std::optional<tt::tt_metal::DataType> intermediate_dtype =

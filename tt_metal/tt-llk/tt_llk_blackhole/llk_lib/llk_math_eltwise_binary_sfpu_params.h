@@ -15,7 +15,7 @@ inline void _llk_math_eltwise_binary_sfpu_params_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_out,
-    int vector_mode = static_cast<int>(VectorMode::RC),
+    VectorMode vector_mode = VectorMode::RC,
     Args&&... args)
 {
     _llk_math_eltwise_sfpu_start_(0);

@@ -26,6 +26,11 @@ protected:
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
+    void SetUp() override {
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
+        }
+    }
 };
 
 // CPU reference: for each expert slice X_e, compute
@@ -214,10 +219,15 @@ TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_TrailingPad_E3_H64_I128) {
     RunCase({/*E*/ 3U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {32U, 16U, 48U}, /*tail_pad_tiles*/ 5U});
 }
 
-// Backward sanity: gradients populate, are finite, have the right shapes,
-// and are zero on per-expert pad rows of `grouped` (those rows contribute
-// nothing to the loss). Numerical correctness is left to a downstream
-// reference test; this guards the op wiring and graph dependencies.
+// Backward sanity + empty-expert regression. Runs fwd+bwd on E=3 with one empty expert
+// (counts={32,0,40}). Asserts shape correctness, finiteness, pad-row zeroing, AND that
+// the empty expert's dW_gate/dW_up/dW_down are exactly zero (the kernel-side fix for
+// K_active=0 garbage). Non-empty experts must produce non-zero finite gradients.
+//
+// Before the kernel fix the empty expert's K-axis OffsetsRole dW matmuls would copy
+// uninitialized DRAM into the output → ~1e37 / NaN gradients → loss blew up on step 2
+// of training. This is the regression guard at the moe_ffn op level (complementary to
+// VariableMatmulTest.EmptyExpertProbe_InputAndWeightK_TransposeA at the kernel level).
 class MoeFfnSwigluBackwardTest : public ::testing::Test {
 protected:
     static void SetUpTestSuite() {
@@ -226,15 +236,21 @@ protected:
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
+    void SetUp() override {
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
+        }
+    }
 };
 
-TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_GradientsRunAndShapesMatch) {
+TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_EmptyExpert_dWZeroForEmpty) {
     using namespace ttml;
 
     constexpr uint32_t E = 3U;
     constexpr uint32_t H = 64U;
     constexpr uint32_t I = 128U;
-    const std::vector<uint32_t> counts = {32U, 16U, 48U};
+    // Expert 1 is empty.
+    const std::vector<uint32_t> counts = {32U, 0U, 40U};
 
     std::vector<uint32_t> offsets(E + 1U, 0U);
     for (uint32_t e = 0; e < E; ++e) {
@@ -257,7 +273,6 @@ TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_GradientsRunAndShapesMatch) {
         xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
 
-    // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
     const auto w_gate = test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 3U>{static_cast<std::size_t>(E), I, H}, 0.0f, 1.0f, rng());
     const auto w_up = test_utils::make_uniform_xarray<float>(
@@ -278,38 +293,10 @@ TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_GradientsRunAndShapesMatch) {
     t_out->set_grad(core::ones_like(t_out->get_value()));
     t_out->backward();
 
+    // ----- dgrouped: shape, finiteness, pad-row zeroing -----
     const auto dgrouped = core::to_xtensor(t_grouped->get_grad());
     EXPECT_EQ(dgrouped.shape(), grouped_4d.shape());
     EXPECT_TRUE(xt::all(xt::isfinite(dgrouped))) << "non-finite dgrouped";
-
-    auto check_per_expert_grads = [&](const std::vector<autograd::TensorPtr>& list,
-                                      const std::vector<std::size_t>& expected_per_expert_shape,
-                                      const std::string& name) {
-        ASSERT_EQ(list.size(), E);
-        for (uint32_t e = 0; e < E; ++e) {
-            const auto g = core::to_xtensor(list[e]->get_grad());
-            EXPECT_EQ(g.shape(), expected_per_expert_shape) << name << "[" << e << "] shape mismatch";
-            EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
-        }
-    };
-    check_per_expert_grads(t_wg, {1U, 1U, I, H}, "dW_gate");
-    check_per_expert_grads(t_wu, {1U, 1U, I, H}, "dW_up");
-    check_per_expert_grads(t_wd, {1U, 1U, H, I}, "dW_down");
-
-    // Loss = sum(Y); inputs are positive, weights are positive — every active row
-    // contributes a non-zero gradient. Active-row dgrouped should be non-trivial.
-    bool any_active_nonzero = false;
-    for (uint32_t e = 0; e < E; ++e) {
-        if (counts[e] == 0U) {
-            continue;
-        }
-        const auto active = xt::view(dgrouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all());
-        if (xt::amax(xt::abs(active))() > 0.0f) {
-            any_active_nonzero = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(any_active_nonzero) << "all active-row gradients are zero — backward likely not connected";
 
     // Per-expert pad rows of `grouped` had zero input → must have zero gradient.
     for (uint32_t e = 0; e < E; ++e) {
@@ -320,6 +307,46 @@ TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_GradientsRunAndShapesMatch) {
         }
         const auto pad = xt::view(dgrouped, 0, 0, xt::range(pad_lo, pad_hi), xt::all());
         EXPECT_NEAR(xt::amax(xt::abs(pad))(), 0.0f, 1e-3f) << "non-zero dgrouped on pad rows for expert " << e;
+    }
+
+    // ----- Per-expert dW: shape, finiteness, empty-expert = 0, non-empty = nonzero. -----
+    auto check_shape = [E](const std::vector<autograd::TensorPtr>& list,
+                           const std::vector<std::size_t>& expected,
+                           const std::string& name) {
+        ASSERT_EQ(list.size(), E);
+        for (uint32_t e = 0; e < E; ++e) {
+            EXPECT_EQ(core::to_xtensor(list[e]->get_grad()).shape(), expected)
+                << name << "[" << e << "] shape mismatch";
+        }
+    };
+    check_shape(t_wg, {1U, 1U, I, H}, "dW_gate");
+    check_shape(t_wu, {1U, 1U, I, H}, "dW_up");
+    check_shape(t_wd, {1U, 1U, H, I}, "dW_down");
+
+    constexpr uint32_t kEmptyExpert = 1U;
+    auto check_zero = [](const std::vector<autograd::TensorPtr>& list, uint32_t e, const std::string& name) {
+        const auto g = core::to_xtensor(list[e]->get_grad());
+        EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
+        const float max_abs = xt::amax(xt::abs(g))();
+        EXPECT_EQ(max_abs, 0.0f) << name << "[" << e << "] non-zero for empty expert; max_abs=" << max_abs
+                                 << " (kernel returned uninitialized memory for K_active=0)";
+    };
+    check_zero(t_wg, kEmptyExpert, "dW_gate");
+    check_zero(t_wu, kEmptyExpert, "dW_up");
+    check_zero(t_wd, kEmptyExpert, "dW_down");
+
+    // Non-empty experts must produce some signal — guards against accidentally zeroing
+    // every dW (which would also pass the empty-expert check trivially).
+    auto check_nonzero_finite = [](const std::vector<autograd::TensorPtr>& list, uint32_t e, const std::string& name) {
+        const auto g = core::to_xtensor(list[e]->get_grad());
+        EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
+        EXPECT_GT(xt::amax(xt::abs(g))(), 0.0f)
+            << name << "[" << e << "] zero for non-empty expert — backward not connected";
+    };
+    for (uint32_t e : {0U, 2U}) {
+        check_nonzero_finite(t_wg, e, "dW_gate");
+        check_nonzero_finite(t_wu, e, "dW_up");
+        check_nonzero_finite(t_wd, e, "dW_down");
     }
 
     autograd::ctx().reset_graph();

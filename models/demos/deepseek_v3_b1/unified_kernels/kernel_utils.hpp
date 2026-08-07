@@ -68,27 +68,30 @@ FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
 
 // Atomic semaphore decrement (for global semaphore reset across iterations)
 FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
-    __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELAXED);
+    __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELEASE);
 }
 
 // Atomic semaphore increment
 FORCE_INLINE void semaphore_inc(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
-    __atomic_fetch_add(sem_addr, val, __ATOMIC_RELAXED);
+    __atomic_fetch_add(sem_addr, val, __ATOMIC_RELEASE);
 }
 
 #endif
 
 // Atomic L1 semaphore primitives by address — callable from any RISC
-// (BR / NC / TR0 / TR1 / TR2). RELAXED ordering; callers are responsible for
-// pipeline fences (e.g. noc_async_read_barrier on NC; blocking LLK calls on TR).
+// (BR / NC / TR0 / TR1 / TR2). ACQUIRE/RELEASE ordering: producers use INC
+// (RELEASE) so prior writes are visible before the signal; consumers use LOAD
+// (ACQUIRE) so subsequent reads can't be hoisted before the load; DEC uses
+// RELEASE since the dec often signals downstream consumers (gather_sync_sem,
+// partial_sem, fmt_sync::consumer_release).
 FORCE_INLINE uint32_t sem_atomic_load(uint32_t sem_addr) {
-    return __atomic_load_n(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), __ATOMIC_RELAXED);
+    return __atomic_load_n(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), __ATOMIC_ACQUIRE);
 }
 FORCE_INLINE void sem_atomic_inc(uint32_t sem_addr, uint32_t v = 1) {
-    __atomic_fetch_add(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+    __atomic_fetch_add(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELEASE);
 }
 FORCE_INLINE void sem_atomic_dec(uint32_t sem_addr, uint32_t v = 1) {
-    __atomic_fetch_sub(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+    __atomic_fetch_sub(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELEASE);
 }
 
 // ============================================================================
@@ -125,12 +128,12 @@ FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
             tensix_sync();
         }
 #endif
-        __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELEASE);
 #elif defined(COMPILE_FOR_NCRISC)
         constexpr uint32_t sync_value = sync_math_risc ? 4 : 3;
-        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) & 0xFFFF) < sync_value) {
+        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_ACQUIRE) & 0xFFFF) < sync_value) {
         }
-        __atomic_fetch_sub(&sem_addr[0], sync_value, __ATOMIC_RELAXED);
+        __atomic_fetch_sub(&sem_addr[0], sync_value, __ATOMIC_RELEASE);
 #endif
     }
 }
@@ -143,11 +146,11 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
     {
 #if defined(COMPILE_FOR_NCRISC)
         constexpr uint32_t sync_value = sync_math_risc ? 4 : 3;
-        __atomic_fetch_add(&sem_addr[0], sync_value << 16, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&sem_addr[0], sync_value << 16, __ATOMIC_RELEASE);
 #elif defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
-        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) >> 16) == 0) {
+        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_ACQUIRE) >> 16) == 0) {
         }
-        __atomic_fetch_sub(&sem_addr[0], 1 << 16, __ATOMIC_RELAXED);
+        __atomic_fetch_sub(&sem_addr[0], 1 << 16, __ATOMIC_RELEASE);
 #endif
     }
 }

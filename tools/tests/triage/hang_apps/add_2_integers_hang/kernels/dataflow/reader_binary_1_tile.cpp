@@ -32,14 +32,14 @@ void kernel_main() {
     // read the tiles from DRAM into the circular buffers
     cb_reserve_back(cb_in0, 1);
     uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-    noc_async_read_tile(0, in0, cb_in0_addr);  // read
+    noc_async_read_page(0, in0, cb_in0_addr);  // read
     noc_async_read_barrier();                  // wait until the read is done
     cb_push_back(cb_in0, 1);                   // mark the tile as ready.
 
     // same process for the second input (different circular buffer and input buffer)
     cb_reserve_back(cb_in1, 1);
     uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-    noc_async_read_tile(0, in1, cb_in1_addr);
+    noc_async_read_page(0, in1, cb_in1_addr);
     noc_async_read_barrier();
     cb_push_back(cb_in1, 1);
 }

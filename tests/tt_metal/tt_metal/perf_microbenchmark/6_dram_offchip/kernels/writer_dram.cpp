@@ -23,7 +23,7 @@ void kernel_main() {
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t cb_addr = get_write_ptr(cb_id);
         for (uint32_t i = 0; i < block_size; ++i) {
-            noc_async_write_tile(input_start_tile_id, s, cb_addr);
+            noc_async_write_page(input_start_tile_id, s, cb_addr);
             cb_addr += single_tile_size_bytes;
             input_start_tile_id++;
         }

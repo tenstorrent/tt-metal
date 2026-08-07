@@ -314,7 +314,7 @@ void reduce_log_sum_exp_x() {
 
     tile_regs_acquire();
     const uint32_t reduction_register = 0;
-    reconfig_data_format(cb_exp_sum_before_reduction, cb_scaler);
+    reconfig_data_format(cb_scaler, cb_exp_sum_before_reduction);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         cb_exp_sum_before_reduction, cb_scaler, cb_exp_sum_after_reduction);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(

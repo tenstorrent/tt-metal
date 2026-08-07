@@ -30,7 +30,10 @@ namespace tt::scaleout_tools {
 using PortId = ttsl::StrongType<uint32_t, struct PortIdTag>;
 using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
+// Keep in sync with tt::tt_metal::PortType (fabric_types.hpp); duplicated rather than
+// aliased to avoid a ScaleoutTools<->Metalium cycle. Converted in physical_system_discovery.cpp.
 enum class PortType {
+    UNKNOWN,
     TRACE,
     QSFP_DD,
     WARP100,
@@ -50,7 +53,7 @@ struct AsicChannel {
 std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel);
 
 struct Port {
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
     PortId port_id{0};
 };
 

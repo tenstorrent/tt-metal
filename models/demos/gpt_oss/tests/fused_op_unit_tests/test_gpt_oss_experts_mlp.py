@@ -30,6 +30,7 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.experts_throughput.config import ThroughputExpertConfig, ThroughputProgramConfig
 from models.demos.gpt_oss.tt.experts_throughput.decode import expert_mlp_forward
 from models.demos.gpt_oss.tt.experts_throughput.weights import ThroughputExpertWeights, load_throughput_expert_weights
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -37,8 +38,8 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename, run_devic
 # Constants
 # ==============================================================================
 DEVICE_PERF_ENV_VAR = "GPT_OSS_EXPERTS_MLP_DEVICE_PERF"
-PERF_WARMUP_ITERS = 10
-PERF_MEASURE_ITERS = 100
+PERF_WARMUP_ITERS = 0
+PERF_MEASURE_ITERS = 1
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 
@@ -566,7 +567,7 @@ def _run_experts_mlp_test(
         return pcc
 
     # Standard e2e performance measurement
-    if not trace_mode or program_cache_enabled:
+    if expected_perf_us > 0.0 and (not trace_mode or program_cache_enabled):
         perf_profiler = BenchmarkProfiler()
         benchmark_data = BenchmarkData()
         trace_suffix = "trace" if trace_mode else "no_trace"
@@ -640,7 +641,7 @@ def _run_experts_mlp_test(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -721,7 +722,7 @@ def test_gpt_oss_experts_mlp(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

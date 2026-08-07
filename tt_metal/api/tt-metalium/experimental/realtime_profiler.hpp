@@ -6,23 +6,32 @@
 
 #include <cstdint>
 #include <functional>
-#include <string>
-#include <vector>
+#include <span>
+#include <string_view>
 
 namespace tt::tt_metal::experimental {
 
-// Record passed to registered callbacks when real-time profiler data arrives from a device.
 struct ProgramRealtimeRecord {
-    uint32_t program_id;                      // Runtime program ID
-    uint64_t start_timestamp;                 // Device start timestamp (raw ticks)
-    uint64_t end_timestamp;                   // Device end timestamp (raw ticks)
-    double frequency;                         // Device clock frequency (cycles per ns)
-    uint32_t chip_id;                         // Device chip ID
-    std::vector<std::string> kernel_sources;  // Kernel source paths for this program
+    uint32_t runtime_id;                               // Runtime ID. Currently truncated to 16 bits;
+                                                       // widening tracked in #46103.
+    uint32_t chip_id;                                  // Device chip ID
+    uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
+    uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
+    double frequency;                                  // Device clock frequency (cycles per ns)
+    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
+                                                       // MetalContext teardown or reinitialization.
 };
 
-// Callback type for real-time profiler data.
-using ProgramRealtimeProfilerCallback = std::function<void(const ProgramRealtimeRecord& record)>;
+struct ProgramRealtimeRecordBatch {
+    std::span<const ProgramRealtimeRecord> records;  // Non-empty, oldest first; valid
+                                                     // until the callback returns.
+    uint64_t dropped;                                // Records lost since this callback last ran; nonzero if the
+                                                     // callback could not keep up with incoming profiler data.
+};
+
+// Callback type for real-time profiler data. Invoked with a batch so a callback can
+// amortize fixed costs (a lock, a file flush, a network/DB round-trip, etc.) across many records.
+using ProgramRealtimeProfilerCallback = std::function<void(const ProgramRealtimeRecordBatch& batch)>;
 
 // Opaque handle returned by RegisterProgramRealtimeProfilerCallback, used to unregister.
 using ProgramRealtimeProfilerCallbackHandle = uint64_t;
@@ -30,8 +39,10 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 // clang-format off
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; they are called in order of registration from the
- * real-time profiler receiver thread.
+ * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
+ * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
+ * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
+ * is reported by ProgramRealtimeRecordBatch::dropped.
  *
  * Return value: ProgramRealtimeProfilerCallbackHandle - handle that can be passed to
  *               UnregisterProgramRealtimeProfilerCallback to remove the callback.

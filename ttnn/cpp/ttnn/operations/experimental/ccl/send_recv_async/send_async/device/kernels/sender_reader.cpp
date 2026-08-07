@@ -5,7 +5,11 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -32,35 +36,38 @@ void kernel_main() {
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
+    Noc noc_obj;
+    CircularBuffer cb0(cb0_id);
+
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 
     // Small pages. We pack multiple pages into a single packet.
     uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
-            cb_reserve_back(cb0_id, 1);
-            auto l1_write_addr = get_write_ptr(cb0_id);
+            cb0.reserve_back(1);
+            auto l1_write_addr = cb0.get_write_ptr();
             for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-                noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
+                noc_obj.async_read(
+                    input_addr_gen, CoreLocalMem<uint8_t>(l1_write_addr), input_page_size, {.page_id = page_index}, {});
                 page_index++;
                 l1_write_addr += socket_page_size;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb0_id, 1);
+            noc_obj.async_read_barrier();
+            cb0.push_back(1);
         }
 
         if (num_pages_remainder > 0) {
-            cb_reserve_back(cb0_id, 1);
-            auto l1_write_addr = get_write_ptr(cb0_id);
+            cb0.reserve_back(1);
+            auto l1_write_addr = cb0.get_write_ptr();
             for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-                noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
+                noc_obj.async_read(
+                    input_addr_gen, CoreLocalMem<uint8_t>(l1_write_addr), input_page_size, {.page_id = page_index}, {});
                 page_index++;
                 l1_write_addr += socket_page_size;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb0_id, 1);
+            noc_obj.async_read_barrier();
+            cb0.push_back(1);
         }
 
     }
@@ -70,19 +77,19 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_pages; ++i) {
             auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-                cb_reserve_back(cb0_id, 1);
-                auto l1_write_addr = get_write_ptr(cb0_id);
+                cb0.reserve_back(1);
+                auto l1_write_addr = cb0.get_write_ptr();
                 noc_async_read<whole_packet_size>(noc_read_addr, l1_write_addr, whole_packet_size);
                 noc_read_addr += whole_packet_size;
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, 1);
+                noc_obj.async_read_barrier();
+                cb0.push_back(1);
             }
             if constexpr (partial_packet_size > 0) {
-                cb_reserve_back(cb0_id, 1);
-                auto l1_write_addr = get_write_ptr(cb0_id);
+                cb0.reserve_back(1);
+                auto l1_write_addr = cb0.get_write_ptr();
                 noc_async_read<partial_packet_size>(noc_read_addr, l1_write_addr, partial_packet_size);
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, 1);
+                noc_obj.async_read_barrier();
+                cb0.push_back(1);
             }
             page_index++;
         }

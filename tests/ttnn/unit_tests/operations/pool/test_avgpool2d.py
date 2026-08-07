@@ -5,6 +5,8 @@ import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.fixture(scope="module")
 def tensor_map():

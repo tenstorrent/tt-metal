@@ -50,7 +50,7 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     const tt::tt_metal::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     ttnn::Tensor input_tensor_reshaped = ttnn::reshape(input_tensor, new_shape);
 
-    tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
+    ttnn::Tensor haloed_tensor = ttnn::halo(
         input_tensor_reshaped,
         sliding_window_config,
         compute_kernel_config,
@@ -134,9 +134,9 @@ ttnn::Tensor upsample(
         // Apply halo preprocessing (requires integer scales)
         int scale_h_int = static_cast<int>(scale_h);
         int scale_w_int = static_cast<int>(scale_w);
-        std::pair<tt::tt_metal::Tensor, sliding_window::SlidingWindowConfig> halo_result =
+        std::pair<ttnn::Tensor, sliding_window::SlidingWindowConfig> halo_result =
             apply_bilinear_halo_preprocessing(input_for_halo, scale_h_int, scale_w_int, config);
-        tt::tt_metal::Tensor haloed_tensor = halo_result.first;
+        ttnn::Tensor haloed_tensor = halo_result.first;
         sliding_window::SlidingWindowConfig sliding_window_config = halo_result.second;
 
         // Pass the HALOED tensor to upsample for bilinear mode

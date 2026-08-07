@@ -4,6 +4,8 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+import os
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -70,7 +72,7 @@ class MLP:
                     config=throughput_expert_config,
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
-                    num_links=ccl_manager.num_links,
+                    num_links=ccl_manager.num_links if ccl_manager is not None else 4,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
@@ -84,14 +86,24 @@ class MLP:
 
                 from .experts_throughput.prefill import _compute_weight_permutation
 
+                seq_len_per_chip = 1024
+                seq_len_override = os.getenv("GPT_OSS_PREFILL_SEQ_LEN_PER_CHIP")
+                if seq_len_override:
+                    seq_len_per_chip = int(seq_len_override)
+                    if seq_len_per_chip <= 0 or seq_len_per_chip % 64 != 0:
+                        raise ValueError(
+                            "GPT_OSS_PREFILL_SEQ_LEN_PER_CHIP must be a positive multiple of 64, "
+                            f"got {seq_len_per_chip}"
+                        )
+
                 prefill_config = DeepSeekPrefillConfig(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
                     dispatch_group_size=mesh_device.shape[0],
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
-                    seq_len_per_chip=1024,
-                    num_links=ccl_manager.num_links,
+                    seq_len_per_chip=seq_len_per_chip,
+                    num_links=ccl_manager.num_links if ccl_manager is not None else 4,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
                 perm = _compute_weight_permutation(
@@ -109,7 +121,7 @@ class MLP:
                 deepseek_permuted_weights = load_throughput_expert_weights(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
-                    state_dict=permuted_sd,
+                    state_dict=experts_state_dict,
                     weight_dtype=ttnn.bfloat4_b,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_ds_perm"),
                 )

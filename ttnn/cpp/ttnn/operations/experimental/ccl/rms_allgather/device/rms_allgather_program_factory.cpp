@@ -227,6 +227,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     std::vector<uint32_t> storage_core_noc_y;
     std::vector<CoreCoord> storage_core_coords =
         corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), true);
+    storage_core_noc_x.reserve(storage_core_coords.size());
+    storage_core_noc_y.reserve(storage_core_coords.size());
     for (auto core : storage_core_coords) {
         storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
@@ -287,6 +289,13 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
+    // Number of cells in the multicast bounding box. The on-chip multicasts
+    // below address the full `num_cores_x * num_cores_y` rectangle, which may
+    // be larger than `num_blocks` (the shard worker count) when the shard
+    // grid is non-rectangular. The NoC ack counter must be credited against
+    // the rectangle size, not the worker count, otherwise the sender's
+    // `noc_async_write_barrier()` waits for acks that never arrive.
+    uint32_t num_mcast_dests = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
@@ -338,24 +347,6 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         all_to_all_workers_except_sender =
             num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, true);
     }
-    if (num_none_all_to_all_workers > 0) {
-        if (use_two_stage_reduce) {
-            CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
-            CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-            CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-            not_all_to_all_workers = CoreRangeSet(none_core_range);
-        } else {
-            CoreCoord none_start_core;
-            CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.x == bbox.end_coord.x) {
-                none_start_core = {0, end_core.y + 1};
-            } else {
-                none_start_core = {end_core.x + 1, end_core.y};
-            }
-            not_all_to_all_workers =
-                num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
-        }
-    }
     num_cores_x_mcast = num_cores_x;
     num_cores_y_mcast = num_cores_y;
     auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
@@ -381,7 +372,16 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             {sender_cores.end_coord.x + start_core.x, sender_cores.end_coord.y + start_core.y}};
         all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
         all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
-        not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
+    }
+    if (num_none_all_to_all_workers > 0) {
+        // Workers that are not on the first all-to-all column. Computing this
+        // as a bounding-box rectangle (the legacy path) silently includes
+        // phantom cells when the shard grid is non-rectangular: the receiver
+        // kernel then gets dispatched on cores that have no CBs allocated and
+        // deadlocks in cb_reserve_back. Subtracting from the actual shard
+        // grid is correct for both rectangular and non-rectangular layouts.
+        // (Both operands are already in absolute coords here.)
+        not_all_to_all_workers = all_cores.subtract(all_to_all_cores);
     }
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -620,7 +620,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)ex_cb_external2_index,
         (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)cb_stats_reduced_index,
-        (std::uint32_t)ex_global_cb_index};
+        (std::uint32_t)ex_global_cb_index,
+        (std::uint32_t)num_mcast_dests};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -692,6 +693,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
+    writer_compile_time_args.push_back(num_mcast_dests);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
@@ -950,6 +952,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 std::swap(mcast_start, mcast_end);
             }
             std::vector<uint32_t> mcast_sender_args;
+            mcast_sender_args.reserve(6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mcast_sender_args.push_back(mcast_start.x);
             mcast_sender_args.push_back(mcast_start.y);
             mcast_sender_args.push_back(mcast_end.x);
@@ -963,6 +966,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
+            mcast_receiver_args.reserve(4 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
             if (use_two_stage_reduce and width_index < 1) {
@@ -980,6 +984,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
             std::vector<uint32_t> mcast_receiver_args;
+            mcast_receiver_args.reserve(6);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             mcast_receiver_args.push_back(0);
             mcast_receiver_args.push_back(0);
@@ -1127,6 +1132,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_sender_args.at(0) = writer_mcast_sender_args.size();
             std::vector<uint32_t> writer_mcast_post_sender_args;
+            writer_mcast_post_sender_args.reserve(4 + write_back_writer_args.size());
             if (use_two_stage_reduce) {
                 if (width_index < 1) {
                     writer_mcast_post_sender_args.push_back(cinv_bits);
@@ -1172,6 +1178,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
             std::vector<uint32_t> writer_mcast_post_receiver_args;
+            writer_mcast_post_receiver_args.reserve(4 + write_back_writer_args.size());
             writer_mcast_post_receiver_args.push_back(cinv_bits);
             writer_mcast_post_receiver_args.push_back(e.u);
             writer_mcast_post_receiver_args.push_back(gamma_dram_addr);

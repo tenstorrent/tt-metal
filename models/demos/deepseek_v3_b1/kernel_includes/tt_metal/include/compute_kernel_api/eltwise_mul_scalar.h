@@ -28,7 +28,8 @@ namespace ckernel {
 ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(
+        icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
@@ -39,7 +40,7 @@ template <bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void deepseek_mul_tiles_bcast_scalar(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
-          ELWMUL,
+          EltwiseBinaryType::ELWMUL,
           BroadcastType::SCALAR,
           fp32_dest_acc_en,
           MATH_FIDELITY,
@@ -58,7 +59,9 @@ template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestT
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
+    MATH(
+        (llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+            icb0, icb0, false /*acc_to_dest*/)));
 }
 
 /**
@@ -70,8 +73,12 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index, uint32_t idst) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(icb, in_tile_index)));
-    MATH((llk_math_eltwise_binary<ELWMUL, BroadcastType::NONE, fp32_dest_acc_en, MATH_FIDELITY, binary_reuse_dest>(
-        icb, icb, idst, true)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          fp32_dest_acc_en,
+          MATH_FIDELITY,
+          binary_reuse_dest>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
 }
 
 }  // namespace ckernel

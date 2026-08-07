@@ -1,0 +1,30 @@
+# Transpose dest operation (within-face and face transpose) on 16-bit data.
+# dest_acc=No selects the non-32-bit TRNSPSRCB transpose path.
+# Datacopy must precede TransposeDest so Dst contains pre-existing data.
+
+dest_acc: No
+
+operands:
+  - name: "input_A"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_A"
+        operation: "TransposeDest"
+        unpacker: "TransposeDestUnpacker"
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

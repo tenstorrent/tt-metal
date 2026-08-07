@@ -91,7 +91,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = operation_attributes.output_mem_config.is_sharded();
 
-    BufferType input_buffer_type = input_tensor_a.memory_config().buffer_type();
     BufferType output_buffer_type = operation_attributes.output_mem_config.buffer_type();
 
     TensorMemoryLayout input_memory_layout = input_tensor_a.memory_config().memory_layout();
@@ -250,11 +249,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Multicore implementation doesn't support input DRAM sharding
-    if (operation_attributes.use_multicore && input_is_sharded) {
-        TT_FATAL(input_buffer_type == BufferType::L1, "Multicore implementation doesn't support DRAM sharding");
-    }
-
     // We don't support output DRAM block sharding
     if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
@@ -267,7 +261,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const auto& input_tensor = tensor_args.input;
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             output_dtype,

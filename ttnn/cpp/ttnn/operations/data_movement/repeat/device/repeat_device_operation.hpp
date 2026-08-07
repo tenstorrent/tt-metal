@@ -15,7 +15,7 @@ namespace ttnn::prim {
 struct RepeatDeviceOperation {
     using operation_attributes_t = RepeatParams;
     using tensor_args_t = RepeatInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RepeatProgramFactoryLastDim, RepeatProgramFactoryHigherDim>;
 
@@ -41,4 +41,14 @@ RepeatDeviceOperation::tensor_return_value_t repeat(
     uint32_t m_num_repeats,
     bool m_is_last_dim,
     const tt::tt_metal::MemoryConfig& output_mem_config);
+
+RepeatDeviceOperation::tensor_return_value_t repeat_tile(
+    const Tensor& input,
+    uint32_t num_repeats,
+    int32_t repeat_dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint32_t tile_higher_pages,
+    uint32_t tile_rep_dim_pages,
+    uint32_t tile_lower_pages,
+    uint32_t tile_page_size_bytes);
 }  // namespace ttnn::prim

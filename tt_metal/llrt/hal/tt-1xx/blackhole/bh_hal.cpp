@@ -56,12 +56,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
 
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
+
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -87,10 +96,19 @@ public:
     HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
         HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
-    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+    std::string linker_flags([[maybe_unused]] const Params& params) const override {
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats the fixed L1
+        // mailbox address backing the atomic as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        return "-Wno-stringop-overflow ";
+    }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, noc.o and substitutes.o.
+        objs.reserve(3);
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
@@ -114,6 +132,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 8 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
@@ -309,6 +329,10 @@ void Hal::initialize_bh(
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -409,6 +433,7 @@ void Hal::initialize_bh(
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -418,6 +443,7 @@ void Hal::initialize_bh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;

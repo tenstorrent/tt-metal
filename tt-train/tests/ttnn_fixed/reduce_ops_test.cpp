@@ -19,14 +19,18 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class ReduceOpTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
-        ttml::autograd::ctx().set_seed(42);
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().set_seed(42);
     }
 };
 

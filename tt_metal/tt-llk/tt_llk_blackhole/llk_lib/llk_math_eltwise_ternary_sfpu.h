@@ -26,7 +26,7 @@ inline void eltwise_ternary_sfpu_configure_addrmod()
     }
         .set(ADDR_MOD_7);
 
-    if (sfpu_op == SfpuType::where)
+    if constexpr (sfpu_op == SfpuType::where)
     {
         addr_mod_t {
             .srca = {.incr = 0},

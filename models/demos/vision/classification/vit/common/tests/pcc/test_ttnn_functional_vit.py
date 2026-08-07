@@ -13,6 +13,11 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from models.demos.vision.classification.vit.common.tt import ttnn_functional_vit
+from models.demos.vision.classification.vit.common.vit_compat import (
+    run_vit_encoder_reference,
+    vit_encoder_layer,
+    vit_encoder_module,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -227,7 +232,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
-    model = model.vit.encoder.layer[0]
+    model = vit_encoder_layer(model)
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.bfloat16)
     torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
@@ -263,11 +268,11 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
 
     model = load_torch_model(model_location_generator)
     config = model.config
-    model = model.vit.encoder
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
     torch_attention_mask = None
-    torch_output = model(torch_hidden_states, torch_attention_mask).last_hidden_state
+    torch_output = run_vit_encoder_reference(model, torch_hidden_states, head_mask=torch_attention_mask)
+    model = vit_encoder_module(model)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
@@ -24,18 +30,19 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    CircularBuffer cb_in(cb_id_in);
+
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    // uint32_t end_id = start_id + num_tiles;
     uint32_t tile_id = start_tile_id;
     for (uint32_t row_num = 0; row_num < num_rows; ++row_num) {
-        cb_reserve_back(cb_id_in, Wt);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in);
+        cb_in.reserve_back(Wt);
+        uint32_t l1_write_addr = cb_in.get_write_ptr();
         for (uint32_t w = 0; w < Wt; ++w) {
-            noc_async_read_tile(tile_id, s, l1_write_addr);
+            noc.async_read(s, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes, {.page_id = tile_id}, {});
             l1_write_addr += tile_bytes;
             tile_id++;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in, Wt);
+        noc.async_read_barrier();
+        cb_in.push_back(Wt);
     }
 }

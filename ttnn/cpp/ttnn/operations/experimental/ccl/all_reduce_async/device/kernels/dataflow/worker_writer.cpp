@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -49,14 +53,17 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t reduction_semaphore_send_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // Set up for mcasting to reduction workers
-    volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
-    noc_semaphore_set(reduction_semaphore_send_addr_ptr, VALID);
+    Semaphore<> reduction_semaphore_send(reduction_semaphore_send_id);
+    reduction_semaphore_send.set(VALID);
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -81,13 +88,13 @@ void kernel_main() {
             arg_idx);
 
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -110,8 +117,8 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr =
             safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
@@ -134,7 +141,7 @@ void kernel_main() {
                 sema_noc_addr,
                 static_cast<uint32_t>(1),
                 false);
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
         } else {
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
@@ -151,10 +158,12 @@ void kernel_main() {
             shard_tile_id = 0;
             core_id++;
         }
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
     }
 
     // 2. local semaphore increment
+    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is the address of a GlobalSemaphore.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
     for (uint32_t i = 0; i < core_id; i++) {
         noc_semaphore_inc(safe_get_noc_addr(core_noc_x[i], core_noc_y[i], out_ready_sem_bank_addr), 1);
     }
@@ -165,5 +174,5 @@ void kernel_main() {
         fabric_connection.close_finish();
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

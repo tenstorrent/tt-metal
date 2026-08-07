@@ -27,8 +27,8 @@ struct Sampling {
         uint32_t WinnerPageBytes,
         uint32_t NumSenders,
         uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreId,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t ReceiverSemaphoreAddr,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t MeshMode,
         uint32_t Stage1Sender,
         uint32_t Stage1Receiver,
@@ -56,8 +56,8 @@ struct Sampling {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
         static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_id = ReceiverSemaphoreId;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
@@ -84,14 +84,14 @@ struct Sampling {
 
     template <
         uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
         uint32_t SocketPageSizeBytes = 0,
         uint32_t DeferSocketOutput = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
@@ -209,8 +209,7 @@ struct Sampling {
             uint32_t src_slot_addr, uint32_t dst_slot_addr, uint32_t final_noc_x, uint32_t final_noc_y) {
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
             const uint64_t dst_data_noc_addr = final_noc_base | static_cast<uint64_t>(dst_slot_addr);
-            const uint64_t dst_sem_noc_addr =
-                final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
+            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(src_slot_addr, dst_data_noc_addr, CTArgs::winner_page_bytes);
             noc_semaphore_inc(dst_sem_noc_addr, 1);
             noc_async_posted_writes_flushed();
@@ -371,8 +370,7 @@ struct Sampling {
 
             // Phase 2: final-core intra-device reduction across all active cores.
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
+                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
 
                 uint16_t global_best_score = NEG_INF_BFLOAT16;
@@ -415,8 +413,8 @@ struct Sampling {
                             args.scratch_addr + CTArgs::mesh_local_send_slot_offset,
                             global_best_score,
                             global_best_index);
-                        auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            get_semaphore(CTArgs::local_ready_semaphore_id));
+                        auto local_ready_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::local_ready_semaphore_addr);
                         noc_semaphore_set(local_ready_sem_ptr, 1);
                     }
 
@@ -460,7 +458,7 @@ struct Sampling {
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::local_ready_semaphore_addr);
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);

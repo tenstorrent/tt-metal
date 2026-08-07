@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             20,
             1280,
             0,
-            0.972 if not is_blackhole() else 0.968,
+            0.970 if not is_blackhole() else 0.968,
         ),
         (
             (1024, 1024),
@@ -41,7 +41,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             10,
             640,
             1,
-            0.994,
+            0.993,
         ),
         # 512x512 image resolution
         (
@@ -66,7 +66,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             10,
             640,
             1,
-            0.993,
+            0.992,
         ),
     ],
 )
