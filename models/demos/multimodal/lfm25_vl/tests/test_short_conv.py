@@ -81,10 +81,10 @@ def test_short_conv_inference(seq_len, mode, batch_size, mesh_device, reset_seed
 
     logger.info("Run ShortConv")
     tt_output = tt_model(tt_input, mode=mode)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    # ReplicateTensorToMesh + concat(dim=0) stacks the same tensor once per device; keep only
-    # the leading `tt_input.shape[0]` rows (the un-replicated batch dimension).
-    tt_output_torch = tt_output_torch[: tt_input_shape[0]].reshape(batch_size, seq_len, model_args.dim)
+    # out_proj's output dim is fractured across the mesh (column-parallel, matching the sharded
+    # tt_transformers residual stream), so reassemble the hidden dim by concatenating on dim=-1.
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = tt_output_torch.reshape(batch_size, seq_len, model_args.dim)
 
     pcc_required = 0.98
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

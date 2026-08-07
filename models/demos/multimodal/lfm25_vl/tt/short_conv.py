@@ -73,14 +73,18 @@ class TtLfm2ShortConv(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("in_proj.weight"),
         )
+        # out_proj output dim is fractured across the mesh (column-parallel): the layer input is
+        # full-width on every device (DistributedNorm all-gathers the sharded residual), so this
+        # produces the width-sharded output the tt_transformers residual stream expects -- matching
+        # attention/MLP outputs -- without any CCL.
         self.out_proj = ttnn.as_tensor(
             torch_out_proj_w.transpose(-1, -2).contiguous(),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("out_proj.weight"),
+            cache_file_name=cache_name("out_proj.weight_fractured"),
         )
 
         self.in_proj_bias = None
@@ -102,14 +106,15 @@ class TtLfm2ShortConv(LightweightModule):
                     cache_file_name=cache_name("in_proj.bias"),
                 )
             if out_bias_key in state_dict:
+                # Sharded like out_proj's output dim (see above).
                 self.out_proj_bias = ttnn.as_tensor(
                     state_dict[out_bias_key].reshape(1, -1),
                     dtype=ttnn.bfloat16,
                     device=mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=args.cluster_shape),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_file_name=cache_name("out_proj.bias"),
+                    cache_file_name=cache_name("out_proj.bias_fractured"),
                 )
             if conv_bias_key in state_dict:
                 conv_bias = state_dict[conv_bias_key]
