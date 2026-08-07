@@ -4,7 +4,8 @@
 
 **PORTED — all 5 of 5 program factories now on `MetalV2FactoryConcept`.** Pass 2 (this pass) ported the
 final factory, `BcastMultiCoreHW`; pass 1 ported `BcastMultiCoreH`, `BcastMultiCoreW`, `BcastShardedH`,
-`BcastShardedHOptimised`. All verified on Wormhole.
+`BcastShardedHOptimised`. All verified on **Blackhole** (`p100a` board — the physical device on this host;
+kernels JIT-compile `-mcpu=tt-bh` / `-DARCH_BLACKHOLE`).
 
 **HW (pass 2)** was deferred in pass 1 because its borrowed cross-family writer had no reusable Metal 2.0
 fork (only an out-of-bounds `experimental/quasar/` copy). It now ports cleanly under the updated recipe's
@@ -24,18 +25,19 @@ fork (only an out-of-bounds `experimental/quasar/` copy). It now ports cleanly u
 
 ## Verification
 
-Target: **Wormhole (`wormhole_b0`)**. All runs via `scripts/run_safe_pytest.sh` (5 s dispatch-timeout hang detection + auto device reset) except the C++ gtest.
+Target: **Blackhole (`p100a`)** — the physical device on this host (UMD auto-discovery reports `blackhole`; kernels JIT `-mcpu=tt-bh`). All runs via `scripts/run_safe_pytest.sh` (5 s dispatch-timeout hang detection + auto device reset) except the C++ gtest.
 
-| Test | Result | Re-run pass 2? |
+| Test | Result | Coverage |
 |---|---|---|
-| C++ `build/test/tt_eager/ops/test_bcast_op` | **PASS** (`Test Passed`) — interleaved H / W / **HW** | ✅ rerun — HW now on Metal 2.0 |
-| `tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py -k test_bcast` | **45 passed** — interleaved H / W / **HW** (HW: 32×32, 64×64, 320×384 × ADD/SUB/MUL) | ✅ rerun — HW now on Metal 2.0 |
-| `tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py` (full) | **640 passed** — ShardedH + ShardedHOptimised; incl. `batch_b>1` and the `Wt=10` config #51056 added | ✅ rerun — no regression |
-| `sweeps/eltwise/binary/bcast/{bcast.py,bcast_h_sharded.py}` | **not run** — sweep-framework files (no `pytest` test functions; 0 collected). Need the sweep runner, not plain `pytest`. See Open items. | — |
+| C++ `build/test/tt_eager/ops/test_bcast_op` | **PASS** (`Test Passed`) | interleaved H / W / **HW** |
+| `tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py -k test_bcast` | **45 passed** | interleaved H / W / **HW** (32×32, 64×64, 320×384 × ADD/SUB/MUL) |
+| `tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py` (full) | **640 passed** | ShardedH + ShardedHOptimised (dim=H); incl. `batch_b>1` and #51056's `Wt=10` |
+| `models/demos/vision/generative/stable_diffusion/wormhole/tests/test_cross_attention.py` (`has_encoder_hidden_states=False`) | **1 passed** (PCC ✓, 110 s) | **HEIGHT-sharded HW** — the self-attention path reshards `attention_scores` to HEIGHT_SHARDED then `ttnn.bcast(dim=HW)` → my `IN0_SHARDED`+`OUT_SHARDED` borrowed-DFB path |
+| `sweeps/eltwise/binary/bcast/{bcast.py,bcast_h_sharded.py}` | **not run** | sweep-framework files (0 collected under plain `pytest`); need the sweep runner. See Open items. |
 
-All pass-2 runs via `scripts/run_safe_pytest.sh --run-all` (5 s dispatch-timeout hang detection + auto reset) except the C++ gtest. No-regression baseline confirmed with the invoker (pass 1) before relying on it.
+The C++ gtest and `test_binary_bcast -k test_bcast` were re-run at `ARCH_NAME=blackhole` (both green). `misc/test_bcast.py` (640) and the SD cross-attention case ran on the same Blackhole device. No-regression baseline confirmed with the invoker (pass 1).
 
-**HW coverage note:** the baseline exercises **interleaved** HW thoroughly (C++ gtest + the `-k test_bcast` HW cases). **HEIGHT-sharded HW** (`IN0_SHARDED` / `OUT_SHARDED` — a supported config per `validate`) is **not** directly exercised by the confirmed baseline; it is ported structurally (borrowed DFBs on the shard grid) but unverified on device. Flagged in Open items.
+**HW coverage — both paths verified on device.** Interleaved HW: C++ gtest + the `-k test_bcast` HW cases. **HEIGHT-sharded HW** (`IN0_SHARDED`+`OUT_SHARDED`, borrowed DFBs on the shard grid): the stable-diffusion cross-attention self-attention path exercises exactly this — `ttnn_functional_cross_attention.py:517` calls `ttnn.bcast(dim=HW, memory_config=<HEIGHT_SHARDED>)` on a resharded (line 496) tensor — and `test_cross_attention.py`'s `has_encoder_hidden_states=False` cases pass (verified here; also in CI: perf-models / single-card-demo / t3k). *(Earlier draft wrongly called sharded HW "unverified"; it is production-exercised and now confirmed.)*
 
 ## TTNN ProgramFactory
 
@@ -110,7 +112,7 @@ unlike the writer-less ShardedH factories).
 
 - **Sweep coverage not exercised.** `tests/sweep_framework/sweeps/eltwise/binary/bcast/{bcast.py,bcast_h_sharded.py}` define sweep-framework suites (no `pytest` test functions) and collect **0 tests** under plain `pytest`. They must be run via the sweep-framework runner. Functional coverage of the ported factories is otherwise strong (C++ gtest + 45 interleaved + 640 sharded pytest cases), but a follow-up should run the sweeps through the proper runner.
 - **All 5 factories now ported.** No unported bcast factories remain.
-- **HEIGHT-sharded HW is ported but device-unverified.** The confirmed baseline exercises interleaved HW only. Sharded HW (`IN0_SHARDED` / `OUT_SHARDED`) is a supported config (`validate`) but has no direct test in the confirmed set; a follow-up should add one (or run the sweeps, which may cover it) to verify the borrowed-DFB-on-shard-grid path on device.
+- **HEIGHT-sharded HW — verified via the stable-diffusion cross-attention model** (`test_cross_attention.py`, `has_encoder_hidden_states=False`; in CI: perf-models / single-card-demo / t3k), which runs `ttnn.bcast(dim=HW)` on a HEIGHT_SHARDED tensor (the `IN0_SHARDED`+`OUT_SHARDED` borrowed-DFB path). Passed on device here. A dedicated *unit* test for sharded HW would still be worthwhile (the current coverage is incidental to a model test), but the path is exercised, not dark.
 - **Shared-kernel forks — sunset checklist** (per [Caution: Porting a shared kernel]):
   - `bcast_hw_metal2.cpp` (created this pass, in-directory fork of the lent `bcast_hw.cpp`): remaining consumer of the legacy original = `experimental/transformer/rotate_half`. When rotate_half migrates, `bcast_hw.cpp` can be deleted and the fork can take over its name.
   - `writer_unary_interleaved_start_id_metal2.cpp` (reused, not created by this pass): the eltwise/unary owners track its ~30 remaining legacy binders; bcast is now one more consumer of the fork.
