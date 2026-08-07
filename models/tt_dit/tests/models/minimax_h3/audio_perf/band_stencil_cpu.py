@@ -1,12 +1,14 @@
 """Validate the fused band's math on CPU before writing a line of kernel C++.
 
 FUSED_BAND_DESIGN.md formulates the band as a per-channel 1-D nonlinear stencil that never
-materialises the 2x upsampled tensor or the post-activation tensor:
+materialises the 2x upsampled tensor or the post-activation tensor. The verified form, with `xp` the
+once-replicate-padded input (see the derivation at `stencil_band` for why the phases map to these tap
+subsets and not the other way round):
 
-    u[2n]   = sum_j h[2j]   * x[n-j+off]        polyphase upsample, even phase
-    u[2n+1] = sum_j h[2j+1] * x[n-j+off]        odd phase
-    s       = u + inv_beta * sin(alpha*u)^2     snake, pointwise, per channel
-    y[n]    = sum_k g[k] * s[2n-k+off]          stride-2 downsample
+    u[m], m even -> sum_j h[K-1-2j] * xp[m/2 + j]         odd-indexed taps, reversed
+    u[m], m odd  -> sum_j h[K-2-2j] * xp[(m+1)/2 + j]     even-indexed taps, reversed
+    s            =  u + inv_beta * sin(alpha*u)^2         snake, pointwise, per channel
+    y[n]         =  sum_k g[k] * s[2n + K-1-k]            stride-2 downsample
 
 If that algebra is wrong the kernel cannot be right, and a CPU check costs nothing next to a 40-minute
 rebuild. So this implements the stencil literally -- computing only the `u` values each output needs,
