@@ -66,10 +66,20 @@ bucket costs 83.6 µs, net −69.9 µs — which is the whole −71.2 µs win.
 is 58.0 → 56.7. `DRAM Sharded` is `False` on every row of both files, and no shard spec or core count changes
 except where an op disappears.
 
-So despite being produced by a *shard* advisor and screened as a placement candidate, **this win is a change of
-buffer type — DRAM → L1 — not a change of sharding.** Worth holding next to the fact that the advisor's score
-ranks `isL1` as its very first criterion (see [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §2): the one
-thing it puts first is the thing that paid.
+So despite being produced by a *shard* advisor and screened as a placement candidate, **what shipped here is a
+change of buffer type — DRAM → L1 — not a change of sharding.** Worth holding next to the fact that the advisor's
+score ranks `isL1` as its very first criterion (see [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §2):
+the one thing it puts first is the thing that paid.
+
+⚠ **Measured later, and it changes the reading of that sentence.** The advisor *did* advise sharding for this
+region — `l1/height_sharded/32x1`, shard `(32,64)`/`(32,96)` on a 32-core two-range `CoreRangeSet`, all of it
+legal and runnable. **The cell did not apply it.** Implemented verbatim from `final_ir.mlir`, the advised
+placement is **−10.43 % at differential PCC exactly 1.0**, against the **−4.88 %** this file describes — so the
+sharding half was worth more than the buffer half, and it was never tried.
+
+The corrected reading: *the one thing the advisor puts first is the thing the cell took, and the thing it put
+second was worth more.* → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7,
+[`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §3.27.
 
 ### Per-op sharding deltas (only rows that changed)
 

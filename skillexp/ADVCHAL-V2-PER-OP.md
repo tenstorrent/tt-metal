@@ -35,6 +35,14 @@ deterministic and re-derives from DRAM-interleaved inputs, never seeing the ship
 `shipped→advised cores, op µs, verdict`, where **KEPT** shipped, `rej` measured slower than the incumbent,
 `below` was under the screening threshold, and `agree` means the row is `agrees_with_shipped`.
 
+⚠ **`DRAM-advice` is not always advice.** The label marks a `dram_resident` row — the advisor placed the op in
+DRAM where the shipped op is sharded. For three op classes that is a **fallback after the advisor declared the op
+unplaceable**, not a recommendation: `nlp_concat_heads_decode` (**every** such row in the corpus, 20 of 20),
+`rotary_embedding` (18 of 22) and `repeat` (8 of 8), each carrying the exact `TT_FATAL` in `report.json`'s
+`unfixable_ops`. **Corpus-wide, 23 % of the rows implying a measurement sit on an op its own cell declared
+unfixable.** Do not score the advisor on those rows.
+→ [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §3, [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §3.28.
+
 > **A caution that caught me out, and a second one behind it.** An `agrees_with_shipped` row can still show a
 > *different* advised core count, because `reconcile.py` treats a DRAM-sharded matmul as agreement when the
 > **program-config family** matches even if the grids differ — so `12→99, agree` means *both are DS*, not that

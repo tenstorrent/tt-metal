@@ -11,6 +11,15 @@ cross-cell difference below is a hardware difference.
 This is the **detail tier**. For the readable account of what each cell was doing and why, read
 [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md).
 
+⚠ **Scope: "complete" means every measurement *the cells* took.** It does not include my own follow-up
+measurements, which are numerous and are what several later findings rest on — the E1–E8 experiments, the
+E9–E27 counterfactuals, the isolated single-op legality tests, the oracle sweeps, and the four `ttnn-advise`
+re-runs. Those live in [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md),
+[`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) and
+[`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md), with raw logs under
+`~/skillexp-logs/exp-advisor-probe/`, `exp-rope-faithful/` and `exp-readvise/`. If you are checking whether a
+number in this corpus was measured, check there too before concluding it was not.
+
 Every row is one invocation of the mandated harness: **≥10 untimed warm-ups, then n=5 timed blocks,
 each block the mean of ≥50 traced decode replays**; `ms` is the median of the 5 blocks and `floor`
 is their max−min spread. A candidate may only ship if *every* one of its 5 blocks beats *every* one

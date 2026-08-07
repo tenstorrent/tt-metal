@@ -99,3 +99,27 @@ the veto belongs to the absolute oracle at the model's own bar.
 - **g26 onA** and **g26 FN** both ran the oracle against the *actual shipped default* with every
   candidate environment override unset — closing the gap between "what was timed" and "what ships".
   Not every cell did this.
+
+---
+
+## Addendum: the oracle did not block the sharding — nothing did
+
+Measured after this file was written, and it changes what the oracle can be blamed for on phi FN.
+
+| configuration | differential PCC vs the frozen incumbent | passes the cell's 0.999999 bar? |
+|---|---|---|
+| rope L1 interleaved — **what shipped** | **1.0** | yes |
+| rope as the advisor advised — height-sharded, 32 cores | **1.0** | yes |
+| the advised 11-core norm, rope off | 0.9999910666979231 | no |
+| the advised norm + rope interleaved | 0.9999910666979231 | no |
+| the advised norm + rope as advised | 0.9999910666979231 | no |
+
+Two things follow. **The advised RoPE sharding is bit-identical to the incumbent**, so the −10.43 % it is worth
+was available with no correctness question of any kind — the oracle was never what stood in the way there; the
+stage simply never applied it. And **the PCC movement is the same number whatever else changes**, which is
+attributable wholly to the norm re-grid and behaves like a deterministic reduction-order difference rather than a
+shard-spec bug — a bug would interact with the other change.
+
+So the oracle's cost on this cell is narrower than this file implies: it blocked the norm half (worth a further
+7.4 pp), not the placement work as a whole.
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7.

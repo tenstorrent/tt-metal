@@ -250,3 +250,42 @@ so the advised plan itself contains a 96 → 11 → 103 re-grid across the norm.
 5. **Keep the decision trace as a stage deliverable.** phi FN's is 118 MB uncompressed (7 MB gzipped)
    and is the only artifact that answers "why this grid". llama-8B's was committed **uncompressed at
    51 MB**; two of the traces are the largest single files in the cells' trees.
+
+---
+
+## 8. Two behavioural facts, measured, that matter for using it
+
+Neither is in the source reading above; both came from running it.
+
+### It is topology-sensitive and memory-config-blind
+
+The advisor **discards the input graph's memory configs and re-places everything from scratch**. So it responds
+to *topology* — ops added, removed or reordered — and is blind to the memory-config and program-config choices it
+is handed.
+
+Tested by applying its own advice and re-advising the result: the advised rope placement, then the advised
+11-core norm, then the advised `gate_up` DRAM-sharded matmul — **byte-identical advice all four times**
+(`ops[]`, `unfixable_ops`, `total_ops` 39, `final_choices` 36). A change that alters topology would not be
+invariant, and there the stale advice would matter.
+
+Two consequences worth knowing: **replaying committed advice onto a graph changed only in memory configs is
+sound**, and **a fixed point is reached immediately** for that class of change — re-advising will not walk you
+to a better plan.
+
+### It costs ~18 s, so re-advising is never the expensive part
+
+Four measured runs, end to end — device open, the capture script, the trace, the full pipeline, artefact write:
+**18.4 / 18.4 / 18.1 / 18.6 s.** The cells' own `shard_advise/*/pipeline.log` brackets the pipeline portion at
+**~14 s**.
+
+That is **less than a single harness measurement** (≥10 warm-up replays plus 5 timed blocks of ≥50 traced
+replays; the cells' measurement timestamps sit 15–60 s apart). It is also deterministic: a re-run reproduces a
+cell's committed advice exactly at pin `618cd4e75d` — the only difference in `final_ir.mlir` is the
+`#system_desc` header when the device count differs.
+
+⚠ **But what it advises on is not always what ships.** The capture template substitutes a hand-written
+`_decode_rope` before tracing — *"the direct advisor tracer cannot query a symbolic tensor's runtime
+`memory_config()`"* — so for that region the advisor is reasoning about a stand-in, and a RoPE-side change cannot
+reach it at all. Check the capture script before trusting advice for any region it patches.
+
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §12.

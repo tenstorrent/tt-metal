@@ -101,11 +101,18 @@ Requires the layer-kind counts before anything else, and mandates ranking *acros
 number rather than per-layer. The file gives the counter-example: a 1.629 µs/layer sliding chain is
 65.2 µs/model over 40 layers while a 2.146 µs/layer full-attention chain is only 17.2 µs/model over 8.
 
-### 6. "The advice is a whole-graph plan; you apply parts of it"
+### 6. "The advice is a whole-graph plan; you apply parts of it" — half right, and the half that is wrong is expensive
 
 A new section, and it changed behaviour: when a candidate's first neighbour rejected sharded I/O, **qwen
 FN** extended through the advisor's adjacent `add → concat` reconfiguration and **nm B** extended through
-an existing L1 sharded→interleaved conversion, both getting a measured number instead of a blank.
+an existing L1 sharded→interleaved conversion, both getting a measured number instead of a blank. **That
+extension behaviour is a genuine improvement and it stands.**
+
+⚠ **But the framing — "you apply *parts* of it" — is now measured as the stage's single largest defect.**
+Nothing in v2 ever applies the plan *whole*. On phi FN, the one cell with the artefacts to test it end to end,
+applying the advised placement as written gives **−17.84 % against the −4.88 % the cell shipped — 3.7×** — and
+**−10.43 % of that is bit-identical to the incumbent**, so no correctness rule blocked it. It was never tried.
+Recorded below as **D11**. → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7.
 
 ---
 
@@ -208,6 +215,14 @@ For normalization ops the `coreCount` term is overridden with the *input's* grid
 with the candidate at all. Nothing in the skill tells a cell this, so cells anchor their sweeps on a
 number that carries no throughput information.
 
+**And there is a second, separate problem underneath it: the number the stage reads is not the number the
+advisor chose.** `reconcile.py:194` parses `advised_cores` out of `report.json`'s `cores=(x0,y0)-(x1,y1)`, which
+prints only the **first range** of a multi-range `CoreRangeSet`. **58.3 % of advised core counts corpus-wide are
+understated**, and **59 of 334 `chain` rows stop being disagreements once corrected — 34.4 % of the disagreed-on
+µs.** The `AxB` grid string printed beside it is correct. Two phi cells recorded themselves as *overriding* the
+advisor while agreeing with it. So D4 is really two defects: the count is misread, *and* even the correct count
+carries no throughput information. → [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) Pattern 1.
+
 ### D5. The ceiling misprices in-chain re-grids at zero
 
 The reconciliation ceiling counts *boundary conversions the advice does not place*. A re-grid of an op
@@ -263,6 +278,50 @@ them. A cell that trusted the tool would have over-attributed.
 
 ---
 
+### D11. Nothing ever applies the advisor's plan as written
+
+The screening procedure is build-up: start from the frozen incumbent, add one chain at a time
+(`SKILL.md` §4 — *"Each chain as one unit, one variable per measurement"*). The advised plan as a whole is never
+a candidate, and `final_ir.mlir` — the only artefact carrying the complete plan with its shard shapes — is never
+mentioned in the skill.
+
+**Measured cost, phi FN, its own harness, fresh process per form, all at differential PCC 1.0 except where
+noted:** incumbent 0.807535 → what shipped 0.768104 (−4.88 %) → rope as advised 0.723320 (**−10.43 %**) → rope as
+advised + the advised 11-core norm 0.663507 (**−17.84 %**, PCC 0.99999107). Strict non-overlap throughout.
+**3.7× what the cell shipped, ≈1.43 ms/model on that cell alone.**
+
+Two mechanisms make build-up lose. **Sub-floor chains are never tested** — 60 % of the disagreed-on cost
+corpus-wide sits in `below_threshold` chains that are individually unmeasurable and collectively obvious (phi
+FN's own norm chains were 178 µs and 196 µs). And **"not tried" becomes indistinguishable from "tried and lost"**
+— four cells' unproven deviations look identical in the artefacts to a measured rejection.
+
+The skill already half-knows this: its `aggregate_only` feasibility verdict says *"apply the top chains together
+as one candidate first"* — but only as a fallback when no single chain clears the floor. The corpus says it
+should be the default. → action **F5**.
+
+### D12. `unfixable_ops` is read, then discarded
+
+The advisor declares every op it could not place in `report.json`'s `unfixable_ops`, each with the exact runtime
+`TT_FATAL`, obtained by querying tt-metal's own constraint machinery. `reconcile.py:603` reads the field — but
+**only** to annotate the `untraced` bucket's informational note. An unfixable op landing in `dram_resident` or
+`chain` is never cross-referenced against it, and `nlp_concat_heads_decode` lands in `dram_resident` in every
+cell, where the reconciliation labels it *"advisor placed it in DRAM — that is advice"*.
+
+**54 declarations corpus-wide, 41 still presented as screenable advice.** Cells then spend device time
+rediscovering errors handed to them in writing: phi FN's `advisor_sdpa_concat_l1` knob and its `dense:b43` chain
+both record the identical string from `unfixable_ops`. `SKILL.md` and the stage prompt never mention the field.
+→ action **C5g**.
+
+### D13. The capture does not trace the cell's own RoPE
+
+The capture template substitutes a hand-written `_decode_rope` before tracing, with the stated reason *"the
+direct advisor tracer cannot query a symbolic tensor's runtime `memory_config()`"*. So the advisor never sees the
+shipped implementation of that region — its advice there is advice for a stand-in, and a RoPE-side change cannot
+reach the capture at all. Either fix the tracer limitation or record the substitution in `report.json` so a
+reader knows which regions of the advice are second-hand.
+
+---
+
 ## Verdict on the rebuild
 
 **v2 fixed measurement and broke shipping.**
@@ -273,7 +332,14 @@ are trustworthy in a way v1's were not, and the two cells that reported zero aft
 (llama-8B, llama-1B) are now demonstrably right — I re-measured llama's entire achievable ladder and found
 nothing (§E3).
 
-What v2 broke is the path from a measured win to a shipped one. Its oracle rules are internally
-contradictory and jointly forced the corpus's largest measured win into the bin, and its grid guidance
-pointed the best-executed cell away from a further 1 pp. Both defects hit the *same op class* — the
-1-core reduction — which is where nearly all of the corpus's value turned out to live.
+What v2 broke is the path from a measured win to a shipped one, in three places. Its oracle rules are
+internally contradictory and jointly forced the corpus's largest measured win into the bin. Its grid guidance
+pointed the best-executed cell away from a further 1 pp. And — found last, and the largest of the three —
+**it never applies the advisor's plan as written**, which on the one cell where that can be measured cost
+**3.7×** (D11). The first two defects hit the *same op class* — the 1-core reduction — which is where nearly all
+of the corpus's value turned out to live. The third is not op-specific: it is the screening order itself.
+
+**A note on where that leaves the advisor.** D4, D11 and D12 are all cases of the stage mis-reading, under-using
+or discarding something the advisor got right. That is a more encouraging position than the reverse, because
+these are one-file changes with no build — but it also means v2's numbers understate what the advisor was worth.
+→ [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §7.
