@@ -6,6 +6,7 @@
 27B TP (1,4 mesh): w1/w3 column-parallel, w2 row-parallel; tt_all_reduce
 reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 """
+
 import os
 from dataclasses import dataclass
 
@@ -18,6 +19,40 @@ class MLPWeights:
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
     w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+
+
+# WORMHOLE MLP prefill: one K pass for gate/up/down.
+#
+# The unfused prefill arm below used halve_out_block=True because the full per_core_N-wide
+# output/intermediate CB (gate AND up live at once) overflowed WH L1 by ~28KB. Halving out_block_w is
+# what turns one K pass into two, and each extra pass re-reads the DRAM-resident activation. Dropping
+# fp32 dest accumulation halves that CB and raises the output-subblock cap from 4 to 8, so the
+# full-width block fits -- the same unlock that was worth -16% on the GDN in-projection. packer_l1_acc
+# goes ON at the same time (prefill had it off while decode had it on, with no comment defending it).
+#
+# MEASURED IN THE REAL LAYER (Tracy, T=2048, N300, full decoder layer):
+#     gate  2048x4096x6144  1,321us @ 33.5% of peak  ->  982us @ 45.1%   (-339us)
+#     up    2048x4096x6144  1,183us @ 37.4%          ->  903us @ 49.0%   (-280us)
+#     down  2048x6144x4096  1,110us @ 39.9%          -> 1,013us @ 43.7%  (-97us)
+#                                                                        = -716us/layer
+# The GDN in-proj and out-proj matmuls are byte-identical across the same capture, which is the check
+# that this is scoped to the MLP.
+#
+# ACCURACY: negligible. MLP PCC at T=2048 goes 0.9867734 -> 0.9866364 (test_mlp_tp), because LoFi with
+# bfp4 gate/up weights already dominates the error budget -- fp32 dest accumulation was never what was
+# holding this matmul's precision up.
+#
+# CAUTION on measurement: the isolated sweep in tests/perf/test_mlp_matmul_sweep_prefill.py CANNOT
+# decide this. It dispatches 8 back-to-back copies of the same matmul over an 18MB bfp4 weight and runs
+# DRAM-saturated, which penalises packer_l1_acc=False far more than the real layer (whose gate matmul
+# sits at 41 GB/s) -- it reported the current config at 2,060us against a real 1,321us. Trust the
+# full-layer capture for this shape.
+#
+# Wormhole only. On Blackhole at TP>1 mlp_gateup_agmm_enabled is always True, so the branch below is
+# unreachable there; the guard makes that explicit rather than relying on it.
+_CKC_MLP_KPASS1 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
+)
 
 
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
@@ -286,6 +321,10 @@ class Qwen36MLP:
             # held at once) overflowed WH's smaller, already-at-max-grid L1 by ~28KB (measured). Halve it
             # (halve_out_block, see tp_common.py) and route the output to DRAM (below) instead of L1 —
             # blocking alone doesn't help if the final tensor must still fully reside in L1.
+            # One K pass + _CKC_MLP_KPASS1 on Wormhole; see the constant's definition for the
+            # measurements and why halve_out_block was needed before.
+            _kpass1 = not tpc.is_blackhole()
+            _half = not _kpass1
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
                 seq,
                 args.dim,
@@ -293,11 +332,13 @@ class Qwen36MLP:
                 fused_activation=ttnn.UnaryOpType.SILU,
                 max_cols=_gw,
                 tuning=_pt,
-                halve_out_block=True,
+                halve_out_block=_half,
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, halve_out_block=True
+                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, halve_out_block=_half
             )
+            if _kpass1:
+                ckc = _CKC_MLP_KPASS1
             w1_out = ttnn.linear(
                 x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
