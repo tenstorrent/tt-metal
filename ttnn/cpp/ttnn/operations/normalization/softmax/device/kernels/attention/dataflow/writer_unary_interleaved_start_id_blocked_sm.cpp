@@ -56,7 +56,8 @@ void kernel_main() {
     uint32_t tile_id = tile_offset;
     // Idle cores are given num_tiles=0 / Wt=0; avoid 0/0 and skip the write loop.
     if (num_tiles > 0 && Wt > 0) {
-        const uint32_t out0_pad = ((blk * 2) - (Wt % (blk * 2))) % (blk * 2);
+        // Uniform blocks tile the CB capacity, so a row that blk divides needs no realignment.
+        const uint32_t out0_pad = (Wt % blk == 0) ? 0 : (((blk * 2) - (Wt % (blk * 2))) % (blk * 2));
         const uint32_t num_rows = num_tiles / Wt;
         for (uint32_t row = 0; row < num_rows; ++row) {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {

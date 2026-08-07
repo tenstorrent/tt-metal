@@ -19,9 +19,11 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(5);
     // factory [10] = in0 CB capacity; pad finishes the fifo cycle between rows.
     const uint32_t in0_t = get_arg_val<uint32_t>(10);
-    const uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    // Uniform blocks tile every CB capacity, so a row that blk divides already ends on the base.
+    const bool pad_to_fifo_base = Wt > 0 && blk > 0 && (Wt % blk) != 0;
+    const uint32_t in0_pad = pad_to_fifo_base ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
     // c_4 is sized in4_t = round_up(Wt, blk) but only Wt tiles are read per row/batch; same deal.
-    const uint32_t attn_pad = (blk > 0) ? ((blk - (Wt % blk)) % blk) : 0;
+    const uint32_t attn_pad = pad_to_fifo_base ? ((blk - (Wt % blk)) % blk) : 0;
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0, dfb_id_in1 = tt::CBIndex::c_1;
