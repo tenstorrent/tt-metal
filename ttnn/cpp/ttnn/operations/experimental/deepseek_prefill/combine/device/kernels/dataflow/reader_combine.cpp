@@ -337,6 +337,19 @@ void kernel_main() {
                 uint32_t dst_chip = meta0;
                 uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
 
+                // meta1/meta2 (dst_token_idx / dst_topk_indice) originate from the DRAM-resident
+                // dispatched metadata, so output_page_idx is unbounded.  This value is handed to
+                // writer_combine as the fabric destination page id, so an out-of-range id would
+                // write past the output buffer on a *remote* chip.  Drop the row instead of
+                // clamping it into a valid page — landing a token in the wrong output slot
+                // silently corrupts results.  The untilizer credit is still returned so its ring
+                // keeps draining.  ASSERT is a no-op in release builds, hence the runtime check.
+                ASSERT(output_page_idx < output_pages);
+                if (output_page_idx >= output_pages) {
+                    noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                    continue;
+                }
+
                 if constexpr (is_1d_topology<topology>()) {
                     uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
                     uint32_t distance =
