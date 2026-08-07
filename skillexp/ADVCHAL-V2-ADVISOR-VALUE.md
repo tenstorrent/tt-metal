@@ -12,19 +12,16 @@ Companion to [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md).
 
 > ## ⚠ CORRECTIONS from later work
 >
-> 1. **Advised core counts in this file are understated on 58.3 % of ops.** `reconcile.py` parses `cores=` from
->    `report.json`, which prints only the first range of a multi-range `CoreRangeSet`. The grid-string product is
->    correct (validated 49/49 against three decision traces). So "1→88" for gemma-4-26B is right, but "12→99",
->    "12→77" and "1→22" style figures elsewhere need the corrected value —
->    `advchal-v2-corrected-advice.json`. **59 of 334 `chain` rows stop being disagreements once corrected,
->    carrying 34.4 % of all chain µs.** → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1.
+> 1. **Advised core counts are understated on 58.3 % of ops corpus-wide** — `report.json`'s `cores=` prints only
+>    the first range of a multi-range `CoreRangeSet`. **§2's grid scoring is unaffected** (checked, see the note
+>    there); figures of the "12→99" / "12→77" form elsewhere need the corrected value in
+>    `advchal-v2-corrected-advice.json`. → [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) Pattern 1.
 > 2. **§4's conclusion is strengthened, not weakened.** The "0 of 37 `rms_norm` rows recorded as `kept`" result
 >    stands, and the mechanism — the ceiling prices only boundary conversions — was later confirmed at corpus
 >    scale: two of the three biggest wins came from cells whose feasibility said `ceiling_us = 0` /
 >    `not_measurable` with **0 kept chains recorded**. → [`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md).
-> 3. **The `dram_resident` rows are not all advice.** The advisor declares ops it cannot place in
->    `report.json`'s `unfixable_ops`, with the exact `TT_FATAL`; for those, the DRAM layout is a *fallback after
->    a declared failure*. **54 such declarations corpus-wide, 41 still presented as screenable.** → §C5g.
+> 3. **The `dram_resident` rows are not all advice**, and **23 % of the measured population in §3 is not advice
+>    either** — see the correction inside §3.
 > 4. **The advisor's direction was later measured end to end on one cell.** Its plan implemented verbatim is
 >    **−10.43 %** against the **−4.88 %** that shipped, at **PCC 1.0**; with the advised norm too, −17.84 %.
 >    → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7.
@@ -76,6 +73,13 @@ core-count term is overridden with a value independent of the candidate
 ([`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §2–3). There is nothing in the objective that could
 have made its grid a throughput optimum.
 
+✅ **This section is *not* affected by the `advised_cores` defect** — the one that understates 58.3 % of advised
+core counts ([`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) Pattern 1). Worth stating because a reader who
+knows about it will reasonably doubt the 82 %. The three advised values scored here — phi FN **11**
+(`l1/block_sharded/1x11`), nm FN **22** (`l1/width_sharded/1x22`), g26 onA **88** (`l1/width_sharded/1x88`) — are
+each cases where the grid-string product and the `cores=` bounding box **agree**, so the value scored is the
+value the advisor chose. Checked individually.
+
 ---
 
 ## 3. When its advice *was* measured, how often was it right?
@@ -95,6 +99,36 @@ loses 8 times out of 9 *as recorded*.
 By op class, the pattern is that the advisor is right about cheap movement ops and wrong about the expensive
 ones: `slice_static` 16–10, `multiply` 14–8, `rotary_embedding` 4–0, `neg` 6–2 … against `linear` **1–8** and
 `repeat` **0–8**.
+
+### ⚠ Part of this population is not advice
+
+The advisor declares ops it **cannot place** in `report.json`'s `unfixable_ops`, each with the exact runtime
+`TT_FATAL`. For those ops the layout appearing in `ops[]` is a **fallback after a declared failure, not a
+recommendation** — so scoring the advisor on them measures nothing about its judgement. Counting rows that imply
+a measurement and sit on an op the *same cell* declared unfixable:
+
+| op class | rows implying a measurement | of those, unfixable fallbacks |
+|---|---|---|
+| `nlp_concat_heads_decode` | 20 | **20 — all of them** |
+| `rotary_embedding` | 22 | **18** |
+| `repeat` | 8 | **8 — all of them** |
+| *everything else* | 154 | 1 |
+| **total** | **204** | **47 — 23 %** |
+
+*(204 here is a looser "implies a measurement" rule than the 118 above — chain `kept`/`rejected` or
+`dram_resident`. The per-class contamination is what matters and does not depend on that choice.)*
+
+**Two of the per-class figures used above to argue the advisor is wrong about expensive ops therefore do not
+belong in the ledger at all.** `repeat` **0–8** is 8 declared failures, not 8 rejected recommendations — the
+advisor said it could not place that op and reported why. `rotary_embedding` **4–0** is mostly the same, on the
+winning side. The `to DRAM` row (56 %) is contaminated the same way, since `nlp_concat_heads_decode` is a
+`dram_resident` class in every cell.
+
+**What this changes and what it does not.** The corrected population removes losses *and* wins, so **it does not
+rescue the 49 %** — the overall figure needs recomputing on an advice-only population, which I have not done, and
+I am not going to quote a corrected number I did not compute. What it does establish is that **`repeat 0–8`
+should never have been evidence against the advisor**, and that any future hit-rate must exclude
+`unfixable_ops` first. → [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) Pattern 4.
 
 ---
 
@@ -202,7 +236,8 @@ Stating it as narrowly as the evidence allows.
 
 - that it is needed to *find* the corpus's dominant win class — §1, a profile-only rule finds all four;
 - that it is needed to *choose the grid* — §2, a fixed ~16-core heuristic gets 99.4 % vs its 82 %;
-- that its measured advice is better than chance on boundary candidates — §3, 49 %.
+- that its measured advice on boundary candidates beats chance — §3, 49 %, though that population contains
+  non-advice and the corrected figure is not computed.
 
 **What it did contribute, concretely:**
 
@@ -213,12 +248,29 @@ Stating it as narrowly as the evidence allows.
   *chooser of a fix*, which is exactly what an objective with no latency term should be.
 - **Naming the legality walls early.** `Sharded output not supported for GQA`,
   `nlp_concat_heads_decode requires a sharded input`, `Cos must be sharded in decode mode` — the advisor's
-  `unfixable_ops` and the constraint errors it surfaces saved cells from blind alleys.
+  `unfixable_ops` and the constraint errors it surfaces saved cells from blind alleys. **And it does this better
+  than the stage uses it:** 41 of 54 such declarations were screened on device anyway, rediscovering errors the
+  advisor had already written down.
+- **A complete plan that beats what the stage extracted from it.** The strongest single piece of pro-advisor
+  evidence in the corpus, and it arrived last: implemented **verbatim from `final_ir.mlir`** on the one cell with
+  the artefacts to do it, the advised RoPE placement is **−10.43 % at differential PCC exactly 1.0**, against the
+  **−4.88 %** that cell shipped. With the advised 11-core norm as well, **−17.84 %**. So on that cell the advice
+  contained **2.1×** what the stage took out of it, at no correctness cost.
+  → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7. **One cell** — it is the only one with a
+  before/after profile pair and a full IR, so this is a strong result on a single point, not a corpus trend.
 
 **The honest framing:** on this corpus the advisor is a **defect detector with a broken cost model**, and the
 stage that measures it is priced to reward the half of its output that is a coin flip while recording the half
 that works as `below_threshold`. The cheapest improvements are therefore not to the advisor at all — they are
 to the detection rule (§1), the grid sweep (§2), and the accounting (§4).
+
+**Where that leaves the tool, as opposed to this stage.** §1–§3 measure the advisor as a *substitute* for
+analysis a profile alone can do, and on that framing it adds little. The result above reframes it: as a
+**starting configuration** its complete plan outperformed what v2 built by assembling pieces of it. Those are
+compatible — a plan can be worth applying whole while each of its individual core counts is beatable — and they
+point at different actions. **Trust it for where to look and which direction to move; apply its plan as the first
+candidate; treat its specific core count as one rung on a ladder to sweep.** That is the recommendation, and it
+rests on one measured cell plus the 4-of-4 direction result, which is stated here rather than dressed up as more.
 
 ---
 
