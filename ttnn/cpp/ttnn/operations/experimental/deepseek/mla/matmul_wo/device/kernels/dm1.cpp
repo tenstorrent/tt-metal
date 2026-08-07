@@ -100,10 +100,21 @@ void kernel_main() {
             noc_async_write_one_packet_set_state</*posted=*/true>(
                 collector_dst_base_addr[collector_idx], out_tile_size, /*noc=*/1, vchannel);
             noc_async_write_one_packet_with_state</*posted=*/true>(local_collector_src_addr, local_collector_dst_addr);
-            noc_semaphore_inc</*posted=*/true>(
-                partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
             local_collector_src_addr += out_tile_size;
+        }
+
+        // The payload writes and the semaphore increments that publish them are issued from
+        // different NIU command buffers (write_cmd_buf vs write_at_cmd_buf), so without this the
+        // increment can be launched before the tile has left this core and the collector can push
+        // and reduce a tile that has not arrived. Wait for the (posted) writes to be sent first;
+        // once they are on the NOC the increments cannot overtake them, since both travel from this
+        // core to the same collector on the same static VC and are delivered in order.
+        noc_async_posted_writes_flushed(/*noc=*/1);
+
+        for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
+            noc_semaphore_inc</*posted=*/true>(
+                partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
 
         cb_c2w_out.pop_front(num_n_tiles_per_iter);
