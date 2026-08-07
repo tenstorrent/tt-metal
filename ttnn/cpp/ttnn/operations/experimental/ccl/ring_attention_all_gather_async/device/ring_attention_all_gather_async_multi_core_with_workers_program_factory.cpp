@@ -271,16 +271,24 @@ void ring_attention_neighbor_halo_exchange_helper(
     }
     halo_signaler.initialized_all_gather = true;
 
+    // The halo needs a semaphore of its OWN. semaphores[0]/[1] belong to the all-gather's
+    // backward/forward directions, and the halo lands on the same worker core as the
+    // backward direction because both allocate from this same core_grid_offset. Sharing one
+    // counter between two protocols with different arrival counts deadlocks the all-gather:
+    // see docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md. Callers that
+    // supply a third semaphore get the isolated counter; older two-semaphore callers fall
+    // back to the previous behaviour so this stays source-compatible.
+    const auto& halo_semaphore = semaphores.size() > 2 ? semaphores.at(2) : semaphores.front();
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(static_cast<uint32_t>(
-            semaphores.front().address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_args.push_back(
+            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
         writer_args.push_back(worker_physical.x);
         writer_args.push_back(worker_physical.y);
-        writer_args.push_back(static_cast<uint32_t>(
-            semaphores.front().address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_args.push_back(
+            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
         std::vector<uint32_t> halo_input_Wt;
         halo_input_Wt.reserve(num_inputs);
