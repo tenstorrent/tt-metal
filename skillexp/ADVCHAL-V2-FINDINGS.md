@@ -500,11 +500,28 @@ the advisor buys *precision*, not recall.
 **Hit rate**, over all 118 per-op rows the corpus actually measured: **49 % — a coin flip.** By direction:
 fewer cores 51 %, to DRAM 56 %, **more cores 11 % (1 won, 8 lost)**.
 
-**And the reason that last number looks so bad is an accounting defect.** All 37 low-core `rms_norm` rows the
-advisor wanted widened are recorded as `below_threshold` (30), `not_measurable` (5) or `rejected` (2) —
-**`kept`: 0** — *including in the two cells that shipped exactly that change for −12.98 % and −10.23 %*. So the
-one direction the advisor gets reliably right (4 of 4 cells) is unrepresentable in its own accounting, and the
-hit rate is computed only over the boundary candidates where it is chance.
+**And the reason that last number looks so bad is an accounting defect.** Take every per-op row where a
+`rms_norm` runs on ≤2 cores and the advisor asked for more — 37 rows, advising 8, 11, 22 or 88 cores. Their
+verdicts are `below_threshold` (30), `not_measurable` (5) and `rejected` (2). **`kept`: 0.**
+
+`kept` is not an unreachable verdict — 58 rows in the corpus carry it. But **not one of those 58 widens a
+starved op**: every kept row is on an op already spread over 12 to 110 cores (`slice_static` 16, `multiply` 14,
+`neg` 6, `concat` 6, `add` 6, `rotary_embedding` 4). So across 483 measured per-op rows, the ledger has **never
+once recorded a win for the one direction the advisor gets right in 4 of 4 cells.**
+
+And it happened inside the cells that proved the direction. gemma-4-26B `nofuse-noadvise-onA` shipped
+`advisor_norm88` for **−12.98 %**, and all **14** of its `rms_norm` rows are `below_threshold`. north-mini
+`fuse-noadvise` shipped its MoE norm at 32 cores for **−10.23 %**, and its 3 rows are 1 `below_threshold` and 2
+`not_measurable` — the advisor had asked for 22 there, so the row that would have carried the win describes a
+grid nobody shipped.
+
+The mechanism is STG-2: these rows sit in chains whose ceiling prices only boundary conversions, so an in-chain
+re-grid scores `0.000 µs`, the chain is filed below the noise floor, and nothing downstream ever measures it. The
+49 % hit rate is therefore computed over the boundary candidates that survive that filter — the population where
+the advisor is at chance — and excludes the population where it is not.
+
+*(The direction test is robust to the `advised_cores` defect (§3.23b): that bug makes advised counts too **small**,
+so it cannot manufacture a "wants more cores" row when shipped is 1. 37 is a floor.)*
 
 **What it did contribute:** precision in detection, the *direction* on starved reductions (4/4, even when its
 number was second-best), and early naming of the legality walls. It is a **defect detector with a broken cost

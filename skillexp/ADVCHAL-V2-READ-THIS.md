@@ -22,8 +22,10 @@ only what the advisor's directions add on top is counted. That **understates** t
 
 - The metric that decides which candidates get measured prices the change that produced about half the corpus's
   gains at **zero**, so those candidates were often never tried. *(§3.6)*
-- The one direction it reliably gets right is recorded as a win **0 times out of 37**, including in the two cells
-  that shipped exactly that change. *(§3.14)*
+- The stage's per-op ledger has **no way to record its one reliable win.** 37 rows say *"this norm runs on 1 core,
+  the advisor wants 8–88"*; every one is filed `below_threshold`, `not_measurable` or `rejected`, and **none is
+  filed `kept`** — including all 14 such rows in the cell that shipped that exact change for **−12.98 %**.
+  *(§3.14)*
 - **No cell ever applied its plan as written.** Where that is measurable, doing so is worth **3.7×** what shipped.
   *(§3.27)*
 - On eight cell/kinds it was **never shown the layer at all** — a tracer gap, not a placement verdict.
@@ -42,8 +44,8 @@ points. Plain `§1`–`§6` are sections here. Claims corrected along the way ar
 measured as reachable from the advisor's own directions on the same decoders. Both are lower bounds — nine cells
 were never probed for a better configuration, and eight cell/kinds were never fully traced.
 
-Each row is one cell. Where a cell measured more than one layer kind, each kind is on its own line, in the
-same order across every column.
+One row per cell. The `control` column lists every layer kind that cell measured, one per line. Elsewhere a
+second line means a second *scope*, not a second kind, and names its own kind where it has one.
 
 | model | arm | control ms/layer | what it shipped | result | reachable (measured) |
 |---|---|---|---|---|---|
