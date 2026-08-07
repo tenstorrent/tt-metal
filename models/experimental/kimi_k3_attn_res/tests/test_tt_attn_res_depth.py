@@ -9,9 +9,10 @@ no worse than a bf16 torch implementation of the same math. An absolute PCC
 number at this depth is either vacuous or fails for reasons that have nothing to
 do with our kernels.
 
-The two backends are driven through one shared `_walk`, so the read/seal/write
-order provably cannot diverge between them. That is the whole point of making
-`TtAttnResStream` interface-compatible with the torch one.
+Both backends are driven through one shared `_walk` calling each one's own
+shipped `attn_res_layer`, so the seal schedule and the read count cannot diverge
+between them, and what this harness gates is the code a model calls rather than a
+copy of it kept in a test.
 """
 
 import pytest
@@ -24,9 +25,13 @@ from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
     EPS,
     NUM_LAYERS,
     AttnResStream,
+    attn_res_layer,
 )
 from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
-from models.experimental.kimi_k3_attn_res.tt.attn_res_stream import TtAttnResStream
+from models.experimental.kimi_k3_attn_res.tt.attn_res_stream import (
+    TtAttnResStream,
+    attn_res_layer as tt_attn_res_layer,
+)
 
 PROJ_STD = 0.02
 
@@ -54,27 +59,20 @@ def _make_stack(num_tokens, hidden_size, num_layers, seed=0):
     return hidden_states, queries[:num_layers], queries[num_layers:-1], queries[-1], weights
 
 
-def _walk(stream, weights, q_pre, q_post, q_out, apply_module, free, record):
-    """One layer of residual bookkeeping, repeated. Reference order.
+def _walk(stream, layer_fn, weights, q_pre, q_post, q_out, apply_module, record):
+    """A whole stack, one layer at a time, through the backend's own `layer_fn`.
 
-    The pre-attention read is skipped at `S == 0` — only layer 0 — so `h` there
-    aliases the stream's own `prefix_sum`, which `seal` then takes ownership of.
-    Freeing it would free `block_residual`; hence `borrowed`."""
+    A stand-in module is a single `[d]` multiply, so `apply_module` closes over
+    that layer's weight to reach the `attn_fn(h)` shape the drivers take."""
     for layer_idx, (attn_weight, mlp_weight) in enumerate(weights):
-        h, borrowed = stream.prefix_sum, True
-        if stream.num_sealed > 0:
-            h, borrowed = stream.read(q_pre[layer_idx]), False
-
-        if layer_idx % stream.block_size == 0:
-            stream.seal()
-
-        stream.accumulate(apply_module(h, attn_weight))
-        if not borrowed:
-            free(h)
-
-        h = stream.read(q_post[layer_idx])
-        stream.accumulate(apply_module(h, mlp_weight))
-        free(h)
+        layer_fn(
+            stream,
+            layer_idx,
+            q_pre[layer_idx],
+            q_post[layer_idx],
+            lambda h, w=attn_weight: apply_module(h, w),
+            lambda h, w=mlp_weight: apply_module(h, w),
+        )
         record(layer_idx, stream)
 
     return stream.read(q_out)
@@ -86,12 +84,12 @@ def _walk_torch(hidden_states, weights, q_pre, q_post, q_out, dtype):
     curve = []
     out = _walk(
         stream,
+        attn_res_layer,
         [(cast(a), cast(m)) for a, m in weights],
         [cast(q) for q in q_pre],
         [cast(q) for q in q_post],
         cast(q_out),
         lambda h, w: h * w,
-        lambda _: None,
         lambda _, s: curve.append(s.prefix_sum.float()),
     )
     return out.float(), curve
@@ -121,12 +119,12 @@ def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidd
     curve = []
     out = _walk(
         stream,
+        tt_attn_res_layer,
         [(to_vector(a), to_vector(m)) for a, m in weights],
         [op.to_query(q) for q in q_pre],
         [op.to_query(q) for q in q_post],
         op.to_query(q_out),
         ttnn.mul,
-        ttnn.deallocate,
         record or (lambda _, s: curve.append(from_tt(s.prefix_sum))),
     )
     result = from_tt(out)
@@ -222,6 +220,7 @@ def test_device_lifecycle_matches_torch(mesh_device):
     sealed_after = []
     _walk(
         stream,
+        tt_attn_res_layer,
         [
             (
                 ttnn.from_torch(
@@ -237,7 +236,6 @@ def test_device_lifecycle_matches_torch(mesh_device):
         [op.to_query(q) for q in q_post],
         op.to_query(q_out),
         ttnn.mul,
-        ttnn.deallocate,
         lambda _, s: sealed_after.append(s.num_sealed),
     )
 
