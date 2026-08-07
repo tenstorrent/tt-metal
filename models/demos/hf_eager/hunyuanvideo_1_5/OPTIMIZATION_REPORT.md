@@ -382,6 +382,33 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### Unused mid-granularity part stubs (IMPLEMENTED: -28s, bit-identical)
+
+- A phase breakdown of a 480p i2v 121f run put `tt_dit_weight_upload_s` at
+  **63.7s -- the largest single phase**, larger than denoise, VAE decode and
+  writeout combined, and that was already *with* the prepared-weight cache.
+- Cause: `build_pipeline` unconditionally builds four 54-element stub lists --
+  `s_adazero`, `s_adazero_ctx`, `s_ff`, `s_ff_ctx`. They are referenced only by
+  `_transformer_block_from_parts`, which runs only at `granularity="mid"`.
+  Generation calls `_forward_encoded(ctx, "composite")` and goes through the
+  fused `s_blocks`, which extracts its own AdaLN and feed-forward weights.
+  **216 stubs therefore upload a second copy of the model's largest weights
+  (FFN, 2048x8192 and 8192x2048 per block) that the production path never
+  reads.**
+- `HY_DIT_SKIP_PARTS_STUBS=1` skips them:
+
+  | | wall | `tt_dit_weight_upload_s` |
+  |---|---:|---:|
+  | baseline | 130.7s | 48.3s |
+  | skip parts stubs | **102.7s** | **17.3s** |
+
+- **-28s wall, upload -64%**, generated output bit-identical (frame PCC
+  1.00000000, max abs pixel difference 0.0) -- necessarily so, since the skipped
+  weights were never read.
+- Skipped lists are replaced by a `_SkippedStubs` guard that raises on any
+  access, so `granularity="mid"` fails loudly instead of silently taking a
+  different path. Default off.
+
 ### DiT prepared-weight cache (IMPLEMENTED: -49.6s, bit-identical)
 
 - Motivation: after the heads-major change, denoise is no longer the e2e

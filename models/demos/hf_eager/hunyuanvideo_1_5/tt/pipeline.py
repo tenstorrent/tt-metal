@@ -156,6 +156,22 @@ def _rotate_matrix(device, dim_head):
 # --------------------------------------------------------------------------- #
 # The resident pipeline object
 # --------------------------------------------------------------------------- #
+class _SkippedStubs:
+    """Stand-in for stub lists that were deliberately not built.
+
+    Fails loudly on any access so a skipped stub can never be mistaken for a
+    silently different execution path."""
+
+    def __init__(self, message):
+        self._message = message
+
+    def __getitem__(self, index):
+        raise RuntimeError(self._message)
+
+    def __len__(self):
+        raise RuntimeError(self._message)
+
+
 class HunyuanVideo15Pipeline:
     """Resident, device-bound pipeline object (carries every graduated stub +
     the small glue weights).  Constructed once via :func:`build_pipeline`; both
@@ -250,11 +266,25 @@ class HunyuanVideo15Pipeline:
         self.s_tse_main = build("timestep_embedding", m.time_embed.timestep_embedder)
         self.s_combined = build("combined_timestep_text_proj_embeddings", m.context_embedder.time_text_embed)
         self.s_itr = build("hunyuan_video15_individual_token_refiner", m.context_embedder.token_refiner)
-        # block-from-parts: AdaLayerNormZero (norm1 / norm1_context) + FeedForward (ff / ff_context)
-        self.s_adazero = [build("ada_layer_norm_zero", blk.norm1) for blk in m.transformer_blocks]
-        self.s_adazero_ctx = [build("ada_layer_norm_zero", blk.norm1_context) for blk in m.transformer_blocks]
-        self.s_ff = [build("feed_forward", blk.ff) for blk in m.transformer_blocks]
-        self.s_ff_ctx = [build("feed_forward", blk.ff_context) for blk in m.transformer_blocks]
+        # block-from-parts: AdaLayerNormZero (norm1 / norm1_context) + FeedForward (ff / ff_context).
+        # These 4x54 stubs are used ONLY by _transformer_block_from_parts, i.e. only at
+        # granularity="mid". Generation runs "composite" and goes through the fused
+        # s_blocks, which builds its own AdaLN and FF weights -- so on the production
+        # path every one of these uploads a second copy of weights nothing reads.
+        # HY_DIT_SKIP_PARTS_STUBS=1 skips them; anything asking for "mid" then fails
+        # loudly rather than silently taking a different path.
+        _skip_parts = os.environ.get("HY_DIT_SKIP_PARTS_STUBS", "0") == "1"
+        self._parts_stubs_skipped = _skip_parts
+        if _skip_parts:
+            self.s_adazero = self.s_adazero_ctx = self.s_ff = self.s_ff_ctx = _SkippedStubs(
+                "HY_DIT_SKIP_PARTS_STUBS=1 skipped the mid-granularity part stubs; "
+                "unset it to use granularity='mid'"
+            )
+        else:
+            self.s_adazero = [build("ada_layer_norm_zero", blk.norm1) for blk in m.transformer_blocks]
+            self.s_adazero_ctx = [build("ada_layer_norm_zero", blk.norm1_context) for blk in m.transformer_blocks]
+            self.s_ff = [build("feed_forward", blk.ff) for blk in m.transformer_blocks]
+            self.s_ff_ctx = [build("feed_forward", blk.ff_context) for blk in m.transformer_blocks]
 
         def _free_dit_weights():
             """Release the 54 transformer blocks' device weights.
