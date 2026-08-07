@@ -28,7 +28,12 @@ for _name in ("train", "callbacks"):
         del sys.modules[_name]
 
 from callbacks import EpochCallback  # noqa: E402
-from train import TrainingConfig, resolve_effective_max_steps, resolve_warmup_steps  # noqa: E402
+from train import (  # noqa: E402
+    TrainingConfig,
+    build_lr_schedule,
+    resolve_effective_max_steps,
+    resolve_warmup_steps,
+)
 
 
 def _config(**training_config) -> TrainingConfig:
@@ -61,6 +66,44 @@ def test_warmup_is_clamped_to_the_schedule_length():
 
 def test_negative_warmup_steps_clamps_to_zero():
     assert resolve_warmup_steps(_config(warmup_steps=-5), 1000) == 0
+
+
+# ── build_lr_schedule ─────────────────────────────────────────────────────────
+
+_PEAK_LR = 1.0
+
+
+def _schedule(total_steps: int = 1000, **training_config):
+    training_config.setdefault("scheduler_type", "warmup_linear")
+    optimizer = types.SimpleNamespace(get_lr=lambda: _PEAK_LR)
+    return build_lr_schedule(_config(**training_config), optimizer, total_steps)
+
+
+def test_warmup_ramps_to_peak_over_the_warmup_window():
+    schedule = _schedule()  # warmup_ratio 0.1 of 1000 steps
+    # The step index is 0-based, so the first step is at peak/warmup rather than at 0,
+    # and the peak is reached on the last warmup step.
+    assert schedule(0) == pytest.approx(_PEAK_LR / 100)
+    assert schedule(49) == pytest.approx(0.5)
+    assert schedule(99) == pytest.approx(_PEAK_LR)
+
+
+def test_zero_warmup_starts_at_peak_and_decays_immediately():
+    # The step index is 0-based, so an inclusive warmup bound would return 0.0 here.
+    schedule = _schedule(warmup_steps=0)
+    assert schedule(0) == pytest.approx(_PEAK_LR)
+    assert schedule(1) < _PEAK_LR
+
+
+def test_decay_reaches_min_lr_at_the_horizon():
+    schedule = _schedule(min_lr_ratio=0.05)
+    assert schedule(1000) == pytest.approx(_PEAK_LR * 0.05)
+
+
+def test_constant_schedule_ignores_the_warmup_knobs():
+    schedule = _schedule(scheduler_type="identity", warmup_steps=100)
+    assert schedule(0) == pytest.approx(_PEAK_LR)
+    assert schedule(1000) == pytest.approx(_PEAK_LR)
 
 
 # ── resolve_effective_max_steps ───────────────────────────────────────────────

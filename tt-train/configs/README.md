@@ -22,7 +22,7 @@ Training hyperparameters and optimization settings.
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
 | `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
-| `max_steps` | int | 1000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
+| `max_steps` | int | 5000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
@@ -33,7 +33,7 @@ An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_bat
 
 > **Runner differences.** Most configs run under both `examples/train/train.py` and `examples/nano_gpt`
 > (C++). Only `train.py` treats `max_steps: 0` as uncapped and raises when neither cap is set; the C++
-> runner requires `max_steps` and stops immediately at 0.
+> runner requires `max_steps` and runs a single step at 0. The token-based epoch above is also `train.py`-only.
 
 ### LR Schedule Parameters
 Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
@@ -267,7 +267,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
-| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it |
+| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it. Under Muon, set it inside the nested `adamw:` section |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters

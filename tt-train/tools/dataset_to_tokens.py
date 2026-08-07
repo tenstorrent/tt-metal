@@ -34,7 +34,7 @@ def load_tokenizer(spec):
     return AutoTokenizer.from_pretrained(spec)
 
 
-def frame_with_special_tokens(tokenizer, ids):
+def frame_with_special_tokens(tokenizer, ids, add_eos=True):
     """
     Prepend BOS and append EOS when the tokenizer defines them.
     No-op for ids the tokenizer leaves as None -- note a bare
@@ -43,7 +43,7 @@ def frame_with_special_tokens(tokenizer, ids):
     """
     bos, eos = tokenizer.bos_token_id, tokenizer.eos_token_id
     framed = list(ids)
-    if eos is not None:
+    if add_eos and eos is not None:
         framed.append(eos)
     if bos is not None:
         framed.insert(0, bos)
@@ -73,7 +73,7 @@ def tokenize_string(hf_tokenizer, text):
     """
     tokenizer = load_tokenizer(hf_tokenizer)
     ids = tokenizer.encode(text, add_special_tokens=False)
-    tokenized_data = frame_with_special_tokens(tokenizer, ids)
+    tokenized_data = frame_with_special_tokens(tokenizer, ids, add_eos=False)
     return ",".join(map(str, tokenized_data))
 
 
@@ -157,7 +157,10 @@ def main():
     output_file = args.output_file
     if os.path.splitext(output_file)[1].lower() not in (".yaml", ".yml"):
         output_file += ".yaml"
-    save_to_yaml(tokenized_data, tokenizer.vocab_size, output_file)
+    # len(tokenizer), not tokenizer.vocab_size: the latter is the base vocab only, and the BOS/EOS
+    # we just wrote are added tokens above it for some tokenizers (Llama 3.x: 128000/128001 vs
+    # vocab_size 128000). Consumers size the embedding from this value, so it must cover the stream.
+    save_to_yaml(tokenized_data, len(tokenizer), output_file)
 
 
 if __name__ == "__main__":
