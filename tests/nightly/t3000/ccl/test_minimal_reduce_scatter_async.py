@@ -195,6 +195,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
+            logger.info(f"completed new reduce scatter run")
         else:
             logger.info(f"Using experimental reduce scatter")
             if use_persistent_buffers:
@@ -226,12 +227,14 @@ def run_reduce_scatter_impl(
         # Compile the op
         tt_reduce_scatter_output_trace_list = []
         for i in range(num_iters):
+            logger.debug(f"run op for compile {i}")
             tt_reduce_scatter_output_tensor = run_op(i)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(num_iters):
+            logger.debug(f"run op for trace {i}")
             tt_reduce_scatter_output_tensor = run_op(i)
             tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -250,8 +253,11 @@ def run_reduce_scatter_impl(
             tt_reduce_scatter_output_list.append(tt_rs_out)
     else:
         for i in range(num_iters):
+            logger.debug(f"run op {i}")
             tt_reduce_scatter_output_tensor = run_op(i)
+            logger.debug("call from device")
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+            logger.debug("call to torch")
             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
             tt_reduce_scatter_output_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
@@ -699,6 +705,15 @@ def test_reduce_scatter_async(
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
             True,
+            False,
+            10,
+        ),  # perf
+        (
+            [16, 8, 8, 8],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
             True,
             10,
         ),  # perf
@@ -717,6 +732,7 @@ def test_reduce_scatter_async(
         "tt_training_test_three-check",
         "tt_training_test_four-perf",
         "tt_training_test_five-check",
+        "tt_training_test_six-perf-no-trace",
         "tt_training_test_six-perf",
         "tt_training_test_seven-check",
         "tt_training_test_eight-perf",
@@ -765,8 +781,9 @@ def test_reduce_scatter_async_training_shapes(
     mem_config_rs,
     ones_tensor,
     rs_topology,
+    request,
 ):
-    logger.info("start run")
+    logger.info(f"start run {request.node.nodeid}")
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),

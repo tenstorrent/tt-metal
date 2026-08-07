@@ -10,7 +10,7 @@
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    DPRINT("tilize compute start\n");
+    DPRINT(__FILE__ ":{} tilize compute start\n", __LINE__);
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
@@ -30,5 +30,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode>(per_core_block_cnt);
 
-    DPRINT("tilize compute end\n");
+    DPRINT(__FILE__ ":{} tilize compute end\n", __LINE__);
 }

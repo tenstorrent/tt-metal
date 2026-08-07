@@ -74,7 +74,7 @@
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
-// #include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
+#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;
@@ -924,7 +924,6 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // sync information from the accelerators.
         // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
         if (!force_slow_dispatch) {
-            py_log_here();
             detail::DispatchStateCheck(false);
         } else {
             auto& dm = MetalContext::instance().device_manager();
@@ -974,13 +973,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 #endif
         {
-            py_log_here();
             MetalContext::instance().get_cluster().dram_barrier(device_id);
 
             // Note: the l1_barrier below is needed to be sure writes to cores that
             // don't get the GO mailbox (eg, storage cores) have all landed
             MetalContext::instance().get_cluster().l1_barrier(device->id());
-            py_log_here();
 
             std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
             std::unordered_set<CoreCoord> not_done_cores;
@@ -1002,10 +999,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                         tt::llrt::send_reset_go_signal(device->id(), physical_core);
                     }
 
-                    py_log_cout("launching {} kernels", kg->kernel_ids.size());
+                    log_trace(tt::LogMetal, "launching {} kernels on core {}", kg->kernel_ids.size(), physical_core);
                     for (const auto& id : kg->kernel_ids) {
                         const auto& kernel = program.impl().get_kernel(id);
-                        py_log_cout("launch kernel {} {}", kernel->name(), kernel->kernel_source().name());
+                        log_trace(tt::LogMetal, "launch kernel {} {}", kernel->name(), kernel->kernel_source().path_);
                     }
 
                     tt::llrt::write_launch_msg_to_core(
@@ -1230,11 +1227,11 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     rt_args_addr,
                                     rt_args);
-                                log_info(
+                                log_trace(
                                     tt::LogMetal,
-                                    "Kernel runtime args: kernel={}, logical_core={}, physical_core={}, addr=0x{:x}, "
+                                    "Kernel runtime args: kernel={} logical_core={} physical_core={} addr=0x{:x} "
                                     "unique_rt_args={}",
-                                    kernel->name(),
+                                    kernel->kernel_source().path_,
                                     logical_core.str(),
                                     physical_core.str(),
                                     rt_args_addr,
@@ -1256,11 +1253,11 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     common_rt_args_addr,
                                     common_rt_args);
-                                log_info(
+                                log_trace(
                                     tt::LogMetal,
-                                    "Kernel runtime args: kernel={}, logical_core={}, physical_core={}, addr=0x{:x}, "
+                                    "Kernel runtime args: kernel={} logical_core={} physical_core={} addr=0x{:x} "
                                     "common_rt_args={}",
-                                    kernel->name(),
+                                    kernel->kernel_source().path_,
                                     logical_core.str(),
                                     physical_core.str(),
                                     common_rt_args_addr,
