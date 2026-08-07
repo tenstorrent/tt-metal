@@ -118,11 +118,9 @@ void kernel_main() {
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
     bool copy_or_add = true;
-    bool reset_index = false;
     uint32_t group_reset_index = 0;
     uint32_t index_block_w = 0;
     uint32_t row_offset = num_cols_per_group;
-    uint32_t output_tile_index = 0;
 
 #ifdef UNTILIZE_OUT
 #ifndef FUSE_NEGATIVE_MASK
