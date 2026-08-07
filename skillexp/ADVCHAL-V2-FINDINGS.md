@@ -1219,8 +1219,26 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 
 ## 9. Mistakes made along the way, and since corrected
 
-Thirty claims, grouped by the error pattern that produced them, each with the check that would have caught it.
-The patterns transfer to the next analysis; the individual corrections do not. That file also lists what remains
-**unverified** here.
+Thirty-eight claims, grouped by the error pattern that produced them, each with the check that would have caught
+it. The patterns transfer to the next analysis; the individual corrections do not. That file also lists what
+remains **unverified** here.
 
 → **[`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md)**
+
+---
+
+## 10. Reading the numbers: which quantities differ, and why
+
+A few quantities appear with different values in different places. In every case that is a different **scope** or a
+different **run**, not a disagreement. Δ with no unit qualifier is always **per layer**; model-level figures say so.
+
+| looks inconsistent | why |
+|---|---|
+| phi-3.5 `fuse-noadvise` shipped: **−4.91 % / −4.90 % / −4.88 %** | three runs of one configuration — the cell's own `final.json`, a recomputation from its block means, and a fresh re-measurement (§3.27). Run-to-run drift ≈0.1 pp |
+| its discarded candidate: **−13.39 % / −13.4 % / −13.30 %** | same, three runs |
+| north-mini `fuse-noadvise` shipped: **−9.26 % / −10.23 % / −10.37 %** | three **scopes** — its `final.json` (whose `incumbent_ms` is a 27.635 ms multi-layer harness), its own `model_estimate` (24,949 → 22,398 µs), and per-layer on sliding MoE |
+| reachable total: **20,225 → 21,368 µs**, credited **67 % → 64 %**, headroom **8.0 → 9.2 ms/model** | the earlier figures predate the phi `fuse-noadvise` re-measurement (E25/E26). The later ones are current everywhere |
+| qwen's unadvised share: **97 % / ≈62 %** | 97 % is the `linear_attention` kind's share of model decode time; ≈62 % is the share of the *model* in ops the tracer could not capture, since the trace stops **inside** the layer rather than before it (§3.5) |
+
+Assumptions are labelled as assumptions, and claims later refuted are kept in
+[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) rather than deleted.

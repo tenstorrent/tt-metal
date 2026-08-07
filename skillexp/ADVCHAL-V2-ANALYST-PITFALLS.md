@@ -1,6 +1,6 @@
 # Mistakes made in this analysis, and since corrected
 
-Thirty claims that were published as fact during this work and later retracted, downgraded or re-derived,
+Thirty-eight claims that were published as fact during this work and later retracted, downgraded or re-derived,
 grouped by **the error pattern that produced them**. Anyone working from the same artefacts will be tempted the
 same way, which is why the patterns are worth more than the individual corrections.
 
@@ -9,6 +9,9 @@ first**. Defects in the stage and the advisor are in [`READ-THIS`](ADVCHAL-V2-RE
 about the analysis.
 
 About 5 of the ~30 recommendations made here were later refuted by follow-up measurement — a useful base rate.
+
+The densest pattern is **attribution** (Pattern 6): four of the reversals were about *whose* defect something was,
+not whether it existed. Getting that wrong is what puts a cheap fix in the column nobody funds.
 
 ---
 
@@ -41,6 +44,13 @@ concluding anything from reading either. A traceback names it in one line; sourc
 
 **The check:** a regex over a data structure is not a reading of it. Import the module, or enumerate every table
 by name — and account for generic dispatch paths before reporting a coverage count.
+
+| I claimed | what was true | how it was caught |
+|---|---|---|
+| A generator cannot derive missing tracer handlers, because the TTNN dialect only *verifies* output shapes rather than inferring them — `TTNN_SparseMatmulOp` declares `outs AnyRankedTensor` | **True of `TTNNOps.td`, and the wrong file to conclude from.** `SparseMatmulOp::verify` (`TTNNOps.cpp:2720`) states the shape relation explicitly, per sparse mode, in its error branches — invertible into a shape function. The spec exists; it is in C++, not TableGen | Reading the verifier because I needed the shape rule anyway, and noticing it *was* the rule |
+
+**The check:** "the artefact does not contain X" is a claim about that artefact, not about the codebase. Before
+calling something underivable, look where the logic would actually live.
 
 ---
 
@@ -103,6 +113,16 @@ name sounds like a measurement (`below_threshold`, `not_measurable`), find out w
 
 ---
 
+| I claimed | what was true | how it was caught |
+|---|---|---|
+| north-mini `nofuse-noadvise`'s zero was **"reasonable"** — it screened, and its `advisor_dense_chain_exact` candidate regressed 15 % | **Both true and beside the point.** Its screening ceiling sat *below* its own noise floor because three quarters of each MoE layer was never traced. Two handlers later it has **11 candidates worth 632 µs/model** — the largest find in the corpus. The cell reasoned correctly from what it could see; nothing in its output said how little that was | Re-capturing it after closing the tracer gaps |
+| The corpus had **3** coverage-gap zeros — then, correcting that, **"at least 5"** | **4 of the 7.** The first count omitted north-mini's two arms; the correction over-shot by counting phi-3.5 `exp17`, whose obstruction is a screening-order choice, not a coverage gap | Enumerating the seven zeros against `uncapturable` per cell instead of adjusting a remembered number |
+
+**The check:** a cell that screened honestly can still return a meaningless zero. Read the ceiling against the
+noise floor *and* the untraced share before accepting "no headroom", and re-derive a count rather than nudging it.
+
+---
+
 ## Pattern 5 — I proposed fixes that my own follow-up measurements refuted
 
 These are the healthy ones: hypotheses, tested, discarded. Listed so nobody re-chases them.
@@ -134,8 +154,14 @@ Cheap to make, expensive downstream, because everything built on them inherits t
 | …and then that 97 % was "never advised on" | **Wrong — the trace stops *inside* the layer.** Of qwen B's 15,833 µs `linear_attention` window, 63.5 % is `untraced`; the residual/norm/MLP envelope around the token mixer **is** captured. The advisor saw ≈36 % of it, so **≈62 %** of the model was never advised on, not 97 % | Reading the layer's own `accounting` block instead of inferring it from "the kind is uncapturable" |
 | DS-matmul advice never wins | One **did** — gemma-4-12B, `linear` 12 → 55 cores, kept | Reading the cells' kept lists rather than the skill's claim |
 
-**The check:** before calling a low core count a defect, ask what the op's sharding *semantics* are. And derive
-arm/config labels from the driver's own records, never from directory names or memory.
+| `OpModelExempt` on `TTNN_SparseMatmulOp` means the optimizer **cannot handle the op** | **Backwards.** `OpConstraintValidation.cpp:167-177` returns `notImplemented` precisely so the optimizer "can fall back gracefully instead of treating the op as analyzable". It does not break — it declines to place *that op* and places everything around it. Measured: those ops are 47.4 % of one MoE window and stay DRAM-interleaved, while the router and tail do get placed | The user said so, then the tt-mlir source confirmed it — and it flipped the recommendation from "fix the rule book first" to "just port the handler" |
+| The tracer coverage gaps belong to **tt-metal**, and `sparse_matmul` support sits "outside any layout advisor's reach" | **`ttnn-jit`'s, and squarely inside reach.** All five real gaps closed in 218 lines of Python with no rebuild. Listing them as tt-metal's put the corpus's largest limiter in the column of things nobody would fix | Looking for the code to change and finding it in `tt-mlir/tools/ttnn-jit/` |
+| The fused-cache blocker was **phi-3.5 `nofuse-noadvise`**'s | **north-mini `fuse-noadvise`**'s, across three layer kinds. phi has no `uncapturable` entry in either arm | Sweeping `uncapturable.ops` across all 15 cells instead of relying on the note I had written |
+| **"6 advisor defects, all needing tt-mlir builds"** | **3 are the optimizer** (placement decisions, C++), **4 are `ttnn-advise`/`ttnn-jit` around it** (Python, one already fixed), and **1 cannot be assigned** between them from the trace alone. Lumping the reporting defects in with the placement defects overstated the compiler's share of the blame | Asking, for each row, which file a fix would touch |
+
+**The check:** before calling a low core count a defect, ask what the op's sharding *semantics* are. Derive
+arm/config labels from the driver's own records, never from directory names or memory. And for every defect, name
+the file a fix would edit — that alone sorts optimizer from tooling from usage.
 
 ---
 
@@ -143,6 +169,7 @@ arm/config labels from the driver's own records, never from directory names or m
 
 | the problem | what it looked like |
 |---|---|
+| **A claim about my own document that I never checked** | I wrote that in the cells table "each kind is on its own line, in the same order across every column" — in the same commit as the table. Only the `control` column is per-kind; elsewhere a second line is a second *scope*. Describing your own output is as easy to get wrong as describing someone else's |
 | I quoted one quantity at **three different values** across sections without saying they were different runs or scopes | phi FN shipped as −4.88 / −4.90 / −4.91 % (three runs); north-mini FN as −9.26 / −10.23 / −10.37 % (three **scopes** — a multi-layer harness, the cell's model estimate, and per-layer). Reads as sloppiness or error; is neither |
 | I did not re-derive dependent totals when a component improved | "≈8.0 ms/model on the table" → **9.2**; "20,225 µs reachable / 67 % credited" → **21,368 / 64 %**. Three files carried the stale pair |
 | I replayed each cell's **committed** advice onto a decoder I had progressively modified, and reported the result without saying so | Later tested: the advice is **byte-identical** on the diverged graphs, because the advisor discards input memory configs and responds to *topology*. So the replay was valid **for those changes** — but it needed testing, not assuming. A topology-changing edit would not be invariant |
