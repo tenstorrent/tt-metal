@@ -7,6 +7,8 @@ set(TEST_DESCRIPTOR_MERGER_SRCS test_descriptor_merger.cpp)
 
 set(TEST_LINK_RETRAINING_SRCS
     test_link_retraining.cpp
+    # FIXME: reaches outside this directory via PROJECT_SOURCE_DIR to reuse tools/scaleout
+    # sources directly — bad practice, should come from a shared target instead.
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/cluster_validation_utils.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_metrics_serialization.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_api.cpp

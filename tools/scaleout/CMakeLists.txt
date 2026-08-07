@@ -14,6 +14,10 @@ add_library(TT::ScaleoutTools ALIAS scaleout_tools)
 
 include(protobuf)
 
+# GENERATE_PROTO_FILES feeds these into a custom build command, which needs absolute paths
+# (a relative path would be resolved against the build dir, not this source dir).
+list(TRANSFORM SCALEOUT_PROTO_SCHEMAS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+
 set(GENERATED_PROTO_SRCS)
 foreach(PROTO_FILE ${SCALEOUT_PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})

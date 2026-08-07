@@ -2,11 +2,11 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(SCALEOUT_PROTO_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/validation/schemas/ethernet_link_metrics.proto
+    factory_system_descriptor/schemas/factory_system_descriptor.proto
+    cabling_descriptor/schemas/node_config.proto
+    cabling_descriptor/schemas/cluster_config.proto
+    deployment_descriptor/schemas/deployment.proto
+    validation/schemas/ethernet_link_metrics.proto
 )
 
 set(SCALEOUT_TOOLS_API_HEADERS
