@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.matmul_sweep import (
@@ -44,35 +42,18 @@ else:
     THROTTLE_LEVELS = [0]
 
 
-def generate_format_aware_matmul_combinations(
-    formats_list: List[FormatConfig],
-    dest_acc_modes: List[DestAccumulation],
-):
+def _dest_bank_max_tiles(formats, dest_acc):
+    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
+
+    A 32-bit destination register (dest_acc=Yes, or a format the harness forces
+    onto 32-bit dest) holds 4 tiles; the 16-bit destination holds 8. Mirrors
+    perf_matmul._dest_bank_max_tiles so test and perf coverage share the rule.
     """
-    Generate matmul dimension combinations for multiple tiles.
-
-    Rules:
-    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use dest_acc=Yes
-    2. Running matmul tests on DestSync.Half, max tile count is 8
-    3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
-    4. When dest_acc=No: max 8 tiles (16-bit dest register)
-
-    Returns: List of (format, dest_acc, dimensions) tuples
-    """
-    combinations = []
-
-    for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
-
-        for dest_acc in dest_acc_modes:
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
-            dimensions_list = generate_matmul_dimension_combinations(max_tiles)
-            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
-
-    return combinations
+    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
+        return 4
+    return 8
 
 
-# Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -82,9 +63,6 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
-ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
-    MATMUL_FORMATS, DEST_ACC_MODES
-)
 
 
 def _run_matmul_custom(
@@ -180,19 +158,30 @@ def _run_matmul_custom(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    formats=MATMUL_FORMATS,
+    dest_acc=DEST_ACC_MODES,
+    # dimensions depends on (formats, dest_acc): the max result-tile count is set by
+    # which dest register the pair lands in (see _dest_bank_max_tiles). Kept as its
+    # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
+    # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
+    dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
+        _dest_bank_max_tiles(formats, dest_acc)
+    ),
 )
 def test_matmul_custom(
     math_fidelity,
-    format_dest_acc_and_dims,
+    formats,
+    dest_acc,
+    dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
+    input_A_dimensions, input_B_dimensions = dimensions
     _run_matmul_custom(
         math_fidelity,
-        format_dest_acc_and_dims[0],
-        format_dest_acc_and_dims[1],
-        format_dest_acc_and_dims[2][0],
-        format_dest_acc_and_dims[2][1],
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
         throttle_level=0,
         boot_mode=boot_mode,
     )

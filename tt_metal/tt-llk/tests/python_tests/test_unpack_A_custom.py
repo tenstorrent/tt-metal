@@ -69,14 +69,15 @@ UNPACK_A_CUSTOM_FORMATS = [
     # Sweep tile counts to exercise several distinct source L1 addresses inside
     # _llk_unpack_A_custom_ (one base-address program per tile).
     input_dimensions=[[32, 32], [64, 64], [32, 256]],
-    dest_acc=[DestAccumulation.No],
 )
 def test_unpack_A_custom(
     formats,
     input_dimensions,
-    dest_acc,
 ):
     num_faces = NUM_FACES_FULL_TILE
+    # The reused kernel hardcodes a 16-bit destination, and the format sweep is
+    # filtered to non-dest-acc pairs, so dest_acc is fixed (like num_faces).
+    dest_acc = DestAccumulation.No
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
