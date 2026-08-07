@@ -30,6 +30,8 @@ from models.common.models.qwen2_7b import executor as qwen2_executor
 from models.common.models.qwen2_7b import generator as qwen2_generator
 from models.common.models.qwen25_7b import executor as qwen25_executor
 from models.common.models.qwen25_7b import generator as qwen25_generator
+from models.common.models.qwen25_72b import executor as qwen25_72b_executor
+from models.common.models.qwen25_72b import generator as qwen25_72b_generator
 
 EXECUTOR_BINDINGS = {
     "llama32_1b": SimpleNamespace(
@@ -119,6 +121,23 @@ EXECUTOR_BINDINGS = {
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="Qwen/Qwen2.5-7B-Instruct",
     ),
+    "qwen25_72b": SimpleNamespace(
+        executor_module=qwen25_72b_executor,
+        executor_class=qwen25_72b_executor.Qwen25_72BExecutor,
+        executor_config_class=qwen25_72b_executor.Qwen25_72BExecutorConfig,
+        generator_module=qwen25_72b_generator,
+        generator_class=qwen25_72b_generator.Qwen25_72BGenerator,
+        generator_config_class=qwen25_72b_generator.Qwen25_72BGeneratorConfig,
+        build_generator_name="build_qwen25_72b_generator",
+        build_executor_name="build_qwen25_72b_executor",
+        make_model=lambda **kwargs: _make_qwen25_72b_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen25_72b_runtime_config(),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=qwen25_72b_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen25_72b_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen25_72b_product(mesh_device, max_batch_size),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="Qwen/Qwen2.5-72B-Instruct",
+    ),
     "deepseek_r1_distill_qwen_14b": SimpleNamespace(
         executor_module=deepseek_executor,
         executor_class=deepseek_executor.DeepSeekR1Qwen14BExecutor,
@@ -198,6 +217,14 @@ class _Mesh2:
     @staticmethod
     def get_num_devices():
         return 2
+
+
+class _Mesh8:
+    shape = (1, 8)
+
+    @staticmethod
+    def get_num_devices():
+        return 8
 
 
 def _make_llama32_model(max_batch_size=4):
@@ -298,6 +325,7 @@ def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
     config_class = (
         getattr(module, "Qwen2ExecutorConfig", None)
         or getattr(module, "Qwen25ExecutorConfig", None)
+        or getattr(module, "Qwen25_72BExecutorConfig", None)
         or getattr(module, "DeepSeekR1Qwen14BExecutorConfig", None)
         or getattr(module, "Mistral7BExecutorConfig", None)
         or module.Phi4ExecutorConfig
@@ -319,6 +347,27 @@ def _make_qwen2_product(mesh_device, max_batch_size, *, max_prefill_batch_size=3
     )
 
 
+def _make_qwen25_72b_model(max_batch_size=4):
+    model = _make_llama32_model(max_batch_size=max_batch_size)
+    model.config.mesh_device = _Mesh8()
+    model.config.num_devices = 8
+    model.num_devices = 8
+    attention = model.layers[0].attention.config
+    attention.n_kv_heads = 8
+    attention.head_dim = 128
+    return model
+
+
+def _make_qwen25_72b_runtime_config():
+    return _make_qwen2_runtime_config(max_prefill_batch_size=32)
+
+
+def _make_qwen25_72b_product(mesh_device, max_batch_size):
+    model = _make_qwen25_72b_model(max_batch_size=max_batch_size)
+    model.config.mesh_device = mesh_device
+    return SimpleNamespace(model=model, runtime_config=_make_qwen25_72b_runtime_config())
+
+
 def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():
     model = _make_qwen2_model()
     _, num_layers, kv_heads_per_device, head_dim = qwen2_generator._model_kv_metadata(model)
@@ -337,6 +386,26 @@ def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():
     assert runtime.max_prefill_chunk_size == 2048
     assert runtime.max_prefill_batch_size == 32
     assert config.hf_revision == "test-revision"
+    assert config.device_sampling_enabled is False
+
+
+def test_qwen25_72b_binding_preserves_tp8_runtime_and_sampling_defaults():
+    model = _make_qwen25_72b_model()
+    _, num_layers, kv_heads_per_device, head_dim = qwen25_72b_generator._model_kv_metadata(model)
+    runtime = _make_qwen25_72b_runtime_config()
+    config = qwen25_72b_generator.Qwen25_72BGeneratorConfig(
+        hf_model="Qwen/Qwen2.5-72B-Instruct",
+        mesh_device=model.config.mesh_device,
+        max_batch_size=32,
+        max_seq_len=4096,
+    )
+
+    assert model.config.mesh_device.shape == (1, 8)
+    assert (num_layers, kv_heads_per_device, head_dim) == (1, 1, 128)
+    assert runtime.trace_prefill_supported_seq_lens == (128, 1024)
+    assert runtime.max_prefill_chunk_size == 2048
+    assert runtime.max_prefill_batch_size == 32
+    assert config.hf_revision == qwen25_72b_generator.DEFAULT_HF_REVISION
     assert config.device_sampling_enabled is False
 
 
