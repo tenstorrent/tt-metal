@@ -13,7 +13,13 @@ DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
 SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
 LEGACY_DTYPES = (ttnn.bfloat4_b, ttnn.bfloat8_b)
-UNSUPPORTED_DTYPES = (ttnn.uint8,)
+LEGACY_INTEGER_DTYPES = (
+    (ttnn.int8, torch.int8, -100, 100),
+    (ttnn.int32, torch.int32, -100, 100),
+    (ttnn.uint16, torch.uint16, 0, 100),
+    (ttnn.uint32, torch.uint32, 0, 100),
+)
+UNSUPPORTED_DTYPES = (ttnn.uint8, ttnn.fp8_e4m3, ttnn.DataType.INVALID)
 TEST_SEED = 17
 FLOAT32_MIN_NORMAL = torch.finfo(torch.float32).tiny
 FLOAT32_MIN_SUBNORMAL = torch.nextafter(torch.tensor(0.0), torch.tensor(1.0)).item()
@@ -83,26 +89,27 @@ def test_tensor_dtype_and_value_range(device, dtype, layout):
 
 @pytest.mark.parametrize("dtype", UNSUPPORTED_DTYPES)
 def test_rand_rejects_unsupported_dtype(device, dtype, expect_error):
-    with expect_error(RuntimeError, "UINT8 is not supported"):
+    with expect_error(RuntimeError, "Output dtype"):
         ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
 
 
 @pytest.mark.parametrize("dtype", LEGACY_DTYPES)
 def test_rand_preserves_legacy_low_precision_dtypes(device, dtype):
-    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device, seed=TEST_SEED)
 
     assert tensor.dtype == dtype
     assert torch.isfinite(ttnn.to_torch(tensor)).all()
 
 
-def test_rand_preserves_legacy_integer_dtype(device):
-    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=ttnn.int32, device=device, low=-100, high=100)
+@pytest.mark.parametrize("dtype, torch_dtype, low, high", LEGACY_INTEGER_DTYPES)
+def test_rand_preserves_legacy_integer_dtypes(device, dtype, torch_dtype, low, high):
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device, low=low, high=high, seed=TEST_SEED)
     data = ttnn.to_torch(tensor)
 
-    assert tensor.dtype == ttnn.int32
-    assert data.dtype == torch.int32
+    assert tensor.dtype == dtype
+    assert data.dtype == torch_dtype
     assert tuple(data.shape) == DEFAULT_SHAPE
-    assert torch.unique(data).numel() > 1
+    assert torch.unique(data.to(torch.int64)).numel() > 1
 
 
 def test_rand_defaults(device):

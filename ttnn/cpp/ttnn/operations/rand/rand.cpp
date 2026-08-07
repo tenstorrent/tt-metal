@@ -54,6 +54,20 @@ ttsl::SmallVector<bool> build_shard_mask(const tt::tt_metal::distributed::MeshMa
     return mask;
 }
 
+constexpr bool is_supported_output_dtype(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::UINT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::UINT16:
+        case DataType::INT32:
+        case DataType::INT8: return true;
+        default: return false;
+    }
+}
+
 }  // namespace
 
 Tensor rand(
@@ -66,7 +80,7 @@ Tensor rand(
     float to,
     std::uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
-    TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
+    TT_FATAL(is_supported_output_dtype(dtype), "[ttnn::rand] Output dtype {} is not supported.", dtype);
 
     const bool needs_typecast = dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT16;
     const DataType generation_dtype = needs_typecast ? DataType::FLOAT32 : dtype;

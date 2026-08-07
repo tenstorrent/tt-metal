@@ -24,10 +24,10 @@ void bind_rand_operation(nb::module_& mod) {
         - DataType.float32 / bfloat16:
             Values are generated natively in the half-open range [`low`, `high`).
 
-        - DataType.bfloat4_b / bfloat8_b and accepted integer data types:
+        - DataType.bfloat4_b / bfloat8_b / int8 / int32 / uint16 / uint32:
             These legacy outputs are generated in float32 and then typecast. Typecast rounding applies, so the
             converted values are not guaranteed to remain in [`low`, `high`). Integer output is not a discrete
-            uniform distribution. DataType.uint8 is not supported.
+            uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.
 
         Args:
             shape (list[int]) - a list of integers defining the shape of the output tensor.
