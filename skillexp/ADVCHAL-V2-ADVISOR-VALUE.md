@@ -187,7 +187,7 @@ and one wrong-op call (measured cost, estimated saving). v1's analysis independe
 | | µs/model | per hour |
 |---|---|---|
 | what the stage shipped | 13,601 | **1,847 µs/h** |
-| what was reachable from the same directions | 20,225 | 2,746 µs/h |
+| what was reachable from the same directions | 20,225 ⁽*⁾ | 2,746 µs/h |
 
 The static cliff check in §1 costs **zero device time**, runs on data `reconcile.py` already produces, and
 flags every cell that had a win.
@@ -297,3 +297,5 @@ most-screened cell, of a class the stage's own question cannot reach.
 here is measured, but "the advisor is not needed for this class" is a claim about *this* class on *this*
 corpus — the starved-reduction pattern happened to dominate. A corpus where boundary conversions dominated
 would score it differently, and §5's untested classes could change the picture again.
+
+⁽*⁾ **Updated 2026-08-07: reachable is now 21,368 µs and the share 64 %.** phi FN's reachable component grew from 3,466 to 4,609 µs once the rope was implemented as the advisor actually advised it rather than as the cell shipped it — 0.807535 → 0.663507 ms/layer × 32 layers. See [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3.11 and §3.27.

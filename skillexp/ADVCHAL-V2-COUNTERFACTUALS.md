@@ -16,7 +16,7 @@ there.
 | **E13** | drop the **first timed repeat** from the floor | **nothing** — v2 already fixed this; no verdict flips. A v1 fix that is no longer needed |
 | **E14** | run the advisor at a higher **optimization level** | **nothing exists above 2** for layout advice — closed by reading the source |
 | **E15** | stop screening **DS-matmul advice last** | a matmul candidate *did* win, and **65 % of matmul cost** is exempt from screening by the agreement clause (~5.0 ms) |
-| **E16** | report the **best measured decoder**, not the advisor delta | the stage credited the advisor with **67 %** of what its own directions deliver (13.6 ms vs 20.2 ms) |
+| **E16** | report the **best measured decoder**, not the advisor delta | the stage credited the advisor with **64 %** of what its own directions deliver (13.6 ms vs 21.4 ms) ⁽*⁾ |
 | **E17** | change the **batch** | **not testable** — the wins are batch-32-pinned by construction, and nothing records the dependency |
 | **E18** | measure **two layers**, or measure **eagerly** | two layers are additive to ±1.8 %; and **eager measurement inverts every norm win** — the traced-replay rule is load-bearing |
 | **E19** | look for the **wrong op**, not the wrong layout | gemma-4-12B pays **23×** the corpus mean to concatenate heads because it calls a different TTNN op — a defect class the stage cannot express |
@@ -278,9 +278,9 @@ frozen. What would "best decoder reachable from the advisor's own directions" ha
 | | summed model-level saving |
 |---|---|
 | what the stage shipped | **13,601 µs** |
-| best measured on the same decoders | **20,225 µs** (1.5×) |
+| best measured on the same decoders | **21,368 µs** (1.57×) ⁽*⁾ |
 
-**The stage credited the advisor with 67 % of what the advisor's own directions could deliver.** The missing
+**The stage credited the advisor with 64 % of what the advisor's own directions could deliver.** ⁽*⁾ The missing
 33 % is not new ideas — it is the same directions at a different grid, or the same candidate past an oracle
 that should have passed it.
 
@@ -839,3 +839,5 @@ ITERS 50.
 
 **Artefacts:** `~/skillexp-logs/exp-rope-faithful/rope_{off,interleaved,sharded_mul,advisor_full}.{json,log}`,
 `oracle_modes.json`. → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md).
+
+⁽*⁾ **Updated 2026-08-07: reachable is now 21,368 µs and the share 64 %.** phi FN's reachable component grew from 3,466 to 4,609 µs once the rope was implemented as the advisor actually advised it rather than as the cell shipped it — 0.807535 → 0.663507 ms/layer × 32 layers. See [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3.11 and §3.27.
