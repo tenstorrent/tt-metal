@@ -14,7 +14,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
     uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
-    uint32_t mask_h = get_arg_val<uint32_t>(4);
+    // RT arg 4 (mask_h) is still supplied by the host but no longer read: the ragged last tile is
+    // handled by the partial scaler below rather than by a generated 0/1 mask tile.
 
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -28,14 +29,19 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;
     constexpr auto src_args = TensorAccessorArgs<3>();
+#ifdef DO_MASK_H
+    // Non-tile-aligned H: emit a full scaler (tile 0) plus a partial scaler (tile 1) holding the
+    // scaler in only the first PARTIAL_H rows. Compute applies tile 1 to the last H tile of each
+    // column. PARTIAL_H is origin_H % TILE_HEIGHT, so it is always in [1, 31] here.
+    dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+        cb_id_in2,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_COL,
+        PARTIAL_H>();
+#else
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
-
-    constexpr uint32_t cb_id_mask_h = 3;
-#ifdef DO_MASK_H
-    DataflowBuffer dfb_mask_h_obj(cb_id_mask_h);
-    generate_mask_h(dfb_mask_h_obj, mask_h);
 #endif
 
     const auto s = TensorAccessor(src_args, src_addr);

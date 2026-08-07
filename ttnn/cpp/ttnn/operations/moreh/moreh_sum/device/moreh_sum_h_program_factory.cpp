@@ -53,11 +53,6 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumHFactory::create_desc
     uint32_t src0_single_tile_size = tile_size(src0_cb_data_format);
     DataFormat scaler_cb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tile_size(scaler_cb_data_format);
-    DataFormat mask_h_cb_data_format = DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tile_size(mask_h_cb_data_format);
-    DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
-    DataFormat intermed1_cb_data_format = DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tile_size(intermed_cb_data_format);
     DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
 
@@ -89,8 +84,10 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumHFactory::create_desc
             .page_size = src0_single_tile_size,
         }}},
     });
+    // Two scaler tiles when H is not tile-aligned: tile 0 full, tile 1 partial (see the reader).
+    const uint32_t num_scaler_tiles = do_mask_h ? 2 : 1;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = scaler_single_tile_size,
+        .total_size = num_scaler_tiles * scaler_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
@@ -98,34 +95,9 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumHFactory::create_desc
             .page_size = scaler_single_tile_size,
         }}},
     });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = mask_h_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_3),
-            .data_format = mask_h_cb_data_format,
-            .page_size = mask_h_single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
-            .data_format = intermed_cb_data_format,
-            .page_size = intermed_single_tile_size,
-        }}},
-    });
-    uint32_t intermed1_single_tile_size = tile_size(intermed1_cb_data_format);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed1_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_25),
-            .data_format = intermed1_cb_data_format,
-            .page_size = intermed1_single_tile_size,
-        }}},
-    });
+    // c_3 (mask_h), c_24 (accumulator) and c_25 (masked-input scratch) are gone: the partial scaler
+    // handles the ragged last tile inside a single reduce(), so there is nothing left to mask, stage
+    // or accumulate across calls.
     constexpr uint32_t num_output_tiles = 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * dst_single_tile_size,
@@ -144,6 +116,9 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumHFactory::create_desc
     KernelDescriptor::Defines reader_defines = {{"REDUCE_SCALER", "1"}};
     if (do_mask_h) {
         reader_defines.emplace_back("DO_MASK_H", "1");
+        // Valid rows in the last H tile, in [1, 31]. The reader needs this at compile time because
+        // the partial-scaler helper takes the fill count as a template parameter.
+        reader_defines.emplace_back("PARTIAL_H", std::to_string(mask_h));
     }
 
     KernelDescriptor reader_desc;
