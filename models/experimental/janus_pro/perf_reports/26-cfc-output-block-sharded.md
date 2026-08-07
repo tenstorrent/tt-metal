@@ -32,6 +32,9 @@ gives 3 x 16. Sharding pays by the width of the write burst along N, not by the 
 
 Numerically inert -- the mlp, block and transformer PCCs are all bit-identical to the stage before.
 
+The unabridged per-op listing this table condenses is in
+[OPTIMIZED_OP_LIST.md](OPTIMIZED_OP_LIST.md).
+
 ## Kernel time by op code, one replay
 
 | Op | inst | Δ inst | us each | Δ us each | ms | % |

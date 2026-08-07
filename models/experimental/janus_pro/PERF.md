@@ -416,6 +416,7 @@ the total drop, and seven of the 24 steps moved PCC *up*.
 | [`perf_reports/NN-*.md`](perf_reports/) | one per change-log row, linked from the Change column: that stage's explanation next to its own per-op and per-matmul breakdown |
 | [`perf_reports/DEAD_ENDS.md`](perf_reports/DEAD_ENDS.md) | levers measured that did not pay, and one that **did** — the largest win found anywhere here — deliberately absent because it breaks an accuracy gate |
 | [`perf_reports/PROFILER_NOTES.md`](perf_reports/PROFILER_NOTES.md) | three ways `tt-perf-report` and the per-RISC counters mislead on this tower, which ops are structurally closed, and what the profiling did *not* establish |
+| [`perf_reports/OPTIMIZED_OP_LIST.md`](perf_reports/OPTIMIZED_OP_LIST.md) | every device op of one replay at 9.841 ms, as `tt-perf-report` prints it |
 | [`perf_reports/README.md`](perf_reports/README.md) | how a stage report is produced and regenerated |
 
 Read `DEAD_ENDS.md` before trying anything on this tower. It is the cheapest way to avoid
