@@ -58,15 +58,61 @@ def _replay_1cq(device, tid, iters):
     return (time.perf_counter() - t0) / iters
 
 
+# A REPLAYED TRACE DISPATCHES ONE OP. An eager pass dispatches one per ttnn call in the model --
+# 3,564 of them for a 48-layer gemma-3 prefill. Nothing else about the two paths differs by three
+# orders of magnitude, so the dispatch count is the signal, and anything above this is eager.
+_TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
+
+
+def _count_op_dispatches(fn):
+    """Run `fn` once and return how many ttnn ops it dispatched from PYTHON, or None if the counter
+    could not be installed.
+
+    Counting is wrapped around a call the caller was going to make anyway (the last warmup), so this
+    adds no execution: no second pass, no eager run beside the traced one. The point is only to learn
+    which path the step took."""
+    try:
+        from ttnn import decorators as _dec
+
+        target = _dec.Operation
+        orig = target.__call__
+    except Exception:  # noqa: BLE001
+        fn()
+        return None
+    n = [0]
+
+    def counting(self, *a, **kw):
+        n[0] += 1
+        return orig(self, *a, **kw)
+
+    target.__call__ = counting
+    try:
+        fn()
+    finally:
+        target.__call__ = orig
+    return n[0]
+
+
 def _measure_native(device, stage):
     """Time a SELF-TRACED stage: the pipeline owns its trace capture (persistent-buffer / vLLM-style
     decode, e.g. GLM's decode(enable_trace=True)), so we must NOT begin_trace_capture around it --
     doing so raises "Writes/Reads are not supported during trace capture" because the step does
     host<->device I/O + execute_trace internally. Instead warm it (the pipeline lazily captures its own
-    trace on the first call) and time steady-state replays. The pipeline reports its real path via an
-    optional trace_path(); default trace+1cq."""
-    for _ in range(_WARMUP_ITERS):
+    trace on the first call) and time steady-state replays.
+
+    THE PATH IS OBSERVED, NOT ASSUMED. This returned "trace+1cq" for every self-traced stage, on the
+    strength of the stage having DECLARED itself self-traced -- but declaring the capability is not
+    the same as exercising it. gemma-3's prefill declares it and then falls back to eager, because
+    `can_enable_trace` consults an allow-list that the model config sets EMPTY for every device; the
+    harness recorded 91.33 ms as `path=trace+1cq` while the model logged `trace: False` on every call.
+    Half that number is Python dispatch, and the roofline then graded it against a band that assumes
+    a traced measurement.
+
+    So the last warmup is counted rather than merely run. `stage.trace_path()` still wins when a
+    pipeline reports its own path; the count is what decides when nothing does."""
+    for _ in range(max(0, _WARMUP_ITERS - 1)):
         stage.step()
+    dispatched = _count_op_dispatches(stage.step)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(_REPLAY_ITERS):
@@ -77,10 +123,16 @@ def _measure_native(device, stage):
     if callable(tp):
         try:
             path = str(tp())
-        except Exception:
-            path = "trace+1cq"
+        except Exception:  # noqa: BLE001
+            path = "unknown"
+    elif dispatched is None:
+        # The counter could not be installed, so nothing was observed. "unknown" is the honest label:
+        # it withholds the verdict downstream instead of asserting a path on no evidence.
+        path = "unknown"
     else:
-        path = "trace+1cq"
+        path = "trace+1cq" if dispatched <= _TRACED_OP_DISPATCH_MAX else "eager"
+    if dispatched is not None:
+        print("TRACE_STAGE_OPS[%s]=%d path=%s" % (stage.name, dispatched, path), flush=True)
     return per_s * 1000.0, path
 
 

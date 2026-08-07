@@ -26,12 +26,27 @@ are produced from the checkpoint and HF config for any dense LLM without per-mod
 """
 from __future__ import annotations
 
+import re
+
 import importlib.util
 import json
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def _flat(text):
+    """A column-width-agnostic view of the table.
+
+    The roofline pads a number and its unit into fixed sub-fields, so a published figure reads
+    "64.0      tok/s/u". These assertions are about the PAIRING -- that a value is published carrying
+    its unit -- not about the geometry, and pinning the geometry is how a column-width change becomes
+    a test failure with nothing wrong behind it. Collapsing runs of spaces keeps the claim and drops
+    the layout.
+    """
+    return re.sub(r"[ \t]+", " ", str(text))
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
@@ -356,12 +371,12 @@ def test_the_per_token_reading_is_used_not_the_per_profile_sum(tmp_path, monkeyp
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 18.68}, "m", "main"))
-    assert "53.5 tok/s/u" in out, out
-    assert "1.9 tok/s/u" not in out
-    assert "428 GB/s" in out
+    assert "53.5 tok/s/u" in _flat(out), out
+    assert "1.9 tok/s/u" not in _flat(out)
+    assert "428.3 GB/s" in _flat(out)
     # 428/512 = 84% of SPEC peak. Against the sustained ceiling the same run reads 104%, so the
     # per-token reading is what is being checked here, not which denominator the label uses.
-    assert "1.9 tok/s/u" not in out
+    assert "1.9 tok/s/u" not in _flat(out)
 
 
 def test_published_figures_render_exactly(tmp_path, monkeypatch):
@@ -369,9 +384,9 @@ def test_published_figures_render_exactly(tmp_path, monkeypatch):
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 19.4}, "m", "main"))
     # Labels say SUSTAINED, and both are derived from the numbers rather than hardcoded strings.
-    assert "64.0 tok/s/u" in out, out
-    assert "60-80%" in out and "38.4 – 51.2" in out, out
-    assert "51.5 tok/s/u" in out and "412 GB/s" in out
+    assert "64.0 tok/s/u" in _flat(out), out
+    assert "60-80%" in _flat(out) and "38.4 – 51.2" in _flat(out), out
+    assert "51.5 tok/s/u" in _flat(out) and "412.4 GB/s" in _flat(out)
 
 
 def test_with_no_per_token_reading_the_line_says_so(tmp_path, monkeypatch):
@@ -379,8 +394,8 @@ def test_with_no_per_token_reading_the_line_says_so(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), None, {}, "m", "main"))
-    assert "n/a" in out
-    assert "1.9" not in out and "tok/s/u   (1000" not in out
+    assert "n/a" in _flat(out)
+    assert "1.9" not in _flat(out) and "tok/s/u   (1000" not in _flat(out)
 
 
 def test_the_report_never_hands_a_per_profile_sum_to_a_per_token_ceiling(tmp_path, monkeypatch):
@@ -393,13 +408,16 @@ def test_the_report_never_hands_a_per_profile_sum_to_a_per_token_ceiling(tmp_pat
         json.dumps([{"op_signature": "Matmul", "kernel_kind": "grid", "measured_ms": 534.44, "beat_baseline": True}])
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True, throughput=_snap(), baseline_profile={})
-    # Scoped to the BANDWIDTH row. A bare `"3%" not in out` also matched "23% used" on the capacity
+    # Scoped to the BANDWIDTH row. A bare `"3%" not in _flat(out)` also matched "23% used" on the capacity
     # row, so the guard fired on an unrelated healthy number instead of the fabricated utilisation
     # it was written to catch.
-    assert "1.9 tok/s/u" not in out, out
-    _bw = [l for l in out.splitlines() if "DRAM bandwidth" in l]
-    assert _bw and not any("3%" in l for l in _bw), _bw
-    assert "n/a — not measured" in out, out
+    assert "1.9 tok/s/u" not in _flat(out), out
+    # With no per-unit reading there is no bandwidth row to draw at all, which is the correct
+    # rendering of "unknown" -- the guard is that no row may carry the FABRICATED 3%, not that a row
+    # must exist to carry something.
+    _bw = [l for l in _flat(out).splitlines() if "decode memory" in l]
+    assert not any("3%" in l for l in _bw), _bw
+    assert "n/a — not measured" in _flat(out), out
 
 
 def test_rates_carry_the_profiling_depth_when_the_window_is_truncated(tmp_path, monkeypatch):
@@ -410,19 +428,19 @@ def test_rates_carry_the_profiling_depth_when_the_window_is_truncated(tmp_path, 
     sm = _sm()
     snap = dict(_snap(), perf_layers="16")
     out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 9.34}, "m", "main"))
-    assert "[16-layer window, NOT the full model]" in out, out
+    assert "[16-layer window, NOT the full model]" in _flat(out), out
     # ONE qualifier, not two. The old five-line form printed the ceiling and the measurement on
     # separate lines and each needed its own tag; the table puts both rates on one row, so a single
     # line beneath it qualifies both. The depth-invariant GB/s row stays unqualified either way.
     assert out.count("[16-layer window") == 1, out
-    assert "GB/s" in out and "Utilization" in out
+    assert "GB/s" in _flat(out) and "Utilization" in _flat(out)
 
 
 def test_a_full_depth_profile_needs_no_qualifier(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), None, {"per_token_ms": 19.4}, "m", "main"))
-    assert "NOT the full model" not in out
+    assert "NOT the full model" not in _flat(out)
 
 
 def test_a_truncated_measurement_is_refused_against_a_full_model_ceiling(tmp_path, monkeypatch):
@@ -434,8 +452,8 @@ def test_a_truncated_measurement_is_refused_against_a_full_model_ceiling(tmp_pat
     sm = _sm()
     snap = dict(_snap(), perf_layers="all")
     out = "\n".join(sm._roofline_lines(snap, None, None, "m", "main", per_token_ms=9.34, measured_depth="16"))
-    assert "107.1" not in out and "357 GB/s" not in out, out
-    assert "n/a — not measured" in out and "16-layer window" in out and "full depth" in out
+    assert "107.1" not in _flat(out) and "357 GB/s" not in _flat(out), out
+    assert "n/a — not measured" in _flat(out) and "16-layer window" in _flat(out) and "full depth" in _flat(out)
 
 
 def test_matching_depths_are_reported_normally(tmp_path, monkeypatch):
@@ -443,7 +461,7 @@ def test_matching_depths_are_reported_normally(tmp_path, monkeypatch):
     sm = _sm()
     snap = dict(_snap(), perf_layers="all")
     out = "\n".join(sm._roofline_lines(snap, None, None, "m", "main", per_token_ms=19.4, measured_depth="all"))
-    assert "51.5 tok/s/u" in out and "412 GB/s" in out
+    assert "51.5 tok/s/u" in _flat(out) and "412.4 GB/s" in _flat(out)
 
 
 def test_an_unknown_depth_on_either_side_does_not_block_the_report(tmp_path, monkeypatch):
@@ -451,7 +469,7 @@ def test_an_unknown_depth_on_either_side_does_not_block_the_report(tmp_path, mon
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), None, None, "m", "main", per_token_ms=19.4, measured_depth=""))
-    assert "51.5 tok/s/u" in out
+    assert "51.5 tok/s/u" in _flat(out)
 
 
 # --- the anchored ceiling must work for EVERY unit, not just token ----------------------------------
@@ -486,7 +504,7 @@ def test_the_anchor_is_read_under_the_models_own_unit(tmp_path, monkeypatch):
         sm._roofline_lines(_unit_snap("step", 9_000_000_000, 56.9), None, {"per_token_ms": 30.0}, "m", "main")
     )
     # 512 / 2.76 = 185.5 steps/s -- from the ANCHOR, not the snapshot's 9 GB
-    assert "185.5 steps/s" in txt, txt
+    assert "185.5 steps/s" in _flat(txt), txt
     assert "56.9" not in txt, txt
 
 
@@ -497,7 +515,7 @@ def test_a_token_model_still_reads_its_anchor(tmp_path, monkeypatch):
     txt = "\n".join(
         sm._roofline_lines(_unit_snap("token", 3_330_000_000, 153.8), None, {"per_token_ms": 17.0}, "m", "main")
     )
-    assert "84.0 tok/s/u" in txt, txt
+    assert "84.0 tok/s/u" in _flat(txt), txt
     assert "153.8" not in txt, txt
 
 
@@ -519,8 +537,8 @@ def test_the_anchored_ceiling_uses_the_sustained_fraction_not_a_second_copy_of_t
     # 67.2 is the BAND TOP -- rate_and_band returns spec peak as the ceiling and folds the sustained
     # fraction into the band, so the table shows 84.0 in THEORETICAL and 50.4 - 67.2 in ACHIEVABLE.
     # The unit suffix now lives in the ceiling column, so the band is asserted as bare values.
-    assert "84.0 tok/s/u" in txt, txt
-    assert "50.4 – 67.2" in txt, txt
+    assert "84.0 tok/s/u" in _flat(txt), txt
+    assert "50.4 – 67.2" in _flat(txt), txt
     assert "153.8" not in txt, txt  # the stale snapshot value
 
 
@@ -534,7 +552,7 @@ def test_an_anchored_snapshot_without_the_fraction_keeps_its_old_reading(tmp_pat
     txt = "\n".join(
         sm._roofline_lines(_unit_snap("token", 3_330_000_000, 153.8), None, {"per_token_ms": 17.0}, "m", "main")
     )
-    assert "84.0 tok/s/u" in txt, txt
+    assert "84.0 tok/s/u" in _flat(txt), txt
 
 
 def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkeypatch):

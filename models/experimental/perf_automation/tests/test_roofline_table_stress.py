@@ -84,22 +84,28 @@ def test_the_band_percentage_is_derived_not_hardcoded():
     assert "37-50%" in moe, moe[:400]  # 64.0/170.7 = 37.49%, rendered %.0f
 
 
-def test_each_row_states_its_own_direction():
+def test_each_row_states_its_own_direction(fid, facts):
     """26% dispatch is bad and 69% bandwidth is good; an unmarked bar invites the opposite reading.
 
     Marked per ROW rather than under a group heading: the heading sat furthest from the bars it
     described, and grouping forced an ordering on rows that otherwise read roofline-then-overhead."""
-    u = _render()[_render().index("Utilization") :]
+    u = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
+    u = u[u.index("Utilization") :]
     assert "↑ better" in u and "↓ better" in u
-    for name, arrow in (("DRAM bandwidth", "↑"), ("Dispatch overhead", "↓"), ("DRAM capacity", "↓")):
-        row = next(l for l in u.splitlines() if name in l)
-        assert row.rstrip().endswith("%s better" % arrow), row
+    rows = [l for l in u.splitlines() if "better" in l]
+    # one bar per stage (the BINDING roof), plus dispatch and capacity
+    assert len(rows) == 4, rows
+    for row in rows:
+        want = "\u2193 better" if ("dispatch" in row or "capacity" in row) else "\u2191 better"
+        assert row.rstrip().endswith(want), row
 
 
-def test_an_unmeasured_row_claims_no_direction():
-    """TTFT is never measured, so there is no number for 'higher' or 'lower' to be about."""
-    row = next(l for l in _render().splitlines() if "Compute (prefill)" in l)
-    assert "better" not in row, row
+def test_an_unmeasured_stage_draws_no_bar():
+    """A stage with no measured wall-clock has nothing to divide, so it contributes no utilisation
+    row at all -- rather than a 0% bar, which is a claim about the model instead of about the run."""
+    out = _render()  # no stage_ms -> prefill never measured
+    u = out[out.index("Utilization") :]
+    assert "prefill" not in u, u
 
 
 def test_the_direction_column_lines_up():
@@ -112,19 +118,43 @@ def test_the_direction_column_lines_up():
 
 
 def test_the_column_dividers_line_up():
-    """A table whose separator does not meet its dividers reads as corrupted output."""
-    t = _render().splitlines()
-    rows = [ln for ln in t if "│" in ln and "DRAM bandwidth" in ln]
-    seps = [ln for ln in t if "┼" in ln]
-    assert rows and seps
-    for r in rows:
-        for sp in seps:
-            assert r.index("│") == sp.index("┼"), (r, sp)
+    """A table whose separator does not meet its dividers reads as corrupted output.
+
+    Checked on EVERY row, not a sampled one. The failures this catches are cells that OVERFLOW their
+    field and shunt the divider right -- "not measured" in a 10-wide number slot, "ms, flag >10%" in a
+    12-wide unit slot -- and those show up on one row type at a time, so a spot check passes while the
+    table is visibly crooked."""
+    t = _render(stage_ms={"prefill": 30.0, "decode": 33.9}).splitlines()
+    cols = {tuple(i for i, c in enumerate(ln) if c == "\u2502") for ln in t if "\u2502" in ln}
+    assert cols == {(31, 49, 79)}, sorted(cols)
+    seps = {tuple(i for i, c in enumerate(ln) if c == "\u253c") for ln in t if "\u253c" in ln}
+    assert seps == cols, (seps, cols)
+
+
+def test_the_fidelity_ladder_is_its_own_section(fid, facts):
+    """IT IS A WHAT-IF, NOT A MEASUREMENT, and it gets its own section.
+
+    Rendered inside each stage's compute roof it sat in the three-column grid, where its two values
+    -- a peak, and what that stage's FLOPs cost at that peak -- landed under THEORETICAL and
+    ACHIEVABLE 60-80%, so the second read as a sustained band it is not. It also duplicated per
+    stage, though the peaks are identical for every stage; the stages are columns now."""
+    out = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
+    assert "Fidelity ladder" in out, out
+    roof = out[out.index("Roofline") : out.index("Fidelity ladder")]
+    assert "LoFi" not in roof and "HiFi4" not in roof, roof
+    lad = out[out.index("Fidelity ladder") : out.index("Overheads")]
+    for rung in ("LoFi", "HiFi2", "HiFi4"):  # the fixture carries three rungs
+        assert rung in lad, (rung, lad)
+    assert lad.count("← in use") == 1, lad
+    # the stages are columns, so each rung states both on one row
+    assert "prefill ms" in lad and "decode ms" in lad, lad
 
 
 def test_the_bar_is_proportional():
     for frac, filled in ((0.0, 0), (0.5, 10), (1.0, 20)):
         assert S._bar(frac).count("█") == filled
+    # width is an argument: the utilisation panel needs 30 cells to separate 0.1% from 11%
+    assert S._bar(0.5, 30).count("█") == 15 and len(S._bar(None, 30)) == 30
 
 
 def test_a_bar_never_overflows_its_width():
@@ -134,9 +164,8 @@ def test_a_bar_never_overflows_its_width():
 
 
 def test_no_data_renders_an_empty_bar_not_a_zero():
-    """Zero and unknown are different claims. TTFT is unmeasured, not 0%."""
+    """Zero and unknown are different claims."""
     assert S._bar(None).count("█") == 0
-    assert "—" in _render()
 
 
 # ---------------------------------------------------------------- missing inputs degrade, not crash
@@ -172,39 +201,32 @@ def test_dispatch_is_omitted_when_there_is_no_host_bucket():
     """No host_overhead means the profiler recorded no op gaps -- inventing 0% would be a claim."""
     out = _render(profile=_prof(host=0))
     over = out[out.index("Utilization") :]
-    assert "Dispatch overhead" not in over
+    assert "dispatch  overhead" not in over
 
 
 # ---------------------------------------------------------------- the numbers are the right ones
 
 
 def test_capacity_uses_binary_gigabytes():
-    """32 GiB of DRAM is 34.4 decimal GB; printing 34 next to a spec sheet saying 32 reads as a bug."""
+    """32 GiB of DRAM is 34.4 decimal GB; printing 34 next to a spec sheet saying 32 reads as a bug.
+
+    Read off the OVERHEADS row now: the utilisation bar for capacity was removed, because its
+    percentage was already stated there and a second copy in different furniture is not a second
+    fact."""
     out = _render()
-    assert "GiB" in out and "/ 32 GiB" in out
+    over = out[out.index("Overheads") : out.index("Utilization")]
+    assert "GiB" in over and "28.8" in over, over
 
 
 def test_capacity_utilization_is_against_the_real_part():
     out = _render(active_bytes=BH_DRAM // 2)
-    assert "50%" in out
+    assert "50% used" in out and "50%" in out[out.index("Utilization") :], out
 
 
 def test_dispatch_share_is_of_the_headline_unit():
     """host_overhead is 62.4 of 381.23 device_ms = 16%, scaled onto the per-token number."""
     out = _render()
     assert "16%" in out
-
-
-def test_the_measured_column_flags_out_of_band():
-    below = _render(measured=10.0)
-    assert "✗" in below
-
-
-def test_in_band_is_marked_as_such():
-    assert "✔" in _render()
-
-
-# ---------------------------------------------------------------- determinism
 
 
 def test_rendering_is_deterministic():
@@ -239,16 +261,23 @@ def test_a_healthy_row_carries_no_verdict():
     assert " ok" not in over, over
 
 
-def test_a_breach_is_marked():
-    """The exception is the entire signal, so it must be impossible to miss."""
+def test_a_breach_states_its_share_and_grades_nothing():
+    """The share IS the statement. "OVER" was a verdict against a 10% rule printed one column away,
+    and the rule line went with the verdict -- with nothing left to grade against, it graded nothing.
+    Same change the Roofline made: report the number, let the reader judge."""
     out = _render(profile=_prof(host=200.0))
     over = out[out.index("Overheads") : out.index("Utilization")]
-    assert "✗ OVER" in over, over
+    assert "% of token" in over, over
+    assert "OVER" not in over and "flag >" not in over, over
 
 
-def test_the_flag_threshold_is_printed_not_hidden():
-    """A verdict the reader cannot check against a stated number is not a verdict."""
-    assert "flag >%d%%" % S._DISPATCH_FLAG_PCT in _render()
+def test_the_target_column_holds_only_targets():
+    """It carried "10784 ops" -- a MEASUREMENT, counted over the whole profiling window (one prefill
+    plus six decode steps) and printed on a row that reads per token, so wrong by ~7x as well.
+    Nobody targets an op count. Op counts live in the Op breakdown table, per class."""
+    out = _render()
+    over = out[out.index("Overheads") : out.index("Utilization")]
+    assert "ops" not in over, over
 
 
 def _cap_row(**kw):
@@ -283,26 +312,164 @@ def fid(monkeypatch):
     monkeypatch.setattr(S, "_fidelity_breakdown", lambda p: _FID)
 
 
-def test_the_compute_row_uses_a_measured_prefill_stage(fid):
+@pytest.fixture()
+def facts(monkeypatch):
+    """The model's own params and the declared sequence length -- the two inputs the stage compute
+    roof is built from. Stubbed rather than read off disk so this file still needs no device and no
+    model directory."""
+    monkeypatch.setattr(S, "_model_facts", lambda: {"total_params": 11_180_446_320, "layers": 48})
+    monkeypatch.setenv("TT_PERF_ISL_TOKENS", "128")
+    monkeypatch.setenv("PERF_MCP_ARCH", "blackhole")
+
+
+def test_the_binding_roof_carries_the_measurement(fid, facts):
     """It printed a hardcoded "not measured" while trace_replay's prefill stage sat in the state file
     and the block-timing section below rendered it -- the same report saying, in two places, that one
-    phase both was and was not measured."""
+    phase both was and was not measured.
+
+    On EVERY roof row, not hoisted to the stage heading. There is one stopwatch per stage, so hoisting
+    it looks like the way to avoid repeating it -- but it leaves each roof row holding a bare tick,
+    with MEASURED empty exactly where THEORETICAL and ACHIEVABLE have the numbers it is the verdict
+    on. A roofline row is read ACROSS, and a column that empties out on the rows that matter is not a
+    column."""
     out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
-    row = next(l for l in out.splitlines() if "Compute FLOPs" in l)
-    assert "35.80 ms" in row and "trace_replay" in row, row
-    assert "not measured" not in row, row
+    body = out[out.index("PREFILL") : out.index("DECODE")]
+    row = next(l for l in body.splitlines() if "← binds" in l)
+    assert "35.80" in row and "not measured" not in row, row
 
 
-def test_a_prefill_above_its_compute_band_is_flagged(fid):
-    """35.80 ms against a 13.1-17.4 ms ceiling says prefill is not compute-bound. The tick must not
-    say otherwise."""
-    row = next(l for l in _render(stage_ms={"prefill": 35.80}).splitlines() if "Compute FLOPs" in l)
-    assert row.rstrip().endswith("✗"), row
+def test_a_roof_row_is_complete_across_all_three_columns(fid, facts):
+    """The verdict glyph is only meaningful next to the pair it judges."""
+    out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    for ln in out.splitlines():
+        if "✗" not in ln and "✔" not in ln:
+            continue
+        lbl, theo, band, meas = ln[:31], ln[33:49], ln[51:79], ln[81:]
+        assert any(c.isdigit() for c in theo), ln
+        assert any(c.isdigit() for c in band), ln
+        assert any(c.isdigit() for c in meas), ln
 
 
-def test_a_prefill_inside_its_compute_band_ticks(fid):
-    row = next(l for l in _render(stage_ms={"prefill": 12.0}).splitlines() if "Compute FLOPs" in l)
-    assert row.rstrip().endswith("✔"), row
+def test_no_printed_row_has_a_hole_in_the_measured_column(fid, facts):
+    """THE INVARIANT THAT SETTLES THE LAYOUT. Any row that states a THEORETICAL and an ACHIEVABLE
+    value must state a MEASURED one; a row that cannot is DROPPED, not printed with a blank.
+
+    The achieved rate is a stage fact -- one run, one number -- so it duplicated when printed under
+    both roofs and left a hole when printed under neither. The row itself is what has to go: the
+    non-binding roof's ceiling is already stated in ms and in its own currency, and the slack ratio
+    carries the comparison."""
+    full = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    # the Roofline block only: the Fidelity ladder is its own section with its own columns
+    t = full[full.index("Roofline") : full.index("Fidelity ladder")].splitlines()
+    for ln in t:
+        if "│" not in ln or "ACHIEVABLE" in ln:
+            continue
+        theo, band, meas = ln[33:49], ln[51:79], ln[81:]
+        if not (theo.strip() and band.strip()):
+            continue
+        # the fidelity ladder's own header row labels ITS two columns; it states no measurement
+        # because a rung that was not run has none, and the rows below say which
+        if "fidelity mix" in ln:
+            continue
+        assert meas.strip(), ln
+
+
+def test_the_roofline_carries_no_verdict_glyph(fid, facts):
+    """THE THREE COLUMNS ARE THE VERDICT.
+
+    Ceiling, band and measurement sit side by side; a tick or cross states nothing they do not, and
+    it kept ASSERTING one where the band does not apply -- on an eager-measured stage, and on the
+    roof that is not the stage's limit, where the measurement scores an automatic miss against a
+    ceiling physics forbids it reaching. The reader compares the numbers.
+
+    Scoped to the Roofline block: the Overheads block keeps its `✗ OVER`, which marks a breach of a
+    STATED threshold rather than a position within a band."""
+    full = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
+    roof = full[full.index("Roofline") : full.index("Overheads")]
+    assert "✔" not in roof and "✗" not in roof, roof
+    # and the overheads block dropped its own verdict for the same reason
+    assert "✗" not in full[full.index("Overheads") : full.index("Utilization")], full
+
+
+def test_the_roof_that_is_not_the_limit_reduces_to_its_own_currency(fid, facts):
+    """NO MS ROW THERE -- the same rule as the rate row.
+
+    Elapsed time is stage-level: compute and memory run at once, so the stage's 33.94 ms cannot be
+    split into "X ms memory, Y ms compute". Printed on this roof it was either the stage wall-clock,
+    which says something false (compute did not take 33.94 ms, the STAGE did, while the arithmetic
+    idled waiting on memory), or a dash. Neither earns a row.
+
+    What is left is TFLOPS, which differs by stage even though the peak does not."""
+    out = _render(stage_ms={"decode": 33.9})
+    blk = out[out.index("DECODE") : out.index("Overheads")]
+    rows = [l for l in blk.splitlines() if l.strip().startswith("compute")]
+    assert len(rows) == 1, rows
+    assert "TFLOPS" in rows[0] and " ms" not in rows[0], rows[0]
+    assert "33.94" not in rows[0] and "—" not in rows[0], rows[0]
+
+
+def test_the_two_stages_compute_roofs_differ(fid, facts):
+    """The guard on the regression above: peak TFLOPS is a device constant, so if the compute roof
+    ever reduces to it again, prefill and decode print the same line and the table stops saying
+    anything about either stage."""
+    out = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
+    pf = out[out.index("PREFILL") : out.index("DECODE")]
+    dc = out[out.index("DECODE") : out.index("Overheads")]
+    a = [l for l in pf.splitlines() if l.strip().startswith("compute")][0]
+    b = [l for l in dc.splitlines() if l.strip().startswith("compute")][0]
+    assert a != b, a
+
+
+def test_the_rate_belongs_to_the_binding_roof(fid, facts):
+    """THE RATE IS THAT ROOF'S TO EXPLAIN.
+
+    There is one achieved rate and memory sets it. Printed under compute it was a memory-set number
+    held against a compute ceiling of 18850-25088 tok/s/u -- not a comparison but a non-sequitur,
+    since nothing about the arithmetic can be read off a number the arithmetic did not determine.
+    What can be read off it is already one row up, as 0.69 of 702.0 TFLOPS.
+
+    It follows `binds`, so a compute-bound stage gets the mirror image."""
+    out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    blk = out[out.index("DECODE") : out.index("Overheads")]
+    rows = blk.splitlines()
+    rate_rows = [i for i, l in enumerate(rows) if "tok/s/u" in l]
+    assert len(rate_rows) == 1, [rows[i] for i in rate_rows]
+    # and it sits under the roof marked binding, not merely under the first roof
+    binds_at = next(i for i, l in enumerate(rows) if "← binds" in l)
+    nxt = next(
+        (i for i, l in enumerate(rows) if i > binds_at and l.strip().startswith(("memory", "compute"))), len(rows)
+    )
+    assert binds_at < rate_rows[0] < nxt, (binds_at, rate_rows, nxt)
+
+
+def test_both_roofs_are_stated_for_both_stages(fid, facts):
+    """THE DEFECT THIS REPLACES. `annotate_op` kept only the WINNING floor, so compute was the only
+    term that survived to the report -- and the report duly printed a compute band over a stage the
+    profile itself marks memory-bound. A roofline with one roof is a line."""
+    out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    for stage, nxt in (("PREFILL", "DECODE"), ("DECODE", "Overheads")):
+        blk = out[out.index(stage) : out.index(nxt)]
+        assert "memory" in blk and "compute" in blk, (stage, blk)
+        assert "GB/s" in blk and "TFLOPS" in blk, (stage, blk)
+
+
+def test_exactly_one_roof_per_stage_is_marked_binding(fid, facts):
+    """The stage cannot beat its tightest floor, and which floor that is genuinely differs by stage:
+    prefill FLOPs scale with the sequence and decode's do not."""
+    out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    for stage, nxt in (("PREFILL", "DECODE"), ("DECODE", "Overheads")):
+        blk = out[out.index(stage) : out.index(nxt)]
+        assert blk.count("← binds") == 1, (stage, blk)
+
+
+def test_the_binding_roof_is_the_slower_one(fid, facts):
+    """Decode reads the whole model per token and does ~2 FLOPs per param, so memory binds by three
+    orders of magnitude. If compute were marked, the report would send the agent at the fidelity rung
+    for a stage no fidelity change can help."""
+    out = _render(stage_ms={"decode": 138.49})
+    blk = out[out.index("DECODE") : out.index("Overheads")]
+    binding = next(l for l in blk.splitlines() if "← binds" in l)
+    assert "memory" in binding, binding
 
 
 def _flat(t):
@@ -311,21 +478,22 @@ def _flat(t):
     return " ".join(t.split())
 
 
-def test_no_stage_name_is_guessed(fid):
+def test_no_stage_name_is_guessed(fid, facts):
     """Only the DECLARED prefill counts. Matching 'whatever looks like a prefill' would put a
     decode-path number in a TTFT cell on any pipeline that names its stages differently."""
     out = _render(stage_ms={"encode": 35.80, "generate": 138.49})
-    row = next(l for l in out.splitlines() if "Compute FLOPs" in l)
-    assert "35.80" not in row and "not measured" in row, row
+    body = out[out.index("PREFILL") : out.index("DECODE")]
+    assert "35.80" not in body and "not measured" in body, body
 
 
-def test_a_zero_flop_rung_is_marked_measured_not_missing(fid):
-    """All four fidelities print so the reader sees the whole ladder; that only works if an empty
-    rung is visibly EMPTY rather than visibly unknown."""
-    out = _render(stage_ms={"prefill": 12.0})
-    row = next(l for l in out.splitlines() if "HiFi4" in l)
-    assert "no ops at this fidelity" in row, row
-    assert "no ops at this fidelity" not in next(l for l in out.splitlines() if "LoFi" in l)
+def test_the_compute_peak_is_the_fidelity_the_model_runs(fid, facts):
+    """chip_peak_flops defaults to HiFi4 when handed no fidelity, and HiFi4 is a QUARTER of LoFi on
+    Blackhole -- so a LoFi model was priced against 175 TFLOPS instead of 702, making its compute roof
+    4x too slow and its utilisation 4x too flattering."""
+    out = _render(stage_ms={"prefill": 30.0})
+    blk = out[out.index("PREFILL") : out.index("DECODE")]
+    row = next(l for l in blk.splitlines() if "TFLOPS" in l and "LoFi" not in l and "HiFi" not in l)
+    assert "702" in row, row
 
 
 def test_the_report_offers_no_batch_advice():
@@ -341,59 +509,34 @@ def test_a_dispatch_share_at_or_above_one_is_refused():
     plausible-looking number."""
     out = _render(profile={"device_ms": 293.20, "buckets": [{"id": "host_overhead", "device_ms": 634.55}]})
     over = out[out.index("Utilization") :]
-    assert "Dispatch overhead" not in over, over
+    assert "dispatch  overhead" not in over, over
 
 
-# ---------------------------------------------------------------- an estimate is never a measurement
+# ---------------------------------------------------------------- no estimate can enter the table
 
 
-def test_an_estimate_is_marked_by_a_tilde(fid):
-    row = next(l for l in _render(prefill_est_ms=17.0).splitlines() if "Compute FLOPs" in l)
-    assert "~17.0 ms" in row, row
+def test_the_operator_estimate_is_gone():
+    """PERF_MCP_PREFILL_EST_MS filled the prefill cell with a number nobody measured, marked with a
+    tilde and a hatched bar to keep it from being quoted as one. The cell is now filled by a roof
+    derived from the model's own params and the DECLARED sequence length, so the guess has nothing
+    left to do -- and a report with no route for a guess needs no marks warning about one."""
+    src = Path(S.__file__).read_text()
+    assert "prefill_est_ms" not in src and "PREFILL_EST_MS" not in src
 
 
-def test_an_estimate_earns_no_verdict(fid):
-    """A guess cannot be graded, however close to the band it lands -- a tick would assert the
-    model IS in band on the strength of a number nobody measured."""
-    for est in (14.0, 40.0):
-        row = next(l for l in _render(prefill_est_ms=est).splitlines() if "Compute FLOPs" in l)
-        assert not row.rstrip().endswith("✗") and not row.rstrip().endswith("✔"), row
-
-
-def test_the_prefill_row_matches_the_others(fid):
-    """achieved / total, same as bandwidth and capacity, and higher is better."""
-    row = next(l for l in _render(prefill_est_ms=13.1).splitlines() if "Compute (prefill)" in l)
-    assert "10.4 / 13.1 ms" in row and row.rstrip().endswith("↑ better"), row
-
-
-def test_no_estimate_changes_nothing(fid):
-    out = _render()
-    assert "~" not in next(l for l in out.splitlines() if "Compute FLOPs" in l)
-    assert "TTFT never measured" in out
-
-
-def test_the_utilization_row_uses_the_measurement(fid):
-    """THE INCONSISTENCY: the roofline cell read the measured stage while this row read only the
-    estimate, so one report answered the same question two ways -- "15.90 ms (trace_replay)" above
-    and "TTFT never measured" below. A guess lit the bar and a measurement did not."""
-    out = _render(stage_ms={"prefill": 15.9})
-    row = next(l for l in out.splitlines() if "Compute (prefill)" in l)
-    assert "10.4 / 15.9 ms" in row and row.rstrip().endswith("↑ better"), row
-    assert "never measured" not in row, row
-
-
-def test_the_measurement_wins_over_an_estimate(fid):
-    """Both present: the measured value is the one that renders, in BOTH cells."""
-    out = _render(stage_ms={"prefill": 15.9}, prefill_est_ms=13.1)
-    assert "15.90 ms (trace_replay)" in out
-    row = next(l for l in out.splitlines() if "Compute (prefill)" in l)
-    assert "15.9 ms" in row and "13.1" not in row, row
-
-
-def test_both_cells_agree_on_what_is_known(fid):
-    """Whatever the inputs, the two cells must not disagree about whether prefill is known."""
-    for kw in ({}, {"stage_ms": {"prefill": 15.9}}, {"prefill_est_ms": 13.1}):
+def test_no_cell_is_a_guess(fid, facts):
+    """Scoped to the Roofline block. The dispatch TARGET legitimately reads "~0 ms" -- that tilde is
+    the target itself, not a hedge on a measurement."""
+    for kw in ({}, {"stage_ms": {"prefill": 15.9}}):
         out = _render(**kw)
-        roof_known = "not measured" not in next(l for l in out.splitlines() if "Compute FLOPs" in l)
-        util_known = "never measured" not in next(l for l in out.splitlines() if "Compute (prefill)" in l)
-        assert roof_known == util_known, (kw, out)
+        roof = out[out.index("Roofline") : out.index("Overheads & limits")]
+        assert "~" not in roof, roof
+
+
+def test_an_unmeasured_stage_says_so_rather_than_vanishing(fid, facts):
+    """A report is a confirmation document: the stage must still state its roofs, and say plainly
+    that nothing was clocked against them."""
+    out = _render()
+    blk = out[out.index("PREFILL") : out.index("DECODE")]
+    assert "not measured" in blk and "memory" in blk, blk
+    assert "✔" not in blk and "✗" not in blk, blk

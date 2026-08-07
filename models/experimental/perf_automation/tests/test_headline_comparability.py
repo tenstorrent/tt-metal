@@ -105,10 +105,15 @@ def test_sections_say_which_profile_they_came_from():
             "buckets": [{"id": "matmul", "device_ms": 1010.23, "count": 5600}],
         },
     )
-    # The table now STATES the total it sums to rather than naming a provenance it cannot verify: the
-    # variable is called baseline_profile, but perf_mcp rewrites that file on every profile, so the
-    # word BASELINE was a claim about which point in the run the rows describe. The trace line moved
-    # to the ledger for the same reason -- it was reading per_token_ms out of that mutable file.
-    assert "totalling 1010.23 ms" in txt, txt
+    # The heading names no provenance: the variable is called baseline_profile, but perf_mcp rewrites
+    # that file on every profile, so the word BASELINE was a claim about which point in the run the
+    # rows describe. The trace line moved to the ledger for the same reason -- it was reading
+    # per_token_ms out of that mutable file.
+    #
+    # It no longer restates the total either. Each row carries its device_ms AND its share, so the
+    # total is fixed by the rows themselves; the subtitle was a third copy of what the table says.
     assert "BASELINE profile" not in txt and "latest profile" not in txt
     assert "tracy trace pass, BASELINE" not in txt
+    assert "Op breakdown" in txt and "device time by op class" not in txt, txt
+    # the rows still pin the total: 1010.23 at 100.0%
+    assert "1010.23" in txt, txt

@@ -5,10 +5,25 @@ never gated on the throughput temp file existing or the agent passing stages_jso
 
 from __future__ import annotations
 
+import re
+
 import importlib.util
 import json
 import sys
 from pathlib import Path
+
+
+def _flat(text):
+    """A column-width-agnostic view of the table.
+
+    The roofline pads a number and its unit into fixed sub-fields, so a published figure reads
+    "64.0      tok/s/u". These assertions are about the PAIRING -- that a value is published carrying
+    its unit -- not about the geometry, and pinning the geometry is how a column-width change becomes
+    a test failure with nothing wrong behind it. Collapsing runs of spaces keeps the claim and drops
+    the layout.
+    """
+    return re.sub(r"[ \t]+", " ", str(text))
+
 
 _PA = Path(__file__).resolve().parents[1]
 if str(_PA) not in sys.path:
@@ -122,7 +137,7 @@ def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
     }
     text = _render(sm, tmp_path, baseline_profile={"per_token_ms": 19.4}, throughput=llm, final_ms=19.4)
     assert "ACHIEVABLE 60-80%" in text, text
-    assert "64.0 tok/s/u" in text, text  # now a THEORETICAL column, not a labelled line
+    assert "64.0 tok/s/u" in _flat(text), text  # now a THEORETICAL column, not a labelled line
 
 
 def test_status_has_no_band_verdict_for_a_floor_target(tmp_path):

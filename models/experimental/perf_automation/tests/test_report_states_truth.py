@@ -15,11 +15,26 @@ Two false statements were being printed for llama3_1_8b_p150:
 """
 from __future__ import annotations
 
+import re
+
 import json
 
 import importlib.util
 import sys
 from pathlib import Path
+
+
+def _flat(text):
+    """A column-width-agnostic view of the table.
+
+    The roofline pads a number and its unit into fixed sub-fields, so a published figure reads
+    "64.0      tok/s/u". These assertions are about the PAIRING -- that a value is published carrying
+    its unit -- not about the geometry, and pinning the geometry is how a column-width change becomes
+    a test failure with nothing wrong behind it. Collapsing runs of spaces keeps the claim and drops
+    the layout.
+    """
+    return re.sub(r"[ \t]+", " ", str(text))
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -299,6 +314,6 @@ def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypa
     # Thefive-line block became a three-block table; the denominator is now printed BESIDE the bar
     # ("345 / 512 GB/s") instead of being named in a trailing parenthetical. Same requirement --
     # the percentage must not float free of what it is a percentage OF.
-    line = next(l for l in out.splitlines() if "DRAM bandwidth" in l and "%" in l)
+    line = next(l for l in _flat(out).splitlines() if "decode memory" in l and "%" in l)
     assert "/" in line and "GB/s" in line, line
     assert "70%" in line, line

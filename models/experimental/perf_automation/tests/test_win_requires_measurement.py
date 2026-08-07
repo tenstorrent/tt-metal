@@ -72,7 +72,7 @@ def test_the_renderer_refuses_an_unmeasured_win_from_an_old_log(tmp_path):
         )
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
-    row = next(l for l in out.splitlines() if l.startswith("Matmul"))
+    row = next(l for l in out.splitlines() if l.lstrip().startswith("Matmul"))
     assert "✓win" not in row, row
     assert "·try" in row, row
 
@@ -84,7 +84,7 @@ def test_a_measured_win_still_renders_a_tick(tmp_path):
         json.dumps([{"op_signature": "Matmul", "kernel_kind": "dtype", "measured_ms": 648.17, "beat_baseline": True}])
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
-    row = next(l for l in out.splitlines() if l.startswith("Matmul"))
+    row = next(l for l in out.splitlines() if l.lstrip().startswith("Matmul"))
     assert "✓win" in row, row
 
 
@@ -164,9 +164,9 @@ def test_both_sections_agree_on_what_a_win_is(tmp_path):
     # the legend line explains what ✓win MEANS, so it is not a claim about an attempt
     body = [l for l in out.splitlines() if not l.startswith("levels:")]
     assert not [l for l in body if "✓win" in l or "✓ win" in l], "\n".join(body)
-    attempt_rows = [l for l in body if "committed: write the prefill" in l]
+    # the attempts table no longer carries the note text, so find the row by its op and verdict
+    attempt_rows = [l for l in body if l.lstrip().startswith("Matmul") and "· no gain" in l]
     assert attempt_rows, out
-    assert "· no gain" in attempt_rows[0], attempt_rows[0]
 
 
 def test_is_win_is_the_only_definition(tmp_path):
@@ -253,8 +253,11 @@ def test_junk_rows_and_junk_baselines_never_raise():
 
 
 def test_every_report_section_reads_the_same_win_set(tmp_path):
-    """The matrix, the per-attempt table, the code-changes list and the limitations section must agree:
-    one of them judging rows for itself is how a ✓ appeared in one section and 'no gain' in another."""
+    """The matrix, the per-attempt table and the limitations section must agree: one of them judging
+    rows for itself is how a ✓ appeared in one section and 'no gain' in another.
+
+    The code-changes list used to be a fourth reader of the same set; it was removed from the report
+    (source diffs belong in the kernel log and in git), so there are three."""
     sm = _summary()
     kl = tmp_path / "kl.json"
     kl.write_text(
@@ -281,12 +284,11 @@ def test_every_report_section_reads_the_same_win_set(tmp_path):
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
     body = out.splitlines()
-    matrix = [l for l in body if l.startswith("Matmul A") and ("✓win" in l or "·try" in l)]
-    attempts_rows = [l for l in body if l.startswith("Matmul A") and ("✓ win" in l or "· no gain" in l)]
-    diff_heads = [l for l in body if l.startswith("[#")]
+    matrix = [l for l in body if l.lstrip().startswith("Matmul A") and ("✓win" in l or "·try" in l)]
+    attempts_rows = [l for l in body if l.lstrip().startswith("Matmul A") and ("✓ win" in l or "· no gain" in l)]
     # the matrix marks the winning lever and only that lever
     assert len(matrix) == 1 and "✓win" in matrix[0] and "·try" in matrix[0], matrix
     # the per-attempt table: the faster attempt won, the slower committed one did not
     assert [("✓ win" in r) for r in attempts_rows] == [True, False], attempts_rows
-    # the code-changes list agrees, row for row
-    assert [h.endswith("· win") for h in diff_heads] == [True, False], diff_heads
+    # and no section prints source diffs any more
+    assert not [l for l in body if l.startswith("[#")], body

@@ -4,8 +4,22 @@ decode, roofline-floor ms form otherwise). MEASURED values are computed from the
 against a STATIC target snapshot — so nothing stale leaks in and missing inputs render 'n/a', never a
 fabricated 0.0 (the fix for the old '+0.0%'-style readout)."""
 
+import re
 import importlib.util
 from pathlib import Path
+
+
+def _flat(text):
+    """A column-width-agnostic view of the table.
+
+    The roofline pads a number and its unit into fixed sub-fields, so a published figure reads
+    "64.0      tok/s/u". These assertions are about the PAIRING -- that a value is published carrying
+    its unit -- not about the geometry, and pinning the geometry is how a column-width change becomes
+    a test failure with nothing wrong behind it. Collapsing runs of spaces keeps the claim and drops
+    the layout.
+    """
+    return re.sub(r"[ \t]+", " ", str(text))
+
 
 _SPEC = importlib.util.spec_from_file_location(
     "cc_summary", str(Path(__file__).resolve().parents[1] / "cc_optimize" / "summary.py")
@@ -29,10 +43,10 @@ def test_llm_decode_form_matches_bandwidth_math():
     out = "\n".join(S._roofline_lines(_LLM, 19.4))
     # The three-block table states the same four figures; only the layout changed. Asserted as
     # values, not as fixed-width label lines, so a column-width change is not a test failure.
-    assert "64.0 tok/s/u" in out  # ceiling
-    assert "38.4 – 51.2" in out  # sustained band
-    assert "51.5 tok/s/u" in out  # 1000 / 19.4
-    assert "412 GB/s" in out  # 8 GB / 19.4 ms
+    assert "64.0 tok/s/u" in _flat(out)  # ceiling
+    assert "38.4 – 51.2" in _flat(out)  # sustained band
+    assert "51.5 tok/s/u" in _flat(out)  # 1000 / 19.4
+    assert "412.4 GB/s" in _flat(out)  # 8 GB / 19.4 ms
     assert "%" in out and "Utilization" in out
 
 
@@ -44,7 +58,7 @@ def test_module_floor_form_when_not_llm():
     # No tok/s figure in the ms form. The reason line used to assert "not an LLM decode pipeline"
     # unconditionally, which was false for Llama-3.1-8B; with no active_bytes it now says the
     # numerator is missing instead of inventing a property of the model.
-    assert "rate ceiling" in out and "tok/s/u   (1000 /" not in out
+    assert "rate ceiling" in _flat(out) and "tok/s/u   (1000 /" not in out
     assert "no weight-bytes input" in out
 
 
@@ -72,7 +86,7 @@ def test_stale_guard_renders_na_not_zero():
     assert "n/a — not measured" in joined
     assert "—" in joined  # the utilization bar reads unknown, not 0%
     # the ONLY place a "0" appears is the static band label; no fabricated measured/util zero
-    assert "0.0 tok/s/u   (1000" not in joined
+    assert "0.0 tok/s/u   (1000" not in _flat(joined)
     assert "0%   (measured / ceiling)" not in joined
 
 
@@ -123,7 +137,7 @@ def test_render_summary_accepts_throughput_kwarg(tmp_path):
     log = tmp_path / "k.json"
     log.write_text("[]")
     txt = S.render_summary(str(log), 19.4, model="m", task="main", throughput=_LLM, final_override_ms=19.4)
-    assert "Roofline" in txt and "51.5 tok/s/u" in txt
+    assert "Roofline" in txt and "51.5 tok/s/u" in _flat(txt)
     # and with no throughput it still renders (table just absent)
     txt2 = S.render_summary(str(log), 19.4, model="m", task="main")
     assert "Roofline" not in txt2

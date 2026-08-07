@@ -139,6 +139,18 @@ def annotate_op(op: dict[str, Any], env: dict[str, Any], dispatch_per_op: float 
     memory = ideal_ms_memory(float(op.get("bytes") or 0.0), op.get("memory", ""), facts)
     dispatch = (dispatch_per_op * count) if dispatch_per_op else None
 
+    # PERSIST the losing terms too, for the same reason `compute_ms` is persisted: `ideal_ms` keeps
+    # only the winner, so a report reading it back can state the binding floor but not the OTHER
+    # ceilings the op sits under. That is what made the roofline print a compute band over a
+    # memory-bound stage -- compute was the only surviving term, so it was the only one renderable,
+    # and being the only renderable number is not the same as being the right one. A roofline with
+    # one roof is a line.
+    if memory is not None:
+        op["memory_ms"] = round(float(memory), 4)
+        op["bytes_moved"] = int(float(op.get("bytes") or 0.0))
+    if dispatch is not None:
+        op["dispatch_ms"] = round(float(dispatch), 4)
+
     candidates = [
         (c, lbl) for c, lbl in ((compute, "compute"), (memory, "memory"), (dispatch, "dispatch")) if c is not None
     ]
@@ -262,6 +274,12 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 # function, and a caller cannot say WHICH fidelity a floor came from.
                 "compute_ms": o.get("compute_ms"),
                 "flops": o.get("flops"),
+                # The other two ceilings, for the same reason. A stage summed only over compute_ms
+                # can state a compute roof and nothing else, which is how a memory-bound stage came
+                # to be reported against a compute band.
+                "memory_ms": o.get("memory_ms"),
+                "bytes_moved": o.get("bytes_moved"),
+                "dispatch_ms": o.get("dispatch_ms"),
                 "eff_gap_ms": eff_gap,  # ranking key: precision-aware for matmuls, == gap_ms otherwise
                 "gap_pct": (round(100.0 * gap / ideal, 1) if ideal else None),
                 "bound_by": o.get("bound_by"),

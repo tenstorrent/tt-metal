@@ -26,12 +26,27 @@ independent anchors with no per-model code.
 """
 from __future__ import annotations
 
+import re
+
 import ast
 import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def _flat(text):
+    """A column-width-agnostic view of the table.
+
+    The roofline pads a number and its unit into fixed sub-fields, so a published figure reads
+    "64.0      tok/s/u". These assertions are about the PAIRING -- that a value is published carrying
+    its unit -- not about the geometry, and pinning the geometry is how a column-width change becomes
+    a test failure with nothing wrong behind it. Collapsing runs of spaces keeps the claim and drops
+    the layout.
+    """
+    return re.sub(r"[ \t]+", " ", str(text))
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
@@ -252,7 +267,7 @@ def test_the_ledger_anchor_outranks_the_snapshot_for_the_ceiling(tmp_path, monke
         "unit": "token",
     }
     txt = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 17.0}, "m", "main"))
-    assert "84.0 tok/s/u" in txt, txt
+    assert "84.0 tok/s/u" in _flat(txt), txt
     assert "153.8" not in txt and "92.3" not in txt, txt
 
 

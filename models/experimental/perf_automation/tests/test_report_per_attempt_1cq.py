@@ -68,15 +68,29 @@ _ATTEMPTS = [
 def test_headings_are_trimmed():
     out = _render(_ATTEMPTS)
     assert "Per-attempt detail:" in out
-    assert "Code changes:" in out
     # the old verbose headings must be gone
     assert "every optimization tried — win OR fail" not in out
     assert "Code changes — every attempt" not in out
 
 
+def test_the_report_carries_no_source_diffs():
+    """The Code changes section printed the full patch of EVERY attempt, win or fail -- thousands of
+    lines of diff in a document read for its numbers. The diffs live in the kernel log and in git."""
+    out = _render(_ATTEMPTS)
+    assert "Code changes:" not in out, out
+    assert not [ln for ln in out.splitlines() if ln.startswith("[#")], out
+
+
+def test_the_attempt_table_carries_no_prose_column():
+    """It held the agent's own reasoning, truncated at 200 characters, so every row ended mid-sentence
+    and the four measured columns were crowded out by text that was never a measurement."""
+    out = _render(_ATTEMPTS)
+    assert "why tried" not in out, out
+
+
 def test_columns_are_eager_and_1cq():
     out = _render(_ATTEMPTS)
-    assert "Eager (device_ms)" in out
+    assert "eager device_ms" in out
     assert "1CQ Δ vs current" in out
     assert "gain vs base" not in out  # the old eager-masquerading label is gone
 
@@ -85,15 +99,15 @@ def _detail_rows(out):
     """Only the per-attempt table rows (a 'Matmul' also appears in the coverage grid above)."""
     lines = out.splitlines()
     i = next(n for n, ln in enumerate(lines) if ln.startswith("Per-attempt detail:"))
-    j = next((n for n, ln in enumerate(lines) if n > i and ln.startswith("Code changes:")), len(lines))
+    j = next((n for n, ln in enumerate(lines) if n > i and ln.startswith("Limitations")), len(lines))
     return lines[i:j]
 
 
 def test_delta_is_1cq_vs_current_not_eager():
     rows = _detail_rows(_render(_ATTEMPTS))
-    mm = next(ln for ln in rows if ln.startswith("Matmul"))
-    ag = next(ln for ln in rows if ln.startswith("AllGather"))
-    sl = next(ln for ln in rows if ln.startswith("Slice"))
+    mm = next(ln for ln in rows if ln.lstrip().startswith("Matmul"))
+    ag = next(ln for ln in rows if ln.lstrip().startswith("AllGather"))
+    sl = next(ln for ln in rows if ln.lstrip().startswith("Slice"))
     # win: 10.60 - 11.50 = -0.90 (faster). NOT the eager delta (baseline 11.50 - 184.5).
     assert "-0.90 ms" in mm and "184.50" in mm
     assert "+173" not in mm and "-173" not in mm  # would be the old eager delta
@@ -103,14 +117,7 @@ def test_delta_is_1cq_vs_current_not_eager():
     assert "—" in sl
 
 
-def test_code_changes_gain_is_also_1cq():
-    out = _render(_ATTEMPTS)
-    # the code-changes header line for the win carries the 1CQ delta, not the eager one
-    line = next(ln for ln in out.splitlines() if ln.startswith("[#1]"))
-    assert "-0.90 ms" in line
-
-
 def test_eager_column_still_carries_device_ms():
     # the raw per-op device_ms (steering signal) is retained, just relabelled
-    mm = next(ln for ln in _detail_rows(_render(_ATTEMPTS)) if ln.startswith("Matmul"))
+    mm = next(ln for ln in _detail_rows(_render(_ATTEMPTS)) if ln.lstrip().startswith("Matmul"))
     assert "184.50" in mm

@@ -277,6 +277,25 @@ def _read_json(path) -> object:
         return None
 
 
+def _measured_stage_paths(model: str = "", task: str = "") -> dict:
+    """How each stage was measured: "trace+1cq", "eager", or absent/unknown.
+
+    A stage that fell back to eager is not comparable to a traced one -- eager pays per-op host
+    dispatch that trace removes, which on gemma-3's prefill is half the wall clock. Held against a
+    band that assumes trace it scores an automatic miss, so the report needs to know."""
+    try:
+        from .perf_mcp import read_stage_paths
+
+        return read_stage_paths(model=model, task=task) or {}
+    except Exception:  # noqa: BLE001
+        try:
+            from perf_mcp import read_stage_paths  # type: ignore
+
+            return read_stage_paths(model=model, task=task) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+
 def _measured_stage_ms(model: str = "", task: str = "") -> dict:
     """trace_replay's per-stage timings, or {}.
 
@@ -619,17 +638,28 @@ def _wrap_note(text: str, width: int) -> list:
     return lines or [""]
 
 
-def _split(width):
-    """Divider aligned to the column format: first break at 46, second at 69."""
-    return "\u2500" * 46 + "\u253c" + "\u2500" * 23 + "\u253c" + "\u2500" * max(0, width - 70)
+def _split(width, a=60, b=98):
+    """Divider aligned to the column format: breaks at the two column boundaries.
+
+    The positions are arguments rather than the literals 46/69 they used to be, because the table
+    widened and a divider that keeps the old breaks stops being a divider -- it becomes two crosses
+    landing in the middle of the number fields."""
+    return "\u2500" * a + "\u253c" + "\u2500" * max(0, b - a - 1) + "\u253c" + "\u2500" * max(0, width - b - 1)
 
 
-def _bar(frac):
-    """Proportional fill. `frac` is 0..1, or None for "no data" (an all-empty bar)."""
+def _bar(frac, width=None):
+    """Proportional fill. `frac` is 0..1, or None for "no data" (an all-empty bar).
+
+    `width` is an argument because the utilisation panel and the block-timing panel are read
+    differently: block timing compares rows against the block's own peak, where 20 cells is plenty,
+    while utilisation compares FRACTIONS OF A PEAK across roofs that differ by three orders of
+    magnitude -- and at 20 cells a 0.1% bar and an 11% bar both render as empty.
+    """
+    w = int(width or _BAR_W)
     if frac is None:
-        return "\u2591" * _BAR_W
-    n = max(0, min(_BAR_W, int(round(float(frac) * _BAR_W))))
-    return "\u2588" * n + "\u2591" * (_BAR_W - n)
+        return "\u2591" * w
+    n = max(0, min(w, int(round(float(frac) * w))))
+    return "\u2588" * n + "\u2591" * (w - n)
 
 
 def _dispatch_ms_per_unit(profile, per_unit_ms):
@@ -676,6 +706,130 @@ def _capacity_bytes():
         return int((ARCH_FACTS.get(arch) or {}).get("dram_capacity_bytes") or 0) or None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _model_facts():
+    """perf_target_inputs.json — total_params / layers / weight bytes. None if unobtainable."""
+    try:
+        from .perf_mcp import _load_perf_target_inputs as _lp
+    except Exception:  # noqa: BLE001
+        try:
+            from perf_mcp import _load_perf_target_inputs as _lp  # type: ignore
+        except Exception:  # noqa: BLE001
+            return None
+    try:
+        f = _lp()
+        return f if isinstance(f, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prefill_tokens() -> int:
+    """The input length the PREFILL STAGE ACTUALLY RAN, so the FLOP term describes the request the
+    harness issued rather than a number from a neighbouring knob.
+
+    TT_PERF_ISL_TOKENS is the one the generated test reads (perf_test_gen.py) and prints back as
+    PERF_ISL_TOKENS; it is what `_prompt_ids_for_isl` sizes the prompt to and therefore what the
+    traced prefill stage consumes.
+
+    TT_PERF_SEQ_LEN is a DIFFERENT knob -- before_loop walks it down a shape ladder when a baseline
+    crashes on a pinned program config, and the full-pipeline gate quotes it on its scorecard. Reading
+    it here priced prefill's arithmetic against a sequence the stage never saw, and on a run where it
+    is unset (the common case) prefill got no compute roof at all. It stays as a fallback because a
+    run that set it and nothing else still declares something; the variable the test reads wins.
+
+    0 when neither is declared, which WITHHOLDS the prefill compute roof rather than inventing a
+    sequence length for it."""
+    for var in ("TT_PERF_ISL_TOKENS", "TT_PERF_SEQ_LEN"):
+        raw = str(os.environ.get(var) or "").strip()
+        if raw.isdigit() and int(raw) > 0:
+            return int(raw)
+    return 0
+
+
+def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
+    """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
+
+    THE ROOFS ARE ANALYTIC, WHICH IS WHY THIS NEEDS NO PER-OP STAGE LABEL. A stage's memory floor is
+    the weights it streams over peak bandwidth, and its compute floor is 2 x params x tokens-in-the-unit
+    over peak FLOPs -- perf_target already owns both formulas and already takes `tokens_per_unit`. The
+    profile cannot answer this: `_top_ops` keys on (op_code, shape, memory) and records nothing about
+    which phase an op ran in, so any attempt to split the op sums by stage is a guess. These two
+    numbers are not.
+
+    That distinction is the whole reason the roofline could previously state a compute band over a
+    memory-bound stage: `annotate_op` kept only the WINNING floor, so compute was the only term that
+    survived to the report, and the only renderable number is not the same as the right one.
+
+    tokens_per_unit is what separates the stages: 1 for a decoded token, the declared sequence length
+    for a prefill. The bytes are flat in it and the FLOPs are linear, which is exactly why the two
+    stages sit under different roofs at all.
+
+    Returns {stage: {memory_ms, compute_ms, flops, bytes, tokens, binds}} for the stages it can answer.
+    """
+    out = {}
+    mf = _model_facts()
+    if not (active_bytes and peak_bw_gbps):
+        return out
+    tp = max(1, int(tp_degree or 1))
+    per_dev_bytes = float(active_bytes) / tp
+    # ONE bandwidth floor. The weights are read once per unit of work in BOTH stages -- prefill does
+    # not re-read them per token -- so the memory roof is stage-invariant, and printing it twice is a
+    # statement about the model, not a copy-paste.
+    mem_ms = (per_dev_bytes / (float(peak_bw_gbps) * 1e9)) * 1000.0
+    params = 0
+    try:
+        from agent.perf_target import ceiling_params as _cp
+
+        params = int(_cp(mf or {}) or 0)
+    except Exception:  # noqa: BLE001
+        params = int((mf or {}).get("total_params") or 0)
+    # THE PEAK IS THE ONE THE MODEL ACTUALLY RUNS AT. chip_peak_flops defaults to HiFi4 when handed no
+    # fidelity, and HiFi4 is a QUARTER of LoFi on Blackhole -- so a LoFi model was being priced against
+    # 175 TFLOPS instead of 702, making its compute roof 4x too slow and its utilisation 4x too
+    # flattering. The profile reports the fidelity every matmul ran at; the dominant one by FLOP share
+    # is a measurement, not a default.
+    peak_flops, _dom = 0.0, ""
+    try:
+        _fid_rows, _ = _fidelity_breakdown(profile or {})
+        if _fid_rows:
+            _t = max(_fid_rows, key=lambda r: r[1])
+            _dom = str(_t[0]) if _t[1] else ""
+    except Exception:  # noqa: BLE001
+        _dom = ""
+    try:
+        from agent.environment import ARCH_FACTS
+        from agent.perf_target import chip_peak_flops as _cpf
+
+        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
+        peak_flops = float(_cpf(ARCH_FACTS.get(_arch) or {}, _dom) or 0.0)
+    except Exception:  # noqa: BLE001
+        peak_flops = 0.0
+    # THE RECURRING STAGE EXISTS FOR EVERY UNIT, not only for tokens. Gating it on "tok" deleted the
+    # whole ceiling for a diffusion model, whose unit of work is a denoise STEP and which is exactly
+    # as memory-bound per step as an LLM is per token. PREFILL is the part that is token-specific:
+    # a model that does not consume a prompt has no prefill to price, so it gets one stage, not two.
+    stages = [("decode", 1)]
+    _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
+    if _pt:
+        stages.insert(0, ("prefill", _pt))
+    for name, toks in stages:
+        flops = (2.0 * float(params) * float(toks) / tp) if params else 0.0
+        comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
+        out[name] = {
+            "memory_ms": mem_ms,
+            "compute_ms": comp_ms,
+            "flops": flops or None,
+            "bytes": per_dev_bytes,
+            "tokens": toks,
+            "peak_flops": peak_flops or None,
+            "fidelity": _dom,
+            # The binding roof is the SLOWEST one -- the stage cannot beat its tightest floor. Stated
+            # per stage because it genuinely differs: prefill's FLOPs scale with the sequence and
+            # decode's do not, so the same model can be compute-bound in one stage and not the other.
+            "binds": ("compute" if (comp_ms is not None and comp_ms > mem_ms) else ("memory" if mem_ms else None)),
+        }
+    return out
 
 
 def _fidelity_breakdown(profile):
@@ -737,7 +891,8 @@ def _roofline_tables(
     tag="",
     note="",
     stage_ms=None,
-    prefill_est_ms=None,
+    stage_paths=None,
+    tp_degree=1,
 ):
     """The Roofline / Overheads / Utilization blocks.
 
@@ -757,107 +912,347 @@ def _roofline_tables(
     truth is that the value was computable and refused (a truncated window against a full-depth
     ceiling makes the ratio meaningless, not merely optimistic).
     """
-    W = 93
+    W = 100
     rule = "\u2500" * W
     out = []
     # The unit word, derived ONCE from the declared unit. It used to be hardcoded "step" one column
     # from a MEASURED cell already reading "ms/token" -- two names for one unit, side by side.
     _step = unit.split("/")[0].replace("tok", "token") if "/" in unit else "step"
+    # THE SUSTAINED FRACTION IS THE MODEL'S, NOT A CONSTANT. Dense silicon delivers 60-80% of spec;
+    # an MoE reads a fraction of its weights per token and perf_target bands it at 37.5-50%. Hardcoding
+    # 0.60/0.80 here would print a dense band over an MoE ceiling -- so it is read back off the band
+    # perf_target already computed, and only falls to 60-80 when there is no band to read.
+    _LOF, _HIF = 0.60, 0.80
+    if band and band[0] and band[1] and theo:
+        _LOF, _HIF = float(band[0]) / float(theo), float(band[1]) / float(theo)
+
+    # COLUMN GEOMETRY IN ONE PLACE. Number and unit occupy fixed sub-fields, so the digits form a
+    # straight line down the page and the unit words start at their own column. Left-aligned on the
+    # FIRST DIGIT rather than the decimal point: the magnitudes here run from 0.03 ms to 29412
+    # tok/s/u, and no single decimal column serves both.
+    def _n(v):
+        """A duration, to hundredths -- and to thousandths below 0.1 ms. One fixed %.1f printed
+        decode's compute roof as 0.0: a roof three orders below the memory roof IS the finding, so
+        rounding it away deletes the answer."""
+        return ("%.3f" if abs(float(v)) < 0.1 else "%.2f") % float(v)
+
+    def _pct_of_ceiling(got, ceiling):
+        """Tenths, and hundredths below 1% -- a roof the run barely touches (decode reaches 0.1% of
+        its compute ceiling) must not round to the same 0% as no data."""
+        p = 100.0 * float(got) / float(ceiling)
+        return "%s%% of ceiling" % (("%.2f" if p < 1 else "%.1f") % p)
+
+    def _r(v):
+        """A rate. Tenths, except where the number is large enough that a tenth is noise."""
+        a = abs(float(v))
+        return ("%.2f" if a < 1 else "%.0f" if a >= 10000 else "%.1f") % float(v)
+
+    def _al(num):
+        """ALIGNED ON THE FIRST DIGIT: every number starts in the same column.
+
+        The alternative is aligning on the decimal point, which packs the digits more tidily but
+        leaves each number starting somewhere different -- and the column then has no left edge to
+        scan down. The field is wide enough that the widest value still clears its unit."""
+        return "%-8s" % str(num)[:8]
+
+    def _cell(num, u=""):
+        return "%-10s%-12s" % (num, u)
+
+    def _ncell(num, u=""):
+        return "%s%-8s" % (_al(num), u)
+
+    def _bandcell(lo, hi, u=""):
+        # THE LOW VALUE IS RIGHT-ALIGNED so the dash sits BETWEEN the two numbers instead of
+        # drifting. Left-aligned, a short low value ("27.5") left a gap and the dash ended up hard
+        # against the high one -- reading as a sign on it rather than as a range between them. The
+        # dash now lands on one fixed column, tight to both.
+        return "%8s \u2013 %s%-8s" % (str(lo)[:8], _al(hi), u)
+
+    def _row(label, theo_s="", band_s="", meas_s=""):
+        # A divider closes the LABEL column too. Without it the stage name and the roof names ran
+        # straight into the THEORETICAL numbers with no edge between them, so the first column was
+        # the only one on the page without a boundary.
+        return (" %-30s\u2502 %-16s\u2502 %-28s\u2502 %s" % (label, theo_s, band_s, meas_s)).rstrip()
+
+    _row2 = _row
+
+    def _rule4():
+        """Derived from a real row, so the crosses cannot drift from the dividers when a field
+        width changes -- which is exactly what happened when they were counted by hand."""
+        return "".join("\u253c" if c == "\u2502" else "\u2500" for c in _row("", "", "", "x").ljust(W))
+
+    def _hrule():
+        return "\u2500" * W
 
     out.append("Roofline")
     out.append(rule)
-    _pct = ""
-    if band and band[0] and theo:
-        _pct = " %.0f-%.0f%%" % (100.0 * band[0] / theo, 100.0 * band[1] / theo)
-    out.append("%-26s %-18s \u2502 %-21s \u2502 %s" % ("", "THEORETICAL", "ACHIEVABLE" + _pct, "MEASURED"))
-    out.append(_split(W))
+    out.append(_row("", "THEORETICAL", "ACHIEVABLE %.0f-%.0f%%" % (_LOF * 100, _HIF * 100), "MEASURED"))
+    out.append(_rule4())
 
     # A MEASUREMENT ABOVE THE CEILING IS NOT A GOOD SCORE. The ceiling is peak bandwidth over the
     # model's bytes -- exceeding it means the pair is inconsistent (a stale target, or a reading from
-    # a shallower window), not that the model beat physics. Judging in-band on `measured >= band[0]`
-    # alone ticked those runs green, which is the one verdict they must never get.
+    # a shallower window), not that the model beat physics.
     _exceeds = bool(measured and theo and measured > theo)
-    _ach = "%.1f \u2013 %.1f" % (band[0], band[1]) if (band and band[0]) else "n/a"
-    _meas = ("%.1f %s" % (measured, unit)) if measured else "n/a \u2014 not measured"
-    _ok = "\u2714" if (measured and band and band[0] and measured >= band[0] and not _exceeds) else "\u2717"
-    out.append(
-        " %-25s %-18s \u2502 %-21s \u2502 %s   %s" % ("DRAM bandwidth", "%.1f %s" % (theo, unit), _ach, _meas, _ok)
-    )
-    # The depth qualifier goes on its OWN line, not appended to the rate: inline it ran the row to
-    # 133 characters against a 93-wide rule and pushed the verdict glyph off the table. One line
-    # covers both rates, because in this layout the ceiling and the measurement share a row.
-    if tag:
-        out.append(" %-25s %s" % ("", tag.strip()))
-    if _exceeds:
-        out.append(" %-25s %s" % ("", "\u2717 measured EXCEEDS ceiling \u2014 target stale/suspect (re-profile)"))
-    if note and not measured:
-        for _ln in _wrap_note(str(note), W - 28):
-            out.append(" %-25s %s" % ("", _ln))
-    if peak_bw_gbps:
-        _bwb = ("%.0f \u2013 %.0f GB/s" % (peak_bw_gbps * 0.60, peak_bw_gbps * 0.80)) if band and band[0] else ""
-        _bwm = ("%.0f GB/s" % bw_gbps) if bw_gbps else "\u2014"
-        out.append(" %-25s %-18s \u2502 %-21s \u2502 %s" % ("", "%.0f GB/s" % peak_bw_gbps, _bwb, _bwm))
-    out.append(_split(W))
-    _fid, _cc = _fidelity_breakdown(profile)
-    _cc_floor = float(_cc) if (_cc and _cc > 0) else None
     _pf_measured = (stage_ms or {}).get("prefill")
     _pf_measured = float(_pf_measured) if isinstance(_pf_measured, (int, float)) and _pf_measured > 0 else None
-    if _cc and _cc > 0:
-        # USE THE MEASUREMENT IF THERE IS ONE. This cell printed a hardcoded "not measured" while
-        # trace_replay's own prefill stage sat in the state file and the block-timing section below
-        # rendered it -- one report stating in two places that the same phase both was and was not
-        # measured. Only the model's DECLARED prefill stage counts; no stage name is guessed.
-        _pf = _pf_measured
-        # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
-        _lo, _hi = _cc / 0.80, _cc / 0.60
-        out.append(
-            " %-25s %-18s │ %-21s │ %s   %s"
-            % (
-                "Compute FLOPs   prefill",
-                "%.1f ms TTFT" % _cc,
-                "%.1f – %.1f ms" % (_lo, _hi),
+    _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile)
+    # ONE CEILING, NOT TWO THAT NEARLY AGREE. `theo` is what perf_target published and what the stop
+    # gate judges against -- and on the anchored path it is recomputed from the ledger, not from the
+    # snapshot this function was handed. Re-deriving the decode memory roof from bytes here would put
+    # a second, almost-identical ceiling in the same report, and "almost" is how a run gets banked
+    # against one number and reported against another.
+    if _roofs.get("decode") and theo:
+        _roofs["decode"]["memory_ms"] = 1000.0 / float(theo)
+    _fid, _cc = _fidelity_breakdown(profile)
+    _cc_floor = float(_cc) if (_cc and _cc > 0) else None
+    # Which fidelity the model ACTUALLY runs at, by FLOP share. The per-fidelity rows below price the
+    # stage's own FLOPs at every rung of the ladder; without this mark they state what each rung would
+    # cost but not which one is being paid for.
+    _in_use = ""
+    if _fid:
+        _top = max(_fid, key=lambda r: r[1])
+        _in_use = str(_top[0]) if _top[1] else ""
+
+    # BOTH ROOFS, BOTH STAGES. Only the WINNING floor used to survive `annotate_op`, so compute was
+    # the only renderable term and the report printed a compute band over a memory-bound stage. Being
+    # the only number that can be drawn is not the same as being the right one.
+    if tag:
+        out.append(_row(" " + tag.strip()))
+    if _exceeds:
+        out.append(_row(" \u2717 measured EXCEEDS ceiling \u2014 target stale/suspect (re-profile)"))
+    if note and not measured:
+        # Wrapped to the LABEL field, not to the page. At W-40 the note ran past the first divider
+        # and pushed the column edges out on its own rows.
+        for _ln in _wrap_note(str(note), 56):
+            out.append(_row(" " + _ln))
+
+    def _fidelity_section():
+        """The precision ladder, ONCE, with the stages as columns.
+
+        It used to render inside each stage's compute roof, which put it in the three-column grid --
+        where its two values (a peak, and what this stage's FLOPs cost at that peak) landed under
+        THEORETICAL and ACHIEVABLE 60-80%, and the second read as a sustained band it is not. Adding
+        sub-labels only put two headers over one column, and the block still duplicated per stage.
+
+        It is not a measurement, it is a what-if: what the arithmetic WOULD cost at each precision.
+        That is its own kind of statement and gets its own section, and since the peaks are the same
+        for every stage the stages are columns rather than repeated blocks."""
+        _cols = [(st, _roofs[st]) for st in ("prefill", "decode") if _roofs.get(st) and _roofs[st].get("flops")]
+        if not (_fid and _cols):
+            return []
+        _o = ["", "Fidelity ladder", "\u2500" * W]
+        # Ruled and spaced like the tables above it, so the section does not read as loose text
+        # dropped between two grids.
+        _fr = " %-14s\u2502 %-18s" + "\u2502 %-18s" * len(_cols) + "\u2502 %s"
+        _hdr = _fr % (("precision", "peak") + tuple("%s ms" % st for st, _ in _cols) + ("",))
+        _o.append(_hdr.rstrip())
+        _o.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in _hdr.ljust(W)))
+        for _f, _fl, _pk, _fms in _fid:
+            if not _pk:
+                continue
+            _nm = str(_f).replace("lofi", "LoFi").replace("hifi", "HiFi")
+            _o.append(
                 (
-                    ("%.2f ms (trace_replay)" % _pf)
-                    if _pf
-                    # An estimate carries a TILDE and earns NO verdict glyph. Those two marks are
-                    # what keep it from reading as a measurement; a bare, ticked number here would
-                    # be quoted as a measured TTFT.
-                    else (("~%.1f ms" % prefill_est_ms) if prefill_est_ms else "n/a — not measured")
-                ),
-                ("✔" if (_pf and _pf <= _hi) else ("" if (prefill_est_ms and not _pf) else "✗")),
+                    _fr
+                    % (
+                        (_nm, "%s TFLOPS" % _r(_pk))
+                        + tuple(_n((rf["flops"] / (_pk * 1e12)) * 1000.0) for _, rf in _cols)
+                        + ("\u2190 in use" if str(_f) == _in_use else "",)
+                    )
+                ).rstrip()
+            )
+        _o.append("\u2500" * W)
+        return _o
+
+    _STAGE_UNIT = {"prefill": "req/s", "decode": unit}
+    # The recurring stage is named for the unit the model actually reports, so a diffusion run reads
+    # "per step" rather than being told it decodes.
+    _STAGE_TITLE = {
+        "prefill": "PREFILL \u2014 per request",
+        "decode": "%s \u2014 per %s" % (("DECODE" if _step == "token" else _step.upper()), _step),
+    }
+    _rendered = []
+    for _st in ("prefill", "decode"):
+        _rf = _roofs.get(_st)
+        if not _rf:
+            continue
+        _u = _STAGE_UNIT.get(_st) or unit
+        _path = str((stage_paths or {}).get(_st) or "").strip().lower()
+        _traced = _path.startswith("trace") or not _path
+        _ms = _pf_measured if _st == "prefill" else (float(per_unit_ms) if per_unit_ms else None)
+        # EVERY ROW CARRIES ALL THREE COLUMNS. The stage wall-clock was hoisted to this heading to
+        # avoid repeating it, which left each roof row holding a bare tick -- MEASURED no longer
+        # sitting beside the THEORETICAL and ACHIEVABLE it is the verdict on. A roofline row is read
+        # ACROSS; a column that empties out on the rows that matter is not a column.
+        _mrate = measured if (_st == "decode" and measured) else ((1000.0 / _ms) if _ms else None)
+        out.append(
+            _row(
+                "%s%s"
+                % (_STAGE_TITLE[_st], "" if _traced else "   [%s \u2014 not comparable to a traced band]" % _path),
+                "",
+                "",
+                "",
             )
         )
-        out.append(" %-25s %-18s │ %-21s │" % ("   fidelity mix:", "", ""))
-        for _f, _fl, _pk, _ms in _fid:
-            # A 0-FLOP row is a MEASUREMENT -- no ops ran at that fidelity -- not missing data. All
-            # four modes print so the reader sees the whole ladder the model could sit on, and that
-            # only works if an empty rung is visibly EMPTY rather than visibly unknown.
-            out.append(
-                " %-25s %-18s │ %-21s │%s"
-                % (
-                    "    %-6s %6.2fe12 FLOP" % (_f.replace("lofi", "LoFi").replace("hifi", "HiFi"), _fl / 1e12),
-                    "x %.0f TFLOPS" % _pk,
-                    "%.2f ms" % _ms,
-                    "   no ops at this fidelity" if not _fl else "",
+        _rendered.append(_st)
+
+        for _roof in ("memory", "compute"):
+            _c = _rf.get("%s_ms" % _roof)
+            _binding = _rf.get("binds") == _roof
+            _mark = "   \u2190 binds" if _binding else ""
+            _lbl = "  %s%s" % (_roof, _mark)
+            if not _c:
+                out.append(_row(_lbl, "not measured", "not measured", ""))
+                continue
+            # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
+            _lo_ms, _hi_ms = _c / _HIF, _c / _LOF
+            # ONLY THE BINDING ROOF EARNS A VERDICT. Held against the roof that is NOT the limit, the
+            # measurement scores an automatic miss -- prefill reads 22x off its compute ceiling -- and
+            # that miss is meaningless: the stage cannot reach the lower ceiling because the higher one
+            # forbids it. A cross there says "close this gap" about a gap physics will not let anyone
+            # close, and it duplicates the binding row's measurement to say it. The non-binding roof
+            # reports its SLACK instead, which is the actual finding: how much headroom that resource
+            # has before it would start to matter.
+            _bind_ms = _rf.get("%s_ms" % _rf.get("binds")) if _rf.get("binds") else None
+            # THE MS ROW BELONGS TO THE BINDING ROOF, like the rate row and for the same reason.
+            #
+            # There is one elapsed time per stage. Printed on both roofs it was the same 91.33 ms
+            # twice, and on the non-binding roof it also said something false: compute did not take
+            # 91.33 ms, the STAGE did, while the arithmetic units sat idle waiting on memory. The
+            # verdict beside it was worse -- an automatic cross against a ceiling the stage cannot
+            # reach because the higher one forbids it.
+            #
+            # So the roof that is not the limit reduces to ONE row, in its own currency: 0.69 of
+            # 702.0 TFLOPS. Nothing repeats, no cell is blank, and the row still says plainly that
+            # the arithmetic is idle.
+            if not _binding:
+                # NO MS ROW ON THE ROOF THAT IS NOT THE LIMIT -- the same rule as the rate row.
+                #
+                # Elapsed time is stage-level: compute and memory run at once, so the stage's 91.33 ms
+                # cannot be split into "X ms memory, Y ms compute". Printed here it was either the
+                # stage wall-clock (false -- compute did not take 91.33 ms, the STAGE did, while the
+                # arithmetic idled waiting on memory) or a dash. Neither earns a row.
+                #
+                # The roof reduces to its own currency, where it does have something to say: 0.69 of
+                # 702.0 TFLOPS, which differs by stage even though the peak does not.
+                if _roof == "memory" and peak_bw_gbps:
+                    _mb0 = (
+                        bw_gbps
+                        if (_st == "decode" and bw_gbps)
+                        else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
+                    )
+                    out.append(
+                        _row(
+                            _lbl,
+                            _ncell(_r(peak_bw_gbps), "GB/s"),
+                            _bandcell(_r(peak_bw_gbps * _LOF), _r(peak_bw_gbps * _HIF), "GB/s"),
+                            _ncell(_r(_mb0), "GB/s") if _mb0 else "n/a \u2014 not measured",
+                        )
+                    )
+                elif _roof == "compute" and _rf.get("peak_flops"):
+                    _pk0 = _rf["peak_flops"] / 1e12
+                    _mt0 = ((_rf["flops"] / (_ms / 1000.0)) / 1e12) if (_ms and _rf.get("flops")) else None
+                    out.append(
+                        _row(
+                            _lbl,
+                            _ncell(_r(_pk0), "TFLOPS"),
+                            _bandcell(_r(_pk0 * _LOF), _r(_pk0 * _HIF), "TFLOPS"),
+                            _ncell(_r(_mt0), "TFLOPS") if _mt0 else "n/a \u2014 not measured",
+                        )
+                    )
+                continue
+            if _ms:
+                # AN EAGER STAGE EARNS NO VERDICT. The ACHIEVABLE band is 60-80% of a hardware
+                # ceiling, which assumes the measurement is a traced replay; an eager stage also
+                # pays per-op host dispatch, and on gemma-3's prefill that is half the wall clock.
+                # Scoring it against the band marks the harness's measuring method as a model
+                # defect. The number still prints -- it is what the pipeline does today -- it just
+                # carries how it was taken instead of a cross.
+                # NO VERDICT GLYPH. The three columns already state ceiling, band and measurement
+                # side by side; a tick or cross adds no fact, and it kept asserting one on stages the
+                # band does not describe -- an eager-measured prefill, a roof that is not the limit.
+                # The reader compares the numbers, which is what they are there for.
+                _meas = _ncell(_n(_ms), "ms")
+            else:
+                _meas = "n/a \u2014 not measured"
+            out.append(_row(_lbl, _ncell(_n(_c), "ms"), _bandcell(_n(_lo_ms), _n(_hi_ms), "ms"), _meas))
+            if _roof == "memory" and peak_bw_gbps:
+                # The caller already computed this one from the same bytes; recomputing it here
+                # differs in the last digit and puts two nearly-equal bandwidths in one report.
+                _mb = (
+                    bw_gbps
+                    if (_st == "decode" and bw_gbps)
+                    else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
                 )
-            )
-    else:
-        out.append(" %-25s %-18s │ %-21s │ %s   %s" % ("Compute FLOPs", "not modelled", "—", "n/a — not measured", "✗"))
+                out.append(
+                    _row(
+                        "",
+                        _ncell(_r(peak_bw_gbps), "GB/s"),
+                        _bandcell(_r(peak_bw_gbps * _LOF), _r(peak_bw_gbps * _HIF), "GB/s"),
+                        _ncell(_r(_mb), "GB/s") if _mb else "",
+                    )
+                )
+            if _roof == "compute" and _rf.get("peak_flops"):
+                _pk_t = _rf["peak_flops"] / 1e12
+                _mt = ((_rf["flops"] / (_ms / 1000.0)) / 1e12) if (_ms and _rf.get("flops")) else None
+                out.append(
+                    _row(
+                        "",
+                        _ncell(_r(_pk_t), "TFLOPS"),
+                        _bandcell(_r(_pk_t * _LOF), _r(_pk_t * _HIF), "TFLOPS"),
+                        _ncell(_r(_mt), "TFLOPS") if _mt else "",
+                    )
+                )
+            # THE RATE ROW BELONGS TO THE BINDING ROOF, because the rate is that roof's to explain.
+            #
+            # There is one achieved rate -- 30.8 tok/s/u -- and memory sets it. Printed under compute
+            # it was that memory-set number held against a compute ceiling of 18850-25088 tok/s/u: not
+            # a comparison but a non-sequitur, since nothing about the arithmetic can be read off a
+            # number the arithmetic did not determine. What CAN be read off it is already stated one
+            # row up, as 0.69 of 702.0 TFLOPS.
+            #
+            # It follows `binds`, so a compute-bound stage gets the mirror image: compute carries
+            # ms + TFLOPS + the rate, and memory keeps ms + GB/s.
+            if _binding:
+                _tr = 1000.0 / _c
+                out.append(
+                    _row(
+                        "",
+                        _ncell(_r(_tr), _u),
+                        _bandcell(_r(_tr * _LOF), _r(_tr * _HIF), _u),
+                        _ncell(_r(_mrate), _u) if _mrate else "n/a \u2014 not measured",
+                    )
+                )
+            # THE FIDELITY LADDER, PRICED IN THIS STAGE'S OWN FLOPs. Peak differs 4x across the modes,
+            # so a blanket peak is either optimistic (LoFi, unreachable without dropping precision) or
+            # pessimistic (HiFi4, punishing LoFi work already done). Every rung prints, present or
+            # not, so the reader sees the whole ladder the stage could sit on rather than only where
+            # it sits today -- and the rung actually in use is marked.
+
+        if _st != "decode":
+            out.append(_rule4())
+
+    if not _rendered:
+        _na = "n/a \u2014 not measured"
+        out.append(_row("  memory", _na, _na, _na))
+        out.append(_row("  compute", _na, _na, _na))
     # ONE resolution of the prefill figure, measurement first. The roofline cell read the measured
     # stage while this row read only the estimate, so the same report answered the same question two
     # ways: "15.90 ms (trace_replay)" above, "TTFT never measured" below. A guess lit the bar and a
     # measurement did not.
-    _prefill_ms = _pf_measured or prefill_est_ms
+    _prefill_ms = _pf_measured
+    # close the roofline block BEFORE the ladder starts its own, or the two rules stack
+    out.append(rule)
+    out.extend(_fidelity_section())
     disp = _dispatch_ms_per_unit(profile, per_unit_ms)
     cap = _capacity_bytes()
-    out.append(rule)
     out.append("")
 
     if disp is not None or cap:
         out.append("Overheads & limits")
         out.append(rule)
-        out.append("%-26s %-18s \u2502 %-21s \u2502" % ("", "TARGET", "MEASURED"))
-        out.append(_split(W))
+        out.append(_row2("", "TARGET", "MEASURED"))
+        out.append(_rule4())
         # No "ok" marker on a healthy row. It read as a verdict against the TARGET beside it, but was
         # judged on a DIFFERENT, invisible rule -- a hardcoded 10% tolerance -- so a row could print
         # a target of ~0 ms, measure 2.46 ms, and call itself ok. The tolerance is now stated in the
@@ -869,28 +1264,33 @@ def _roofline_tables(
             _ops = _ops_per_unit(profile)
             out.append(
                 (
-                    " %-25s %-18s \u2502 %-21s \u2502 %.0f%% of %-9s %s"
+                    " %-30s\u2502 %-16s\u2502 %-28s\u2502 %.0f%% of %-8s %s"
                     % (
                         "Dispatch",
-                        "~0 ms, flag >%d%%" % _DISPATCH_FLAG_PCT,
-                        "%.2f ms/%s" % (disp, _step),
+                        _ncell("~0", "ms"),
+                        _ncell("%.2f" % disp, "ms/%s" % _step),
                         _share,
                         _step,
-                        "\u2717 OVER" if _share > _DISPATCH_FLAG_PCT else "",
+                        "",
                     )
                 ).rstrip()
             )
-            if _ops:
-                out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("", "%d ops" % _ops, ""))
+            # NO THRESHOLD LINE AND NO OP COUNT.
+            #
+            # The threshold was the rule behind a "OVER" verdict; with the verdict gone it grades
+            # nothing. And the op count was a MEASUREMENT sitting in the TARGET column -- nobody
+            # targets 10784 ops -- counted over the whole profiling window (one prefill plus six
+            # decode steps) on a row that reads per token, so it was out by roughly 7x as well.
+            # Op counts live in the Op breakdown table below, per class, correctly attributed.
         if cap and active_bytes:
             _used = 100.0 * active_bytes / cap
             out.append(
                 (
-                    " %-25s %-18s \u2502 %-21s \u2502 %.0f%% used%s"
+                    " %-30s\u2502 %-16s\u2502 %-28s\u2502 %.0f%% used%s"
                     % (
                         "DRAM capacity",
-                        "< %.1f GiB (90%%)" % (cap * 0.9 / 1024**3),
-                        "%.2f GiB" % (active_bytes / 1024**3),
+                        _ncell("%.1f" % (cap * 0.9 / 1024**3), "GiB 90%"),
+                        _ncell("%.2f" % (active_bytes / 1024**3), "GiB"),
                         _used,
                         "      \u2717 OVER" if _used >= 90 else "",
                     )
@@ -911,40 +1311,67 @@ def _roofline_tables(
     # SATURATED bar -- the inconsistent pair reading as a flawless score, which is the opposite of
     # what it means.
     _u1 = None if _exceeds else ((measured / theo) if (measured and theo) else None)
-    _rows = [
-        (
-            "DRAM bandwidth",
-            _u1,
-            (
-                "inconsistent \u2014 see above"
-                if _exceeds
-                else (("%.0f / %.0f GB/s" % (bw_gbps, peak_bw_gbps)) if (bw_gbps and peak_bw_gbps) else "no data")
-            ),
-            "\u2191 better" if _u1 else "",
-        ),
-        (
-            "Compute (prefill)",
-            (_cc_floor / _prefill_ms) if (_prefill_ms and _cc_floor) else None,
-            ("%.1f / %.1f ms" % (_cc_floor, _prefill_ms)) if (_prefill_ms and _cc_floor) else "TTFT never measured",
-            # Same shape as every other row: achieved / total, and higher is better for a compute
-            # utilisation just as it is for bandwidth.
-            "\u2191 better" if (_prefill_ms and _cc_floor) else "",
-        ),
-    ]
+    _rows = []
+    # ONE BAR PER STAGE AND ROOF, each a fraction of a PEAK so the bars are directly comparable. The
+    # list used to hold memory for decode and compute for prefill and nothing else -- the same
+    # one-sided view the roofline had, which left "is decode compute-bound?" unanswerable from the
+    # report. An empty compute bar beside a two-thirds-full memory bar is the whole optimisation
+    # story at a glance: there is no compute headroom to win because compute was never the constraint.
+    for _st in ("prefill", "decode"):
+        _rf = _roofs.get(_st)
+        if not _rf:
+            continue
+        _ms = _pf_measured if _st == "prefill" else (float(per_unit_ms) if per_unit_ms else None)
+        if not _ms:
+            continue
+        # ONE BAR PER STAGE: the roof that BINDS it. Same rule the ms and rate rows follow above --
+        # a resource that is not the limit has no utilisation worth acting on, and drawing it invited
+        # the reading that an empty compute bar is something to go and fill.
+        _bind = _rf.get("binds")
+        if _bind == "memory" and peak_bw_gbps and _rf.get("bytes"):
+            # Same figure as the roofline row above, not a second computation of it: recomputing from
+            # bytes differed in the last digit and put 345.0 and 344.4 in one report.
+            _g = bw_gbps if (_st == "decode" and bw_gbps) else (_rf["bytes"] / (_ms / 1000.0)) / 1e9
+            _rows.append(
+                (
+                    "%-9s memory" % _st,
+                    (None if _exceeds and _st == "decode" else _g / peak_bw_gbps),
+                    (
+                        "inconsistent \u2014 see above"
+                        if (_exceeds and _st == "decode")
+                        else "%.1f / %.1f GB/s" % (_g, peak_bw_gbps)
+                    ),
+                    "\u2191 better",
+                )
+            )
+        if _bind == "compute" and _rf.get("flops") and _rf.get("peak_flops"):
+            _t = (_rf["flops"] / (_ms / 1000.0)) / 1e12
+            _pk_t = _rf["peak_flops"] / 1e12
+            _rows.append(("%-9s compute" % _st, _t / _pk_t, "%.1f / %.1f TFLOPS" % (_t, _pk_t), "\u2191 better"))
+    # DISPATCH AND CAPACITY BELONG HERE TOO. Their percentages also appear in the Overheads block,
+    # but this panel is the one place every resource is drawn on the same 0-100% scale -- which is
+    # what makes 67% bandwidth, 17% dispatch and 33% capacity comparable at a glance. Overheads
+    # answers "is this row in breach"; this one answers "which resource is full".
     if disp is not None and per_unit_ms:
         _d = disp / float(per_unit_ms)
-        _rows.append(("Dispatch overhead", _d, "%.2f / %.2f ms" % (disp, per_unit_ms), "\u2193 better"))
+        _rows.append(("dispatch  overhead", _d, "%.2f / %.2f ms" % (disp, per_unit_ms), "\u2193 better"))
     if cap and active_bytes:
         _c = active_bytes / cap
         _rows.append(
-            ("DRAM capacity", _c, "%.2f / %.0f GiB" % (active_bytes / 1024**3, cap / 1024**3), "\u2193 better")
+            ("DRAM      capacity", _c, "%.2f / %.0f GiB" % (active_bytes / 1024**3, cap / 1024**3), "\u2193 better")
         )
     for _name, _frac, _detail, _dir in _rows:
         # An estimated row draws a HATCHED bar, never the solid fill a measurement gets. A bar is
         # read as data at a glance, so the distinction has to survive a glance.
-        _b = _bar(_frac)
-        _pc = ("%.0f%%" % (_frac * 100)) if _frac else "\u2014"
-        out.append(("  %-19s %s  %4s   %-21s %s" % (_name, _b, _pc, _detail, _dir)).rstrip())
+        _b = _bar(_frac, 30)
+        # Two decimals below 1%: a compute bar reading 0% and a bar reading "no data" are opposite
+        # findings, and "%.0f%%" printed both as 0.
+        _pc = (
+            (("%.1f%%" % (_frac * 100)) if (_frac and _frac < 0.01) else ("%.0f%%" % (_frac * 100)))
+            if _frac
+            else "\u2014"
+        )
+        out.append(("  %-20s %s  %6s   %-24s %s" % (_name, _b, _pc, _detail, _dir)).rstrip())
     out.append(rule)
     return out
 
@@ -1075,10 +1502,11 @@ def _roofline_lines(
                     # The MEASURED phase split, so the compute row can state a real prefill time
                     # instead of a hardcoded "not measured" while the block below prints one.
                     stage_ms=_measured_stage_ms(model, task),
-                    # An operator-supplied ESTIMATE for a phase the harness has not measured. Opt-in
-                    # and always rendered with an EST marker and a hatched bar, so it cannot be read
-                    # as, or quoted as, a measurement.
-                    prefill_est_ms=_env_float("PERF_MCP_PREFILL_EST_MS"),
+                    # HOW each stage was measured. A stage that fell back to eager cannot be graded
+                    # against a band that assumes trace.
+                    stage_paths=_measured_stage_paths(model, task),
+                    # The stage roofs shard the bytes and the FLOPs the same way the ceiling does.
+                    tp_degree=tp,
                     # WHY the measurement is absent, not merely that it is. A depth mismatch means the
                     # value was computable and REFUSED: a truncated window streams a fraction of the
                     # bytes the ceiling assumes, so the ratio is meaningless rather than optimistic.
@@ -1217,7 +1645,10 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     _hdr_note = "totalling %.2f ms" % _tot if _tot > 0 else "total unknown"
     if _depth:
         _hdr_note += " over %s" % _depth
-    out = ["Op breakdown — device time by op class (profile %s · what to target, ranked):" % _hdr_note]
+    # Heading only. The subtitle restated the column names ("device time by op class"), the ranking
+    # is visible from the order, and the profile total is the first row's denominator -- so it was
+    # three facts the table already carries, in a line as wide as the table itself.
+    out = ["Op breakdown"]
     hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
     out.append(hdr)
     out.append("-" * min(len(hdr) + 30, 118))
@@ -1474,9 +1905,18 @@ def render_summary(
     if attempts:
         lines.append("")
         lines.append("Per-attempt detail:")
-        ah = f"{'op':<34} {'lever':>12} {'Eager (device_ms)':>18} {'1CQ Δ vs current':>16}  {'result':<10} why tried / why it won or failed"
+        # NO REASON COLUMN. It carried the agent's own prose, truncated at 200 characters, so every
+        # row ended mid-sentence and the table's four measured columns were pushed off the width by
+        # text that was never a measurement. The reasoning lives in the kernel log, in full.
+        # SAME FURNITURE AS THE TABLES ABOVE: ruled columns, one field per fact. Packed right-aligned
+        # against each other the numbers ran together and the op name had no column edge to end at.
+        # Sized to the coverage matrix above it, so the two tables in this section share a width.
+        _ar = " %-44s\u2502 %-18s\u2502 %-20s\u2502 %-22s\u2502 %s"
+        ah = _ar % ("op", "lever", "eager device_ms", "1CQ \u0394 vs current", "result")
         lines.append(ah)
-        lines.append("-" * min(len(ah), 120))
+        # THE RULE IS DERIVED FROM THE HEADER, not counted by hand. Hand-counted it drifted the
+        # moment a field width changed -- crosses at 33/48/64/82 under dividers at 33/49/66/85.
+        lines.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in ah.ljust(128)))
         _unmeasured = 0
         for _i, a in enumerate(attempts):
             if not isinstance(a, dict):
@@ -1518,8 +1958,7 @@ def render_summary(
                 _unmeasured += 1
                 continue
             res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
-            note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
-            lines.append(f"{sig:<34} {lever:>12} {ms_s:>18} {gain_s:>16}  {res:<10} {note}")
+            lines.append((_ar % (sig, lever, ms_s, gain_s, res)).rstrip())
         if _unmeasured:
             lines.append("")
             lines.append(
@@ -1527,26 +1966,9 @@ def render_summary(
                 "marked tried in the matrix above.)" % _unmeasured
             )
 
-    # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
-    if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
-        lines.append("")
-        lines.append("Code changes:")
-        lines.append("=" * len("Code changes:"))
-        for i, a in enumerate(attempts, 1):
-            if not isinstance(a, dict):
-                continue
-            d = (a.get("diff") or "").strip()
-            if not d:
-                continue
-            sig = _op_label(a.get("op_signature", "?"))
-            lever = _disp_level(a.get("kernel_kind") or "?")
-            res = "win" if (i - 1) in _wins else ("wedged" if a.get("wedged") else "no gain")
-            _fp, _fb = a.get("fullpipe_ms"), a.get("fullpipe_best_ms")
-            gain = f"  {_fp - _fb:+.2f} ms" if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)) else ""
-            lines.append("")
-            lines.append(f"[#{i}] {sig} · {lever} · {res}{gain}")
-            for dl in d.splitlines():
-                lines.append("    " + dl)
+    # NO CODE-CHANGES SECTION. It printed the full source diff of every attempt, win or fail, which
+    # on a long run is thousands of lines of patch in a document read for its numbers. The diffs are
+    # in the kernel log and in git; a report is not a second copy of the tree.
 
     # --- Limitations / suggested manual next steps (#5c) ---
     _won_ops = {attempts[i].get("op_signature") for i in _wins}
