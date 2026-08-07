@@ -1238,3 +1238,38 @@ before triaging — `TT_METAL_INSPECTOR=1` writes `generated/inspector/*.yaml`, 
 After this hang a single `tt-smi -r` left the control plane broken:
 `Physical chip id 0 not found in control plane chip mapping`, and the control failed 6/6. A second
 `tt-smi -r` restored it (6 passed, 11 s). Do not conclude the machine is broken after one reset.
+
+### Q-stage deadlock: TRIAGED, exact stall site
+
+Caught the hang live (poll for `log frozen` + `pcpu==0`, do **not** kill) and ran
+`triage.py --run=dump_callstacks`. It works against the **live process**; from serialized yaml
+alone it reports "Inspector unavailable", which is why the first attempt failed.
+
+Stall site — core **(0,0)**, trisc0, program `glm_q_stage_*`:
+
+```
+llk_wait_tiles  <-  ckernel::cb_wait_front  (cb_api.h:44)
+  <- blaze::DRAMStreamingMatmul::Op<ct_args::glm_q_stage__norm_q_b__q_b_proj>::operator()
+     at blaze/ops/dram_streaming_matmul/kernels/op.hpp:329
+  <- kernel_main at generated/kernels/glm_q_stage_*_debug.cpp:111
+```
+
+Other workers sit in `dram_stream::accumulate_output_tile` (op.hpp:390, 413) — i.e. downstream of
+the same starved CB.
+
+**The second matmul of the stage (`q_b_proj`) waits forever for its activation tiles.** Those
+tiles arrive by Mcast from the norm stage; the bench reports `gather_receiver=mcast_sender=(11,9)`.
+So the mcast never delivers in the model context, while the identical chain completes standalone
+in 13 s.
+
+**Prime suspect: `_PROGRAM_SEMAPHORES` in `tt/blaze_ops.py`, shared across all 47 layer programs
+on purpose.** Mcast signals completion through a named semaphore. One semaphore object shared by
+47 programs, captured into a trace, is exactly the shape that leaves a stale or mis-signalled
+count so the receiver waits forever. The module comment says a fresh dict per program "allocates
+one mesh-global L1 semaphore per layer and eventually collides with SDPA's static CB region" —
+so both options have a failure mode and the fix has to reset the semaphore per dispatch rather
+than simply un-sharing it.
+
+Next: confirm by giving one layer its own semaphore dict (single-layer run), or by asserting the
+semaphore's value at stage entry. `BLAZE_DEBUG_KERNELS=1` alone produced nothing useful — the
+device-side prints need DPRINT cores configured, so triage is the tool, not that flag.
