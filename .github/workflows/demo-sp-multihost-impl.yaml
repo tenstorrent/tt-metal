@@ -257,8 +257,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        # SC4 (legacy rank-binding) stays on local /home/user/tt-metal.
-        # SC16 automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
+        # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
