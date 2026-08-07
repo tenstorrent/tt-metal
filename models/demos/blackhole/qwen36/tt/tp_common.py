@@ -6,6 +6,7 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
@@ -479,6 +480,45 @@ def all_gather_matmul_prefill(
     )[0]
 
     return out
+
+
+def prefill_ccl_tuning():
+    """(chunks_per_sync, num_workers_per_link) for the PREFILL collectives.
+
+    tt_all_reduce() takes these as arguments defaulting to 10 / 2, and qwen36 never passed them;
+    DistributedNorm hardcodes the same 10 / 2 for every non-decode call. So unlike their decode
+    counterparts (which get per-op configs from model_config) the prefill all-gathers and
+    reduce-scatters have never been tuned at all. All four run on 5 cores at 6.8-8.1 GB/s against a
+    ~12.5 GB/s Wormhole link -- 55-65% efficiency, i.e. real headroom.
+
+    Used by BOTH prefill collectives: the reduce-scatters (tt_all_reduce call sites in gdn/tp.py and
+    mlp.py) and the all-gathers (via tt/prefill_norm_tuned.py).
+
+    MEASURED on N300 at seq 2048, device times straight out of tt-perf-report:
+
+      ALL-GATHER -- the reliable win. Per-op, 2 runs each:
+        wpl=2 (upstream)  1,245 / 1,242 us
+        wpl=4             1,012 / 1,012 us      <- used
+        wpl=8             1,015 / 1,016 us
+        => ~-460us per layer across the two gathers, and repeatable to ~10us.
+
+      REDUCE-SCATTER -- smaller and noisy. Layer RS total, 3 runs each:
+        wpl=2 (upstream)  2,234 / 2,478 / 2,076   mean 2,263, spread 402
+        wpl=4             1,995 / 2,063 / 2,037   mean 2,032, spread  68
+        => ~-230us on the mean, and it tightens the spread ~6x, which matters more for tail latency
+           than the mean does. Individual RS ops still range 963-1,277us run to run, so do not read
+           much into any single profile.
+
+      wpl=8 is indistinguishable from 4 once both collectives are tuned (CCL mean 4,313 vs 4,278 us
+      over 2-3 runs each), so 4 stays -- it is the smaller departure from the upstream default.
+      chunks_per_sync made no measurable difference anywhere and stays at 10.
+
+    QWEN35_PREFILL_CCL="cps,wpl" overrides, for re-sweeping."""
+    _v = os.environ.get("QWEN35_PREFILL_CCL")
+    if _v:
+        _c, _w = (int(t) for t in _v.split(","))
+        return _c, _w
+    return 10, 4
 
 
 def mlp_gateup_agmm_enabled(num_devices):
