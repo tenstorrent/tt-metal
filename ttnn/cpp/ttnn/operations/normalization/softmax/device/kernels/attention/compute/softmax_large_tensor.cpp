@@ -383,7 +383,8 @@ void kernel_main() {
     // The streamed CBs all share dfb_length_t; the reader pushes dfb_in0/dfb_fused_attn's pad.
     const std::uint32_t stream_pad = (dfb_length_t - (Wt % dfb_length_t)) % dfb_length_t;
     // out0 is sized 2*blk; pad so multi-row cores realign (writer drains the same count).
-    const std::uint32_t out0_pad = ((blk * 2) - (Wt % (blk * 2))) % (blk * 2);
+    // Uniform blk blocks tile 2*blk exactly, so a Wt that blk divides needs no realignment.
+    const std::uint32_t out0_pad = (blk > 0 && (Wt % blk) != 0) ? (((blk * 2) - (Wt % (blk * 2))) % (blk * 2)) : 0;
 
     // First loop is to parse and find the sum
     std::uint32_t dst0 = 0;

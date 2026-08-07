@@ -18,9 +18,11 @@ void kernel_main() {
     const std::uint32_t Wt = get_arg(args::Wt);
     // in0's DFB capacity; pad finishes the fifo cycle between rows.
     constexpr std::uint32_t in0_t = get_arg(args::in0_t);
-    const std::uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    // Uniform blocks tile every CB capacity, so a row that blk divides already ends on the base.
+    const bool pad_to_fifo_base = Wt > 0 && blk > 0 && (Wt % blk) != 0;
+    const std::uint32_t in0_pad = pad_to_fifo_base ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
     // fused_attn is sized in4_t = round_up(Wt, blk) but only Wt tiles are read per row/batch; same deal.
-    const std::uint32_t attn_pad = (blk > 0) ? ((blk - (Wt % blk)) % blk) : 0;
+    const std::uint32_t attn_pad = pad_to_fifo_base ? ((blk - (Wt % blk)) % blk) : 0;
 
     constexpr std::uint32_t dfb_id_in0 = dfb::in0;
 

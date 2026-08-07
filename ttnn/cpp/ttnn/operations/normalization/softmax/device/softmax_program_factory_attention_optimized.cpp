@@ -93,6 +93,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     // Widths not divisible by block_size are handled by the kernels via a clamped final block.
     std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
+    // Prefer an exact divisor of Wt when it costs no extra register batches: uniform blocks keep every
+    // CB capacity a multiple of the block, so no fifo needs realignment between tile rows.
+    if (Wt % block_size != 0) {
+        const std::uint32_t divisor = static_cast<std::uint32_t>(tt::tt_metal::find_max_divisor(Wt, block_size));
+        if (tt::div_up(Wt, block_size) == Wt / divisor) {
+            block_size = divisor;
+        }
+    }
+
     // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
     // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
     //   - no mask, no padding: it consumes cb_in0 directly.

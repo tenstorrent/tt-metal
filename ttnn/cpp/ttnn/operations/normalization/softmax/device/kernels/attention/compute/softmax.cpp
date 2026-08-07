@@ -101,11 +101,15 @@ void kernel_main() {
     constexpr std::uint32_t in0_t = get_arg(args::in0_t);          // in0 DFB tile capacity
     const std::uint32_t out0_t = ndst * 2;                         // matches factory out0_t = block_size * 2
     const std::uint32_t exps_t = ((Wt + ndst - 1) / ndst) * ndst;  // dfb_exps/dfb_x capacity, rounded to ndst
+    // Every CB capacity is a multiple of ndst, so when ndst divides Wt the blocks tile each fifo
+    // exactly: a row already ends on the base and no pad is needed. Zero guards keep the modulo safe.
+    const bool pad_to_fifo_base = Wt > 0 && ndst > 0 && (Wt % ndst) != 0;
     // Tiles needed after Wt to finish each CB's cycle, named for the capacity they align.
-    const std::uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
-    const std::uint32_t out0_pad = (out0_t > 0 && Wt > 0) ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
-    const std::uint32_t exps_pad = (exps_t > Wt) ? (exps_t - Wt) : 0;
+    const std::uint32_t in0_pad = pad_to_fifo_base ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    const std::uint32_t out0_pad = pad_to_fifo_base ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
+    const std::uint32_t exps_pad = pad_to_fifo_base ? (exps_t - Wt) : 0;
     const std::uint32_t attn_pad = exps_pad;  // in4_t is also round_up(Wt, ndst); reader pushes the pad
+    const std::uint32_t scale_mask_pad = pad_to_fifo_base ? (exps_pad + ndst) : 0;  // im3_t = exps_t + ndst
 
     constexpr std::uint32_t onetile = 1;
     // reserve one tile for zeros on dfb_in2
@@ -380,7 +384,7 @@ void kernel_main() {
         drain_dfb_pad(dfb_in0, in0_pad);
         cycle_dfb_pad(dfb_exps, exps_pad);
 #if FUSED_SCALE_MASK
-        cycle_dfb_pad(dfb_scale_mask, exps_pad + ndst);  // im3_t = exps_t + ndst
+        cycle_dfb_pad(dfb_scale_mask, scale_mask_pad);
 #ifdef NUMERIC_STABLE
         // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
         cycle_dfb_pad(dfb_x, exps_pad);
