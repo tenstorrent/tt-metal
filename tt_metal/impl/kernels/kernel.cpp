@@ -579,12 +579,9 @@ uint64_t Kernel::compute_hash() const {
         // Fold the baked scope: two kernels binding the same semaphore id under different
         // scopes emit different tokens (different device mechanism) and must not share an artifact.
         hasher.update(static_cast<uint64_t>(it->second.scope));
-        // Same reasoning for the access bit, and it is NOT optional: read_only is baked into the
-        // emitted token too, and it changes which member functions will compile. Two kernels binding
-        // the same id at the same scope but different access_type would otherwise hash identically
-        // and share a cached artifact -- so the OBSERVE static_asserts would fire or not depending on
-        // which kernel happened to populate the cache first. That is a nondeterministic build, and it
-        // is the one failure mode in this feature that is silent rather than a compile error.
+        // Same for the access bit: same id + scope but different access must not share an
+        // artifact (read_only is baked into the token and changes which members compile);
+        // without it the collision would be silent.
         hasher.update(static_cast<uint64_t>(it->second.read_only));
     }
     // Tensor binding handles:

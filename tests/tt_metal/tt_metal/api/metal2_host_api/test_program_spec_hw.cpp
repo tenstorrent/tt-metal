@@ -612,8 +612,8 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
-        // Read-only: the kernel only wait()s (semaphore_accessor_loopback_consumer.cpp), so OBSERVE
-        // keeps this binding out of the writer census -> the sem stays on the cheap single-writer path.
+        // Read-only: the kernel only wait()s, so OBSERVE bakes read_only (mutators = compile errors).
+        // No census effect here: Gen1 AUTO resolves LOCAL_NONATOMIC regardless.
         .semaphore_bindings = {{
             .semaphore_spec_name = SemaphoreSpecName{"only_sem"},
             .accessor_name = "waiter",

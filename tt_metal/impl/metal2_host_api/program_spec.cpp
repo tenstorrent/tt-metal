@@ -106,28 +106,24 @@ struct CollectedSpecData {
         };
         std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
         std::vector<BinderRecord> readers;  // OBSERVE bindings
-        // Union of ALL binders' node sets (writers + readers), derived in Pass 2. Used to validate a
-        // forced DM_LOCAL_CACHED semaphore: the cached-only pool is a PER-CORE region, so a binder
-        // running on another node would address THAT node's pool copy and the semaphore would
-        // silently split. (No "is every binder a DM kernel?" check is needed: hw_config is a
-        // two-alternative variant (DataMovement | Compute) and ValidateProgramSpec already forbids
-        // semaphore bindings on compute kernels outright, so every binder is necessarily DM.)
+        // Union of ALL binders' node sets (writers + readers), derived once kernel node sets exist.
+        // Used to validate a forced DM_LOCAL_CACHED semaphore: the cached-only pool is per-core, so a
+        // binder on another node would address THAT node's pool copy and the semaphore would silently
+        // split. (Every binder being a DM kernel is validator-enforced, but re-checked at decision
+        // time since validation can be skipped.)
         NodeRangeSet binder_node_set;
-        // Distinct binder KERNELS (writers + readers, deduplicated). The cached pool slot is seeded by
-        // an init call that genfiles injects into EVERY binding kernel's entry, and that seed is an
-        // unsynchronised destructive store of the initial value -- so with two or more binder kernels a
-        // co-resident kernel (even an OBSERVE-only reader) can reset a counter its sibling is already
-        // incrementing. The cached path is therefore restricted to exactly ONE binder kernel, which is
-        // also the case it exists for: one multi-threaded kernel synchronising its own threads.
+        // Distinct binder KERNELS (writers + readers, deduplicated). The cached pool slot is re-seeded
+        // at EVERY binding kernel's entry by an unsynchronised store, so a second binder kernel (even
+        // an OBSERVE-only reader) can reset a counter its sibling is incrementing. The cached path
+        // therefore requires exactly ONE binder kernel -- the case it exists for anyway.
         uint32_t binder_kernel_count = 0;
         // Set when ANOTHER kernel on this semaphore's node also binds a cached semaphore. The injected
-        // pool seeder rendezvouses on ONE node-wide barrier slot (KERNEL_BARRIER_CACHED_SEM_INIT), and
-        // wait_threads releases on the ARRIVING hart's own participant count -- so two co-resident
-        // cached-binder kernels mix rendezvous groups: different thread counts hang at kernel entry,
-        // equal counts let a hart leave before its own seed store lands. The per-semaphore
+        // pool seeders rendezvous on ONE node-wide barrier slot (KERNEL_BARRIER_CACHED_SEM_INIT), so
+        // two co-resident cached-binder kernels mix rendezvous groups: unequal thread counts hang at
+        // kernel entry, equal counts let a hart leave before its own seed store lands. The per-semaphore
         // binder_kernel_count==1 rule does NOT catch this (two DISTINCT semaphores, one kernel each).
         bool cached_blocked_by_node_conflict = false;
-        // Derived in Pass 2 (needs kernel_node_set): sum over writers of
+        // Derived once kernel node sets exist: sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
         uint32_t writer_instance_count = 0;
         uint32_t consuming_instance_count = 0;  // CONSUME writers only (multi-consumer down() is unsafe)
@@ -241,10 +237,8 @@ const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
 }
 
 // Is every binder a data-movement kernel? ValidateProgramSpec forbids semaphore bindings on compute
-// kernels outright, so this is expected to be trivially true -- but the cached pool is a DM-cache-domain
-// region and the scope is baked unconditionally (BuildProgramFromSpec can be reached without the
-// validator), so the cached path re-checks it where the decision is actually made rather than trusting
-// a validation that may be skipped.
+// kernels, but validation can be skipped and the scope is baked unconditionally, so the cached path
+// re-checks this where the decision is made.
 bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
     for (const auto* recs : {&binders.writers, &binders.readers}) {
         for (const auto& rec : *recs) {
@@ -273,37 +267,32 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //
 //   EXTERNAL        -> EXTERNAL (pass-through).
 //   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit escape hatch; caller is asserting single-writer).
-//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only after five FATALs: Gen2 arch, a single-node
-//                      semaphore, at most one binder kernel, no other cached-binder kernel on the
-//                      node, and every binder a data-movement kernel on that same node. Each guards a
-//                      way the cached pool would SPLIT the semaphore or hang, not merely lose atomicity.
-//   AUTO            -> the cheapest CORRECT mechanism, from the who-touches census:
-//                        Gen1 (Wormhole/Blackhole)            -> LOCAL_NONATOMIC, always. Gen1 keeps its
-//                                                                historical behaviour exactly; this
-//                                                                feature addresses a Gen2-only problem.
+//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only after six FATALs: Gen2 arch, single-node semaphore,
+//                      at most one binder kernel, no other cached-binder kernel on the node, every
+//                      binder a data-movement kernel, and every binder confined to the semaphore's
+//                      node. Each guards a way the cached pool would SPLIT the semaphore or hang.
+//   AUTO            -> the cheapest CORRECT mechanism, from the binder census:
+//                        Gen1 (Wormhole/Blackhole)            -> LOCAL_NONATOMIC (historical behaviour)
 //                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
 //                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
 //                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      Two hazards are MECHANISM-INDEPENDENT and FATAL here rather than being papered
-//                      over: >=2 concurrent CONSUME instances, and a SET racing another writer.
-//                      (Both are Gen2-only today, because the Gen1 arm returns before reaching them.)
+//                      Two MECHANISM-INDEPENDENT hazards FATAL here: >=2 concurrent CONSUME
+//                      instances, and a SET racing another writer.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
         case SemaphoreScope::DM_LOCAL_CACHED: {
-            // A DM_LOCAL_CACHED semaphore lives in the dedicated cached-only pool: a per-core region
-            // in the DM cache domain. Every access must therefore come from a data-movement kernel on
-            // that one node. Violations do not merely lose atomicity -- the semaphore SPLITS into
-            // separate words and the program hangs -- so they are rejected at config time.
+            // The cached-only pool is a per-core region in the DM cache domain, so every access must
+            // come from a data-movement kernel on the semaphore's one node. Violations SPLIT the
+            // semaphore or hang, so they are rejected at config time.
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
             const uint32_t num_nodes = sem_nodes.num_cores();
             TT_FATAL(
                 is_gen2_arch(),
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED, which is a Gen2 (Quasar) mechanism: the "
-                "cached-only semaphore pool, its cache aliases and its seeding do not exist on Gen1 "
-                "(Wormhole/Blackhole), where the kernel would not even link. Use SemaphoreScope::EXTERNAL "
-                "to get an atomic semaphore here. (AUTO will NOT do it for you: on Gen1 AUTO preserves "
-                "the historical plain non-atomic RMW, so ask for EXTERNAL explicitly.)",
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED, a Gen2 (Quasar) mechanism; the cached-only "
+                "pool does not exist on Gen1 (Wormhole/Blackhole), where the kernel would not even "
+                "compile. Use SemaphoreScope::EXTERNAL for an atomic semaphore here (on Gen1, AUTO "
+                "resolves to the historical non-atomic RMW).",
                 sem.unique_id);
             TT_FATAL(
                 num_nodes == 1,
@@ -311,15 +300,13 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "semaphore must live on exactly one node (it must never be reachable via the NoC).",
                 sem.unique_id,
                 num_nodes);
-            // The pool slot is seeded by an init injected into EVERY binding kernel's entry, as an
-            // unsynchronised destructive store -- so a second binder kernel could reset a live counter.
+            // The pool slot is re-seeded at every binding kernel's entry by an unsynchronised store.
             TT_FATAL(
                 binders.binder_kernel_count <= 1,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by {} kernels; the cached pool "
-                "slot is seeded at each binding kernel's entry by an unsynchronised store, so a second "
-                "binder kernel (even a read-only one) can reset a counter its sibling is already "
-                "incrementing. Bind a cached semaphore from exactly one kernel (its threads may be many), "
-                "or use SemaphoreScope::EXTERNAL.",
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by {} kernels; each binding "
+                "kernel's entry re-seeds the pool slot with an unsynchronised store, so a second binder "
+                "kernel (even a read-only one) can reset a live counter. Bind a cached semaphore from "
+                "exactly one kernel (its threads may be many), or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id,
                 binders.binder_kernel_count);
             // Same reason, one level up: the seeder's rendezvous slot is node-wide, so only ONE kernel
@@ -327,20 +314,17 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             TT_FATAL(
                 !binders.cached_blocked_by_node_conflict,
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but another kernel on the same node also "
-                "binds a cached semaphore. The pool seeder rendezvouses on a single node-wide barrier "
-                "slot, so two co-resident cached-binder kernels mix rendezvous groups: unequal thread "
-                "counts hang at kernel entry, equal counts let a seed land after an increment. Bind all "
-                "cached semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL.",
+                "binds a cached semaphore; the pool seeders share one node-wide rendezvous slot, so two "
+                "co-resident cached-binder kernels can hang or re-seed a live counter. Bind all cached "
+                "semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id);
-            // Re-checked here rather than trusting ValidateProgramSpec's compute-binding ban, because
-            // the scope is baked unconditionally and the validator can be skipped.
+            // Validator forbids compute-kernel semaphore bindings, but validation can be skipped.
             TT_FATAL(
                 all_binders_are_dm(binders),
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a non-data-movement kernel; "
-                "the cached-only pool lives in the DM cache domain, so such a binder would address a "
-                "different word (the kernel_config ring) and the semaphore would split.",
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a non-data-movement kernel, "
+                "which would touch the pool word from outside the DM coherence domain. Bind it only from "
+                "DM kernels, or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id);
-            // A binder on another node would address ITS OWN node's pool at the same offset.
             // merge() then compare counts: if the union grew, some binder sits outside the sem's node.
             TT_FATAL(
                 sem_nodes.merge(binders.binder_node_set).num_cores() == num_nodes,
@@ -365,17 +349,12 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             //   anything else (multi-node sem, or a
             //   binder off the sem's node)          -> EXTERNAL (self-targeted NoC atomic; serializes
             //                                          local + remote writers at one NIU)
-            // Gen1 (Wormhole/Blackhole) keeps its historical behaviour EXACTLY: AUTO resolves to
-            // LOCAL_NONATOMIC, the plain uncached RMW every semaphore has always used there.
-            //
-            // This feature exists for a Gen2-only problem -- the Quasar DM write-back cache, which has
-            // no Gen1 equivalent -- so it must not change how a mature platform executes. Two concrete
-            // reasons beyond scope discipline: (1) the EXTERNAL path is a self-targeted NoC atomic, and
-            // this branch's own keystone fixture skips Wormhole on the grounds that it lacks the
-            // required NoC/RISC-V atomics, so selecting it there would be unproven; (2) silently turning
-            // an existing Gen1 program's plain write into a NoC round-trip is a device-mechanism change
-            // nobody asked for. A Gen1 user who wants atomicity can still force SemaphoreScope::EXTERNAL
-            // explicitly -- that path is untouched.
+            // Gen1 (Wormhole/Blackhole) keeps its historical behaviour: AUTO resolves to
+            // LOCAL_NONATOMIC, the plain uncached RMW every semaphore has always used there. This
+            // feature exists for the Quasar DM write-back cache, which has no Gen1 equivalent, and
+            // it does not silently change a mature platform's device mechanism. A Gen1 user who
+            // wants atomicity can still force SemaphoreScope::EXTERNAL (the NoC atomic increment is
+            // a standard Gen1 primitive).
             if (!is_gen2_arch()) {
                 return SemScope::LOCAL_NONATOMIC;
             }
@@ -405,26 +384,16 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 sem.unique_id,
                 binders.writer_instance_count);
 
-            // Prefer the cached fast path only when it is PROVABLY safe. cached_geometry_ok() carries
-            // the structural half of that proof:
-            //   - the semaphore is a single L1 cell, and every binder (writers AND readers) lives on
-            //     that node: the pool is per-core, so a binder elsewhere would address its own node's
-            //     copy and the semaphore would split.
-            //   - exactly ONE binder kernel: the pool slot is seeded by an init call injected into every
-            //     binding kernel's entry, and that seed is an unsynchronised destructive store, so a
-            //     second binder kernel (even an OBSERVE-only reader) could reset a live counter. One
-            //     kernel is also the case the fast path exists for: its own threads synchronising.
-            //   - every binder is a data-movement kernel: the pool lives in the DM cache domain.
-            // The remaining conjuncts are checked here:
-            //   - no other kernel on this node binds a cached semaphore: the injected seeder
-            //     rendezvouses on ONE node-wide barrier slot, so two co-resident cached-binder kernels
-            //     would mix rendezvous groups (hang, or a seed landing after an increment).
-            //   - Gen2 (Quasar): the pool, its cache aliases and the injected seeding are all
-            //     ARCH_QUASAR-only, and Gen1 DM cores have no usable 32-bit AMO. This conjunct is
-            //     redundant with the Gen1 early return at the top of this arm and is kept deliberately:
-            //     it is the guard that must not be forgotten if that early return is ever relaxed.
-            // Anything unproven => EXTERNAL, which is correct wherever it is selected (Gen2 only, since
-            // Gen1 returned LOCAL_NONATOMIC above).
+            // Take the cached fast path only when it is PROVABLY safe. cached_geometry_ok() carries
+            // the structural half: a single-cell semaphore, exactly ONE binder kernel (every binding
+            // kernel's entry re-seeds the pool slot with an unsynchronised store, so a second binder
+            // -- even OBSERVE-only -- could reset a live counter), and every binder a DM kernel on the
+            // semaphore's node (the pool is per-core, in the DM cache domain). Checked here:
+            //   - no other kernel on this node binds a cached semaphore (the seeders share one
+            //     node-wide rendezvous slot: mixed groups hang or re-seed a live counter).
+            //   - Gen2: redundant with the Gen1 early return above; kept in case that return is ever
+            //     relaxed.
+            // Anything else => EXTERNAL, correct wherever selected.
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
@@ -678,7 +647,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 binding.semaphore_spec_name);
 
             // Census for the AUTO scope classifier: a writer (INCREMENT/CONSUME/SET) or a reader
-            // (OBSERVE). Instance counts are derived in Pass 2, once kernel node sets exist.
+            // (OBSERVE). Instance counts are derived later, once kernel node sets exist.
             auto& sem_info = collected.semaphore_endpoints[binding.semaphore_spec_name];
             // At most once per kernel, mirroring the DFB and scratchpad rules: a second binding would
             // double-count this kernel's instances in the census (inflating writer_instance_count and
@@ -2894,7 +2863,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id (+ the host-resolved physical scope)
+// Create map of accessor name -> logical Semaphore id (+ the host-resolved scope and read_only flag)
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
@@ -2909,11 +2878,10 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
-        // The host-resolved physical scope (ResolveSemaphoreScope) is baked into the kernel via the
-        // emitted SemaphoreBindingToken<id, scope, read_only> token, so the kernel picks the mechanism
-        // through CTAD. read_only carries the declared AccessType so an OBSERVE binding cannot compile
-        // a mutator -- the census EXCLUDES OBSERVE bindings from the writer count, so that promise has
-        // to be enforced rather than trusted.
+        // The host-resolved scope (ResolveSemaphoreScope) is baked into the kernel via the emitted
+        // SemaphoreBindingToken<id, scope, read_only> token. read_only carries the declared AccessType
+        // so an OBSERVE binding cannot compile a mutator -- the census excludes OBSERVE from the
+        // writer count, so that promise must be enforced, not trusted.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
         const bool read_only = semaphore_binding.access_type == KernelSpec::SemaphoreBinding::AccessType::OBSERVE;
         out.emplace(
@@ -3422,12 +3390,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
         // Resolve the host intent (SemaphoreSpec.scope) to a device SemScope now, so it can be baked
-        // into every kernel that binds this semaphore. For AUTO this consults the who-touches census
-        // (single-writer single-node -> cheap LOCAL_NONATOMIC; multi-writer confined to one node on
-        // Gen2 with a single binder kernel -> the cached pool; otherwise atomic EXTERNAL). The pick is
-        // arch-sensitive: on Gen1 AUTO resolves to LOCAL_NONATOMIC unconditionally, preserving the
-        // historical non-atomic RMW (a Gen1 caller who wants atomicity must force EXTERNAL).
-        // Contradictions/honesty violations already FATALed in ValidateProgramSpec.
+        // into every kernel that binds this semaphore (see ResolveSemaphoreScope for the AUTO rules;
+        // on Gen1 AUTO always resolves to LOCAL_NONATOMIC). Contradiction/honesty violations FATAL in
+        // ValidateProgramSpec -- or here, when validation is skipped.
         semaphore_name_to_scope[semaphore_name] =
             ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
     }

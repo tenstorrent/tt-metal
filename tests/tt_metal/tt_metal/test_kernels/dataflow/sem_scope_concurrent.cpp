@@ -2,22 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Concurrency proof for the scoped Semaphore class: verifies that up()/down() route to
-// the ATOMIC mechanism under real multi-DM contention (single-writer tests can't tell an
-// atomic path from a non-atomic one). Quasar-only (roles gated by mhartid).
-//
-// The physical scope is baked host-side (SemaphoreSpec.scope) and picked up here via CTAD, so
-// this kernel is scope-agnostic — the same source runs under EXTERNAL / DM_LOCAL_CACHED /
-// LOCAL_NONATOMIC depending on how the host built the SemaphoreSpec.
+// Concurrency proof for the scoped Semaphore class: up()/down() must be atomic under real
+// multi-DM contention. Scope is host-baked and picked up via CTAD, so the same source runs
+// under any scope. Quasar-only (roles gated by mhartid).
 //
 // Modes (via -D):
-//   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared Semaphore, then signal a
-//                            'done' semaphore; the lowest DM waits for all, reports value().
-//                            Expect num_threads*iters. A non-atomic up() loses updates -> less.
-//   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM is the
-//                            single consumer, down(1)*((num_threads-1)*iters), reports value().
-//                            Expect 0. A non-atomic down() (losing a concurrent producer inc)
-//                            leaves fewer units than downs -> the consumer blocks (timeout).
+//   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared sem; the lowest DM waits on a
+//                            'done' sem, reports value(). Expect num_threads*iters (a
+//                            non-atomic up() loses updates -> less).
+//   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM drains them
+//                            all with down(1), reports value(). Expect 0 (a non-atomic down()
+//                            loses units -> the consumer blocks -> timeout).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -36,14 +31,12 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-    // NOTE: a DM_LOCAL_CACHED semaphore's cached-only pool slot is seeded by sem::init_dm_cached(),
-    // AUTO-INJECTED at kernel entry (before any thread's first up()) -- no call is needed here.
-
     // Quasar user DM harts are 2..(2+num_threads-1); the lowest (2) is reporter/consumer.
-    uint64_t hart = 2;
+    uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     const bool is_lowest = (hart == 2);
 
+    // A DM_LOCAL_CACHED semaphore's pool slot is seeded by the auto-injected sem::init_dm_cached().
     Semaphore work(sem::counter);  // CTAD deduces the host-baked scope
 
 #if defined(MODE_PRODUCER_CONSUMER)

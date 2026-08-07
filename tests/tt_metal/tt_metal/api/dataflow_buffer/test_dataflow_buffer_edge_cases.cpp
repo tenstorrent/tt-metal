@@ -299,11 +299,9 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     producer.compile_time_args = {
         {"num_entries_per_producer", kPushTiles}, {"implicit_sync", 1u}, {"kPreloadPostedValue", kPreloadValue}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
-    // The producer set()s prod_ready and only wait_min()s cons_ready, so label each for what it does:
-    // SET for the one it writes (a destructive store, not an increment) and OBSERVE for the one it only
-    // reads. OBSERVE keeps cons_ready out of the writer census, so the sem stays on the cheap
-    // single-writer path. Both labels are load-bearing declarations the host trusts -- see the trust
-    // boundary note on KernelSpec::SemaphoreBinding::access_type.
+    // SET for the sem the producer set()s (destructive store; a declaration the host trusts),
+    // OBSERVE for the one it only wait_min()s (bakes read_only -- mutators are compile errors --
+    // and keeps it out of the writer census).
     producer.semaphore_bindings = {
         {.semaphore_spec_name = SEM_PROD_READY,
          .accessor_name = "prod_ready",

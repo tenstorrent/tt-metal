@@ -93,12 +93,8 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> logical DFB ids
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: semaphore accessor handle -> {semaphore id, host-baked physical scope, access rights}.
-// The scope is resolved by the host (ResolveSemaphoreScope) and baked into the kernel via the emitted
-// SemaphoreBindingToken<id, scope, read_only> token so the kernel's Semaphore picks the mechanism via
-// CTAD. read_only carries KernelSpec::SemaphoreBinding::access_type == OBSERVE, which makes every
-// Semaphore mutator fail to compile for that binding -- the host relies on an OBSERVE binding not
-// writing (it is excluded from the writer census), so the promise is enforced rather than trusted.
+// Metal 2.0: per-binding semaphore handle: id, host-baked scope (ResolveSemaphoreScope), and
+// read_only (access_type == OBSERVE, enforced on device by the Semaphore mutator static_asserts).
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;

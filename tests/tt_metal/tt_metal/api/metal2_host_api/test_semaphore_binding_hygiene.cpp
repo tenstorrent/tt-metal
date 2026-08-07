@@ -19,33 +19,18 @@ namespace {
 //
 // WHY THIS EXISTS
 // ---------------
-// The AUTO semaphore-scope classifier (ResolveSemaphoreScope) picks each semaphore's
-// physical mechanism -- cheap non-atomic LOCAL_NONATOMIC vs atomic EXTERNAL -- from a
-// census of the kernels that DECLARE a binding to it (KernelSpec::semaphore_bindings,
-// with a per-binding AccessType). That census is only complete if every Metal 2.0
-// kernel reaches its semaphores through the managed accessor:
+// The AUTO scope classifier (ResolveSemaphoreScope) picks each semaphore's physical mechanism
+// from a census of the kernels that DECLARE a binding to it (KernelSpec::semaphore_bindings).
+// A raw access -- get_semaphore(id), noc_semaphore_inc(addr, 1), ... -- is an UNDECLARED
+// writer the host cannot see: the census undercounts and AUTO may pick a non-atomic
+// mechanism for a semaphore that actually has concurrent writers.
 //
-//     Semaphore s(sem::<name>);      // declared -> the host sees this writer
+// Worse under DM_LOCAL_CACHED: a cached semaphore is RELOCATED into the cached-only pool
+// (noc_semaphore.h sem_l1_offset()), so a declared binder and an undeclared toucher address
+// two DIFFERENT words -- the semaphore splits and a wait() never completes. Keeping this
+// lint green is load-bearing for the cached pick.
 //
-// A kernel can also reach a semaphore RAW, bypassing the declaration:
-//
-//     get_semaphore(get_arg_val<uint32_t>(i))              // id -> address, undeclared
-//     noc_semaphore_inc(get_noc_addr(x, y, addr), 1)       // poke a peer's word
-//     noc_semaphore_set_remote(...)
-//
-// A raw access is an UNDECLARED WRITER: the host cannot see it, so the census can
-// undercount and AUTO may choose the wrong mechanism for a semaphore that actually has
-// concurrent writers.
-//
-// The stakes rose once AUTO gained the ability to auto-select DM_LOCAL_CACHED: a cached
-// semaphore is RELOCATED into the cached-only pool (noc_semaphore.h sem_l1_offset()), so a
-// declared binder and an undeclared toucher address two DIFFERENT words -- the semaphore
-// SPLITS and a wait() never completes, rather than merely losing an update as it would
-// under LOCAL_NONATOMIC/EXTERNAL (both of which stay in the kernel_config ring). Keeping
-// this lint green is therefore load-bearing for the cached pick.
-//
-// An audit found ZERO production Metal 2.0 kernels using the raw path. This test keeps
-// it that way: it fails if a Metal 2.0 kernel source starts using raw semaphore access.
+// The tree is clean today; this test fails if a Metal 2.0 kernel source goes raw.
 //
 // SCOPE / LIMITS (deliberate, be honest about them):
 //  - LEGACY kernels are not checked and do not matter: they never reach the AUTO path
@@ -65,13 +50,10 @@ bool looks_like_metal2_kernel(const std::string& text) {
            text.find("dfb::") != std::string::npos;
 }
 
-// Strip comments so prose mentioning a pattern (e.g. the explanatory comments in the keystone
-// kernels) is not flagged as code. Tracks /* */ state properly: an earlier version skipped any line
-// whose first non-space character was '*', which also silently dropped real statements such as
-//     *(volatile uint32_t*)get_semaphore(3) += 1;
-// i.e. it hid exactly the raw accesses this lint exists to find.
-// String/char literal contents are stripped too: a "//" or "/*" inside a string must not start a
-// comment, and a banned pattern inside a string is not code.
+// Strip comments so prose mentioning a banned pattern is not flagged as code. Tracks /* */ state
+// properly, so a statement starting with '*' (e.g. `*(volatile uint32_t*)get_semaphore(3) += 1;`)
+// still reaches the scanner. String/char literal contents are stripped too: a "//" or "/*" inside
+// a string must not start a comment, and a banned pattern inside a string is not code.
 std::string strip_comments(const std::string& text) {
     std::string out;
     out.reserve(text.size());
@@ -132,20 +114,17 @@ std::string strip_comments(const std::string& text) {
     return out;
 }
 
-// Raw (undeclared) semaphore access patterns. Each is matched on its OWN, not as a literal pair:
-// an earlier version only flagged "noc_semaphore_inc(get_noc_addr(" and so missed the (very common)
-// two-statement form where the address is computed on a previous line -- which let a real in-tree
-// raw writer through. A declared binding never needs any of these: it uses Semaphore(sem::<name>),
-// whose up()/down() call into these primitives from inside the framework header, not kernel source.
-// A baked sem:: token must be constructed WITHOUT an explicit template argument list, so CTAD can
-// adopt the host-chosen scope. `Semaphore<> s(sem::x)` (or any explicit <...>) pins the class default
-// LOCAL_NONATOMIC instead, contradicting the baked scope and firing the token ctor's static_assert --
-// a hard JIT compile failure. This is not a "raw access", so the pattern list below cannot see it;
-// six live sites reached the tree that way, four of them for weeks. Detected separately here.
+// A sem:: token must be constructed with NO template argument list, so CTAD adopts the baked scope
+// and access rights. `Semaphore<> s(sem::x)` (or any explicit <...>) pins the class defaults
+// instead: it compiles while the baked values happen to match the defaults, then turns into a JIT
+// compile failure (token-ctor static_assert) once the host bakes something else. Not a raw access,
+// so the pattern list below cannot see it; detected separately here.
 std::vector<std::string> find_pinned_scope_constructions(const std::string& code) {
     std::vector<std::string> found;
     size_t pos = 0;
     while ((pos = code.find("Semaphore<", pos)) != std::string::npos) {
+        // First '>' is a safe bound: no nested Semaphore<...<...>> spelling exists, and erring
+        // short only over-flags.
         const size_t close = code.find('>', pos);
         if (close == std::string::npos) {
             break;
@@ -157,7 +136,7 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
             const std::string stmt = code.substr(close, stmt_end - close);
             if (stmt.find("sem::") != std::string::npos) {
                 found.emplace_back("Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
-                                   "adopt the baked scope)");
+                                   "adopt the baked scope and access rights)");
             }
         }
         pos = close + 1;
@@ -165,6 +144,10 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
     return found;
 }
 
+// Raw (undeclared) semaphore access patterns. Each is matched on its OWN, not as a literal pair,
+// to catch the common two-statement form where the address is computed on a previous line. A
+// declared binding never needs any of these: Semaphore(sem::<name>)'s up()/down() call these
+// primitives from the framework header, not from kernel source.
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
         "get_semaphore(",                // turning a semaphore id into a raw address
@@ -222,11 +205,8 @@ bool is_kernel_source(const std::filesystem::path& p) {
     return s.find("test_kernels") != std::string::npos || s.find("/kernels/") != std::string::npos;
 }
 
-// POSITIVE CONTROL for the detector itself. Without this, the scan test above is
-// "always green by construction": if strip_comments or the pattern list silently stopped matching,
-// the sweep would still report zero violations and pass. (That is not hypothetical -- an earlier
-// version dropped '*'-leading statement lines and only matched noc_semaphore_inc when it was
-// literally followed by get_noc_addr, which let a real in-tree raw writer through.)
+// POSITIVE CONTROL for the detector itself: if strip_comments or the pattern list silently
+// stopped matching, the sweep below would still report zero violations and pass.
 TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
     struct Case {
         const char* name;
@@ -237,12 +217,12 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         {"id_to_address", "void kernel_main() { uint32_t a = get_semaphore(get_arg_val<uint32_t>(0)); }", true},
         // Must survive comment-stripping: the statement starts with '*'.
         {"deref_leading_star", "void kernel_main() {\n    *(volatile uint32_t*)get_semaphore(3) += 1;\n}", true},
-        // Address computed on a PREVIOUS line -- the two-statement form that used to escape.
+        // Address computed on a PREVIOUS line -- the two-statement form.
         {"split_noc_poke",
          "void kernel_main() {\n    uint64_t a = get_noc_addr(1, 1, 64);\n    noc_semaphore_inc(a, 1);\n}",
          true},
         {"raw_local_set", "void kernel_main() { noc_semaphore_set(ptr, 5); }", true},
-        // The shape that slipped past this lint six times: explicit <> pins the class-default scope.
+        // Explicit <> pins the class-default scope and access rights instead of the baked ones.
         {"pinned_scope_ctor", "void kernel_main() { Semaphore<> s(sem::counter); }", true},
         // ...but the same spelling over a RAW id uses the unaffected uint32_t ctor and is legal.
         {"pinned_scope_raw_id_ok", "void kernel_main() { Semaphore<> s(sem_id); }", false},
@@ -272,8 +252,8 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
             found.push_back(p);
         }
         if (c.should_flag) {
-            EXPECT_FALSE(found.empty()) << "detector MISSED a raw semaphore access in case '" << c.name
-                                        << "' -- the scan test would silently pass on this code";
+            EXPECT_FALSE(found.empty()) << "detector MISSED a violation (raw access or pinned scope) in case '"
+                                        << c.name << "' -- the sweep test would silently pass on this code";
         } else {
             EXPECT_TRUE(found.empty()) << "detector FALSE-POSITIVED on case '" << c.name << "' (first: "
                                        << (found.empty() ? std::string{} : found.front()) << ")";
@@ -282,10 +262,9 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
 }
 
 TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
-    // Locate the repo WITHOUT depending on the environment. This test used to GTEST_SKIP when
-    // TT_METAL_HOME was unset, which is the worst failure mode for a lint: it protects nothing while
-    // still reporting success. __FILE__ is this source's own path, so the root is derivable from it;
-    // TT_METAL_HOME is only a fallback for an out-of-tree layout.
+    // Locate the repo WITHOUT depending on the environment: skipping when TT_METAL_HOME is unset
+    // would let this lint pass while scanning nothing. __FILE__ is this source's own path, so the
+    // root is derivable from it; TT_METAL_HOME is only a fallback for an out-of-tree layout.
     std::filesystem::path root;
     {
         const std::string self{__FILE__};
@@ -363,7 +342,7 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
            "who-touches census (which drives the AUTO scope classifier) cannot see such a writer, so AUTO "
            "may pick the cheap non-atomic mechanism for a semaphore that actually has concurrent writers."
            "\n\nFix: declare a KernelSpec::SemaphoreBinding and use the managed accessor instead:"
-           "\n    Semaphore s(sem::<accessor_name>);   // scope is host-baked, picked automatically"
+           "\n    Semaphore s(sem::<accessor_name>);   // CTAD adopts the baked scope and access rights"
            "\nIf the raw access is genuinely required (e.g. a hardware probe on scratch L1, not on a "
            "declared semaphore), add the file to is_allowlisted() with a reason."
            "\n\nOffending files:"

@@ -2,16 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Coexistence proof for the dedicated cached-only semaphore pool (Solution #1): a
-// DM_LOCAL_CACHED semaphore (which lives in the pool, written via the cached alias + RISC-V
-// AMO) and an EXTERNAL semaphore (which lives in the kernel_config ring, written via the NoC
-// atomic) are hammered CONCURRENTLY by every DM in the SAME program. Because the pool is
-// physically disjoint from the ring (MEM_DM_CACHED_SEM_BASE < MEM_MAP_END <= kernel_config
-// ring base), the cached semaphore's dirty-line write-back can never overlap the NoC-written
-// ring word -> neither clobbers the other. Both final counts must be exact.
-//
-// Scopes are host-baked (SemaphoreSpec.scope) and picked up via CTAD; the kernel is
-// scope-agnostic. Quasar-only (roles gated by mhartid; the pool + AMO are Quasar features).
+// Coexistence proof for the cached-only semaphore pool: every DM concurrently hammers a
+// DM_LOCAL_CACHED semaphore (pool, cached RISC-V AMO) and an EXTERNAL semaphore
+// (kernel_config ring, NoC atomic). The pool is physically disjoint from the ring, so the
+// cached sem's dirty-line write-back can't clobber the NoC-written ring word (or vice
+// versa); both final counts must be exact. Scopes are host-baked (CTAD). Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -30,22 +25,19 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-    // NOTE: the cached-only pool slot for sem::cached is seeded by sem::init_dm_cached(), which the
-    // build AUTO-INJECTS at kernel entry (before any thread's first up()) -- no call is needed here.
-
+    // sem::cached's pool slot is seeded by the auto-injected sem::init_dm_cached().
     Semaphore cached(sem::cached);      // CTAD -> DM_LOCAL_CACHED (pool, cached AMO)
     Semaphore external(sem::external);  // CTAD -> EXTERNAL (ring, NoC atomic)
     Semaphore done(sem::done);          // EXTERNAL: cross-thread completion barrier
 
-    // Every thread hammers BOTH semaphores, interleaved, so the cached AMOs on the pool word and
-    // the NoC atomics on the ring word are maximally concurrent.
+    // Interleave both semaphores so the pool AMOs and ring NoC atomics are maximally concurrent.
     for (uint32_t i = 0; i < increment_times; i++) {
         cached.up(1);
         external.up(1);
     }
     done.up(1);
 
-    uint64_t hart = 2;
+    uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     if (hart == 2) {  // lowest user DM: wait for all, then report both final counts
         done.wait_min(num_threads);

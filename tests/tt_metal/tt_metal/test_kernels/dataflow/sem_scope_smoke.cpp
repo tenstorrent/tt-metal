@@ -2,18 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SemScope smoke kernel: exercises the scoped Semaphore class end-to-end.
-//
-// A single DM thread constructs a Semaphore over a bound semaphore (sem::counter),
-// increments it `increment_times` via up(), reads it back with value(), and reports the
-// observed value to a scratch L1 word for host checking. This validates that the selected
-// scope's up()/value() paths compile (templates only compile when instantiated) and produce
-// the correct single-writer count.
-//
-// The physical scope is baked host-side (SemaphoreSpec.scope) into the sem::counter token and
-// picked up here via CTAD, so this kernel is scope-agnostic: the same source runs under
-// EXTERNAL (self-targeted NoC atomic), DM_LOCAL_CACHED (32-bit RISC-V AMO on the cached alias),
-// or LOCAL_NONATOMIC (legacy plain RMW) depending on how the host built the SemaphoreSpec.
+// SemScope smoke kernel: a single DM thread up()s sem::counter increment_times, reads it back
+// with value(), and reports the result to a scratch L1 word for the host to check. Scope is
+// host-baked and picked up via CTAD, so the same source runs under EXTERNAL, DM_LOCAL_CACHED,
+// or LOCAL_NONATOMIC.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -23,8 +15,7 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
 
-    // NOTE: a DM_LOCAL_CACHED semaphore's cached-only pool slot is seeded by sem::init_dm_cached(),
-    // which the build AUTO-INJECTS at kernel entry -- no call is needed here.
+    // A DM_LOCAL_CACHED semaphore's pool slot is seeded by the auto-injected sem::init_dm_cached().
     Semaphore s(sem::counter);  // CTAD deduces the host-baked scope
     for (uint32_t i = 0; i < increment_times; i++) {
         s.up(1);
