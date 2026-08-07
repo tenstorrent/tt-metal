@@ -101,8 +101,13 @@ class LagunaForCausalLM:
     #
     # Per-group persistent-page-table threading (prefill + decode trace) + warmup pre-alloc are now
     # implemented; get_kv_cache_spec emits SlidingWindowSpec(512) for the 30 sliding layers so the
-    # sliding pools shrink ~3.7x. Set False to fall back to the legacy uniform full-cache path.
-    _HYBRID_KV_CACHE_GROUPS_ENABLED = True
+    # sliding pools shrink ~3.7x. Set False (TT_LAGUNA_HYBRID_KV=0) to fall back to the legacy uniform
+    # full-cache path (single KV group). NOTE (2026-08-06): on STOCK vLLM 0.24.0 the hybrid multi-group KV
+    # manager needs per-group budgets, but the plugin sizes a SINGLE num_gpu_blocks_override → the
+    # sufficiency check rejects 131072 (needs ~20 GiB per the 10 full layers vs the single-override budget).
+    # The fork served UNIFORM (1 group), where a single override works. So set TT_LAGUNA_HYBRID_KV=0 for the
+    # fork-free 0.24.0 stack until the plugin sizes hybrid per-group. Default True preserves prior behavior.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("TT_LAGUNA_HYBRID_KV", "1") == "1"
 
     def __init__(self, generator: LagunaGenerator, mesh_device, max_batch_size: int, max_model_len: int):
         self.gen = generator
