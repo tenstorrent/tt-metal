@@ -244,24 +244,19 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
     float dropout_probability,
-    bool no_mask) {
+    std::optional<ttml::metal::AttentionMaskType> mask_type_override) {
     validate_qkv_shapes(query, key, value);
 
-    if (no_mask && mask.has_value() && mask.value()) {
+    const bool has_mask = mask.has_value() && mask.value();
+    ttml::metal::AttentionMaskType mask_type = mask_type_override.value_or(
+        has_mask ? ttml::metal::AttentionMaskType::Arbitrary : ttml::metal::AttentionMaskType::Causal);
+    if ((mask_type == ttml::metal::AttentionMaskType::Arbitrary) != has_mask) {
         throw std::invalid_argument(
-            "scaled_dot_product_attention: no_mask=true is incompatible with a mask tensor "
-            "(pass mask=None, or no_mask=false to apply the mask).");
+            "scaled_dot_product_attention: mask_type=Arbitrary requires a mask tensor, and a mask tensor requires "
+            "mask_type=Arbitrary (or unset).");
     }
-
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
-    std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
-    if (no_mask) {
-        mask_type = ttml::metal::AttentionMaskType::None;
-    } else if (mask.has_value() && mask.value()) {
-        mask_tensor = mask.value()->get_value();
-        mask_type = ttml::metal::AttentionMaskType::Arbitrary;
-    }
+    std::optional<ttnn::Tensor> mask_tensor = has_mask ? std::optional(mask.value()->get_value()) : std::nullopt;
 
     // ========== Forward Pass using sdpa_fw kernel ==========
     auto fw_result = ttml::metal::sdpa_fw(

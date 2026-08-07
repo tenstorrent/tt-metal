@@ -152,16 +152,10 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
 //
-// M6 (2026-07-31, TENSTORRENT_PORT.md, upstream SDPA_OPTIMIZATION_PROPOSALS.md item B17):
-// the row-sum reduction uses `sfpu_reduce<SUM, Float32, REDUCE_ROW>` directly on the DST
-// register holding the elementwise dO*O accumulation, instead of the previous matmul-with-
-// a-column-of-ones trick (which needed a full pack-to-CB -> wait -> matmul -> unpack round
-// trip through `cb_mat_mul_reduction` just to sum across a tile's columns). This fuses what
-// was 2 tile_regs cycles (elementwise accumulate, then matmul-reduce) into 1, and operates
-// at full FP32 in DST throughout (matmul reduction routed the tile through SrcA/SrcB, a TF32
-// truncation point the SFPU-in-DST path avoids). `cb_mat_mul_reduction` is left as an unused
-// parameter (still loaded by the reader, harmlessly) rather than touching the reader/program
-// factory in 3 call sites for a CB that costs nothing to leave in place.
+// Row-sum reduction uses sfpu_reduce<SUM, Float32, REDUCE_ROW> directly on the DST register
+// holding the elementwise dO*O accumulation, replacing a matmul-with-a-column-of-ones trick
+// that round-tripped through cb_mat_mul_reduction. Fuses accumulate+reduce into one tile_regs
+// cycle and stays at full FP32 in DST instead of routing through SrcA/SrcB.
 //
 // Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
 // When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
@@ -171,7 +165,7 @@ void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
-    /*unused, kept for call-site compatibility -- see M6 comment above*/ const uint32_t cb_mat_mul_reduction,
+    /*unused*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {

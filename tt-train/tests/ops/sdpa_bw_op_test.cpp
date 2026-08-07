@@ -575,13 +575,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
     // ========== Pure Float Reference (Ground Truth) ==========
-    // `attn_mask_tensor` is always a causal (lower-triangular) mask (see `generate_attn_mask`
-    // above) -- correct to pass through for Causal/Arbitrary configs (both exercise causal-shaped
-    // masking today, just via different code paths), but for AttentionMaskType::None the kernel
-    // computes genuinely unmasked (bidirectional) attention, so the float reference must skip
-    // masking too or it silently compares against the wrong ground truth. Mirrors the existing
-    // `mask_type == Arbitrary ? optional(attn_mask) : nullopt` conditional already used below for
-    // the composite/kernel calls.
+    // For AttentionMaskType::None, skip masking here too, or this compares against the wrong ground truth.
     const std::optional<xt::xarray<float>> float_ref_mask =
         mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask_tensor);
     auto float_gradients =
@@ -593,14 +587,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto& float_attn_output = float_gradients[4];
 
     // ========== Composite Implementation (uses ttnn ops) ==========
-    // `composite_sdpa` has no on-the-fly causal-mask generation (unlike the real `sdpa_fw`/
-    // `sdpa_bw` kernels for Causal) -- it only ever applies whatever `attn_mask` optional it's
-    // given, so Causal/Arbitrary configs both need the (always causal-shaped) mask tensor passed
-    // explicitly here. For AttentionMaskType::None the kernel path computes genuinely unmasked
-    // attention, so this reference must skip masking too, or `fw_attn_output_matches` below
-    // (a real asserted check, not just informational) would spuriously fail comparing an unmasked
-    // kernel output against a causally-masked composite reference. Same conditional shape as the
-    // float reference fix above.
+    // Same reasoning as float_ref_mask above.
     const std::optional<ttnn::Tensor> composite_ref_mask =
         mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask);
     auto composite_output =
