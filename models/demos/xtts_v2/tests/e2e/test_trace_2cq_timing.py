@@ -47,6 +47,7 @@ def _time_ms(fn, n, sync):
 
 def test_trace_2cq_timing():
     torch.manual_seed(0)
+    # trace_region_size is a self-test scratch allocation: oversized on purpose, not tuned
     device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2)
 
     def sync():

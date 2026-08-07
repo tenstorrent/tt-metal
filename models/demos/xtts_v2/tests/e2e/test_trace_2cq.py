@@ -29,6 +29,7 @@ def _load_reference():
 
 def test_trace_2cq_selftest():
     torch.manual_seed(0)
+    # trace_region_size is a self-test scratch allocation: oversized on purpose, not tuned
     device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2)
     try:
         model = _load_reference()

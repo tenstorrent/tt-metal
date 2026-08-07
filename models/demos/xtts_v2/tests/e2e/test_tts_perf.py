@@ -38,6 +38,7 @@ os.environ.setdefault("TT_PERF_LAYERS", "2")
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 _DEV_PARAMS = {"l1_small_size": 24576}
 if _PERF_TRACE:
+    # sized during bring-up to fit the traced decode step; raise via TT_PERF_TRACE_REGION if capture OOMs
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
     _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "2"))
 
