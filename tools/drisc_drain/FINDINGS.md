@@ -2143,3 +2143,49 @@ device's power-state telemetry across a wedge.
 - **S N+17's "the timeout does not suppress" is superseded**: it does, but only with the progress read
   enabled, which `noprog` had deliberately removed.
 - Any hang-rate figure in this file must now state whether a periodic device read was in flight.
+
+## §N+19 — RETRACT §N+18. The timeout escapes a TEARDOWN wait; it does not prevent the wedge.
+
+§N+18 claimed the periodic device progress read prevents the endpoint wedge (0/279 armed vs 15/425 unarmed).
+**That comparison was never apples-to-apples.** Timing the runs exposed it: armed runs take ~45 s, not ~5 s,
+and the extra time is one stall whose duration equals `TT_METAL_OPERATION_TIMEOUT_SECONDS` exactly.
+
+The stall is not in the completion queue:
+
+```
+TT_THROW: Device 0: Timeout (45000 ms) waiting for physical cores to finish: 14-3   (assert.hpp:104)
+Device 0: Exception waiting for dispatch cores to finish during teardown.
+          Continuing with cleanup.  (llrt.cpp:406)
+```
+
+`TT_METAL_OPERATION_TIMEOUT_SECONDS` bounds `wait_until_cores_done` at **teardown** as well. The exception is
+**caught** and cleanup proceeds, so the process exits **0**.
+
+| | teardown wait on core 14-3 | outcome | how I scored it |
+|---|---|---|---|
+| armed | bounded at 45 s, exception caught | exits 0 after ~45 s | **"clean"** |
+| unarmed | unbounded | spins forever, killed at 300 s | **"hang"** |
+
+Fired in **73/74** msweep runs and **27/100** arm4 runs. So the armed arms' zero hang count is substantially
+an artifact of the timeout rescuing a teardown wait, not evidence that the endpoint stopped wedging.
+
+**Corroboration missed at the time:** poll-pressure hang `k=138` recorded `card=32.0 GT/s PCIe|16` -- a
+HEALTHY card. At least one "hang" was never an endpoint wedge. **Two distinct failure modes were being
+pooled under one label**:
+1. genuine PCIe endpoint wedge (`card=Unknown|63`, all-ones config space)
+2. teardown `wait_until_cores_done` never completing (card healthy)
+
+Any future run MUST classify by card state at failure, not by exit code alone.
+
+**What survives from §N+18:** nothing about mechanism. The 0/279 number is real but measures "did not
+hang OR was rescued by the timeout", which is not the quantity of interest.
+
+**What still needs explaining**, and is now the sharper question: why does teardown wait on core 14-3 at all?
+The DRISC drainer is resident by design, so a teardown wait for it to finish should either always fire or
+never -- yet unarmed runs complete cleanly 97% of the time. Something makes that wait unsatisfiable
+intermittently. That is a better-posed problem than the endpoint wedge and is probably upstream of it.
+
+**Method lesson, third instance:** measure run DURATION, not just exit code. A 9x slowdown sat in the data
+across ~280 runs and went unnoticed because every one of them exited 0. The earlier two instances were the
+ordering trap (twice). Cheap invariants -- runtime, card state, log length -- catch this class of error
+before it becomes a finding.
