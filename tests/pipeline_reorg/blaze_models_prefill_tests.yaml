@@ -611,7 +611,19 @@
 
     MR_DIR=$(mktemp -d "${PIPELINE_DIR}/prefill_ci_mr.XXXXXX")
     export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"   # ttrun expandvars this into the committed binding's global_env
-    trap 'rm -rf "${MR_DIR}"' EXIT
+
+    # The runner idles owning the 4-galaxy allocation until the producer's shutdown
+    # sentinel; on any early exit (table-publish timeout, producer failure) it must be
+    # reaped or it strands the hardware until the step timeout. Killing ttrun.py tears
+    # down the remote ranks with it.
+    cleanup() {
+      if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
+        kill "${RUNNER_PID}" 2>/dev/null || true
+        wait "${RUNNER_PID}" 2>/dev/null || true
+      fi
+      rm -rf "${MR_DIR}"
+    }
+    trap cleanup EXIT
 
     python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
@@ -648,12 +660,20 @@
     PROD_RC=$?
     set -e
 
+    # On success the producer already sent the shutdown sentinel; wait for the runner
+    # to finish teardown so a hung shutdown surfaces here instead of being orphaned.
+    if [ "${PROD_RC}" -eq 0 ]; then
+      wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
+    fi
+
     exit ${PROD_RC}
   test_type: prefill_runner_kv_pcc
   test_group: module
   skus:
     bh_sc4-blitz:
-      timeout: 60
+      # Measured test step ~6 min; headroom for the up-to-120s producer connect plus
+      # model-load/NFS variance on a 4-galaxy run. Must match the scaleout/demo budget.
+      timeout: 15
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: scaleout
   sp_config: sc4-blitz
