@@ -40,15 +40,11 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreWProgramFactory::create_p
     const std::uint32_t W = ashape[-1];
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     const std::uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    const std::uint32_t bH = bshape[-2];
-    const std::uint32_t bW = bshape[-1];
     const std::uint32_t NC = N * C;
 
     const std::uint32_t Wt = W / TILE_WIDTH;
     const std::uint32_t Ht = H / TILE_HEIGHT;
 
-    const std::uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
-    (void)num_btensor_tiles;  // legacy dead reader arg (idx 7); not carried into the port
     const std::uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
     IDevice* device = a.device();
