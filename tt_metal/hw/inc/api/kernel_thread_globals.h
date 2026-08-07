@@ -36,11 +36,10 @@ struct KernelBarrier {
 // DM rendezvous group per worker. Two co-resident same-role multi-thread DM kernels with
 // different thread counts would still share a slot (host validation admits at most one
 // same-role DFB instance per node today, so this is not a reachable topology); if that
-// ever becomes supported, key the barrier per kernel-group instead of the fixed 2 slots.
+// ever becomes supported, key the barrier per kernel-group instead of per DFB role.
 // [0] = DFB producer side, [1] = DFB consumer side, [2] = cached-semaphore pool init.
-// Slot 2 exists so the auto-injected sem::init_dm_cached() rendezvous cannot be mixed with a
-// co-resident kernel's DFB-role barrier (which is keyed on that role's own participant count --
-// sharing a slot across groups with different counts deadlocks at kernel entry).
+// Slot 2 keeps the auto-injected sem::init_dm_cached() rendezvous out of the DFB-role
+// barriers: sharing a slot across groups with different participant counts deadlocks.
 constexpr uint32_t NUM_KERNEL_BARRIERS = 3;
 constexpr uint32_t KERNEL_BARRIER_CACHED_SEM_INIT = 2;
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];

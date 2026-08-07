@@ -50,10 +50,10 @@ struct SemaphoreSpec {
     //////////////////////////////////////////////////////////////////////////////
     SemaphoreAdvancedOptions advanced_options;
 
-    // Physical-path INTENT for this semaphore (Phase-2 auto-path baking). AUTO lets the
-    // host derive it; explicit values force a mechanism and are validated at build time
-    // (e.g. DM_LOCAL_CACHED on a multi-node semaphore is a FATAL). The host resolves this
-    // to a device SemScope that the kernel picks up via CTAD (see noc_semaphore.h).
+    // Physical-path INTENT for this semaphore. AUTO lets the host derive it. Forcing
+    // DM_LOCAL_CACHED is validated at build time (e.g. multi-node is a FATAL); forcing
+    // EXTERNAL or LOCAL_NONATOMIC passes through unvalidated. The host resolves this to
+    // a device SemScope that the kernel picks up via CTAD (see noc_semaphore.h).
     SemaphoreScope scope = SemaphoreScope::AUTO;
 };
 
