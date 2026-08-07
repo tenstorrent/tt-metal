@@ -192,10 +192,21 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, Sk_chunk_t);
         }
 #else
-        // USE_ATTN_MASK (provided mask) — uses a per-`n` matmul_tiles + apply_mask_on_reg path.
-        // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
+        // USE_ATTN_MASK (provided mask): per-`n` matmul_tiles + apply_mask_on_reg path. The
+        // per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
         // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
+        //
+        // AttentionMaskType::None (neither CAUSAL_MASK/BALANCED_PARALLELISM nor USE_ATTN_MASK
+        // defined): identical matmul, but apply_mask_on_reg and the cb_attn_mask pop are
+        // skipped entirely. sdpa_fw_reader_kernel.cpp only stages tiles into cb_attn_mask when
+        // USE_ATTN_MASK is defined, so touching that CB here for the None case would read
+        // uninitialized L1 -- garbage added to the scores, which overflows to Inf through the
+        // exp() in apply_exp_inplace_and_find_exp_sum below. (apply_mask_on_reg's own docstring
+        // confirms it does not apply the SDPA scale factor -- that happens later, uniformly for
+        // every mask type -- so no substitute scaling call is needed here, unlike the
+        // sdpa_bw_q/kv compute kernels' `else: mul_unary_tile(matmul_accum_reg, scaler_bits)`
+        // no-mask branch, which scale immediately because backward has no later scaled-exp step.)
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
             matmul_init(cb_query, cb_key, /* transpose */ 1);
@@ -209,7 +220,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                     tile_idx * Sk_chunk_t + n,
                     /* dst */ matmul_accum_reg);
             }
+#ifdef USE_ATTN_MASK
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits, /* mask_tile_idx */ n);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_attention_weights, onetile);
@@ -218,9 +231,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, onetile);
         }
 
+#ifdef USE_ATTN_MASK
         // Every mask tile is unique per (row, k tile). Pop the whole chunk's worth so the
         // reader can stage the next chunk.
         cb_pop_front(cb_attn_mask, Sk_chunk_t);
+#endif
 #endif
         // CAUSAL_MASK/BALANCED_PARALLELISM: the two mask tiles stay permanently fronted; no pop.
 
