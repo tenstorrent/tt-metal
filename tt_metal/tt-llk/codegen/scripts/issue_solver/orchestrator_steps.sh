@@ -898,24 +898,26 @@ with open(run_path) as f:
 
 arches = json.loads(arches_json)
 required = {"llk": ("llk",), "metal": ("metal",), "both": ("llk", "metal")}[route]
-failure_priority = ("COMPILE_FAILED", "TESTS_FAILED", "ENV_ERROR", "SIM_ISA_GAP")
-non_failing = {"SUCCESS", "COMPILED_ONLY", "UNVERIFIABLE_IN_LLK_SUITE"}
+failure_priority = ("ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP")
 existing = run.get("arch_results") or {}
 updates = {}
 tests_total = 0
 tests_passed = 0
 
-def count(value):
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+def strict_count(value, field):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a nonnegative integer")
+    return value
 
 for arch in arches:
     current = existing.get(arch) or {}
     if current.get("verdict") == "SKIPPED":
-        tests_total += count(current.get("tests_total"))
-        tests_passed += count(current.get("tests_passed"))
+        tests_total += strict_count(
+            current.get("tests_total"), f"{arch}.tests_total"
+        )
+        tests_passed += strict_count(
+            current.get("tests_passed"), f"{arch}.tests_passed"
+        )
         continue
 
     suite_results = current.get("suite_results") or {}
@@ -926,28 +928,53 @@ for arch in arches:
     for suite_name in required:
         suite = suite_results.get(suite_name) or {}
         verdict = suite.get("verdict")
+        suite_reasons = []
+        if suite.get("status") != "done":
+            suite_reasons.append("RESULT_NOT_TERMINAL: status must be done")
+        try:
+            suite_total = strict_count(
+                suite.get("tests_total"), f"{suite_name}.tests_total"
+            )
+            suite_passed = strict_count(
+                suite.get("tests_passed"), f"{suite_name}.tests_passed"
+            )
+            if suite_passed > suite_total:
+                raise ValueError(f"{suite_name}.tests_passed exceeds tests_total")
+        except ValueError as exc:
+            suite_total = 0
+            suite_passed = 0
+            suite_reasons.append(f"COUNT_INVALID: {exc}")
+
         if not verdict:
             verdict = "ENV_ERROR"
-            reasons.append(f"{suite_name}: missing required suite result")
-        elif verdict not in non_failing and verdict not in failure_priority:
-            reasons.append(f"{suite_name}: unknown verdict {verdict}")
+            suite_reasons.append("RESULT_MISSING: missing required suite verdict")
+        elif verdict == "SUCCESS":
+            if suite_total < 1:
+                suite_reasons.append("ZERO_SELECTED: success requires tests_total > 0")
+            if suite_passed != suite_total:
+                suite_reasons.append(
+                    "COUNT_MISMATCH: success requires tests_passed == tests_total"
+                )
+        elif verdict not in failure_priority:
+            suite_reasons.append(f"VERDICT_UNKNOWN: {verdict}")
             verdict = "ENV_ERROR"
+        if suite_reasons:
+            verdict = "ENV_ERROR"
+            reasons.extend(f"{suite_name}: {reason}" for reason in suite_reasons)
         elif verdict in failure_priority:
             reasons.append(f"{suite_name}: {suite.get('obstacle') or verdict}")
         elif suite.get("obstacle"):
             reasons.append(f"{suite_name}: {suite['obstacle']}")
         verdicts.append(verdict)
-        arch_total += count(suite.get("tests_total"))
-        arch_passed += count(suite.get("tests_passed"))
+        arch_total += suite_total
+        arch_passed += suite_passed
 
-    combined = next((value for value in failure_priority if value in verdicts), None)
-    if combined is None:
-        if "SUCCESS" in verdicts:
-            combined = "SUCCESS"
-        elif "COMPILED_ONLY" in verdicts:
-            combined = "COMPILED_ONLY"
-        else:
-            combined = "UNVERIFIABLE_IN_LLK_SUITE"
+    if verdicts and all(verdict == "SUCCESS" for verdict in verdicts):
+        combined = "SUCCESS"
+    else:
+        combined = next(
+            (value for value in failure_priority if value in verdicts), "ENV_ERROR"
+        )
 
     updates[arch] = {
         "status": "done",
