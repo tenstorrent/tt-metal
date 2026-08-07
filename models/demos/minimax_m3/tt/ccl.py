@@ -20,6 +20,19 @@ class CCLManager:
         # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
         self._ring_gather_buffers = {}
 
+        # --- shared-expert || dispatch overlap: owned reduce-scatter state (see
+        # MeshConfig.reduce_scatter(overlapped=True) for the full rationale) ---
+        # ONE stable-address intermediate accumulator shared by every layer's overlapped
+        # reduce-scatter. All layers share the shape and run sequentially, so one buffer for the whole
+        # model is safe; owning it keeps it alive across the overlap window (so the concurrent dispatch
+        # cannot reuse its slot) AND fixes its DRAM address, making the fabric reduction order — and
+        # therefore the result — identical every iteration.
+        self._shared_rs_intermediate = None
+        # Keepalive for the overlapped reduce-scatter's INPUT. ONE slot for the whole model, not one
+        # per layer: each layer's call overwrites it, releasing the previous layer's input. A
+        # per-module reference would pin one input per layer for the model's lifetime (57 x ~7.9 MB).
+        self._shared_rs_input_keepalive = None
+
         # Setup semaphores
         self._init_subdevice()
 
@@ -130,6 +143,37 @@ class CCLManager:
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]
+
+    def get_shared_rs_intermediate(self, input_tensor, topology):
+        """Lazily allocate (once per manager) and return the shared reduce-scatter intermediate.
+
+        Shape/dtype/layout must match the op's expectation: the Linear path carries a doubled leading
+        dimension for its forward/backward halves, the Ring tiled path wants the input's own shape.
+        Interleaved DRAM, replicated across the mesh. Reused at a stable address by every overlapped
+        reduce-scatter — see MeshConfig.reduce_scatter(overlapped=True).
+
+        Allocated on first use rather than in __init__ because the shape is the shared expert's output
+        ([1, 1, tokens, emb]), which the CCL manager is built long before it knows.
+        """
+        if self._shared_rs_intermediate is None:
+            shape = list(input_tensor.shape)
+            if topology == ttnn.Topology.Linear:
+                shape = [2] + shape
+            self._shared_rs_intermediate = ttnn.from_torch(
+                torch.zeros(shape),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._shared_rs_intermediate
+
+    def set_shared_rs_input_keepalive(self, input_tensor):
+        """Hold an overlapped reduce-scatter's INPUT alive until the next such call, so the concurrent
+        dispatch cannot reuse its DRAM slot while the RS kernels are still reading it. One slot for
+        the whole model; overwriting it releases the previous layer's input."""
+        self._shared_rs_input_keepalive = input_tensor
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

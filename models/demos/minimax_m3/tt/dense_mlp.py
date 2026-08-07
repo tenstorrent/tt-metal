@@ -18,7 +18,7 @@ from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
-from .moe.activation import apply_swiglu
+from .moe.activation import swiglu
 from .residual import use_sharded_residual
 
 
@@ -88,7 +88,8 @@ class DenseMLP:
             gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
             up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
         with zone("swiglu", FINE):
-            act = apply_swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3)
+            # One device op by default (7 with M3_FUSED_SWIGLU=0); consumes gate and up.
+            act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3)
         with zone("down_proj", FINE):
             out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
         act.deallocate(True)

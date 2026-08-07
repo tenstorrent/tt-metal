@@ -152,13 +152,54 @@ class MeshConfig:
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
 
-    def reduce_scatter(self, tensor, ccl_manager, dim=3, axis=0, memory_config=None):
+    def reduce_scatter(
+        self, tensor, ccl_manager, dim=3, axis=0, memory_config=None, subdevice_id=None, overlapped=False
+    ):
         """Reduce-scatter along mesh `axis`: sum across the devices on that axis, scattering the result
         on tensor `dim`. (allreduce = reduce_scatter + all_gather; this exposes the scatter half alone.)
+
+        ``subdevice_id`` / ``overlapped`` are for the shared-expert||dispatch overlap, where this op is
+        enqueued on one sub-device while dispatch runs concurrently on another. Both must be set there,
+        and neither may be set elsewhere:
+
+          * ``subdevice_id`` confines the op's workers to that sub-device.
+          * ``overlapped=True`` switches to an OWNED, stable-address intermediate accumulator
+            (``ccl_manager.get_shared_rs_intermediate``) and pins this call's INPUT alive until the
+            next overlapped call (``set_shared_rs_input_keepalive``).
+
+        The second part is not an optimization, it is a correctness requirement. This op is async: its
+        kernels keep touching its DRAM after the Python call returns, while the concurrent dispatch
+        allocates its own large buffers. Any buffer freed before those kernels finish can be re-handed
+        to dispatch and overwritten mid-flight. DeepSeek observed exactly that — both the RS input and
+        its intermediate re-handed to dispatch's `metadata` / `dispatched_buffer` at the SAME DRAM
+        address, the input alias giving a catastrophic period-2 failure and the intermediate alias
+        nondeterministic PCC (models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py:473-507). Owning
+        the intermediate at a fixed address additionally makes the fabric reduction order identical
+        every iteration, i.e. bit-exact determinism.
 
         Note: Caller should check if communication is needed before calling
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+        if overlapped:
+            assert subdevice_id is not None, "overlapped reduce_scatter needs the sub-device it runs on"
+            intermediate = ccl_manager.get_shared_rs_intermediate(tensor, ccl_manager.topology)
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                tensor,
+                persistent_output_buffers=[intermediate],
+                dim=dim,
+                multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+                barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+                num_links=ccl_manager.num_links,
+                memory_config=memory_config,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ccl_manager.topology,
+                cluster_axis=axis,
+                subdevice_id=subdevice_id,
+            )
+            # Hold the (fresh-per-iteration) input until the next overlapped call, so the concurrent
+            # dispatch cannot reuse its slot mid-flight. One slot on the CCL manager, not per-layer.
+            ccl_manager.set_shared_rs_input_keepalive(tensor)
+            return out
 
         return ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -169,6 +210,7 @@ class MeshConfig:
             topology=ccl_manager.topology,
             cluster_axis=axis,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            **({"subdevice_id": subdevice_id} if subdevice_id is not None else {}),
         )
 
     def __repr__(self):
