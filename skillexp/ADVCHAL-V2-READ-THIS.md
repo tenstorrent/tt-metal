@@ -22,9 +22,8 @@ only what the advisor's directions add on top is counted. That **understates** t
 
 - The metric that decides which candidates get measured prices the change that produced about half the corpus's
   gains at **zero**, so those candidates were often never tried. *(§3.6)*
-- The stage's per-op ledger has **no way to record its one reliable win.** 37 rows say *"this norm runs on 1 core,
-  the advisor wants 8–88"*; every one is filed `below_threshold`, `not_measurable` or `rejected`, and **none is
-  filed `kept`** — including all 14 such rows in the cell that shipped that exact change for **−12.98 %**.
+- **Its most reliable recommendation cannot be recorded as a win.** 37 rows say *"widen this starved norm"* and
+  not one is marked `kept` — including in the cell that made exactly that change and gained **−12.98 %**.
   *(§3.14)*
 - **No cell ever applied its plan as written.** Where that is measurable, doing so is worth **3.7×** what shipped.
   *(§3.27)*
