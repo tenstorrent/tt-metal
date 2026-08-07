@@ -1530,6 +1530,70 @@ def test_init_emits_dashboard_fields(tmp_path):
     assert doc.get("version") is None
 
 
+def test_progress_sequence_and_heartbeat_advance_monotonically(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "progress-1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "Analyzing",
+    )
+    first = json.loads((tmp_path / "run.json").read_text())
+    _run(tmp_path, "message", "--message", "Still analyzing")
+    second = json.loads((tmp_path / "run.json").read_text())
+    _run(
+        tmp_path,
+        "advance",
+        "--new-step",
+        "writer",
+        "--new-message",
+        "Writing",
+        "--prev-result",
+        "success",
+    )
+    third = json.loads((tmp_path / "run.json").read_text())
+
+    assert [
+        first["progress_sequence"],
+        second["progress_sequence"],
+        third["progress_sequence"],
+    ] == [1, 2, 3]
+    assert (
+        first["last_heartbeat"] <= second["last_heartbeat"] <= third["last_heartbeat"]
+    )
+    assert third["supervisor_phase"] == "active_compute"
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "message",
+                "--message",
+                f"parallel-{i}",
+                "--log-dir",
+                str(tmp_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for i in range(8)
+    ]
+    for writer in writers:
+        stdout, stderr = writer.communicate(timeout=10)
+        assert writer.returncode == 0, stderr or stdout
+    final = json.loads((tmp_path / "run.json").read_text())
+    assert final["progress_sequence"] == 11
+
+
 def test_init_records_version_when_passed(tmp_path):
     _run(
         tmp_path,

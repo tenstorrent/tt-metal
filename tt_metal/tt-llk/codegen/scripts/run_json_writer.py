@@ -59,6 +59,7 @@ Idempotency:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -105,8 +106,45 @@ def _atomic_write(
 ) -> None:
     path = destination or _run_json_path(log_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    lock = None
     try:
+        if path.name == "run.json":
+            lock_path = path.parent / ".run.json.lock"
+            lock = lock_path.open("a+")
+            try:
+                os.chmod(lock_path, 0o664)
+            except OSError:
+                # Another shared-service user may own an already group-writable
+                # lock inode; inability to chmod it does not make locking unsafe.
+                pass
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            current_sequence = 0
+            try:
+                current = json.loads(path.read_text()) if path.exists() else {}
+                current_sequence = current.get("progress_sequence", 0)
+            except (OSError, ValueError, TypeError):
+                current_sequence = 0
+            sequence = doc.get("progress_sequence", 0)
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 0
+            ):
+                sequence = 0
+            if (
+                isinstance(current_sequence, bool)
+                or not isinstance(current_sequence, int)
+                or current_sequence < 0
+            ):
+                current_sequence = 0
+            doc["progress_sequence"] = max(sequence, current_sequence) + 1
+            doc["last_heartbeat"] = _utcnow()
+            doc.setdefault("supervisor_phase", "active_compute")
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
         with os.fdopen(fd, "w") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")
@@ -116,9 +154,13 @@ def _atomic_write(
         os.chmod(tmp, 0o664)
         os.replace(tmp, path)
     except Exception:
-        if os.path.exists(tmp):
+        if "tmp" in locals() and os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    finally:
+        if lock is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
 
 
 def _json_arg(value: str | None, default: Any) -> Any:
