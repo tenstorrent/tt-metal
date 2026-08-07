@@ -34,7 +34,7 @@
  * Metal 2.0 named resources:
  *   CTAs:  W_tiles, H_tiles, has_right_pad, has_bottom_pad, elem_size (elem_size unused).
  *   DFB:   dfb::data_in  (this reader is its PRODUCER).
- *   tensor: tensor::input (in-place tensor; base address auto-injected by the binding).
+ *   tensor: tensor::src (in-place tensor; base address auto-injected by the binding).
  *   RTAs:  start_right, num_right, start_bottom, num_bottom, start_corner, num_corner.
  */
 
@@ -68,8 +68,8 @@ void kernel_main() {
     const auto start_corner = get_arg(args::start_corner);
     const auto num_corner = get_arg(args::num_corner);
 
-    // Tensor base address and layout metadata are supplied by the tensor::input binding.
-    const auto s = TensorAccessor(tensor::input);
+    // Tensor base address and layout metadata are supplied by the tensor::src binding.
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
     DataflowBuffer dfb_tile_in(dfb::data_in);

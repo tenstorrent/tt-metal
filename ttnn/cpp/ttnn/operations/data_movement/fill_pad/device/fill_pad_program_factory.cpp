@@ -141,43 +141,43 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     const TensorParamName INPUT{"input"};
 
     // ---- Dataflow buffers (placement derived from bindings) ----
-    Group<DataflowBufferSpec> dfbs;
-    dfbs.push_back(DataflowBufferSpec{
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_IN, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
     if (has_right_pad) {
-        dfbs.push_back(DataflowBufferSpec{
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RIGHT_MASK,
             .entry_size = tile_bytes,
             .num_entries = 1,
             .data_format_metadata = cb_data_format});
     }
     if (has_bottom_pad) {
-        dfbs.push_back(DataflowBufferSpec{
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BOT_MASK, .entry_size = tile_bytes, .num_entries = 1, .data_format_metadata = cb_data_format});
     }
-    dfbs.push_back(DataflowBufferSpec{
+    dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_OUT, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
 
     // ---- Defines ----
-    const auto kernel_defines =
+    const auto fill_defines =
         build_kernel_defines(input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
     // has_right_pad / has_bottom_pad are promoted to preprocessor defines on the writer and
     // compute kernels (they gate the conditionally-bound right / bottom mask DFBs).
-    auto mask_defines = kernel_defines;
+    auto mask_defines = fill_defines;
     if (has_right_pad) {
-        mask_defines.insert({"FILL_PAD_HAS_RIGHT_PAD", "1"});
+        mask_defines.insert({"HAS_RIGHT_PAD", "1"});
     }
     if (has_bottom_pad) {
-        mask_defines.insert({"FILL_PAD_HAS_BOTTOM_PAD", "1"});
+        mask_defines.insert({"HAS_BOTTOM_PAD", "1"});
     }
 
     // ---- Reader KernelSpec ----
-    KernelSpec reader{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = kDramReaderSrc,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args =
             {{"W_tiles", W_tiles},
              {"H_tiles", H_tiles},
@@ -189,80 +189,80 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    reader.compiler_options.defines = kernel_defines;
+    reader_spec.compiler_options.defines = fill_defines;
 
     // ---- Writer KernelSpec ----
-    Group<DFBBinding> writer_dfbs = {
+    Group<DFBBinding> writer_dfb_bindings = {
         DFBBinding{.dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::CONSUMER}};
     KernelSpec::CompileTimeArgs writer_cta = {{"W_tiles", W_tiles}, {"H_tiles", H_tiles}};
     if (has_right_pad) {
-        writer_dfbs.push_back(DFBBinding{
+        writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = RIGHT_MASK, .accessor_name = "right_mask", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_cta.insert({"W_mod32", W_mod32});
     }
     if (has_bottom_pad) {
-        writer_dfbs.push_back(DFBBinding{
+        writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_cta.insert({"H_mod32", H_mod32});
     }
-    KernelSpec writer{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = kDramWriterSrc,
-        .dfb_bindings = std::move(writer_dfbs),
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
-    writer.compiler_options.defines = mask_defines;
+    writer_spec.compiler_options.defines = mask_defines;
 
     // ---- Compute KernelSpec ----
-    Group<DFBBinding> compute_dfbs = {
+    Group<DFBBinding> compute_dfb_bindings = {
         DFBBinding{.dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     if (has_right_pad) {
-        compute_dfbs.push_back(DFBBinding{
+        compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = RIGHT_MASK, .accessor_name = "right_mask", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     if (has_bottom_pad) {
-        compute_dfbs.push_back(DFBBinding{
+        compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    ComputeGen1Config compute_gen1{};
-    compute_gen1.enable_32_bit_dest = need_fp32_dest_acc;
+    ComputeGen1Config compute_hw{};
+    compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
     if (is_fp32) {
         // Match legacy UnpackToDestFp32 on the FP32 DFBs the compute kernel consumes.
-        compute_gen1.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});
+        compute_hw.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});
         if (has_right_pad) {
-            compute_gen1.unpack_modes.insert({RIGHT_MASK, UnpackMode::UnpackToDest});
+            compute_hw.unpack_modes.insert({RIGHT_MASK, UnpackMode::UnpackToDest});
         }
         if (has_bottom_pad) {
-            compute_gen1.unpack_modes.insert({BOT_MASK, UnpackMode::UnpackToDest});
+            compute_hw.unpack_modes.insert({BOT_MASK, UnpackMode::UnpackToDest});
         }
     }
-    KernelSpec compute{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeSrc,
-        .dfb_bindings = std::move(compute_dfbs),
+        .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {{"W_tiles", W_tiles},
              {"H_tiles", H_tiles},
              {"elem_size", input_element_size_bytes},
              {"fill_bits", fill_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_right", "num_bottom", "num_corner"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_gen1)},
+        .hw_config = ComputeHardwareConfig{std::move(compute_hw)},
     };
-    compute.compiler_options.defines = mask_defines;
-    compute.compiler_options.opt_level = KernelBuildOptLevel::O3;  // legacy ComputeConfig defaults to O3
+    compute_spec.compiler_options.defines = mask_defines;
+    compute_spec.compiler_options.opt_level = KernelBuildOptLevel::O3;  // legacy ComputeConfig defaults to O3
 
     // ---- ProgramSpec ----
     ProgramSpec spec{
         .name = "fill_pad_dram",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
-        .dataflow_buffers = std::move(dfbs),
+        .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
+        .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()}},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
@@ -272,9 +272,9 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     // global blocks to produce per-phase (start, num) pairs. Phases with num==0 are skipped in the
     // kernels.
     const std::vector<CoreCoord> cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-    KernelRunArgs reader_ra{.kernel = READER};
-    KernelRunArgs writer_ra{.kernel = WRITER};
-    KernelRunArgs compute_ra{.kernel = COMPUTE};
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
     std::uint32_t work_start = 0;
     for (std::uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -311,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         clip_to_phase_block(T_right + T_bottom, T_corner, start_corner, num_corner);
 
         AddRuntimeArgsForNode(
-            reader_ra.runtime_arg_values,
+            reader_run.runtime_arg_values,
             core,
             {{"start_right", start_right},
              {"num_right", num_right},
@@ -320,7 +320,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
              {"start_corner", start_corner},
              {"num_corner", num_corner}});
         AddRuntimeArgsForNode(
-            writer_ra.runtime_arg_values,
+            writer_run.runtime_arg_values,
             core,
             {{"start_right", start_right},
              {"num_right", num_right},
@@ -330,7 +330,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
              {"num_corner", num_corner}});
         // Compute RT: per-phase counts; starts are not needed (DFBs are FIFO).
         AddRuntimeArgsForNode(
-            compute_ra.runtime_arg_values,
+            compute_run.runtime_arg_values,
             core,
             {{"num_right", num_right}, {"num_bottom", num_bottom}, {"num_corner", num_corner}});
 
@@ -338,7 +338,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     }
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_ra)};
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
     run_args.tensor_args.insert({INPUT, TensorArgument{tensor_args.input.mesh_tensor()}});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
@@ -502,30 +502,30 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     const TensorParamName INPUT{"input"};
 
     // ---- Dataflow buffers ----
-    Group<DataflowBufferSpec> dfbs;
-    dfbs.push_back(DataflowBufferSpec{
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_IN, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
     if (has_right_pad) {
-        dfbs.push_back(DataflowBufferSpec{
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RIGHT_MASK,
             .entry_size = tile_bytes,
             .num_entries = 1,
             .data_format_metadata = cb_data_format});
     }
     if (has_bottom_pad) {
-        dfbs.push_back(DataflowBufferSpec{
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BOT_MASK, .entry_size = tile_bytes, .num_entries = 1, .data_format_metadata = cb_data_format});
     }
-    dfbs.push_back(DataflowBufferSpec{
+    dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_OUT, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
 
-    const auto kernel_defines =
+    const auto fill_defines =
         build_kernel_defines(input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
 
     // ---- Build kernels + work units per group ----
     struct GroupInfo {
         KernelSpecName reader_id, writer_id, compute_id;
-        KernelRunArgs reader_ra, writer_ra, compute_ra;
+        KernelRunArgs reader_run, writer_run, compute_run;
     };
     std::map<ComputeKey, GroupInfo> groups;
     Group<KernelSpec> kernels;
@@ -538,29 +538,29 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .reader_id = KernelSpecName{"reader_" + gs},
             .writer_id = KernelSpecName{"writer_" + gs},
             .compute_id = KernelSpecName{"compute_" + gs},
-            .reader_ra = KernelRunArgs{.kernel = KernelSpecName{"reader_" + gs}},
-            .writer_ra = KernelRunArgs{.kernel = KernelSpecName{"writer_" + gs}},
-            .compute_ra = KernelRunArgs{.kernel = KernelSpecName{"compute_" + gs}}};
+            .reader_run = KernelRunArgs{.kernel = KernelSpecName{"reader_" + gs}},
+            .writer_run = KernelRunArgs{.kernel = KernelSpecName{"writer_" + gs}},
+            .compute_run = KernelRunArgs{.kernel = KernelSpecName{"compute_" + gs}}};
 
         const bool k_right = key.has_right_pad != 0u;
         const bool k_bottom = key.has_bottom_pad != 0u;
 
         // Mask defines for this group's writer + compute.
-        auto mask_defines = kernel_defines;
+        auto mask_defines = fill_defines;
         if (k_right) {
-            mask_defines.insert({"FILL_PAD_HAS_RIGHT_PAD", "1"});
+            mask_defines.insert({"HAS_RIGHT_PAD", "1"});
         }
         if (k_bottom) {
-            mask_defines.insert({"FILL_PAD_HAS_BOTTOM_PAD", "1"});
+            mask_defines.insert({"HAS_BOTTOM_PAD", "1"});
         }
 
         // Reader.
-        KernelSpec reader{
+        KernelSpec reader_spec{
             .unique_id = gi.reader_id,
             .source = kShardedReaderSrc,
             .dfb_bindings = {DFBBinding{
                 .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::PRODUCER}},
-            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
             .compile_time_args =
                 {{"W_tiles", W_tiles}, {"has_right_pad", key.has_right_pad}, {"elem_size", input_element_size_bytes}},
             .runtime_arg_schema =
@@ -569,78 +569,78 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
         };
 
         // Writer.
-        Group<DFBBinding> writer_dfbs = {DFBBinding{
+        Group<DFBBinding> writer_dfb_bindings = {DFBBinding{
             .dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::CONSUMER}};
         KernelSpec::CompileTimeArgs writer_cta = {{"W_tiles", W_tiles}};
         if (k_right) {
-            writer_dfbs.push_back(DFBBinding{
+            writer_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = RIGHT_MASK,
                 .accessor_name = "right_mask",
                 .endpoint_type = DFBEndpointType::PRODUCER});
             writer_cta.insert({"W_mod32", W_mod32});
         }
         if (k_bottom) {
-            writer_dfbs.push_back(DFBBinding{
+            writer_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
             writer_cta.insert({"H_mod32", H_mod32});
         }
-        KernelSpec writer{
+        KernelSpec writer_spec{
             .unique_id = gi.writer_id,
             .source = kShardedWriterSrc,
-            .dfb_bindings = std::move(writer_dfbs),
-            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+            .dfb_bindings = std::move(writer_dfb_bindings),
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "dst"}},
             .compile_time_args = std::move(writer_cta),
             .runtime_arg_schema =
                 {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
             .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
         };
-        writer.compiler_options.defines = mask_defines;
+        writer_spec.compiler_options.defines = mask_defines;
 
         // Compute.
-        Group<DFBBinding> compute_dfbs = {
+        Group<DFBBinding> compute_dfb_bindings = {
             DFBBinding{
                 .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::CONSUMER},
             DFBBinding{
                 .dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::PRODUCER}};
         if (k_right) {
-            compute_dfbs.push_back(DFBBinding{
+            compute_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = RIGHT_MASK,
                 .accessor_name = "right_mask",
                 .endpoint_type = DFBEndpointType::CONSUMER});
         }
         if (k_bottom) {
-            compute_dfbs.push_back(DFBBinding{
+            compute_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
         }
-        ComputeGen1Config compute_gen1{};
-        compute_gen1.enable_32_bit_dest = need_fp32_dest_acc;
+        ComputeGen1Config compute_hw{};
+        compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
         if (is_fp32) {
-            compute_gen1.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});
+            compute_hw.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});
             if (k_right) {
-                compute_gen1.unpack_modes.insert({RIGHT_MASK, UnpackMode::UnpackToDest});
+                compute_hw.unpack_modes.insert({RIGHT_MASK, UnpackMode::UnpackToDest});
             }
             if (k_bottom) {
-                compute_gen1.unpack_modes.insert({BOT_MASK, UnpackMode::UnpackToDest});
+                compute_hw.unpack_modes.insert({BOT_MASK, UnpackMode::UnpackToDest});
             }
         }
-        KernelSpec compute{
+        KernelSpec compute_spec{
             .unique_id = gi.compute_id,
             .source = kComputeSrc,
-            .dfb_bindings = std::move(compute_dfbs),
+            .dfb_bindings = std::move(compute_dfb_bindings),
             .compile_time_args =
                 {{"W_tiles", key.effective_W},
                  {"H_tiles", key.H},
                  {"elem_size", input_element_size_bytes},
                  {"fill_bits", fill_bits}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_right", "num_bottom", "num_corner"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_gen1)},
+            .hw_config = ComputeHardwareConfig{std::move(compute_hw)},
         };
-        compute.compiler_options.defines = mask_defines;
-        compute.compiler_options.opt_level = KernelBuildOptLevel::O3;
+        compute_spec.compiler_options.defines = mask_defines;
+        compute_spec.compiler_options.opt_level = KernelBuildOptLevel::O3;
 
-        kernels.push_back(std::move(reader));
-        kernels.push_back(std::move(writer));
-        kernels.push_back(std::move(compute));
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
         work_units.push_back(WorkUnitSpec{
             .name = "wu_" + gs,
             .kernels = {gi.reader_id, gi.writer_id, gi.compute_id},
@@ -657,14 +657,14 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     for (const auto& ci : active) {
         GroupInfo& gi = groups.at(key_of(ci));
         AddRuntimeArgsForNode(
-            gi.reader_ra.runtime_arg_values,
+            gi.reader_run.runtime_arg_values,
             ci.coord,
             {{"shard_H_tiles", ci.shard_H_tiles},
              {"has_bottom_pad_core", ci.has_bottom_pad},
              {"num_work", ci.num_work},
              {"local_right_col", ci.local_right_col}});
         AddRuntimeArgsForNode(
-            gi.writer_ra.runtime_arg_values,
+            gi.writer_run.runtime_arg_values,
             ci.coord,
             {{"shard_H_tiles", ci.shard_H_tiles},
              {"has_bottom_pad_core", ci.has_bottom_pad},
@@ -685,7 +685,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             num_bottom = ci.local_valid_w;
         }
         AddRuntimeArgsForNode(
-            gi.compute_ra.runtime_arg_values,
+            gi.compute_run.runtime_arg_values,
             ci.coord,
             {{"num_right", num_right}, {"num_bottom", num_bottom}, {"num_corner", num_corner}});
     }
@@ -694,16 +694,16 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     ProgramSpec spec{
         .name = "fill_pad_l1_sharded",
         .kernels = std::move(kernels),
-        .dataflow_buffers = std::move(dfbs),
+        .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()}},
         .work_units = std::move(work_units),
     };
 
     ProgramRunArgs run_args;
     for (auto& [key, gi] : groups) {
-        run_args.kernel_run_args.push_back(std::move(gi.reader_ra));
-        run_args.kernel_run_args.push_back(std::move(gi.writer_ra));
-        run_args.kernel_run_args.push_back(std::move(gi.compute_ra));
+        run_args.kernel_run_args.push_back(std::move(gi.reader_run));
+        run_args.kernel_run_args.push_back(std::move(gi.writer_run));
+        run_args.kernel_run_args.push_back(std::move(gi.compute_run));
     }
     run_args.tensor_args.insert({INPUT, TensorArgument{tensor_args.input.mesh_tensor()}});
 

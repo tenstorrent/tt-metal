@@ -9,7 +9,7 @@
  * Metal 2.0 named resources:
  *   CTAs:  W_tiles (shard width in tiles), has_right_pad, elem_size (elem_size unused).
  *   DFB:   dfb::data_in (this reader is its PRODUCER).
- *   tensor: tensor::input — bound only to recover this core's shard L1 base address
+ *   tensor: tensor::src — bound only to recover this core's shard L1 base address
  *           (Case 2: get_bank_base_address()); the raw self-read arithmetic is unchanged.
  *   RTAs:  shard_H_tiles, has_bottom_pad_core, num_work (num_work is inert in the reader),
  *          local_right_col.
@@ -42,8 +42,8 @@ void kernel_main() {
 
     // Case 2: recover this core's shard L1 base from the tensor binding; the raw
     // self-read address arithmetic below is unchanged from the legacy kernel.
-    const auto ta = TensorAccessor(tensor::input);
-    const std::uint32_t shard_l1_base = ta.get_bank_base_address();
+    const auto s = TensorAccessor(tensor::src);
+    const std::uint32_t shard_l1_base = s.get_bank_base_address();
 
     Noc noc;
     DataflowBuffer dfb_data_in(dfb::data_in);

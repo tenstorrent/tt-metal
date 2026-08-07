@@ -15,11 +15,11 @@
  * Metal 2.0 named resources:
  *   CTAs:  W_tiles; W_mod32 (only when the right mask is bound), H_mod32 (only
  *          when the bottom mask is bound).
- *   Defines: FILL_PAD_HAS_RIGHT_PAD / FILL_PAD_HAS_BOTTOM_PAD gate the
+ *   Defines: HAS_RIGHT_PAD / HAS_BOTTOM_PAD gate the
  *            conditionally-bound right / bottom mask DFBs (per compute group).
  *   DFBs:  dfb::right_mask (PRODUCER, conditional), dfb::bot_mask (PRODUCER,
  *          conditional), dfb::data_out (this writer is its CONSUMER).
- *   tensor: tensor::input — bound only to recover this core's shard L1 base
+ *   tensor: tensor::dst — bound only to recover this core's shard L1 base
  *           (Case 2: get_bank_base_address()); raw self-write arithmetic unchanged.
  *   RTAs:  shard_H_tiles, has_bottom_pad_core, num_work, local_right_col.
  *
@@ -40,7 +40,7 @@ void kernel_main() {
 
     // has_right_pad is carried as a preprocessor define (not a CTA) because it gates
     // references to the conditionally-bound right mask DFB.
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     constexpr std::uint32_t has_right_pad = 1;
 #else
     constexpr std::uint32_t has_right_pad = 0;
@@ -57,29 +57,29 @@ void kernel_main() {
 
     // Case 2: recover this core's shard L1 base from the tensor binding; the raw
     // self-write address arithmetic below is unchanged from the legacy kernel.
-    const auto ta = TensorAccessor(tensor::input);
-    const std::uint32_t shard_l1_base = ta.get_bank_base_address();
+    const auto s = TensorAccessor(tensor::dst);
+    const std::uint32_t shard_l1_base = s.get_bank_base_address();
 
     Noc noc;
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     DataflowBuffer dfb_right_mask(dfb::right_mask);
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     DataflowBuffer dfb_bot_mask(dfb::bot_mask);
 #endif
     DataflowBuffer dfb_data_out(dfb::data_out);
     const std::uint32_t tile_bytes = dfb_data_out.get_entry_size();
 
     // ---- Phase 1: generate and push mask tile(s) ----
-#if defined(FILL_PAD_HAS_RIGHT_PAD) || defined(FILL_PAD_HAS_BOTTOM_PAD)
+#if defined(HAS_RIGHT_PAD) || defined(HAS_BOTTOM_PAD)
     using mask_t = MASK_ELEM_UINT;
     constexpr std::uint32_t TILE = 32;
 #endif
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     constexpr auto W_mod32 = get_arg(args::W_mod32);
     push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     constexpr auto H_mod32 = get_arg(args::H_mod32);
     if (has_bottom_pad_core) {
         push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));

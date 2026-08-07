@@ -111,10 +111,10 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_data_in(dfb::data_in);
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     DataflowBuffer dfb_right_mask(dfb::right_mask);
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     DataflowBuffer dfb_bot_mask(dfb::bot_mask);
 #endif
     DataflowBuffer dfb_data_out(dfb::data_out);
@@ -124,36 +124,36 @@ void kernel_main() {
 
     // Wait for persistent mask tiles pushed once by the writer. They are popped
     // once at cleanup; during the main loop they are reused persistently.
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     dfb_right_mask.wait_front(1);
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     dfb_bot_mask.wait_front(1);
 #endif
 
     // ---- Main loop: same tile ordering as reader and writer (right/bottom/corner) ----
 
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     for (std::uint32_t i = 0; i < num_right; ++i) {
         process_masked_tile(dfb_data_in, dfb_right_mask, dfb_data_out, fill_bits_ct);
     }
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     for (std::uint32_t j = 0; j < num_bottom; ++j) {
         process_masked_tile(dfb_data_in, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
 #endif
-#if defined(FILL_PAD_HAS_RIGHT_PAD) && defined(FILL_PAD_HAS_BOTTOM_PAD)
+#if defined(HAS_RIGHT_PAD) && defined(HAS_BOTTOM_PAD)
     for (std::uint32_t k = 0; k < num_corner; ++k) {
         process_corner_tile(dfb_data_in, dfb_right_mask, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
 #endif
 
     // Clean-up
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     dfb_right_mask.pop_front(1);
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     dfb_bot_mask.pop_front(1);
 #endif
 }
