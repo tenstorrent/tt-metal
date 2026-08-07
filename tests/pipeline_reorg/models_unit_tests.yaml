@@ -245,9 +245,10 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # Carried over unchanged from the legacy t3k_unit_tests.yaml entry, NOT re-measured
-    # on the tier runner. Tighten to measured + ~15% after the first tiered run and
-    # re-sync .github/time_budget.yaml to the new sum.
+    # Still the carried-over legacy value. Run 31106916424 took 7.3 min but ABORTED at
+    # test_pixtral_transformer (the L1 clash fixed in this PR), so 3 of the 8 test files
+    # never ran and that time is not a usable measurement. Re-measure once the job is
+    # green end-to-end.
     wh_llmbox:
       timeout: 20
       tier: 2
@@ -267,11 +268,11 @@
   model: vit
   model_family: ViT
   skus:
-    # Carried over unchanged from the legacy `vit nightly` entry, NOT re-measured on
-    # the tier runner. Tighten to measured + ~15% after the first tiered run and
-    # re-sync .github/time_budget.yaml to the new sums.
+    # wh_n150: 9.8 min measured (run 31107849852) + ~15% -> 12.
+    # wh_n300 stays at the carried-over 30: that leg never got a runner in
+    # run 31107849852 (waited ~6 h, then cancelled), so there is no measurement for it.
     wh_n150:
-      timeout: 30
+      timeout: 12
       tier: 2
     wh_n300:
       timeout: 30
