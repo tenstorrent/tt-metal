@@ -23,7 +23,7 @@ on:
         default: ""
         type: string
       tests-yaml-gist-url:
-        description: "URL to GitHub gist/raw containing release_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
+        description: "URL to GitHub gist/raw containing models_e2e_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
         required: false
         default: ""
         type: string

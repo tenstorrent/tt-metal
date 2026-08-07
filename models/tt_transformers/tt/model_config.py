@@ -108,8 +108,7 @@ def should_pad_sampling_logits_to_power_of_2(
 ) -> bool:
     # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
-        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
-        return False
+        raise ValueError(f"sampling_splits must be >= 1, got {sampling_splits}")
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0

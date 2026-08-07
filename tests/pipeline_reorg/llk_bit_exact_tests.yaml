@@ -24,7 +24,7 @@
   skus:
     wh_n150_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_bit_exact_blackhole group 1/2
   split_group: 1
@@ -42,7 +42,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_bit_exact_blackhole group 2/2
   split_group: 2
@@ -60,4 +60,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
