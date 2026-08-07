@@ -94,6 +94,9 @@ LTX_ONE_STAGE_MESH_PARAMS_DL = [
     for p in LTX_PIPELINE_MESH_PARAMS_DL
 ]
 
+# Two-stages (Pro) drives the same audio vocoder, so it needs the same pool for the same reason.
+LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
+
 
 # ---------------------------------------------------------------------------
 # Distilled AV pipeline mesh params. Same geometry as the pipeline configs, but the audio
