@@ -25,9 +25,8 @@ The demo and the e2e test share one pipeline (`tt/pipeline.py::run_tts`), so a p
 a working demo. Only integer token bookkeeping and the repetition-penalty logit adjustment run on
 host; next-token selection is on device (`ttnn.argmax`).
 
-This branch adds only `models/demos/xtts_v2/` on top of `tenstorrent/tt-metal` main
-(@ `32cdc03d6`, 2026-08-07), so it merges cleanly. Every gate below was re-run on that base, so
-the numbers are what current main produces.
+This branch adds only `models/demos/xtts_v2/` on top of `tenstorrent/tt-metal` main, so it
+merges cleanly. Every gate below was re-run on main @ `32cdc03d6` (2026-08-07).
 
 ## Pipeline (all native TTNN)
 
