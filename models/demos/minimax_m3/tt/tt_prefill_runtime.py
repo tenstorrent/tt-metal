@@ -247,11 +247,8 @@ class TtPrefillRuntime:
         return x
 
     def compile(self, kv_cache) -> None:
-        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT. The
-        cache-read attention (RingJointSDPA) keys its program per KV-length bucket, so warming only the
-        first chunk just relocates the ~6s compile to the first un-warmed depth. Sweep the full per-user
-        cache in chunk steps (actual_start = 0, chunk, 2*chunk, ... max_seq_len-chunk); each warm-up writes
-        slot 0, which the real run overwrites in order."""
+        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT.
+        Sweep the full per-user cache in chunk steps; each warm-up writes slot 0, which the real run overwrites."""
         assert self.model_built
         chunk = self.config.chunk_size
         starts = list(range(0, self.config.max_seq_len - chunk + 1, chunk))
