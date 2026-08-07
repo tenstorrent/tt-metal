@@ -30,7 +30,10 @@ bool is_supported_dtype(DataType dtype) {
 
 }  // namespace
 
-const char* unsupported_execution_control(const Tile& tile, const std::optional<CoreRangeSet>& sub_core_grids) {
+// Fully qualified: unity builds share a translation unit with code that pulls in tt::Tile
+// (hostdevcommon/kernel_structs.h), which makes a bare `Tile` ambiguous with tt::tt_metal::Tile.
+const char* unsupported_execution_control(
+    const tt::tt_metal::Tile& tile, const std::optional<CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
         return "sub_core_grids";
     }
