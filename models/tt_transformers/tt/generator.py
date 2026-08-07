@@ -1616,6 +1616,29 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+        # EXPERIMENT ONLY (#52176) — do not merge. Paired with exp12, which injects a non-CCL op
+        # here instead. This one injects a CCL all_gather per step, matching the form on-device
+        # sampling uses (cluster_axis None on a 1xN mesh, Linear topology). The decode trace
+        # itself contains CCLs, so an untraced CCL interleaved between replays is the suspect.
+        _md = self.model_args[0].mesh_device
+        if not hasattr(self, "_exp_dummy"):
+            self._exp_dummy = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32),
+                device=_md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(_md),
+            )
+        ttnn.deallocate(
+            ttnn.all_gather(
+                self._exp_dummy,
+                dim=3,
+                num_links=1,
+                memory_config=self._exp_dummy.memory_config(),
+                cluster_axis=None,
+                topology=ttnn.Topology.Linear,
+            )
+        )
         return self.trace_output_decode[on_device_sampling]
 
     def sample_decode_on_device(
