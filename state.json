@@ -1,10 +1,10 @@
 {
-  "last_run": "2026-08-07T06:45:00Z",
-  "run_id": 31154815728,
+  "last_run": "2026-08-07T18:35:00Z",
+  "run_id": 31207303760,
   "open_prs": {
-    "51999": {"issue": 51420, "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged"},
-    "52106": {"issue": 51660, "status": "checks green; pr-gate.yaml action_required, unchanged"},
-    "51868": {"issue": 51866, "status": "checks green; pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred"}
+    "51999": {"issue": 51420, "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged this run"},
+    "52106": {"issue": 51660, "status": "checks green; pr-gate.yaml action_required, unchanged this run"},
+    "51868": {"issue": 51866, "status": "checks green (2 runs, one success conclusion); pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred; unchanged this run"}
   },
   "issues_labeled": ["52178:bug", "52174:bug", "52233:bug", "52203:bug", "52390:bug,ci-bug", "52376:bug"],
   "issues_commented": ["52178"],
