@@ -66,8 +66,30 @@ That bound retro-explains every measurement on this branch: 150 ~= 74 + 83; dedi
 `scratchpad/arrival_order_AND_ablations_WIP.patch` is therefore worth at most one hop `delta`, not the 37 us
 it was aimed at, and was dropped rather than debugged.
 
-Fixing the stall while keeping ring delivery means per-wave rings (one ring per arrival wave instead of one
-ring over the whole gathered K), giving `T_ready_max + T_mm/tp`. Not in this change.
+### What this bound does NOT rule out (read this before concluding the stall is unfixable)
+
+The derivation above holds `sigma` variable but keeps ONE thing fixed: that core `c` consumes shard `c-s` at
+step `s`. There are two independent freedoms here and the Latin-square argument only kills the first:
+
+1. **`sigma`** -- which shard sits at which ring position. Irrelevant, as proved above.
+2. **The CONSUMPTION ORDER** -- which of the shards a core already holds it works on next. Untouched by the
+   argument, and it is where the whole stall lives.
+
+Because those got conflated, this section was read for a while as "the stall is structural, only per-wave
+rings can fix it". It is not. Concretely, at the picked config (Pk=10, tp=4) on device 0, chunks 2 and 7
+arrive last (3 fabric hops); core 2 is forced to consume chunk 2 FIRST, so it idles through the entire
+gather and then owes all 8 of its steps -- while chunks 1 and 0 have been sitting in its L1 since t~1.
+Sorted by availability it could finish 6 of its 8 chunks before the last wave lands.
+
+The fix is therefore **consume in availability order rather than ring order**: same shards, same fabric
+traffic, same on-chip traffic, same unidirectional unicast ring, only the order changes. Forwarding moves to
+the same order so a core waiting on its own late shard stops holding up the cores behind it. See
+`REGIME_A_AGMM_DESIGN_SPEC.md` appendix B for the schedule and phasing.
+
+Note also that the `t(c,s) >= T_ready(sigma(c-s)) + (s+1)*delta` inequality counts RECEIVE hops, not the
+consuming core's own steps: a shard reaches core `c` when its upstream neighbours pass it along, which does
+not depend on `c` having consumed anything. Reading `s` as both "hops travelled" and "steps this core has
+completed" is what makes the stall look unfixable.
 
 ## Preconditions verified
 
@@ -287,12 +309,18 @@ with the measurement, not proven by it -- the 17.9 MB is derived from the config
 
 ### What is left
 
-1. **The ring's zero-overlap bound, 19.0 us.** `makespan >= T_ready_max + G*delta`. Per-wave rings (one ring
-   per arrival wave instead of one ring over the whole gathered K) is the fix, giving
-   `T_ready_max + T_mm/tp`. Now the only identified lever that has not been tried and measured.
-2. **The on-chip ring's 17.9 MB itself**, if the 25.7 us is to move at all. That is Regime-A's core
-   structure (the activation is deliberately replicated across the 8-bank ring), so it is a much larger
-   question than this change -- but it, not the fabric, is what the fabric is queueing behind.
+1. **The waiting term, 19.6 us** (`full 120.38 - nowait 100.79`). Fix: **consume in availability order, not
+   ring order** -- see "What this bound does NOT rule out" above, and appendix B of the spec for the phasing.
+   Not per-wave rings, and not a topology change: same traffic, same unicast ring, only the order moves.
+   Phases 0-2 (committed) already made the schedule host-controlled and single-sourced; phase 3 is the
+   schedule function.
+2. **The payload occupancy, 24.3 us**, if the gate is to be reached at all. This is bytes over links at
+   `num_links=2`, the hardware maximum on this axis, so it is a floor unless the byte count changes.
+
+The on-chip ring is NOT on this list. It moves ~17.9 MB, 9x the fabric's 1.92 MB, but the floor measurement
+bounds its entire cost at <=3.2 us (75.24 measured vs a 72.8 us DRAM roofline), because it is L1-to-L1 and
+overlaps compute. An earlier version of this section had it as item 2 on the theory that the fabric was
+queueing behind it; that was inferred from byte counts, contradicted by the floor, and is withdrawn.
 
 Arithmetic worth keeping in view: floor 76.0 + the 25.7 us exposed fabric cost = 101.7, still above the
 86.9 us gate. **So per-wave rings alone does not reach the gate** -- it targets the 19.0 us, and 101.7 is

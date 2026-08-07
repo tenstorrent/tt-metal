@@ -191,13 +191,50 @@ Delivers the spec's "never wait for the whole gathered tensor / each availabilit
 on the direct-L1 path. The on-chip distribution stays a UNICAST ring; multicast is explicitly out of scope
 until further notice.
 
-### What unicast can and cannot give
+### THE FIX, in one line
 
-A stripe reaches one new core per step, so "every core works on wave 0 at step 0" is unreachable: at step 0
-only the `ppr` cores owning wave-0 stripes hold data. What IS reachable, and is the whole content of the
-wavefront: **no core ever waits on a late wave while an earlier wave sits undelivered.** Today core `c`
-consumes position `c-s` at step `s`, so if `c-1` falls in the last wave, core `c` stalls at step 1 with
-wave-0 data available elsewhere on the ring.
+**Each core consumes its chunks in the order they become available, instead of in ring order.** Same chunks,
+same fabric traffic, same on-chip traffic, same unidirectional unicast ring — only the order changes.
+Forwarding moves to the same order, so a core waiting on its own late chunk stops holding up the cores
+behind it.
+
+### Worked example: why the current order stalls (the picked config, device 0)
+
+`(Pk,Ns,Sm,kb,nsb) = (10,1,1,2,1)`, 80 cores = 8 banks x 10 K-splits. Each K-split owns 16 of the 160 global
+K-tiles; the 8 cores of a split need the SAME 16 tiles and differ only in which N columns they compute. Those
+16 tiles sit in cb0 as **8 chunks of 2 K-tiles** (x 8 M-tiles = 16 tiles = 32 KB each). This device holds only
+40 of the 160 global K-tiles, so each split takes 4 tiles from each device — **2 chunks per device**:
+
+```text
+chunk        :   0    1    2    3    4    5    6    7
+lives on dev :   0    0    1    1    2    2    3    3
+fabric hops  :   0    0    3    1    2    2    1    3     <- device 0; 0 == already local
+```
+
+Core at ring position `p` fetches chunk `p` (locally or over fabric); the ring then circulates chunks until
+every core has all 8. Consumption order today is `p, p-1, p-2, ...`, giving (40 time units per fabric hop,
+1 per on-chip hop):
+
+```text
+core | consumption order (chunk @ when available)                | stalls at
+  0  | 0@0    7@121  6@42   5@83   4@84   3@45   2@126  1@7      | step 1
+  1  | 1@0    0@1    7@122  6@43   5@84   4@85   3@46   2@127    | step 2
+  2  | 2@120  1@1    0@2    7@123  6@44   5@85   4@86   3@47     | step 0  <--
+  7  | 7@120  6@41   5@82   4@83   3@44   2@125  1@6    0@7      | step 0  <--
+```
+
+**Core 2 is the whole problem.** It must consume chunk 2 first, chunk 2 is one of the two last-arriving
+chunks, so it idles from t=0 to t=120 and only then starts its matmul — while chunks 1 and 0 have been in its
+L1 since t~1. Sorted by availability it could finish **6 of its 8 chunks before t=120**. Two cores per ring
+are always in this position (two chunks always arrive last), and they set the makespan: `T_gather + T_matmul`.
+
+### The two clocks — do not re-derive the wrong conclusion here
+
+It is easy to "prove" this is unfixable by arguing that after `r` steps a core can only possess `r+1` chunks,
+so it has nothing else to consume. That conflates two clocks: `r+1` counts **receive hops**, but a chunk
+reaches core 2 as soon as its upstream neighbours pass it along, which does not depend on core 2's own
+progress. Core 2 can be blocked at consume-step 0 and already hold two received chunks — the table above
+shows exactly that (`1@1`, `0@2` in hand while step 0 waits until t=120). The freedom is real.
 
 ### A cb0 slot index IS the consumption-order index
 
@@ -215,23 +252,35 @@ A fixed position->slot layout would therefore fix the ORDER too, not decouple fr
 consumption order is **which stripe lands in which slot** — which is what phase 1 makes host-controlled, and
 what phase 3 then chooses differently.
 
+("chunk" here is the same 32 KB object appendix A's glossary calls a **stripe** — one cb0 slot's worth.)
+
 ### Two structural facts this rests on
 
-1. Each stripe travels 7 hops (`o -> o+1 -> ... -> o+7`), so **each core forwards exactly 7 stripes over 7
-   steps, one per step, and WHICH stripe it forwards at each step is free** — constrained only by
-   receive-before-forward. Today that choice is implicitly "the one I just consumed", which is precisely
-   what chains every core's order to its predecessor's.
-2. A stripe's availability at core `c` is `T_arr(wave(o)) + hops(o->c)*delta`, which depends on `c`. So the
-   optimal consumption order is **per-core**, not device-global (device-global is true of *fabric* arrival,
-   not of on-chip availability). It is still fully static and host-computable: 8 cores x 8 stripes per ring.
+1. Each chunk travels 7 hops (`o -> o+1 -> ... -> o+7`), so **each core forwards exactly 7 chunks over 7
+   steps, one per step, and WHICH chunk it forwards at each step is free** — constrained only by
+   receive-before-forward. Today that choice is implicitly "the one I just consumed", and the kernel WAITS
+   before it forwards, so **a core blocked on its own consume wait forwards nothing and the stall propagates
+   down the ring.** That is why forwarding has to move to availability order too, not just consumption.
+2. A chunk's availability at core `c` is `T_arr(wave(o)) + hops(o->c)*delta`, which depends on `c`. So the
+   consumption order is **per-core**, not device-global (device-global is true of *fabric* arrival, not of
+   on-chip availability). It is still fully static and host-computable: 8 cores x 8 chunks per ring.
+
+   Convenient consequence: `hops(o->c+1) = hops(o->c) + 1` for every chunk except `c+1`'s own, so adding one
+   hop preserves the relative order. A core's consume order is therefore its predecessor's FORWARD order with
+   its own chunk inserted — which means received chunks still land in ascending slot order and the kernel's
+   existing receive COUNT remains a valid gate (see phase 4).
 
 ### Bound
 
 ```text
-today       T_ready_max + T_mm          the last-arriving core still owes its WHOLE matmul
-per-wave    T_ready_max + T_mm/tp
-this        T_ready_max + T_mm/8        per-stripe granularity: after its last stripe a core owes 1/8
+today       T_ready_max + T_mm          the core owning a last-arriving chunk owes its WHOLE matmul
+this        T_ready_max + T_mm/8        after its last chunk a core owes only 1/8 (one chunk) of its work
 ```
+
+Per-wave rings would give the intermediate `T_ready_max + T_mm/tp`. It is NOT the plan: availability ordering
+is both finer-grained and a smaller change, and needs no new distribution structure. Same for a bidirectional
+on-chip ring or NoC multicast — both were considered while the mechanism was mis-diagnosed, and neither is
+needed once consumption is reordered.
 
 ### Phases, each with its own gate
 
@@ -240,7 +289,7 @@ this        T_ready_max + T_mm/8        per-stripe granularity: after its last s
 | 0 | Allow `nopayload`+`nowait` together (ablation composition) | **DONE** — closed the 2x2; see Target below. Fixed plumbing is 1.3 us, not the 13.4 us previously attributed to it |
 | 1 | Make the slot assignment schedule-driven: `own_slot`, `peer_slot` and a per-step `{src_slot, dst_slot}` become host-emitted writer args (`RingSlotArg`, 17..32) instead of being derived from the step counter | **DONE** — bit-identical (`468b790b823e2959` pre/post, and direct-L1 == staged), 12/12 both paths, perf neutral (118.3 vs 120.2) |
 | 2 | `RingSchedule.consume_pos[position][step]` becomes the single source of truth: the in1 reader takes the consume order as args 7..7+G-1, and the writer's `own_slot`/`dst_slot` are DERIVED from it by inverting the successor's map. Still today's rotation | **DONE** — bit-identical (`468b790b823e2959`, both paths), 12/12 both paths, perf neutral (118.95). Guards: schedule must be a permutation per position, and derived writer args must equal phase 1's `(s, s+1)` |
-| 3 | Switch to an arrival-aware schedule (host greedy list-schedule: each core forwards the earliest-available stripe its successor still needs; consumes in availability order). Unicast, still 7 forwards/core, identical on-chip traffic | PCC-only (re-associates the K-sum), and the perf win |
+| 3 | **Consume in availability order, not ring order.** Host computes `avail(o, c) = fabric_hops(o)*WAVE + on_chip_hops(o->c)*DELTA` from the stream plan, sorts each core's 8 chunks by it, and emits that as the schedule. Forwarding moves to the same order and must be issued BEFORE the consume wait, so a core blocked on its own late chunk keeps relaying. Unicast, still 7 forwards/core, identical fabric AND on-chip traffic | PCC-only (re-associates the K-sum — which is why phases 1-2 were held bit-identical), and the perf win. Target ~101 (`nowait`) vs 118.95 |
 | 4 | Per-slot readiness — only if needed | the spec's per-slot-epoch clause targets out-of-order BIDIRECTIONAL FABRIC arrivals; under direct-L1 each core takes exactly one fabric stripe and the on-chip receive order is static from phase 2, so verify the existing monotone count still suffices rather than adding machinery |
 | 5 | Re-measure `TT_AGMM_DIRECT_L1_BALANCED=1` | its burstiness penalty should shrink once the ordering constraint is gone |
 
