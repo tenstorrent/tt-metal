@@ -11,7 +11,7 @@ kernel, so we bind it directly. Captured input/output: `[1, 256, 416]` (channels
 first `[B, C, T]`).
 
 Implemented as a **matmul shifted tap-accumulate** conv (the same recipe the
-graduated `hifigan_generator` port uses — `ttnn.conv1d`'s halo path OOMs L1_SMALL,
+`hifigan_generator` port uses — `ttnn.conv1d`'s halo path OOMs L1_SMALL,
 and tap-accumulate lands at PCC ~1.0 in fp32). For a stride-1, groups-1 Conv1d:
 
     y[:, t, :] = sum_tap  x_pad[:, t + tap*dilation, :] @ W[:, :, tap]^T   (+ bias)
@@ -30,16 +30,17 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 def build(device, torch_module):
     """Bind the trained conv weight/bias and return a native ttnn forward closure."""
-    import torch
 
     m = torch_module
-    w = m.weight.detach().float()              # [C_out, C_in, k]
+    w = m.weight.detach().float()  # [C_out, C_in, k]
     c_out, c_in, k = w.shape
     stride = int(m.stride[0])
     dil = int(m.dilation[0])
     pad = int(m.padding[0])
     if stride != 1 or m.groups != 1:
-        raise RuntimeError(f"parametrized_conv1d native port supports stride-1 groups-1 only (got stride={stride}, groups={m.groups})")
+        raise RuntimeError(
+            f"parametrized_conv1d native port supports stride-1 groups-1 only (got stride={stride}, groups={m.groups})"
+        )
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -51,8 +52,10 @@ def build(device, torch_module):
     # Per-tap weight in x @ W orientation: W[:, :, tap]^T -> [C_in, C_out].
     taps = [
         ttnn.as_tensor(
-            w[:, :, tap].t().contiguous(), dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT, device=device,
+            w[:, :, tap].t().contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         for tap in range(k)
@@ -61,7 +64,9 @@ def build(device, torch_module):
     if m.bias is not None:
         bias = ttnn.as_tensor(
             m.bias.detach().reshape(1, 1, c_out).contiguous().float(),
-            dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

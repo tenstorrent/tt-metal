@@ -9,7 +9,7 @@ This ONE module is imported and called by BOTH the demo entrypoints
 test therefore guarantees a working demo — they run identical wiring.
 
 The chain mirrors `TTS.tts.models.xtts.Xtts.inference` and is composed entirely
-of the graduated native TTNN stubs under `_stubs/`:
+of the native TTNN modules under `tt/modules/`:
 
     speaker wav ─┬─(16 kHz)─> res_net_speaker_encoder ──> d-vector g [1,512,1]
                  └─(mel 80)──> conditioning_encoder ─> perceiver_resampler
@@ -86,9 +86,9 @@ def _install_resident_upload_cache():
 # ── stages, derived from the reference config (encoder-decoder-like + vocode) ──
 PIPELINE_STAGES = ["speaker_encode", "conditioning_encode", "gpt_prefill", "gpt_decode", "gpt_latents", "vocode"]
 
-# ── the 29 graduated stubs (name -> module path). Order is leaf->composite so
+# ── the 29 modules (name -> module path). Order is leaf->composite so
 #    the invocation tracker patches a child's build BEFORE a composite imports it.
-_STUB_ORDER = [
+_MODULE_ORDER = [
     # GPT leaves -> composites
     "conv1_d",
     "learned_position_embeddings",
@@ -123,9 +123,9 @@ _STUB_ORDER = [
     "hifigan_generator",
     "hifi_decoder",
 ]
-assert len(_STUB_ORDER) == 29
+assert len(_MODULE_ORDER) == 29
 
-_MODPATH = "models.demos.xtts_v2._stubs.{}"
+_MODPATH = "models.demos.xtts_v2.tt.modules.{}"
 
 # extra callable entry-points some composites import by a non-`build` name
 _EXTRA_ENTRYPOINTS = {
@@ -136,10 +136,10 @@ _EXTRA_ENTRYPOINTS = {
 INVOKED: dict[str, int] = {}
 
 
-def instrument_stubs():
-    """Wrap every graduated stub so its forward increments INVOKED[name].
+def instrument_modules():
+    """Wrap every module so its forward increments INVOKED[name].
 
-    Must be called BEFORE any composite stub is imported (i.e. at the very start
+    Must be called BEFORE any composite module is imported (i.e. at the very start
     of a fresh process) so `from child import build` inside composites captures
     the wrapped entry-point. Returns a restore() callable.
     """
@@ -171,8 +171,8 @@ def instrument_stubs():
 
         return wrapped
 
-    # Pass 1 — wrap each stub module's public entry-points (build + extras).
-    for name in _STUB_ORDER:
+    # Pass 1 — wrap each module module's public entry-points (build + extras).
+    for name in _MODULE_ORDER:
         mod = importlib.import_module(_MODPATH.format(name))
         if hasattr(mod, "build"):
             orig = mod.build
@@ -193,9 +193,9 @@ def instrument_stubs():
     # Pipeline) captured its children via `from child import build as _alias`,
     # freezing `_alias` to the UNWRAPPED build. Patching `child.build` in pass 1
     # does not touch that captured reference, so the child would never register as
-    # invoked. Scan every stub module and rebind any attribute still pointing at an
+    # invoked. Scan every module module and rebind any attribute still pointing at an
     # original entry-point to its wrapped counterpart (import-order independent).
-    for name in _STUB_ORDER:
+    for name in _MODULE_ORDER:
         mod = importlib.import_module(_MODPATH.format(name))
         for attr, val in list(vars(mod).items()):
             w = orig_to_wrapped.get(id(val))
@@ -332,7 +332,7 @@ def _select_next_on_device(last, gen_ids, base_mask, eye_v, penalty):
 
 
 class BuiltPipeline:
-    """Weight-resident XTTS-v2 pipeline: the graduated stubs are built ONCE, then
+    """Weight-resident XTTS-v2 pipeline: the modules are built ONCE, then
     reused for any number of utterances.
 
     Building uploads all 466.87 M parameters; doing that per utterance is the single
@@ -348,7 +348,7 @@ class BuiltPipeline:
         _restore_cache = _install_resident_upload_cache()
         try:
             gpt = model.gpt
-            # ── build the graduated native stubs (weights uploaded via as_tensor) ─────
+            # ── build the native modules (weights uploaded via as_tensor) ─────
             self.se_fwd = _build("res_net_speaker_encoder")(device, _resolve(model, "hifigan_decoder.speaker_encoder"))
             self.cond_fwd = _build("conditioning_encoder")(device, _resolve(model, "gpt.conditioning_encoder"))
             self.perc_fwd = _build("perceiver_resampler")(device, _resolve(model, "gpt.conditioning_perceiver"))
@@ -417,12 +417,12 @@ class BuiltPipeline:
         start_audio = int(gpt.start_audio_token)
         stop_audio = int(gpt.stop_audio_token)
         # Seed the (fixed) decoder prefix from the HF conditioning latent — a persistent
-        # buffer snapshotted into the inference stub at build time (host-free thereafter).
+        # buffer snapshotted into the inference module at build time (host-free thereafter).
         with torch.no_grad():
             cond_seed = _hf_cond_latent(model, ins["mel_chunk"]).to(torch.float32)  # [1,32,1024]
             gpt_inputs = gpt.compute_embeddings(cond_seed, text_tokens)
         prefix_len = int(gpt.gpt_inference.cached_prefix_emb.shape[1])
-        # Refresh the per-utterance prefix in the resident inference stub: the build is
+        # Refresh the per-utterance prefix in the resident inference module: the build is
         # reused across utterances, only this one buffer is re-uploaded (same as_tensor
         # upload path as the build-time snapshot, so numerics are identical).
         self.infer_fwd.set_prefix(gpt.gpt_inference.cached_prefix_emb)
@@ -561,7 +561,7 @@ class BuiltPipeline:
         if getattr(self, "_kv_blocks", None) is not None:
             return
         self._ensure_decode_common()
-        from models.demos.xtts_v2._stubs.g_p_t2_block import build_gpt2_block
+        from models.demos.xtts_v2.tt.modules.g_p_t2_block import build_gpt2_block
 
         device, gpt = self.device, self.model.gpt
         _restore_cache = _install_resident_upload_cache()
@@ -958,7 +958,7 @@ def forward_on_device(
     stream). `run_tts` wraps this with reference goldens + PCC for the correctness
     gate; the forward-only e2e test drives this directly to prove on-device residency.
 
-    This one-shot form rebuilds every stub per call; callers running more than one
+    This one-shot form rebuilds every module per call; callers running more than one
     utterance should hold a `build_pipeline` object and call `.forward` instead.
     """
     return build_pipeline(device, model).forward(text, language, ref_wav_22k, N, repetition_penalty, collect)

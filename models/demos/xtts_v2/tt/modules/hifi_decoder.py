@@ -22,7 +22,7 @@ module) and apply it as a native ttnn matmul:
     z[c, t_out] = sum_{t_in} latents[0, t_in, c] * M[t_in, t_out]
                 = (latents.transpose(1,2) @ M)
 
-The HiFi-GAN vocoder itself reuses the graduated native `hifigan_generator` port
+The HiFi-GAN vocoder itself reuses the native `hifigan_generator` port
 (`waveform_decoder`), whose forward already accepts the `[1, C, T]` activation and the
 `g` d-vector.
 """
@@ -30,8 +30,7 @@ The HiFi-GAN vocoder itself reuses the graduated native `hifigan_generator` port
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.hifigan_generator import build as _build_generator
+from models.demos.xtts_v2.tt.modules.hifigan_generator import build as _build_generator
 
 
 def build(device, torch_module):
@@ -54,7 +53,7 @@ def build(device, torch_module):
 
             # Push a time-identity through the exact reference interpolation chain
             # to materialize the [t_in, t_out] linear resampling map.
-            x = torch.eye(t_in).unsqueeze(0)                                  # [1, t_in, t_in]
+            x = torch.eye(t_in).unsqueeze(0)  # [1, t_in, t_in]
             mm = F.interpolate(x, scale_factor=[ar_mel / hop], mode="linear").squeeze(1)
             if out_sr != in_sr:
                 mm = F.interpolate(mm, scale_factor=[out_sr / in_sr], mode="linear").squeeze(0)
@@ -62,7 +61,10 @@ def build(device, torch_module):
             # precision-sensitive front (bf16 here measurably lowered e2e PCC).
             _m_cache[t_in] = ttnn.as_tensor(
                 mm.contiguous().to(torch.float32),
-                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return _m_cache[t_in]
 
@@ -70,9 +72,9 @@ def build(device, torch_module):
         t_in = int(latents.shape[1])
         M = _interp_matrix(t_in)
         if latents.get_dtype() != ttnn.float32:
-            latents = ttnn.typecast(latents, ttnn.float32)   # f32 interp for a clean vocoder input
-        lt = ttnn.transpose(latents, 1, 2)     # [1, C, t_in]
-        z = ttnn.matmul(lt, M)                 # [1, C, t_out]
+            latents = ttnn.typecast(latents, ttnn.float32)  # f32 interp for a clean vocoder input
+        lt = ttnn.transpose(latents, 1, 2)  # [1, C, t_in]
+        z = ttnn.matmul(lt, M)  # [1, C, t_out]
         return gen_forward(z, g=g)
 
     return forward

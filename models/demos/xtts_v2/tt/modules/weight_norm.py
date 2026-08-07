@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ttnn
 
-
 HF_MODEL_ID = "coqui/XTTS-v2"
 
 
@@ -46,18 +45,23 @@ def build(device, torch_module):
             if t.get_dtype() != ttnn.float32:
                 t = ttnn.typecast(t, ttnn.float32)
             return t
-        import torch
+
         t = t.contiguous().float()
         if _is_mesh(device):
             try:
                 return ttnn.as_tensor(
-                    t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                    t,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                 )
             except (AttributeError, TypeError):
                 pass
-        return ttnn.as_tensor(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
 
     def forward(weight_g, weight_v=None, *args, **kwargs):
         if weight_v is None:
@@ -75,9 +79,9 @@ def build(device, torch_module):
         sq = ttnn.multiply(v, v)
         for ax in sorted((a for a in range(rank) if a != d), reverse=True):
             sq = ttnn.sum(sq, dim=ax, keepdim=True)
-        inv_norm = ttnn.rsqrt(sq)                     # 1/‖v‖, broadcastable over the non-`d` axes
-        scale = ttnn.multiply(g, inv_norm)            # weight_g / ‖v‖
-        return ttnn.multiply(v, scale)                # weight_v * (weight_g / ‖v‖)
+        inv_norm = ttnn.rsqrt(sq)  # 1/‖v‖, broadcastable over the non-`d` axes
+        scale = ttnn.multiply(g, inv_norm)  # weight_g / ‖v‖
+        return ttnn.multiply(v, scale)  # weight_v * (weight_g / ‖v‖)
 
     return forward
 

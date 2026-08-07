@@ -6,7 +6,7 @@
 |---|---|---|
 | BH (Blackhole p300c), single chip | Supported, verified 2026-08-06 | one chip of a 4-chip QuietBox-2; requires a `TT_VISIBLE_DEVICES` pin + the single-chip mesh descriptor (see [Run](#run)). `l1_small_size=24576` |
 | Multi-chip mesh (TP/DP) | Not supported | the pipeline opens one device; no `ShardTensor*Mesh`, no collectives, no mesh mapper |
-| WH (Wormhole) | Not tested | nothing arch-specific in the stubs, but no run exists — do not assume it works |
+| WH (Wormhole) | Not tested | nothing arch-specific in the modules, but no run exists — do not assume it works |
 
 ## Introduction
 
@@ -14,7 +14,7 @@
 voice-cloning text-to-speech model: a GPT-2-style autoregressive text→mel-code decoder feeding a
 HiFi-GAN vocoder, conditioned on a speaker embedding taken from a reference wav. This port runs
 the full reference `Xtts.inference` chain (speaker encode → conditioning encode → AR mel-code
-decode → GPT latents → vocode) on Tenstorrent hardware through 29 native TTNN stubs, compared
+decode → GPT latents → vocode) on Tenstorrent hardware through 29 native TTNN modules, compared
 against the HuggingFace/coqui reference implementation.
 
 Parameter counts are measured from the real checkpoint, not estimated: **466.87 M total** —
@@ -96,9 +96,9 @@ gpt_latents, vocode]`. The chain is fully self-fed — no reference tensor is in
 | KV-cache | none by default — repeat-prefill; experimental `decode_mode="kv"`/`"trace"` opt-ins are accuracy-capped (see [Performance](#performance)) |
 | Component split (planner) | REUSE 3 / ADAPT 0 / NEW 29 |
 
-## Graduated modules (29, all invoked in the e2e path)
+## modules (29, all invoked in the e2e path)
 
-Ordered leaf → composite, as the pipeline builds them (`tt/pipeline.py::_STUB_ORDER`):
+Ordered leaf → composite, as the pipeline builds them (`tt/pipeline.py::_MODULE_ORDER`):
 
 | Subsystem | Modules |
 |---|---|
@@ -107,7 +107,7 @@ Ordered leaf → composite, as the pipeline builds them (`tt/pipeline.py::_STUB_
 | Speaker encoder (8) | `adaptive_avg_pool2d`, `s_e_layer`, `s_e_basic_block`, `instance_norm1d`, `mel_scale`, `mel_spectrogram`, `pre_emphasis`, `res_net_speaker_encoder` |
 | HiFi-GAN vocoder (7) | `weight_norm`, `parametrization_list`, `parametrized_conv1d`, `parametrized_conv_transpose1d`, `res_block1`, `hifigan_generator`, `hifi_decoder` |
 
-Invocation is proven by an execution tracker (`P.instrument_stubs()` / `P.INVOKED`) — each module
+Invocation is proven by an execution tracker (`P.instrument_modules()` / `P.INVOKED`) — each module
 is recorded when it actually runs, not by the caller's optimism.
 
 ## Precision
@@ -149,7 +149,7 @@ XTTS_E2E_N=40 python -m pytest models/demos/xtts_v2/tests/e2e/test_e2e_tts.py -s
 python -m models.demos.xtts_v2.demo.demo_tts \
     --text "hello world." --language en --tokens 40 --out /tmp/xtts_tt.wav
 
-# smoke: every stub forwards on device
+# smoke: every module forwards on device
 python -m pytest models/demos/xtts_v2/tests/e2e/test_00_forward_on_device.py -s
 
 # trace + 2CQ substrate self-tests and timing
@@ -170,8 +170,8 @@ valid 24 kHz WAV (44,544 samples) in the same session.
 
 | Gate | Result |
 |---|---|
-| Gate 1 — routed stubs composed as-is as native TTNN (no reference module substituted in the chain) | PASS (structural) |
-| Gate 2 — all 29 graduated modules invoked in the real forward path | **PASS 29/29** (`missing=[]`) |
+| Gate 1 — routed modules composed as-is as native TTNN (no reference module substituted in the chain) | PASS (structural) |
+| Gate 2 — all 29 modules invoked in the real forward path | **PASS 29/29** (`missing=[]`) |
 | Gate 3 — e2e waveform PCC vs HF reference ≥ 0.95 | **0.9904 PASS** |
 
 Per-stage PCC (each TT stage vs the HF reference run on the previous TT output; every stage gated
@@ -363,13 +363,9 @@ models/demos/xtts_v2/
   demo/demo_tts.py                   # runnable demo (argparse + __main__)
   tests/e2e/test_e2e_tts.py          # e2e gate: Gate 1/2/3 + per-stage PCC
   tests/e2e/test_accuracy_decomposition.py  # print-only: 2x2 ablation, sub-stage PCCs, log-mel
-  tests/e2e/test_00_forward_on_device.py   # per-stub device forward smoke
+  tests/e2e/test_00_forward_on_device.py   # per-module device forward smoke
   tests/e2e/test_tts_perf.py         # Tracy / 2CQ / trace-replay perf harness
   tests/e2e/test_trace_2cq*.py       # trace + 2CQ self-tests and timing
   tests/pcc/                         # 29 per-component PCC tests (need _captured/ goldens)
-  _stubs/*.py                        # the 29 graduated native TTNN stubs
+  tt/modules/*.py                    # the 29 native TTNN modules
 ```
-
-`_stubs/*.best_native`, `*.last_good_native` and `*.preiter_native` are the optimizer's per-attempt
-snapshots, kept for provenance. `_stubs/{cpp_bmm,cpp_reduce,ttl_bmm,reduce_ttl}.py` are custom-kernel
-helpers left over from the dropped tt-lang commits; no module on the verified path imports them.

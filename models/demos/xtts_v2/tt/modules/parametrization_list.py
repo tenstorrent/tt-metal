@@ -24,22 +24,20 @@ parameter reconstruction (the values, not the torch reference module).
 
 from __future__ import annotations
 
-import ttnn
-
-from models.demos.xtts_v2._stubs.weight_norm import build as _build_weight_norm
+from models.demos.xtts_v2.tt.modules.weight_norm import build as _build_weight_norm
 
 
 def build(device, torch_module):
     """Reconstruct the weight-norm weight natively in ttnn and return a forward closure."""
     pl = torch_module
-    g = pl.original0                            # magnitude `g` (weight_g), [C, 1, 1] (dim=0)
-    v = pl.original1                            # direction `v` (weight_v), [C, *rest]
+    g = pl.original0  # magnitude `g` (weight_g), [C, 1, 1] (dim=0)
+    v = pl.original1  # direction `v` (weight_v), [C, *rest]
 
     # Delegate the reparametrization to the weight_norm leaf, built from the
     # `_WeightNorm` parametrization (`pl[0]`). Its forward(weight_g, weight_v)
-    # returns the same reconstructed ttnn weight this stub computed inline.
+    # returns the same reconstructed ttnn weight this module computed inline.
     _wn_fwd = _build_weight_norm(device, pl[0])
-    weight = _wn_fwd(g, v)                       # [C, ...] reconstructed weight
+    weight = _wn_fwd(g, v)  # [C, ...] reconstructed weight
 
     def forward(*args, **kwargs):
         return weight

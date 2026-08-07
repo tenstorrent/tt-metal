@@ -16,15 +16,14 @@ Input `x` is a channels-first `(1, 80, T)` mel-like activation; output is
 
 The 1x1 init conv is a per-position linear over channels. Each of the 6
 attention blocks is structurally identical to the `attention_block` component,
-so we reuse its native ttnn builder (`_stubs.attention_block.build`) per block
+so we reuse its native ttnn builder (`tt.modules.attention_block.build`) per block
 rather than duplicating the group-norm/qkv/attention math.
 """
 
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.attention_block import build as _build_attention_block
+from models.demos.xtts_v2.tt.modules.attention_block import build as _build_attention_block
 
 
 def build(device, torch_module):
@@ -36,13 +35,17 @@ def build(device, torch_module):
     # 1x1 init conv weight -> [C_in=80, C_out=1024] (transpose of [C_out,C_in,1]).
     init_w = ttnn.as_tensor(
         m.init.weight.detach().squeeze(-1).t().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     c_out = m.init.weight.shape[0]
     init_b = ttnn.as_tensor(
         m.init.bias.detach().reshape(1, 1, c_out).contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -51,10 +54,10 @@ def build(device, torch_module):
 
     def forward(x, *args, **kwargs):
         # init conv: channels-first [1,C_in,T] -> tokens-last linear -> [1,C_out,T]
-        x_tl = ttnn.transpose(x, -2, -1)            # [1, T, C_in]
-        h = ttnn.matmul(x_tl, init_w)               # [1, T, C_out]
+        x_tl = ttnn.transpose(x, -2, -1)  # [1, T, C_in]
+        h = ttnn.matmul(x_tl, init_w)  # [1, T, C_out]
         h = ttnn.add(h, init_b)
-        h = ttnn.transpose(h, -2, -1)               # [1, C_out, T] channels-first
+        h = ttnn.transpose(h, -2, -1)  # [1, C_out, T] channels-first
 
         for blk in block_forwards:
             h = blk(h)

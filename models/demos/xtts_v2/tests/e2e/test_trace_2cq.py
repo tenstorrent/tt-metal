@@ -8,7 +8,7 @@ Opens a device with a trace region + 2 command queues, builds the Pipeline
 object, and runs `trace_capture_selftest`: for each stage it pins the sequence
 axis to a fixed capacity, captures ONE host-op-free step in
 begin/end_trace_capture, execute_trace, verifies PCC vs the eager reference, and
-releases the trace before the next stage. Stages whose graduated stub has
+releases the trace before the next stage. Stages whose module has
 unavoidable host ops are degraded to single-CQ eager with a printed fallback.
 """
 

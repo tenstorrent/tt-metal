@@ -31,7 +31,7 @@ gating math runs in float32. Input/output are NCHW to match the torch module.
 from __future__ import annotations
 
 import ttnn
-from models.demos.xtts_v2._stubs.s_e_layer import build as _b_se_layer
+from models.demos.xtts_v2.tt.modules.s_e_layer import build as _b_se_layer
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -100,7 +100,7 @@ def build(device, torch_module):
     W2, bias2 = fold_conv_bn(blk.conv2, blk.bn2)
     w2, b2 = conv_w(W2), conv_b(bias2)
 
-    # squeeze-excitation channel gate: graduated leaf stub (s_e_layer)
+    # squeeze-excitation channel gate: leaf module (s_e_layer)
     se_gate = _b_se_layer(device, blk.se)
 
     ds = None
@@ -224,7 +224,7 @@ def build(device, torch_module):
         out, oh, ow = run_conv(to_conv_in(out), w2, b2, planes, planes, 3, 1, 1, oh, ow)
         out = ttnn.typecast(out, ttnn.float32)
 
-        # SE gating (graduated leaf: s_e_layer) — stub is NCHW; out here is NHWC
+        # SE gating (leaf: s_e_layer) — module is NCHW; out here is NHWC
         out = ttnn.permute(out, (0, 3, 1, 2))  # NHWC -> NCHW
         out = se_gate(out)  # per-channel SE rescale
         out = ttnn.permute(out, (0, 2, 3, 1))  # NCHW -> NHWC

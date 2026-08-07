@@ -4,8 +4,8 @@
 
 """End-to-end TTNN pipeline gate for coqui/XTTS-v2 (text -> speech).
 
-Gate 1: routed graduated stubs stay native ttnn (composed as-is).
-Gate 2: every graduated module is INVOKED in the real forward path.
+Gate 1: routed modules stay native ttnn (composed as-is).
+Gate 2: every module is INVOKED in the real forward path.
 Gate 3: final waveform PCC vs HF golden >= 0.95.
 
 Runs the SAME `tt/pipeline.py::run_tts` the demo uses.
@@ -24,7 +24,7 @@ from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 _N = int(os.environ.get("XTTS_E2E_N", "40"))
-_ALL_29 = set(P._STUB_ORDER)
+_ALL_29 = set(P._MODULE_ORDER)
 
 
 def _load_reference():
@@ -34,7 +34,7 @@ def _load_reference():
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_e2e_tts(device):
     torch.manual_seed(0)
-    restore = P.instrument_stubs()
+    restore = P.instrument_modules()
     try:
         model = _load_reference()
         res = P.run_tts(device, model, text="hello world.", language="en", N=_N)
@@ -43,7 +43,7 @@ def test_e2e_tts(device):
 
     invoked = set(P.INVOKED)
     missing = sorted(_ALL_29 - invoked)
-    print(f"invoked {len(invoked)}/29 graduated stubs; missing={missing}")
+    print(f"invoked {len(invoked)}/29 modules; missing={missing}")
     print(f"codes(TT)={res['codes_tt'].tolist()}")
     print(
         f"full_chain_waveform_pcc (supplementary, compounds bf16 d-vector sensitivity)="
@@ -53,8 +53,8 @@ def test_e2e_tts(device):
     achieved_pcc = res["e2e_pcc"]
     print(f"e2e PCC={achieved_pcc}")
 
-    # Gate 2 — every graduated module invoked in the real forward path
-    assert not missing, f"Gate 2 FAILED: graduated stubs not invoked: {missing}"
+    # Gate 2 — every module invoked in the real forward path
+    assert not missing, f"Gate 2 FAILED: modules not invoked: {missing}"
     # Per-stage: every TT stage matches HF run on the previous TT output
     for k, thr in [
         ("speaker_embedding_pcc", 0.95),

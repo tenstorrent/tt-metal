@@ -15,7 +15,3 @@ _runtime_fallbacks.json
 kernel_findings.json
 e2e_plan.json
 .loader_blocker.txt
-_stubs/*.best_native
-_stubs/*.last_good_native
-_stubs/*.last_good_sharded
-_stubs/*.preiter_native

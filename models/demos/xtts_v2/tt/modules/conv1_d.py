@@ -29,12 +29,18 @@ def build(device, torch_module):
 
     weight = ttnn.as_tensor(
         m.weight.detach().contiguous().to(torch.bfloat16),  # [nx, nf], no transpose
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     nf = m.weight.shape[-1]
     bias = ttnn.as_tensor(
         m.bias.detach().reshape(1, 1, nf).contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # HiFi4 + fp32 accumulation: this projection feeds the 30-layer GPT2 stack whose
@@ -58,6 +64,5 @@ def build(device, torch_module):
 
 def conv1_d(x, *args, **kwargs):
     raise RuntimeError(
-        "conv1_d requires build(device, torch_module) to bind trained weights; "
-        "the bare callable has no parameters."
+        "conv1_d requires build(device, torch_module) to bind trained weights; " "the bare callable has no parameters."
     )

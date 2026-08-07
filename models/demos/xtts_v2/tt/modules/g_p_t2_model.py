@@ -32,8 +32,7 @@ values and are not needed (the captured mask is all-ones -> causal-only).
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.g_p_t2_block import build_gpt2_block
+from models.demos.xtts_v2.tt.modules.g_p_t2_block import build_gpt2_block
 
 _LN_EPS = 1e-5
 # Large negative additive bias for masked (future) positions; after softmax
@@ -51,11 +50,17 @@ def build(device, torch_module):
 
     lnf_w = ttnn.as_tensor(
         m.ln_f.weight.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     lnf_b = ttnn.as_tensor(
         m.ln_f.bias.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     _mask_cache = {}
@@ -66,12 +71,15 @@ def build(device, torch_module):
             m_t = torch.triu(torch.full((t, t), _MASK_NEG, dtype=torch.float32), diagonal=1)
             _mask_cache[t] = ttnn.as_tensor(
                 m_t.reshape(1, 1, t, t).to(torch.bfloat16),
-                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return _mask_cache[t]
 
     def forward(inputs_embeds, *args, **kwargs):
-        hidden = inputs_embeds                       # wpe == 0, drop == identity
+        hidden = inputs_embeds  # wpe == 0, drop == identity
         bias = _causal_bias(hidden.shape[1])
         for blk in block_forwards:
             hidden = blk(hidden, attn_bias=bias)

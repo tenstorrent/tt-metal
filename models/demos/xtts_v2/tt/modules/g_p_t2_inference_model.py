@@ -19,7 +19,7 @@ causal forward + LM head:
     hidden     = transformer(inputs_embeds=emb)          # causal GPT2
     logits     = mel_head(final_norm(hidden))            # lm_head = Sequential(norm, linear)
 
-The GPT2 transformer reuses the graduated native `g_p_t2_model` port. Embeddings,
+The GPT2 transformer reuses the native `g_p_t2_model` port. Embeddings,
 the final LayerNorm, the LM-head matmul, and all concat/slice run in ttnn. Only
 the integer `input_ids[:, prefix_len:]` slice runs on host (index arithmetic).
 
@@ -34,8 +34,8 @@ host torch tensors in **kwargs.
 from __future__ import annotations
 
 import ttnn
-from models.demos.xtts_v2._stubs.g_p_t2_model import build as _build_gpt2_model
-from models.demos.xtts_v2._stubs.learned_position_embeddings import build as _build_lpe
+from models.demos.xtts_v2.tt.modules.g_p_t2_model import build as _build_gpt2_model
+from models.demos.xtts_v2.tt.modules.learned_position_embeddings import build as _build_lpe
 
 _LN_EPS = 1e-5
 
@@ -46,7 +46,7 @@ def build(device, torch_module):
 
     m = torch_module
 
-    # GPT2 transformer stack (native, graduated port).
+    # GPT2 transformer stack (native, port).
     gpt2_forward = _build_gpt2_model(device, m.transformer.float())
 
     # Token embedding (ROW_MAJOR for ttnn.embedding).
@@ -57,8 +57,7 @@ def build(device, torch_module):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    # Absolute position-prefix lookup via the graduated
-    # learned_position_embeddings leaf stub (returns float32 [sl, D]).
+    # Absolute position-prefix lookup via the     # learned_position_embeddings leaf module (returns float32 [sl, D]).
     lpe = _build_lpe(device, m.pos_embedding)
 
     # lm_head = Sequential(final_norm: LayerNorm, mel_head: Linear).

@@ -27,9 +27,7 @@ from __future__ import annotations
 import math
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.mel_scale import build as _b_mel_scale
-
+from models.demos.xtts_v2.tt.modules.mel_scale import build as _b_mel_scale
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -49,7 +47,7 @@ def build(device, torch_module):
     extra_pad = int(getattr(spectro, "pad", 0))
     n_freqs = n_fft // 2 + 1
 
-    window = spectro.window.detach()                     # [win_length]
+    window = spectro.window.detach()  # [win_length]
     # Zero-pad the analysis window to n_fft, centered (torchaudio convention).
     w_full = torch.zeros(n_fft, dtype=torch.float32)
     off = (n_fft - win_length) // 2
@@ -57,14 +55,18 @@ def build(device, torch_module):
 
     n = torch.arange(n_fft).float()
     k = torch.arange(n_freqs).float()
-    ang = 2.0 * math.pi * torch.outer(n, k) / n_fft      # [n_fft, n_freqs]
-    w_cos = (w_full.unsqueeze(1) * torch.cos(ang)).contiguous()   # window folded into basis
+    ang = 2.0 * math.pi * torch.outer(n, k) / n_fft  # [n_fft, n_freqs]
+    w_cos = (w_full.unsqueeze(1) * torch.cos(ang)).contiguous()  # window folded into basis
     w_sin = (w_full.unsqueeze(1) * -torch.sin(ang)).contiguous()
 
-    Wcos = ttnn.as_tensor(w_cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    Wsin = ttnn.as_tensor(w_sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    Wcos = ttnn.as_tensor(
+        w_cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    Wsin = ttnn.as_tensor(
+        w_sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
-    # mel filterbank projection: graduated leaf stub (mel_scale)
+    # mel filterbank projection: leaf module (mel_scale)
     mel_scale = _b_mel_scale(device, mspec.mel_scale)
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -91,7 +93,9 @@ def build(device, torch_module):
                 xh = torch.nn.functional.pad(xh, (extra_pad, extra_pad))
             if center:
                 xh = torch.nn.functional.pad(xh, (n_fft // 2, n_fft // 2), mode=pad_mode)
-            xp = ttnn.as_tensor(xh.contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=DRAM)
+            xp = ttnn.as_tensor(
+                xh.contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=DRAM
+            )
         else:
             # Device input (host-free): the boundary pad is pure data movement done
             # on-device — constant `extra_pad` via a zero concat and the center reflect
@@ -107,8 +111,14 @@ def build(device, torch_module):
                 Lw = int(work.shape[1])
                 le = ttnn.to_layout(ttnn.slice(work, [0, 1], [1, p + 1]), ttnn.TILE_LAYOUT)
                 re = ttnn.to_layout(ttnn.slice(work, [0, Lw - p - 1], [1, Lw - 1]), ttnn.TILE_LAYOUT)
-                le = ttnn.to_layout(ttnn.matmul(le, Jrev, compute_kernel_config=compute_config, memory_config=DRAM), ttnn.ROW_MAJOR_LAYOUT)
-                re = ttnn.to_layout(ttnn.matmul(re, Jrev, compute_kernel_config=compute_config, memory_config=DRAM), ttnn.ROW_MAJOR_LAYOUT)
+                le = ttnn.to_layout(
+                    ttnn.matmul(le, Jrev, compute_kernel_config=compute_config, memory_config=DRAM),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+                re = ttnn.to_layout(
+                    ttnn.matmul(re, Jrev, compute_kernel_config=compute_config, memory_config=DRAM),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
                 work = ttnn.concat([le, work, re], dim=1, memory_config=DRAM)
             xp = work
 
@@ -135,9 +145,9 @@ def build(device, torch_module):
         if power != 2.0:
             spec = ttnn.pow(spec, power / 2.0)
 
-        spec_t = ttnn.permute(spec, (1, 0))              # [n_freqs, n_frames]
+        spec_t = ttnn.permute(spec, (1, 0))  # [n_freqs, n_frames]
         spec_t = ttnn.reshape(spec_t, (1, n_freqs, n_frames))
-        mel = mel_scale(spec_t)                          # [1, n_mels, n_frames]
+        mel = mel_scale(spec_t)  # [1, n_mels, n_frames]
         return mel
 
     return forward

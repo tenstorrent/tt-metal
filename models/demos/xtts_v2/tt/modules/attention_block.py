@@ -35,9 +35,8 @@ tensor; there are no extra tensor kwargs. All math below is native ttnn.
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.group_norm32 import build as _build_gn
-from models.demos.xtts_v2._stubs.q_k_v_attention_legacy import build as _build_qkv
+from models.demos.xtts_v2.tt.modules.group_norm32 import build as _build_gn
+from models.demos.xtts_v2.tt.modules.q_k_v_attention_legacy import build as _build_qkv
 
 _CHANNELS = 1024
 
@@ -61,41 +60,43 @@ def build(device, torch_module):
     def _w(t):
         return ttnn.as_tensor(
             t.contiguous().to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # GroupNorm32 handled by the graduated leaf stub (reads groups/eps/affine
+    # GroupNorm32 handled by the leaf module (reads groups/eps/affine
     # from m.norm); takes/returns channels-first [1, C, T].
     gn_fwd = _build_gn(device, m.norm)
 
-    # Multi-head QKV attention handled by the graduated leaf stub (reads
+    # Multi-head QKV attention handled by the leaf module (reads
     # n_heads from m.attention); takes head-major qkv [1, 3C, T] -> [1, C, T].
     qkv_fwd = _build_qkv(device, m.attention)
 
     # 1x1 conv weights -> [C_in, C_out] (transpose of conv's [C_out, C_in, 1]).
-    qkv_w = _w(m.qkv.weight.detach().squeeze(-1).t())        # [1024, 3072]
+    qkv_w = _w(m.qkv.weight.detach().squeeze(-1).t())  # [1024, 3072]
     qkv_b = _w(m.qkv.bias.detach().reshape(1, 1, 3 * _CHANNELS))
     proj_w = _w(m.proj_out.weight.detach().squeeze(-1).t())  # [1024, 1024]
     proj_b = _w(m.proj_out.bias.detach().reshape(1, 1, _CHANNELS))
 
     def forward(x, mask=None):
-        x_norm = gn_fwd(x)                                   # [1, C, T]
+        x_norm = gn_fwd(x)  # [1, C, T]
 
         # qkv = 1x1 conv on the normalized activation, produced head-major.
         # tokens-last for the linear, then back to channels-first for the leaf.
-        xn_tl = ttnn.transpose(x_norm, -2, -1)               # [1, T, C]
-        qkv = _linear_1x1(xn_tl, qkv_w, qkv_b)               # [1, T, 3C]
-        qkv_cf = ttnn.transpose(qkv, -2, -1)                 # [1, 3C, T] head-major
+        xn_tl = ttnn.transpose(x_norm, -2, -1)  # [1, T, C]
+        qkv = _linear_1x1(xn_tl, qkv_w, qkv_b)  # [1, T, 3C]
+        qkv_cf = ttnn.transpose(qkv, -2, -1)  # [1, 3C, T] head-major
 
-        # multi-head QKVAttentionLegacy via the graduated leaf stub.
-        a_cf = qkv_fwd(qkv_cf)                               # [1, C, T]
+        # multi-head QKVAttentionLegacy via the leaf module.
+        a_cf = qkv_fwd(qkv_cf)  # [1, C, T]
 
-        a_tl = ttnn.transpose(a_cf, -2, -1)                  # [1, T, C]
-        h = _linear_1x1(a_tl, proj_w, proj_b)                # [1, T, C]
-        h_cf = ttnn.transpose(h, -2, -1)                     # [1, C, T]
+        a_tl = ttnn.transpose(a_cf, -2, -1)  # [1, T, C]
+        h = _linear_1x1(a_tl, proj_w, proj_b)  # [1, T, C]
+        h_cf = ttnn.transpose(h, -2, -1)  # [1, C, T]
 
-        return ttnn.add(x_norm, h_cf)                        # tortoise_norm=False
+        return ttnn.add(x_norm, h_cf)  # tortoise_norm=False
 
     return forward
 

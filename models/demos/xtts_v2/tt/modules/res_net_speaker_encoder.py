@@ -24,7 +24,7 @@ Everything runs natively on device:
   * PreEmphasis  -> ttnn slice/concat + scaled subtract (no host op).
   * STFT/mel     -> windowed DFT and mel projection are pure `ttnn.matmul`;
                     only the reflect boundary pad (center=True) is host-side
-                    data movement, exactly as the graduated `mel_spectrogram`
+                    data movement, exactly as the `mel_spectrogram`
                     port does (ttnn has no reflect pad).
   * conv/bn/relu -> `ttnn.conv2d` with BatchNorm (eval) FOLDED into the
                     preceding conv weights where no nonlinearity intervenes,
@@ -42,10 +42,10 @@ runs bf16 activations with HiFi4 + fp32 accumulation for a clean PCC.
 from __future__ import annotations
 
 import ttnn
-from models.demos.xtts_v2._stubs.instance_norm1d import build as _b_inorm
-from models.demos.xtts_v2._stubs.mel_spectrogram import build as _b_mel
-from models.demos.xtts_v2._stubs.pre_emphasis import build as _b_pre
-from models.demos.xtts_v2._stubs.s_e_basic_block import build as _b_block
+from models.demos.xtts_v2.tt.modules.instance_norm1d import build as _b_inorm
+from models.demos.xtts_v2.tt.modules.mel_spectrogram import build as _b_mel
+from models.demos.xtts_v2.tt.modules.pre_emphasis import build as _b_pre
+from models.demos.xtts_v2.tt.modules.s_e_basic_block import build as _b_block
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -79,7 +79,7 @@ def build(device, torch_module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # ---- mel front-end: graduated leaf stubs (PreEmphasis -> MelSpectrogram -> InstanceNorm1d) ----
+    # ---- mel front-end: leaf modules (PreEmphasis -> MelSpectrogram -> InstanceNorm1d) ----
     pre_emph = _b_pre(device, se.torch_spec[0])
     mel_fe = _b_mel(device, se.torch_spec[1])
     inorm = _b_inorm(device, se.instancenorm)
@@ -116,10 +116,10 @@ def build(device, torch_module):
     bn1_a, bn1_b = bn_scale_shift(se.bn1)
     bn1_at, bn1_bt = affine_t(bn1_a), affine_t(bn1_b)
 
-    # ---- SE-ResNet blocks: graduated s_e_basic_block leaf stubs (NCHW) ----
-    block_stubs = []
+    # ---- SE-ResNet blocks: s_e_basic_block leaf modules (NCHW) ----
+    block_modules = []
     for layer in (se.layer1, se.layer2, se.layer3, se.layer4):
-        block_stubs.append([_b_block(device, b) for b in layer])
+        block_modules.append([_b_block(device, b) for b in layer])
 
     # ---- attention (Conv1d 1x1 == matmul over channels) ----
     att = se.attention
@@ -271,16 +271,16 @@ def build(device, torch_module):
         # (N,1,T) -> (1,T)
         x = ttnn.reshape(x, (1, -1))
 
-        # ---- PreEmphasis (graduated leaf: pre_emphasis) ----
+        # ---- PreEmphasis (leaf: pre_emphasis) ----
         y = pre_emph(x)  # [1, T]
 
-        # ---- MelSpectrogram STFT + mel projection (graduated leaf: mel_spectrogram) ----
+        # ---- MelSpectrogram STFT + mel projection (leaf: mel_spectrogram) ----
         mel = mel_fe(y)  # [1, 64, F]
 
         # ---- log_input ----
         mel = ttnn.log(ttnn.add(mel, 1e-6))
 
-        # ---- InstanceNorm1d over time (graduated leaf: instance_norm1d) ----
+        # ---- InstanceNorm1d over time (leaf: instance_norm1d) ----
         h = inorm(mel)  # [1, 64, F]
         n_mels = int(h.shape[1])
         F = int(h.shape[-1])
@@ -295,9 +295,9 @@ def build(device, torch_module):
         out = ttnn.relu(out)
         out = affine(out, bn1_at, bn1_bt)
 
-        # ---- SE-ResNet layers (graduated leaf: s_e_basic_block, NCHW) ----
-        out = ttnn.permute(out, (0, 3, 1, 2))  # NHWC -> NCHW for the block stubs
-        for layer in block_stubs:
+        # ---- SE-ResNet layers (leaf: s_e_basic_block, NCHW) ----
+        out = ttnn.permute(out, (0, 3, 1, 2))  # NHWC -> NCHW for the block modules
+        for layer in block_modules:
             for block in layer:
                 out = block(out)  # NCHW -> NCHW
 

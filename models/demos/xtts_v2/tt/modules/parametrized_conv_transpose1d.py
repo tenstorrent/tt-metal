@@ -14,7 +14,7 @@ A stride-`s` `ConvTranspose1d` is exactly a stride-1 `Conv1d` on the input with
 `s-1` zeros stuffed between samples, using the kernel flipped along `k` and with
 `(in, out)` transposed, symmetrically padded by `k - 1 - (k - s)//2` (the inverse
 of torch's `padding=(k-s)//2`). The stride-1 conv is then the same matmul
-tap-accumulate used by the graduated `hifigan_generator` / `parametrized_conv1d`
+tap-accumulate used by the `hifigan_generator` / `parametrized_conv1d`
 ports (fp32, HiFi4 -> PCC ~1.0; avoids `ttnn.conv1d`'s L1_SMALL halo OOM).
 
     y[:, t, :] = sum_tap  x_stuffed_pad[:, t + tap, :] @ Wc[:, :, tap]^T   (+ bias)
@@ -25,8 +25,7 @@ with `Wc = flip(W, k).permute(1,0,2)`  ->  `[out, in, k]`.
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.parametrization_list import build as _build_parametrization_list
+from models.demos.xtts_v2.tt.modules.parametrization_list import build as _build_parametrization_list
 
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -44,10 +43,10 @@ def build(device, torch_module):
         # weight m.weight would materialize, and stays ON DEVICE (no host round-trip),
         # so its output genuinely feeds the taps below.
         _pl_fwd = _build_parametrization_list(device, m.parametrizations.weight)
-        w_dev = _pl_fwd()                        # ttnn [C_in, C_out, k]
+        w_dev = _pl_fwd()  # ttnn [C_in, C_out, k]
         c_in, c_out, k = (int(d) for d in w_dev.shape)
     else:
-        w = m.weight.detach().float()            # [C_in, C_out, k]
+        w = m.weight.detach().float()  # [C_in, C_out, k]
         c_in, c_out, k = w.shape
     stride = int(m.stride[0])
     pad = int(m.padding[0])
@@ -73,7 +72,7 @@ def build(device, torch_module):
     if parametrized:
         # Extract taps ON DEVICE from the resident reconstructed weight (host-free):
         # permute k to the front, then slice one tap at a time.
-        wp = ttnn.permute(w_dev, (2, 0, 1))              # [k, C_in, C_out]
+        wp = ttnn.permute(w_dev, (2, 0, 1))  # [k, C_in, C_out]
         taps = []
         for tap in range(k):
             idx = k - 1 - tap
@@ -82,11 +81,13 @@ def build(device, torch_module):
             taps.append(ttnn.to_layout(sl, ttnn.TILE_LAYOUT))
         ttnn.deallocate(wp)
     else:
-        w_conv = torch.flip(w, dims=[-1]).permute(1, 0, 2).contiguous()   # [C_out, C_in, k]
+        w_conv = torch.flip(w, dims=[-1]).permute(1, 0, 2).contiguous()  # [C_out, C_in, k]
         taps = [
             ttnn.as_tensor(
-                w_conv[:, :, tap].t().contiguous(), dtype=ttnn.float32,   # [C_in, C_out]
-                layout=ttnn.TILE_LAYOUT, device=device,
+                w_conv[:, :, tap].t().contiguous(),
+                dtype=ttnn.float32,  # [C_in, C_out]
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for tap in range(k)
@@ -95,7 +96,9 @@ def build(device, torch_module):
     if m.bias is not None:
         bias = ttnn.as_tensor(
             m.bias.detach().reshape(1, 1, c_out).contiguous().float(),
-            dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

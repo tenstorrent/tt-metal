@@ -36,7 +36,7 @@ Conv1D (GPT2) is `y = x @ weight + bias` with weight `[nx, nf]` (already in
 from __future__ import annotations
 
 import ttnn
-from models.demos.xtts_v2._stubs.conv1_d import build as _build_conv1d
+from models.demos.xtts_v2.tt.modules.conv1_d import build as _build_conv1d
 
 _LN_EPS = 1e-5
 
@@ -92,7 +92,7 @@ def build_gpt2_block(device, torch_module):
     ln2_w, ln2_b = _w(m.ln_2.weight), _w(m.ln_2.bias)
 
     # GPT2 Conv1D projections (y = x @ weight + bias, weight [nx, nf], no
-    # transpose) run through the graduated conv1_d leaf stub. Its build binds
+    # transpose) run through the conv1_d leaf module. Its build binds
     # bf16 TILE weight/bias and its forward does matmul(x, w) + bias — byte
     # identical to the inline version the block used before.
     c_attn_fwd = _build_conv1d(device, attn.c_attn)  # 1024 -> 3072

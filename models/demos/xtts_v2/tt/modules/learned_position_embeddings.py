@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ttnn
 
-
 HF_MODEL_ID = "coqui/XTTS-v2"
 
 

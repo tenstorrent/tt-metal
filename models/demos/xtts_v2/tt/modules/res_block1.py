@@ -18,7 +18,7 @@ dilations (1, 3, 5)):
 dilation 1 (padding 1); weight-norm is folded (`.weight` materialized). Captured
 input/output `[1, 256, 416]` (channels-first `[B, C, T]`).
 
-Each `Conv1d` is the stride-1 matmul tap-accumulate used by the graduated
+Each `Conv1d` is the stride-1 matmul tap-accumulate used by the
 `hifigan_generator` / `parametrized_conv1d` ports (fp32, HiFi4). We transpose the
 activation to channels-last `[1, T, C]` once, run the whole block there, and
 transpose back to `[1, C, T]`.
@@ -34,7 +34,6 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 def build(device, torch_module):
     """Bind the resblock's conv weights and return a native ttnn forward closure."""
-    import torch
 
     m = torch_module
 
@@ -46,12 +45,14 @@ def build(device, torch_module):
     )
 
     def _prep(c):
-        w = c.weight.detach().float()          # [C_out, C_in, k]
+        w = c.weight.detach().float()  # [C_out, C_in, k]
         c_out, c_in, k = w.shape
         taps = [
             ttnn.as_tensor(
-                w[:, :, tap].t().contiguous(), dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT, device=device,
+                w[:, :, tap].t().contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for tap in range(k)
@@ -60,11 +61,12 @@ def build(device, torch_module):
         if c.bias is not None:
             bias = ttnn.as_tensor(
                 c.bias.detach().reshape(1, 1, c_out).contiguous().float(),
-                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        return {"taps": taps, "bias": bias, "k": k, "cin": c_in,
-                "dil": int(c.dilation[0]), "pad": int(c.padding[0])}
+        return {"taps": taps, "bias": bias, "k": k, "cin": c_in, "dil": int(c.dilation[0]), "pad": int(c.padding[0])}
 
     convs1 = [_prep(c) for c in m.convs1]
     convs2 = [_prep(c) for c in m.convs2]

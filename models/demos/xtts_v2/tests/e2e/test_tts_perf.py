@@ -7,7 +7,7 @@
 Builds the SAME chained TTNN pipeline as demo/demo_tts.py once
 (`models.demos.xtts_v2.tt.pipeline.build_pipeline`) and times its forward:
 text + speaker reference -> 24 kHz speech waveform, produced entirely by the
-graduated native TTNN stubs.
+native TTNN modules.
 
 This is a PERF-ONLY test: it runs the device forward IN-PROCESS (so Tracy can
 see every op), bounds the work so the profiler's marker buffer never overflows,

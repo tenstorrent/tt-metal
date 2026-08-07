@@ -6,7 +6,7 @@
 
 Runs the SAME chained TTNN pipeline as the e2e test (`tt/pipeline.py::run_tts`):
 text + speaker reference -> 24 kHz speech waveform, produced entirely by the
-graduated native TTNN stubs. Emits a .wav and prints the achieved PCC vs the
+native TTNN modules. Emits a .wav and prints the achieved PCC vs the
 HF/Coqui reference.
 
 Run:

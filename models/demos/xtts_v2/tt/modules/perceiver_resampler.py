@@ -26,28 +26,26 @@ FeedForward: Linear(1024->5460) -> GEGLU -> Linear(2730->1024) (both biased).
 RMSNorm: F.normalize(x,-1) * sqrt(dim) * gamma == rms_norm(x) * gamma.
 
 Captured: x `[1, 259, 1024]` -> `[1, 32, 1024]`. Everything runs natively in ttnn
-(float32 + HiFi4 matmuls); the GEGLU reuses the graduated `g_e_g_l_u` port.
+(float32 + HiFi4 matmuls); the GEGLU reuses the `g_e_g_l_u` port.
 """
 
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.attend import build as _build_attend
-from models.demos.xtts_v2._stubs.g_e_g_l_u import _geglu
+from models.demos.xtts_v2.tt.modules.attend import build as _build_attend
+from models.demos.xtts_v2.tt.modules.g_e_g_l_u import _geglu
 
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
 def build(device, torch_module):
     """Bind the trained perceiver weights and return a native ttnn forward closure."""
-    import torch
 
     m = torch_module.float()
 
     heads = int(m.layers[0][0].heads)
     # SDPA scaling (m.layers[i][0].scale == head_dim**-0.5) is applied inside the
-    # graduated `attend` leaf stub, so it is no longer needed here.
+    # `attend` leaf module, so it is no longer needed here.
     dim = int(m.latents.shape[-1])
     # q/k/v project to heads*dim_head (== 512 here), which can differ from `dim`.
     head_dim = int(m.layers[0][0].to_q.weight.shape[0]) // heads
@@ -61,47 +59,57 @@ def build(device, torch_module):
 
     def _w(t):
         return ttnn.as_tensor(
-            t.detach().contiguous().float(), dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT, device=device,
+            t.detach().contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _wt(t):
         # nn.Linear weight [out, in] -> [in, out] for x @ W.
         return ttnn.as_tensor(
-            t.detach().t().contiguous().float(), dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT, device=device,
+            t.detach().t().contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _b(t, n):
         return ttnn.as_tensor(
-            t.detach().reshape(1, 1, n).contiguous().float(), dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT, device=device,
+            t.detach().reshape(1, 1, n).contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     latents0 = ttnn.as_tensor(
         m.latents.detach().reshape(1, *m.latents.shape).contiguous().float(),
-        dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     layers = []
     for attn, ff in m.layers:
         inner = attn.to_q.weight.shape[0]  # heads*head_dim
-        layers.append({
-            "to_q": _wt(attn.to_q.weight),
-            "to_kv": _wt(attn.to_kv.weight),
-            "to_out": _wt(attn.to_out.weight),
-            # scaled-dot-product core via the graduated leaf stub (scale = d**-0.5).
-            "attend": _build_attend(device, attn.attend),
-            "inner": int(inner),
-            "fc1_w": _wt(ff[0].weight),
-            "fc1_b": _b(ff[0].bias, ff[0].weight.shape[0]),
-            "fc2_w": _wt(ff[2].weight),
-            "fc2_b": _b(ff[2].bias, ff[2].weight.shape[0]),
-        })
+        layers.append(
+            {
+                "to_q": _wt(attn.to_q.weight),
+                "to_kv": _wt(attn.to_kv.weight),
+                "to_out": _wt(attn.to_out.weight),
+                # scaled-dot-product core via the leaf module (scale = d**-0.5).
+                "attend": _build_attend(device, attn.attend),
+                "inner": int(inner),
+                "fc1_w": _wt(ff[0].weight),
+                "fc1_b": _b(ff[0].bias, ff[0].weight.shape[0]),
+                "fc2_w": _wt(ff[2].weight),
+                "fc2_b": _b(ff[2].bias, ff[2].weight.shape[0]),
+            }
+        )
 
     gamma = _b(m.norm.gamma, dim)
     norm_scale = float(m.norm.scale)  # == sqrt(dim); folded into gamma below
@@ -113,7 +121,7 @@ def build(device, torch_module):
         return ttnn.to_layout(ttnn.permute(x4, (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
 
     def _merge_heads(x):
-        x = ttnn.permute(x, (0, 2, 1, 3))            # [1, T, H, hd]
+        x = ttnn.permute(x, (0, 2, 1, 3))  # [1, T, H, hd]
         _, t, h, hd = x.shape
         return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, t, h * hd)), ttnn.TILE_LAYOUT)
 
@@ -126,21 +134,21 @@ def build(device, torch_module):
         for L in layers:
             inner = L["inner"]
             # cross-attention with queries included in the context
-            context = ttnn.concat([latents, x], dim=1)                 # [1, nq+T, dim]
-            q = ttnn.matmul(latents, L["to_q"], compute_kernel_config=compute_config)   # [1, nq, inner]
+            context = ttnn.concat([latents, x], dim=1)  # [1, nq+T, dim]
+            q = ttnn.matmul(latents, L["to_q"], compute_kernel_config=compute_config)  # [1, nq, inner]
             kv = ttnn.matmul(context, L["to_kv"], compute_kernel_config=compute_config)  # [1, nq+T, 2*inner]
             ctx_t = int(context.shape[1])
             k = ttnn.slice(kv, [0, 0, 0], [1, ctx_t, inner])
             v = ttnn.slice(kv, [0, 0, inner], [1, ctx_t, 2 * inner])
 
-            qh = _split_heads(q, nq)                                   # [1, H, nq, hd]
-            kh = _split_heads(k, ctx_t)                                # [1, H, ctx_t, hd]
+            qh = _split_heads(q, nq)  # [1, H, nq, hd]
+            kh = _split_heads(k, ctx_t)  # [1, H, ctx_t, hd]
             vh = _split_heads(v, ctx_t)
 
-            # scaled-dot-product attention via the graduated `attend` leaf stub
+            # scaled-dot-product attention via the `attend` leaf module
             # (plain SDPA, scale = hd**-0.5 == this layer's `scale`).
-            out = L["attend"](qh, kh, vh)                             # [1, H, nq, hd]
-            out = _merge_heads(out)                                    # [1, nq, inner]
+            out = L["attend"](qh, kh, vh)  # [1, H, nq, hd]
+            out = _merge_heads(out)  # [1, nq, inner]
             attn_out = ttnn.matmul(out, L["to_out"], compute_kernel_config=compute_config)  # [1, nq, dim]
             latents = ttnn.add(attn_out, latents)
 

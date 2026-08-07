@@ -13,7 +13,7 @@ input tensor. Captured shapes: in/out `[1, 64, 768]`.
 
 from __future__ import annotations
 
-import ttnn  # noqa: F401  (kept for interface consistency across stubs)
+import ttnn  # noqa: F401  (kept for interface consistency across modules)
 
 
 def build(device, torch_module):

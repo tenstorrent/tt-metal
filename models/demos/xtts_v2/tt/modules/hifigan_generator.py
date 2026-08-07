@@ -39,11 +39,9 @@ torch's ``padding=(k-stride)//2``. All conv hyper-params are read from the torch
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.parametrized_conv1d import build as _build_conv1d
-from models.demos.xtts_v2._stubs.parametrized_conv_transpose1d import build as _build_conv_transpose1d
-from models.demos.xtts_v2._stubs.res_block1 import build as _build_res_block1
-
+from models.demos.xtts_v2.tt.modules.parametrized_conv1d import build as _build_conv1d
+from models.demos.xtts_v2.tt.modules.parametrized_conv_transpose1d import build as _build_conv_transpose1d
+from models.demos.xtts_v2.tt.modules.res_block1 import build as _build_res_block1
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -52,7 +50,6 @@ _LRELU = 0.1  # slope used inside the upsample loop and the ResBlocks
 
 def build(device, torch_module):
     """Bind the trained HiFi-GAN weights and return a native ttnn forward closure."""
-    import torch
 
     m = torch_module
 
@@ -104,8 +101,8 @@ def build(device, torch_module):
             "dil": c.dilation[0],
         }
 
-    # conv_pre / conv_post / ups / resblocks are delegated to the graduated leaf
-    # stubs (channels-first [1, C, T]); the cond_layer / conds 1x1 cond-bias convs
+    # conv_pre / conv_post / ups / resblocks are delegated to the leaf
+    # modules (channels-first [1, C, T]); the cond_layer / conds 1x1 cond-bias convs
     # stay on the local prep_conv1d + do_conv path.
     conv_pre_fwd = _build_conv1d(device, m.conv_pre)
     has_cond = hasattr(m, "cond_layer")
@@ -194,15 +191,14 @@ def build(device, torch_module):
 
     def cond_bias(g_torch, spec):
         """1x1 conv on the (time-invariant) d-vector g -> per-channel bias [1, 1, out_ch]."""
-        import torch
 
         g = g_torch
         if isinstance(g, ttnn.Tensor):
             # Host-free: g is a device [1, cond_channels, 1] (or [1, C, T]); take the
             # first time step and move channels to the last axis via ttnn ops only.
             in_ch = spec["in_ch"]
-            gg = ttnn.slice(g, [0, 0, 0], [1, in_ch, 1])          # [1, C, 1]
-            gt = ttnn.permute(gg, (0, 2, 1))                      # [1, 1, C]
+            gg = ttnn.slice(g, [0, 0, 0], [1, in_ch, 1])  # [1, C, 1]
+            gt = ttnn.permute(gg, (0, 2, 1))  # [1, 1, C]
             gt = ttnn.to_layout(gt, ttnn.TILE_LAYOUT)
             if gt.get_dtype() != ttnn.float32:
                 gt = ttnn.typecast(gt, ttnn.float32)
@@ -223,25 +219,25 @@ def build(device, torch_module):
             xx = x
             if len(xx.shape) == 2:
                 xx = ttnn.reshape(xx, (1, int(xx.shape[0]), int(xx.shape[1])))
-            xx = ttnn.permute(xx, (0, 2, 1))            # [1, T, C]
+            xx = ttnn.permute(xx, (0, 2, 1))  # [1, T, C]
             xx = ttnn.to_layout(xx, ttnn.TILE_LAYOUT)
             if xx.get_dtype() != ttnn.float32:
                 xx = ttnn.typecast(xx, ttnn.float32)
             return xx
         t = torch.as_tensor(x)
         if t.dim() == 2:
-            t = t.unsqueeze(0)                # [1, C, T]
+            t = t.unsqueeze(0)  # [1, C, T]
         t = t.reshape(1, t.shape[-2], t.shape[-1]).permute(0, 2, 1).contiguous().float()
         return ttnn.as_tensor(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
 
     def forward(x, g=None, *args, **kwargs):
-        o = _to_1LC(x)                           # [1, T, 1024]
+        o = _to_1LC(x)  # [1, T, 1024]
         # conv_pre via the parametrized_conv1d leaf (channels-first [1, C, T]).
-        o_cf = ttnn.transpose(o, 1, 2)           # [1, T, 1024] -> [1, 1024, T]
+        o_cf = ttnn.transpose(o, 1, 2)  # [1, T, 1024] -> [1, 1024, T]
         _free(o)
-        o_cf2 = conv_pre_fwd(o_cf)               # [1, 512, T]
+        o_cf2 = conv_pre_fwd(o_cf)  # [1, 512, T]
         _free(o_cf)
-        o = ttnn.transpose(o_cf2, 1, 2)          # [1, 512, T] -> [1, T, 512]
+        o = ttnn.transpose(o_cf2, 1, 2)  # [1, 512, T] -> [1, T, 512]
         _free(o_cf2)
         if has_cond:
             cb = cond_bias(g, cond_layer)
@@ -253,11 +249,11 @@ def build(device, torch_module):
             o = ttnn.leaky_relu(o, _LRELU, memory_config=DRAM)
             _free(prev)
             # ups[i] via the parametrized_conv_transpose1d leaf (channels-first).
-            o_cf = ttnn.transpose(o, 1, 2)       # [1, T, C] -> [1, C, T]
+            o_cf = ttnn.transpose(o, 1, 2)  # [1, T, C] -> [1, C, T]
             _free(o)
-            o_cf2 = ups_fwd[i](o_cf)             # [1, C', T_out]
+            o_cf2 = ups_fwd[i](o_cf)  # [1, C', T_out]
             _free(o_cf)
-            o = ttnn.transpose(o_cf2, 1, 2)      # [1, C', T_out] -> [1, T_out, C']
+            o = ttnn.transpose(o_cf2, 1, 2)  # [1, C', T_out] -> [1, T_out, C']
             _free(o_cf2)
             if cond_in_each:
                 cb = cond_bias(g, conds[i])
@@ -266,7 +262,7 @@ def build(device, torch_module):
                 _free(prev, cb)
             # MRF: mean over resblocks via the res_block1 leaf (channels-first);
             # the leaf leaves its input intact so o_cf is shared across kernels.
-            o_cf = ttnn.transpose(o, 1, 2)       # [1, T, C] -> [1, C, T]
+            o_cf = ttnn.transpose(o, 1, 2)  # [1, T, C] -> [1, C, T]
             _free(o)
             z_sum = None
             for j in range(num_kernels):
@@ -286,11 +282,11 @@ def build(device, torch_module):
         o = ttnn.leaky_relu(o, 0.01, memory_config=DRAM)  # final slope is torch's default
         _free(prev)
         # conv_post via the parametrized_conv1d leaf (channels-first [1, C, T]).
-        o_cf = ttnn.transpose(o, 1, 2)           # [1, T, C] -> [1, C, T]
+        o_cf = ttnn.transpose(o, 1, 2)  # [1, T, C] -> [1, C, T]
         _free(o)
-        o_cf2 = conv_post_fwd(o_cf)              # [1, 1, T_out]
+        o_cf2 = conv_post_fwd(o_cf)  # [1, 1, T_out]
         _free(o_cf)
-        o = ttnn.transpose(o_cf2, 1, 2)          # [1, 1, T_out] -> [1, T_out, 1]
+        o = ttnn.transpose(o_cf2, 1, 2)  # [1, 1, T_out] -> [1, T_out, 1]
         _free(o_cf2)
         prev = o
         o = ttnn.tanh(o, memory_config=DRAM)

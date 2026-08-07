@@ -38,9 +38,9 @@ def build(device, torch_module):
 
         # Build the reflect-shifted signal: [x[1], x[0], x[1], ..., x[T-2]].
         xr = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        first = ttnn.slice(xr, [0, 1], [1, 2])          # x[1]
-        head = ttnn.slice(xr, [0, 0], [1, n - 1])       # x[0 : T-1]
-        shift = ttnn.concat([first, head], dim=1)       # [1, T]
+        first = ttnn.slice(xr, [0, 1], [1, 2])  # x[1]
+        head = ttnn.slice(xr, [0, 0], [1, n - 1])  # x[0 : T-1]
+        shift = ttnn.concat([first, head], dim=1)  # [1, T]
         shift = ttnn.to_layout(shift, ttnn.TILE_LAYOUT)
 
         return ttnn.subtract(x, ttnn.multiply(shift, coef))
@@ -50,6 +50,5 @@ def build(device, torch_module):
 
 def pre_emphasis(*args, **kwargs):
     raise RuntimeError(
-        "pre_emphasis requires build(device, torch_module) to bind the coefficient; "
-        "use build(device, torch_module)."
+        "pre_emphasis requires build(device, torch_module) to bind the coefficient; " "use build(device, torch_module)."
     )

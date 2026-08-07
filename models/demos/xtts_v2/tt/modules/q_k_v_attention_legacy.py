@@ -55,7 +55,7 @@ def build(device, torch_module):
         x = ttnn.reshape(ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT), (bs * n_heads, 3 * ch, length))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         B = bs * n_heads
-        q = ttnn.slice(x, [0, 0, 0], [B, ch, length])                       # [B, ch, T]
+        q = ttnn.slice(x, [0, 0, 0], [B, ch, length])  # [B, ch, T]
         k = ttnn.slice(x, [0, ch, 0], [B, 2 * ch, length])
         v = ttnn.slice(x, [0, 2 * ch, 0], [B, 3 * ch, length])
 
@@ -71,9 +71,14 @@ def build(device, torch_module):
         k4 = ttnn.typecast(ttnn.reshape(ttnn.transpose(k, -2, -1), (1, B, length, ch)), ttnn.bfloat16)
         v4 = ttnn.typecast(ttnn.reshape(ttnn.transpose(v, -2, -1), (1, B, length, ch)), ttnn.bfloat16)
         attn = ttnn.transformer.scaled_dot_product_attention(
-            q4, k4, v4, is_causal=False, scale=scale2, compute_kernel_config=compute_config,
-        )                                                                    # [1,B,T,ch]
-        a = ttnn.reshape(ttnn.transpose(attn, -2, -1), (B, ch, length))      # [B,ch,T]
+            q4,
+            k4,
+            v4,
+            is_causal=False,
+            scale=scale2,
+            compute_kernel_config=compute_config,
+        )  # [1,B,T,ch]
+        a = ttnn.reshape(ttnn.transpose(attn, -2, -1), (B, ch, length))  # [B,ch,T]
 
         # [bs*H, ch, T] -> [bs, H*ch, T]
         a = ttnn.reshape(ttnn.to_layout(a, ttnn.ROW_MAJOR_LAYOUT), (bs, n_heads * ch, length))
