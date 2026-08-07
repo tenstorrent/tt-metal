@@ -42,45 +42,45 @@ points. Plain `§1`–`§6` are sections here. Claims corrected along the way ar
 measured as reachable from the advisor's own directions on the same decoders. Both are lower bounds — nine cells
 were never probed for a better configuration, and eight cell/kinds were never fully traced.
 
-`FN` = `fuse-noadvise`, `B` = `nofuse-noadvise`, `onA` = `nofuse-noadvise-onA`. The `-onA` suffix says where
-that cell's *incumbent* came from — **all 15 cells ran on the same host**, so no difference below is a
-hardware difference.
+Each row is one cell. Where a cell measured more than one layer kind, each kind is on its own line, in the
+same order across every column.
 
-The last column is **what was measured to be reachable from the advisor's own directions on that same decoder**:
-how much better each cell could have been had the advice been followed more closely. It is per-layer on the named
-kind. **A blank is an absence of measurement, not a measured zero.**
-
-| model | cell | control ms/layer | what v2 shipped | v2 result | **reachable (measured)** |
+| model | arm | control ms/layer | what it shipped | result | reachable (measured) |
 |---|---|---|---|---|---|
-| llama-3.2-1B | exp17 | 0.3731 | nothing | 0.0 % | — *ladder never swept* |
-| llama-3.1-8B | exp17 | 0.6650 | nothing | 0.0 % | **0.0 % — tested**, full ladder swept, nothing beat the default |
-| phi-3.5-mini | **onA** | 0.6570 | `rope_l1_rect32` | **−8.75 %** | — **not tested** |
-| phi-3.5-mini | **B** | 0.7888 | `rope_l1_chain`, sharded multiply/add | **−5.74 %** | — **not tested**, but see the note below |
-| phi-3.5-mini | **FN** | 0.8072 | rope only, L1 interleaved | −4.91 % | **−17.84 % / layer** — the advised rope (−10.43 %, *bit-identical*) plus the advised 11-core norm |
-| phi-3.5-mini | exp17 | 1.1009 | nothing | 0.0 % | — *advised sharding never tried* |
-| qwen3.6-27B | **FN** | 1.2083 full / 19.14 linear | `packed_qkv_l1_chain` | −445.7 µs — inside its ±618.5 µs band | — *its `linear` kind, 97 % of model time, was never advised on* |
-| qwen3.6-27B | **B** | 1.4494 full / 15.85 linear | nothing | 0.0 % | — *same; geometry hard-failed on the rest* |
-| gemma-4-12B | exp11 | 1.2541 / 1.3774 | `Q+K+V+MLP` + output chain | **−1.14 %** | — *52 measurements, no advised grid among them* |
-| gemma-4-26B | **B** | 1.2597 | `sliding_attention_o_chain` | −147.9 µs *(−0.34 %/layer sliding)* | **−12.44 % / layer** — a win it wrote, shipped disabled, never screened. **36×** |
-| gemma-4-26B | **onA** | 1.8252 | `advisor_norm88` | **−12.98 %** | **−13.63 % / layer** — 44 cores beats the advised 88, bit-identically |
-| gemma-4-26B | **FN** | 1.3412 / 1.5394 | `advisor_concat_projection` | **−2.04 %** *(−1.69 %/layer sliding)* | −1.86 % / layer sliding — *only 0.17 pp; the 88-core norm regressed here and was correctly rejected* |
-| north-mini | **FN** | 0.5537 MoE | MoE norm at 32 cores | **−10.23 %** *(−10.37 %/layer sliding MoE)* | **−11.28 % / layer** — 16 cores beats both the advised 22 and the shipped 32 |
-| north-mini | **B** | 0.6138 / 0.2033 | nothing | 0.0 % | **coverage-limited, not headroom-limited** — 2 tracer handlers open 11 candidates worth **632 µs/model** |
-| north-mini | **onA** | 0.2918 / 0.8465 | nothing | 0.0 % | sparse MoE now traceable — 2 candidates, 61.9 µs/model |
+| llama-3.2-1B | `exp17` | `dense` 0.3731 | nothing | 0.0 % | — *ladder never swept* |
+| llama-3.1-8B | `exp17` | `dense` 0.6650 | nothing | 0.0 % | **0.0 %, tested** — full ladder swept, nothing beat the default |
+| phi-3.5-mini | `exp17` | `dense` 1.1009 | nothing | 0.0 % | — *advised sharding never tried* |
+| phi-3.5-mini | `nofuse-noadvise-onA` | `dense` 0.6570 | `rope_l1_rect32` | **−8.75 %** | — *never probed* |
+| phi-3.5-mini | `nofuse-noadvise` | `dense` 0.7888 | `rope_l1_chain`, sharded multiply/add | **−5.74 %** | — *never probed; see the note below* |
+| phi-3.5-mini | `fuse-noadvise` | `dense` 0.8072 | rope only, L1 interleaved | −4.91 % | **−17.84 %** — the advised rope (−10.43 %, *bit-identical*) plus the advised 11-core norm |
+| qwen3.6-27B | `fuse-noadvise` | `full_attention` 1.2083<br>`linear_attention` 19.1402 | `packed_qkv_l1_chain` | −445.7 µs/model<br>*inside its ±618.5 µs band* | — *`linear_attention`, 97 % of model time, was never advised on* |
+| qwen3.6-27B | `nofuse-noadvise` | `full_attention` 1.4494<br>`linear_attention` 15.8526 | nothing | 0.0 % | — *same coverage gap; the geometry hard-failed on the rest* |
+| gemma-4-12B | `exp11` | `sliding_attention` 1.2541<br>`full_attention` 1.3774 | `Q+K+V+MLP` + output chain | **−1.14 %** | — *52 measurements, no advised grid among them* |
+| gemma-4-26B | `nofuse-noadvise` | `sliding_attention` 1.2597<br>`full_attention` 1.2617 | `sliding_attention_o_chain` | −147.9 µs/model<br>−0.34 % on `sliding_attention` | **−12.44 %** on `sliding_attention` — a win it wrote, shipped disabled, never screened. **36×** |
+| gemma-4-26B | `nofuse-noadvise-onA` | `sliding_attention` 1.8252<br>`full_attention` 2.0132 | `advisor_norm88` | **−12.98 %** on `sliding_attention` | **−13.63 %** — 44 cores beats the advised 88, bit-identically |
+| gemma-4-26B | `fuse-noadvise` | `sliding_attention` 1.3412<br>`full_attention` 1.5394 | `advisor_concat_projection` | **−2.04 %**<br>−1.69 % on `sliding_attention` | −1.86 % on `sliding_attention` — *only 0.17 pp; the 88-core norm regressed here and was correctly rejected* |
+| north-mini | `fuse-noadvise` | `dense_full_attention` 0.1727<br>MoE kinds 0.5537 | MoE norm at 32 cores | **−10.23 %**<br>−10.37 % on `sliding_attention_moe` | **−11.28 %** — 16 cores beats both the advised 22 and the shipped 32 |
+| north-mini | `nofuse-noadvise` | `dense_full_forced_rope` 0.2033<br>MoE kinds 0.6138 | nothing | 0.0 % | **coverage-limited, not headroom-limited** — 2 tracer handlers open 11 candidates worth **632 µs/model** |
+| north-mini | `nofuse-noadvise-onA` | `dense_full_attention` 0.2918<br>sparse MoE kinds 0.8465 | nothing | 0.0 % | sparse MoE now traceable — 2 candidates, **61.9 µs/model** |
 
-**8 shipped, 7 returned zero.**
-
-*`v2 result` is at the cell's own scope — model-level % where it had one, µs where it did not. `reachable` is
-per-layer on the named kind. The two are not directly subtractable; the corpus totals that combine them are in §4
+*`result` is at the cell's own scope: the model-level figure it claimed, with the per-layer figure on the named
+kind beneath it where the two differ. `reachable` is always per-layer on the kind named in the same row, and is*
+**what was measured to be reachable from the advisor's own directions on that same decoder** *— how much better
+the cell could have been had the advice been followed more closely. A blank is an absence of measurement, not a
+measured zero, and the two columns are not directly subtractable; the corpus totals that combine them are in §4
 and* [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) *§3.11.*
 
-⚠ **The reachable column covers 6 of 15 cells.** Five have a measured better configuration; llama-3.1-8B was
+*All 15 cells ran on the same host, so nothing above is a hardware difference — the arm name says only how that
+cell's incumbent decoder was produced.*
+
+⚠ **The reachable column covers 6 of 15 cells.** Five have a measured better configuration; llama-3.1-8B `exp17` was
 swept and has nothing further. The other nine were never probed. **So the corpus reachable total — and the 64 %
 credited figure derived from it — are lower bounds.**
 
-**The cheapest place to look next is phi B**, on an inference rather than a measurement: it shipped the *sharded
-multiply/add* form of the rope chain, which on phi FN's decoder is worth −6.97 % against −10.43 % for the fully
-advised form. If that ordering holds on phi B's own incumbent — untested — phi B has headroom too.
+**The cheapest place to look next is phi-3.5-mini `nofuse-noadvise`**, on an inference rather than a measurement:
+it shipped the *sharded multiply/add* form of the rope chain, which on the `fuse-noadvise` decoder is worth
+−6.97 % against −10.43 % for the fully advised form. If that ordering holds on its own incumbent — untested — it
+has headroom too.
 
 ### How solid are the zeros?
 
@@ -89,16 +89,16 @@ different weight. Only one of the seven is verified by measurement:
 
 | cell | zero because | how well established |
 |---|---|---|
-| **llama-3.1-8B** | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win |
-| llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
-| phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
-| qwen3.6-27B B | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stops inside it — **63.5 % of that layer is `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect |
-| north-mini onA | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the ceiling from 0.66× the noise floor to **10.09×** — **2 candidates worth 61.9 µs/model** that did not exist before. §3.5 |
-| north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
-| qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
+| **llama-3.1-8B** `exp17` | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win |
+| llama-3.2-1B `exp17` | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
+| phi-3.5 `exp17` | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi-3.5 `fuse-noadvise` — was **never tried here** |
+| qwen3.6-27B `nofuse-noadvise` | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stops inside it — **63.5 % of that layer is `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect |
+| north-mini `nofuse-noadvise-onA` | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the ceiling from 0.66× the noise floor to **10.09×** — **2 candidates worth 61.9 µs/model** that did not exist before. §3.5 |
+| north-mini `nofuse-noadvise` | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
+| qwen3.6-27B `fuse-noadvise` | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
 
 **1 verified, 1 asserted, 1 reasonable, 1 partial, and at least 3 of these seven are coverage gaps** — with
-north-mini B and FN, which this table grades as reasonable and untested, now also known to have been
+north-mini `nofuse-noadvise` and `fuse-noadvise`, which this table grades as reasonable and untested, now also known to have been
 coverage-limited. So "7 of 15 returned zero" is true and misleading: for most of them nobody had shown the advisor
 the layer. The zero records a tracer limitation, not a measurement.
 
@@ -115,7 +115,7 @@ Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEAS
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. Both figures are lower bounds: nine cells were never probed for a better configuration, and eight cell/kinds were never fully traced. |
 | **What is the single biggest miss?** | The **screening order**. The harness builds candidates up chain by chain from the frozen incumbent and never applies the optimizer's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % against the −4.88 % that shipped — 3.7×** — and −10.43 % of that is **bit-identical** to the incumbent. Nobody tried it. |
 | **Did the cells follow the advice?** | **7 of 15 tried the advisor's exact value on at least one advised item**, 6 as their first candidate, and all 7 ended cleanly. **4 never tried it and recorded no reason. None applied the whole plan.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly not the optimizer's. Only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **At least 5 are coverage gaps** — the tracer never showed the advisor those layers, so the stage produced no verdict either way. Every real tracer gap is now fixed and re-measured: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). |
+| **Are the zeros failures?** | Mostly not the optimizer's. Only **1 of 7 is verified by measurement** (llama-3.1-8B `exp17`, whose whole ladder was swept). **At least 5 are coverage gaps** — the tracer never showed the advisor those layers, so the stage produced no verdict either way. Every real tracer gap is now fixed and re-measured: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). |
 | **Whose defects?** | **10 in the stage**, almost all one-file changes with no build, and they account for the larger measured loss. **6 in the optimizer or its reporting**, needing tt-mlir work. The ledger is §3. |
 
 **The surrounding tooling is new, and it shows — which is the good news.** `ttnn-jit` is ten months old and
@@ -134,7 +134,7 @@ incoming memory configurations entirely and re-places every op from scratch, and
 answer — four runs in **18.4 / 18.4 / 18.1 / 18.6 s**. That makes it something a pipeline can depend on, which no
 hand-tuning loop is.
 
-**The one end-to-end test of that claim, on phi-3.5 FN**, its own harness, a fresh process per configuration:
+**The one end-to-end test of that claim, on phi-3.5 `fuse-noadvise`**, its own harness, a fresh process per configuration:
 
 | configuration | median ms | Δ | differential PCC |
 |---|---|---|---|
@@ -202,12 +202,12 @@ are the summary and API surface — the information exists, it just is not expos
 
 | id | defect | measured cost | fix |
 |---|---|---|---|
-| STG-1 | **It never applies the advisor's plan as a candidate.** Screens chain by chain, building up from the incumbent. | **3.7× on the one cell where the counterfactual is measurable** — −17.84 % available vs −4.88 % shipped, ≈1.43 ms/model on phi FN alone (§3.27) | **F5** — apply_all first, then ablate |
+| STG-1 | **It never applies the advisor's plan as a candidate.** Screens chain by chain, building up from the incumbent. | **3.7× on the one cell where the counterfactual is measurable** — −17.84 % available vs −4.88 % shipped, ≈1.43 ms/model on phi-3.5 `fuse-noadvise` alone (§3.27) | **F5** — apply_all first, then ablate |
 | STG-2 | **The screening ceiling prices only boundary conversions**, so an in-chain re-grid is worth `0.000 µs`. | **60 % of the disagreed-on cost filed `below_threshold` and never measured.** Two of the three biggest wins in the corpus came from cells whose ceiling said `0` / `not_measurable` and which recorded **0 kept chains** | **D0** |
 | STG-3 | **`advised_cores` is parsed from the lossy `cores=` field** when the correct grid string sits beside it. | **58.3 % of advised core counts wrong; 34.4 % of the "disagreement" is phantom.** Two phi cells recorded themselves as *overriding* the advisor while agreeing with it | **C5f** — one line |
 | STG-4 | **`unfixable_ops` is ignored.** The advisor names each unplaceable op with the exact runtime `TT_FATAL`; `reconcile.py` reads the field only to annotate the `untraced` bucket. | **54 declarations, 41 screened anyway.** Cells burn measurements rediscovering errors handed to them in writing | **C5g** |
 | STG-5 | **The oracle rule rejects anything that moves PCC at all**, implemented as a differential bar ≈1.0. | Discarded a −13.3 % candidate at PCC 0.9999911 that is *more accurate than what shipped* (§3.1). And note §3.27: **−10.43 % was available at PCC exactly 1.0**, so even the strict rule permitted more than shipped | stage: absolute oracle at the model's own bar |
-| STG-6 | **`agrees_with_shipped` never compares the memory space** — core count or DS-family only. | 1 of phi FN's 2 such rows is wrong | **C5c** |
+| STG-6 | **`agrees_with_shipped` never compares the memory space** — core count or DS-family only. | 1 of phi-3.5 `fuse-noadvise`'s 2 such rows is wrong | **C5c** |
 | STG-7 | **`pair_confidence: position` is recorded, documented as a guess, then ignored downstream.** | **23.2 % of pairings corpus-wide** are guesses that nothing discounts — enough to turn positional artefacts into apparent findings | **C5e** |
 | STG-8 | **It never re-advises**, screening every candidate against one start-of-run capture. | `ttnn-advise` costs **~18 s** — less than a single harness measurement (§3.29) | **F6** |
 | STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
@@ -217,7 +217,7 @@ The two columns are not the same size of problem. **ADV-1 and ADV-2 are the one 
 without a latency term the optimizer cannot rank by speed, which is exactly the 82 %-vs-99.4 % gap in §2b. Everything
 else on the left is reporting. **The stage's ten are almost all one-file changes with no build, and they account
 for the larger measured loss** — STG-1 alone is 3.7× on the cell where it can be measured, and STG-2 hid two of
-the corpus's three biggest wins. gemma-4-12B is the extreme case: **52 measurements without ever applying one
+the corpus's three biggest wins. gemma-4-12B `exp11` is the extreme case: **52 measurements without ever applying one
 advised grid.**
 
 ### Neither — outside any layout advisor's reach
@@ -239,10 +239,10 @@ ladder beat.
 
 | cell | winning change | advised value | µs/model | the advisor's own number? |
 |---|---|---|---|---|
-| **phi-3.5 FN** | rope as advised + 11-core norm | rope L1 + **11** | **−4,609** | **yes** |
-| gemma-4-26B B | residual/norm at 22 cores, sliding only | 88 | −3,918 | no — 26× what it shipped |
-| gemma-4-26B onA | norm at 44 instead of the 88 it shipped | 88 | −375 | no — and bit-identical |
-| north-mini FN | MoE norm at 16 instead of the 32 it shipped | 22 | −264 | no |
+| **phi-3.5 `fuse-noadvise`** | rope as advised + 11-core norm | rope L1 + **11** | **−4,609** | **yes** |
+| gemma-4-26B `nofuse-noadvise` | residual/norm at 22 cores, sliding only | 88 | −3,918 | no — 26× what it shipped |
+| gemma-4-26B `nofuse-noadvise-onA` | norm at 44 instead of the 88 it shipped | 88 | −375 | no — and bit-identical |
+| north-mini `fuse-noadvise` | MoE norm at 16 instead of the 32 it shipped | 22 | −264 | no |
 
 **From outside the advisor — much bigger, and correctly outside its reach:**
 
@@ -250,7 +250,7 @@ ladder beat.
 |---|---|---|
 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 % of its decode time**, 14× every shipped win combined | the decoder's shape choice — a 4-element conv window on the 32-wide tile axis |
 | qwen's untraced token mixer | the kind is **97 %** of decode time and **≈62 %** of the model. **The tracer gap is closed** — 4 fixes (`ttnn.copy`, `softplus`, `TracedTensor.__getitem__`, `repeat_interleave`) and the full 71-op mixer traces. A pipeline crash now blocks it instead, unattributed | was `ttnn-jit`; now needs a debug build |
-| ~~tracer coverage gaps~~ | **all five real ones fixed** — 218 lines in `ttnn-jit`, no rebuild, on [`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps). 8 cell/kinds went from 58–77 % untraced to 4–21 %. **17 new candidates**, the largest being north-mini B's 11 worth **632 µs/model** | tt-mlir `ttnn-jit`, not tt-metal |
+| ~~tracer coverage gaps~~ | **all five real ones fixed** — 218 lines in `ttnn-jit`, no rebuild, on [`mvasiljevic/ttnn-jit-tracer-coverage-gaps`](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps). 8 cell/kinds went from 58–77 % untraced to 4–21 %. **17 new candidates**, the largest being north-mini `nofuse-noadvise`'s 11 worth **632 µs/model** | tt-mlir `ttnn-jit`, not tt-metal |
 | sharded GQA SDPA output | blocks two cells' top candidate *and* a 2.6 ms/model wrong-op fix | tt-metal kernel |
 
 Every one of these audited for whether it is real and what fixing it costs — with four of them fixed and
@@ -267,9 +267,9 @@ A few quantities appear with slightly different values in different sections. In
 
 | looks inconsistent | why |
 |---|---|
-| phi FN shipped: **−4.91 % / −4.90 % / −4.88 %** | three runs of one configuration — the cell's own `final.json`, a recomputation from its block means, and a fresh re-measurement (§3.27). Run-to-run drift ≈0.1 pp |
-| phi FN's discarded candidate: **−13.39 % / −13.4 % / −13.30 %** | same, three runs |
-| north-mini FN shipped: **−9.26 % / −10.23 % / −10.37 %** | three **scopes** — its `final.json` (whose `incumbent_ms` is a 27.635 ms multi-layer harness), its own `model_estimate` (24,949 → 22,398 µs), and per-layer on sliding MoE |
+| phi-3.5 `fuse-noadvise` shipped: **−4.91 % / −4.90 % / −4.88 %** | three runs of one configuration — the cell's own `final.json`, a recomputation from its block means, and a fresh re-measurement (§3.27). Run-to-run drift ≈0.1 pp |
+| phi-3.5 `fuse-noadvise`'s discarded candidate: **−13.39 % / −13.4 % / −13.30 %** | same, three runs |
+| north-mini `fuse-noadvise` shipped: **−9.26 % / −10.23 % / −10.37 %** | three **scopes** — its `final.json` (whose `incumbent_ms` is a 27.635 ms multi-layer harness), its own `model_estimate` (24,949 → 22,398 µs), and per-layer on sliding MoE |
 | Δ with no unit qualifier | **per layer**. Model-level figures always say so |
 
 Assumptions are labelled as assumptions. Claims that were later refuted are kept in
