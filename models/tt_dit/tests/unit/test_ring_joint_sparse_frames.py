@@ -125,25 +125,6 @@ def _pack_sparse_frame_mask(allow: torch.Tensor) -> list:
     return words
 
 
-def _additive_mask_from_allow(allow: torch.Tensor, tokens_per_frame: int, n_pad: int) -> torch.Tensor:
-    """Expand `sparse_frame_mask` [nf, nf] to a boolean `[n_pad, n_pad]` attend-mask for the pytorch
-    reference (True = attend, False = disallowed). Returned as bool, not the old f32 additive form:
-    `F.scaled_dot_product_attention` converts False -> -inf internally, so it is numerically
-    identical, but uses 1 byte/elem instead of 4 (4x less host RAM — at 720p n_pad=92160 that is
-    ~8.5 GB vs ~34 GB, which is what OOM-killed consecutive 720p tests). Padded columns are False
-    (masked); padded rows attend all so softmax stays finite (their outputs are dropped after)."""
-    nf = allow.shape[0]
-    real = nf * tokens_per_frame
-    assert real >= n_pad or n_pad >= real, "expected n_pad and real to match after padding"
-    keep = allow.bool().repeat_interleave(tokens_per_frame, 0).repeat_interleave(tokens_per_frame, 1)[:n_pad, :n_pad]
-    if n_pad > keep.shape[0]:
-        padded = torch.zeros((n_pad, n_pad), dtype=torch.bool)  # False = masked
-        padded[: keep.shape[0], : keep.shape[1]] = keep
-        padded[keep.shape[0] :, :] = True  # padded rows attend all so softmax stays finite
-        keep = padded
-    return keep
-
-
 def _torch_sdpa_ref(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -152,19 +133,42 @@ def _torch_sdpa_ref(
     num_frames_real: int,
     tokens_per_frame: int,
 ) -> torch.Tensor:
-    """pytorch reference: block-sparse SDPA using the additive mask expanded from sparse_frame_mask."""
-    n_pad = q.shape[2]
-    # Keep the mask boolean (do NOT cast to q.dtype — that would map True/False to 1.0/0.0 and
-    # break the mask semantics). F.scaled_dot_product_attention handles a bool attn_mask directly.
-    mask = _additive_mask_from_allow(allow, tokens_per_frame, n_pad).to(q.device)
-    out = torch.nn.functional.scaled_dot_product_attention(
-        q,
-        k,
-        v,
-        attn_mask=mask.reshape(1, 1, n_pad, n_pad),
-        is_causal=False,
-    )
-    del mask  # free the [n_pad, n_pad] mask (largest single host allocation at 720p) before returning
+    """Block-sparse pytorch reference for frame-block-sparse attention.
+
+    Computing this densely would materialize the full [n_pad, n_pad] score matrix PER HEAD, which
+    at 720p (n_pad=92160) is ~34 GB/head of fp32 — it OOM-kills the process. Instead we compute the
+    output one Q-frame block at a time, running SDPA against ONLY the K frames that Q frame attends.
+    softmax over the attended-only positions is numerically identical to softmax over all positions
+    with the disallowed ones set to -inf (masked entries contribute exp(-inf)=0 to both numerator
+    and denominator), so this is exact — it just never allocates the dense mask or score matrix.
+    Heads are processed in chunks sized to hold peak score memory near a fixed budget regardless of
+    shape (a windowed Q attends a few frames; a dense/allow-all Q attends all of them)."""
+    b, nh, n_pad, d = q.shape
+    tpf = tokens_per_frame
+    nf = allow.shape[0]
+    out = torch.zeros_like(q)
+    score_budget_elems = 1_500_000_000 // 4  # cap the per-call [b, hc, tpf, attended] score tensor
+    for qf in range(nf):
+        qs = qf * tpf
+        if qs >= n_pad:
+            break
+        qe = min(qs + tpf, n_pad)
+        attended = torch.nonzero(allow[qf], as_tuple=False).flatten().tolist()
+        if not attended:
+            # Padded / fully-masked Q frame: leave zeros. Real Q frames always attend >= themselves;
+            # the only all-zero rows are padded frames whose outputs are dropped by the caller's
+            # [:real_n] slice (and the degenerate drain-all pattern is handled separately upstream).
+            continue
+        k_idx = torch.cat([torch.arange(kf * tpf, min((kf + 1) * tpf, n_pad)) for kf in attended])
+        kb = k[:, :, k_idx, :]
+        vb = v[:, :, k_idx, :]
+        qb = q[:, :, qs:qe, :]
+        head_chunk = max(1, score_budget_elems // (b * (qe - qs) * k_idx.numel()))
+        for h0 in range(0, nh, head_chunk):
+            h1 = min(h0 + head_chunk, nh)
+            out[:, h0:h1, qs:qe, :] = torch.nn.functional.scaled_dot_product_attention(
+                qb[:, h0:h1], kb[:, h0:h1], vb[:, h0:h1], is_causal=False
+            )
     return out
 
 
