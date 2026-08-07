@@ -1119,20 +1119,35 @@ _BINARY_EDGE_OPS = [
 ]
 
 
-# What driving the poles found on Wormhole. Two root causes, and the first of them is the
-# same one the unary edge sweep turned up in signbit / sign / heaviside — so it now spans
-# both suites and seven ops:
+# What driving the poles found on Wormhole, cross-checked against tt-isa-documentation.
+# One of the two causes is documented hardware behaviour; the other is not.
 #
-#   The SFPU does not preserve the sign of zero. div(0, -x) returns +0.0 where IEEE gives
-#   -0.0; fmod and remainder do the same for a negative divisor; xlogy(0, tiny) likewise.
+# DOCUMENTED, and expected to XPASS on Blackhole:
+#
+#   The sign of a zero result is lost. div(0, -x) returns +0.0 where IEEE gives -0.0, and
+#   fmod/remainder do the same for a negative divisor, as does xlogy(0, tiny).
+#
+#   This is SFPMAD, which every one of these ops is built on:
+#     Wormhole  — "If the output (before rounding) is denormal or negative zero, it'll be
+#                  flushed to positive zero."          (WormholeB0/.../SFPMAD.md)
+#     Blackhole — "If the output (after rounding) is denormal, it'll be flushed to
+#                  sign-preserved zero."               (BlackholeA0/.../SFPMAD.md)
+#   and Blackhole's page lists "improved edge-case handling of NaNs and of negative zero"
+#   among its upgrades over Wormhole. So this is a documented Wormhole limitation that
+#   Blackhole is documented to fix — the xfails below are non-strict precisely so they
+#   report XPASS there rather than failing the suite.
+#
+# STILL OPEN — not explained by the ISA:
 #
 #   0/0 and x%0 return inf where IEEE says nan. div(0, 0) -> inf against a nan golden,
-#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. The finite poles agree
-#   exactly (div(-2, ±1/64) = ∓128, and every ±inf lines up), so this is specifically the
-#   0/0 indeterminate form, not a general pole problem.
+#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. SFPMAD says "if any input
+#   is NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual
+#   IEEE754 rules", which makes 0 x inf a NaN — so this is the kernels' own reciprocal
+#   composition, not the multiply. The finite poles agree exactly (div(-2, ±1/64) = ∓128,
+#   every ±inf lines up), so it is specifically the indeterminate form.
 #
-# pow is its own case: 0**0 returns 0 where every convention (IEEE-754 powr aside, C, torch)
-# gives 1.
+#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so this
+#   is a composition artifact rather than anything the ISA prescribes.
 #
 # Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
 # executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
@@ -1172,16 +1187,23 @@ _BINARY_EDGE_DIVERGENCES = {
     ),
 }
 
+_ZERO_SIGN_ISA_NOTE = (
+    "the lost zero sign is documented Wormhole SFPMAD behaviour ('flushed to positive "
+    "zero'); Blackhole is documented to preserve it, so expect XPASS there"
+)
+
 _BINARY_EDGE_REASON = {
-    MathOperation.SfpuElwdiv: "div(0, -x) returns +0.0 not -0.0, and div(0, 0) returns "
-    "inf not nan. The finite poles and every ±inf agree exactly.",
-    MathOperation.SfpuXlogy: "xlogy(0, 0) returns -inf not nan, and xlogy(0, tiny) "
-    "returns +0.0 not -0.0.",
-    MathOperation.SfpuElwpow: "0**0 returns 0; C, torch and the golden all give 1.",
-    MathOperation.SfpuBinaryFmod: "fmod(x, 0) returns inf not nan, and a negative divisor "
-    "loses the sign of a zero result.",
-    MathOperation.SfpuBinaryRemainder: "remainder(x, 0) returns inf not nan, and a "
-    "negative divisor loses the sign of a zero result.",
+    MathOperation.SfpuElwdiv: f"div(0, -x) returns +0.0 not -0.0 ({_ZERO_SIGN_ISA_NOTE}), "
+    "and div(0, 0) returns inf not nan, which the ISA does not explain. The finite poles "
+    "and every ±inf agree exactly.",
+    MathOperation.SfpuXlogy: f"xlogy(0, tiny) returns +0.0 not -0.0 ({_ZERO_SIGN_ISA_NOTE}), "
+    "and xlogy(0, 0) returns -inf not nan.",
+    MathOperation.SfpuElwpow: "0**0 returns 0; C, torch and the golden all give 1. Not "
+    "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
+    MathOperation.SfpuBinaryFmod: f"fmod(x, 0) returns inf not nan, and a negative divisor "
+    f"loses the sign of a zero result ({_ZERO_SIGN_ISA_NOTE}).",
+    MathOperation.SfpuBinaryRemainder: f"remainder(x, 0) returns inf not nan, and a "
+    f"negative divisor loses the sign of a zero result ({_ZERO_SIGN_ISA_NOTE}).",
 }
 
 

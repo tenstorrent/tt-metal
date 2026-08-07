@@ -470,25 +470,37 @@ _EDGE_SWEEP_SPECIALS = False
 # changes. Listed exhaustively per (input, output, dest_acc) rather than by predicate so a
 # combination drifting in or out shows up as a diff here.
 #
-# Two root causes, both genuine and neither previously measured:
+# Cross-checked against tt-isa-documentation, which splits these into "documented" and
+# "still open". Both groups stay xfailed — the test's job is to notice the divergence, not
+# to judge it — but only the second group is worth a kernel-side look.
 #
-#   -0.0 is treated as strictly negative by the SFPU, and as equal to +0.0 by the
-#   torch-backed goldens. One cause, three ops: signbit(-0.0) returns 0 where the kernel's
-#   own docstring promises 1 ("logical-shift the fp32 bit pattern right by 31 ... incl.
-#   -0.0"); sign(-0.0) returns -1 where torch gives 0; heaviside(-0.0) returns 0 where
-#   -0.0 == 0 makes it the dispatch value 0.5. IEEE-1985 makes the golden right in all
-#   three. Note -0.0 is *delivered* correctly — verified host-side that the stimulus
-#   pipeline preserves it into both Float32 and Float16_b — so this is the device path,
-#   not the test.
+# DOCUMENTED, and the ISA is the authority:
+#
+#   -0.0 through a comparison. SFPSETCC is specified only "provided that VC is neither
+#   negative zero nor any kind of NaN" (WormholeB0/.../VectorUnit.md, and identically on
+#   Blackhole). So sign(-0.0) -> -1 and heaviside(-0.0) -> 0 are *outside the documented
+#   contract* of the primitive those kernels are built on, not hardware faults. The golden
+#   follows torch/IEEE-1985 and is right about the mathematics; the hardware was never
+#   promised to agree.
+#
+#   Note -0.0 *is* delivered correctly — verified host-side that the stimulus pipeline
+#   preserves it into both Float32 and Float16_b — so the divergence is downstream of the
+#   test, in the SFPU primitives.
+#
+# STILL OPEN — not explained by the ISA:
+#
+#   signbit(-0.0) returns 0 where the kernel's own docstring promises 1 ("logical-shift the
+#   fp32 bit pattern right by 31 ... incl. -0.0"). Unlike sign/heaviside this op claims to
+#   read the sign bit directly, so either the claim or the implementation is wrong. A
+#   kernel-contract bug rather than a hardware one.
 #
 #   rsqrt at 0 saturates instead of returning inf. RsqrtCompat returns 1.7014118e38
-#   (0x7F000000) where the golden gives inf, on all 8 combinations. Worth a kernel-side
-#   look because plain Rsqrt, driven over the same probe, does *not* diverge — so two
-#   implementations of the same function disagree at their shared pole.
+#   (0x7F000000) where the golden gives inf, on all 8 combinations, while plain Rsqrt over
+#   the same probe does *not* diverge — two implementations of one function disagreeing at
+#   their shared pole. Nothing in the ISA prescribes either answer.
 #
-# Erfinv at ±1 is the third, smaller item: golden ∓inf/±inf against a saturated result,
-# and only on the two fp32-dest combinations, so it is tolerance-shaped rather than
-# semantic.
+#   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
+#   combinations only, so tolerance-shaped rather than semantic.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Signbit: (
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
@@ -523,12 +535,17 @@ _EDGE_KNOWN_DIVERGENCES = {
 }
 
 _EDGE_DIVERGENCE_REASON = {
-    MathOperation.Signbit: "signbit(-0.0) returns 0; the kernel docstring and IEEE both "
-    "say 1. The SFPU treats -0.0 as strictly negative.",
-    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0.",
-    MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5.",
-    MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 instead of inf. "
-    "Plain Rsqrt does not diverge at the same pole.",
+    MathOperation.Signbit: "signbit(-0.0) returns 0; the kernel docstring promises 1 "
+    "('incl. -0.0') and IEEE agrees. Not explained by the ISA — this op claims to read "
+    "the sign bit directly, so the claim or the implementation is wrong.",
+    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
+    "documented contract: SFPSETCC is specified only for inputs that are not negative "
+    "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md).",
+    MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
+    "SFPSETCC negative-zero caveat as Sign.",
+    MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 (0x7F000000) instead "
+    "of inf, while plain Rsqrt does not diverge at the same pole. Not prescribed by the "
+    "ISA either way.",
     MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
 }
 
