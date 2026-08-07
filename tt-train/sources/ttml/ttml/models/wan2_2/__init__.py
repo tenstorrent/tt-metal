@@ -46,6 +46,10 @@ class WanConfig:
     rope_max_seq_len: int = 1024
     model_type: str = "t2v"
     runner_type: RunnerType = RunnerType.Default
+    init_weights: bool = True
+
+    def weight_init(self):
+        return ttml.init.normal(0.0, 0.02) if self.init_weights else ttml.init.zeros()
 
     def __post_init__(self) -> None:
         if self.dim % self.num_heads:
@@ -69,20 +73,16 @@ class WanTransformer3D(AbstractModuleBase):
             patch_features(config.in_channels, config.patch_size),
             config.dim,
             True,
-            weight_init=ttml.init.normal(0.0, 0.02),
+            weight_init=config.weight_init(),
         )
-        print("aaa")
         self.condition_embedder = WanConditioning(config)
-        print("aaa")
         self.blocks = ModuleList([WanTransformerBlock(config) for _ in range(config.num_layers)])
-        print("aaa")
         self.scale_shift_table = Parameter(ttml.init.zeros()((1, 1, _FINAL_CHUNKS, config.dim)))
-        print("aaa")
         self.proj_out = LinearLayer(
             config.dim,
             patch_features(config.out_channels, config.patch_size),
             True,
-            weight_init=ttml.init.normal(0.0, 0.02),
+            weight_init=config.weight_init(),
         )
 
     def _final_modulation(self, temb):

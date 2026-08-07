@@ -56,10 +56,11 @@ class WanAttention(AbstractModuleBase):
         self.head_dim = config.head_dim
         self.is_self = is_self
 
-        self.to_q = LinearLayer(dim, dim, True, weight_init=ttml.init.normal(0.0, 0.02))
-        self.to_k = LinearLayer(dim, dim, True, weight_init=ttml.init.normal(0.0, 0.02))
-        self.to_v = LinearLayer(dim, dim, True, weight_init=ttml.init.normal(0.0, 0.02))
-        self.to_out = LinearLayer(dim, dim, True, weight_init=ttml.init.normal(0.0, 0.02))
+        init = config.weight_init()
+        self.to_q = LinearLayer(dim, dim, True, weight_init=init)
+        self.to_k = LinearLayer(dim, dim, True, weight_init=init)
+        self.to_v = LinearLayer(dim, dim, True, weight_init=init)
+        self.to_out = LinearLayer(dim, dim, True, weight_init=init)
 
         self.norm_q = _RMSNorm(dim, config.eps)
         self.norm_k = _RMSNorm(dim, config.eps)

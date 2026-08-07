@@ -167,7 +167,7 @@ def test_checkpoint_name_mapping():
 
 
 def test_to_ttml_array_rejects_shape_mismatch(expect_error):
-    with expect_error(ValueError, "model_wants"):
+    with expect_error(ValueError, "model wants"):
         to_ttml_array("proj_out.weight", np.zeros((8, 4), np.float32), (1, 1, 8, 5))
 
 

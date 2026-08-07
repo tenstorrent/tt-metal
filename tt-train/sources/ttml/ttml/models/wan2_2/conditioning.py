@@ -42,10 +42,10 @@ def _gelu_tanh_nograd(x):
 class _ProjectionMLP(AbstractModuleBase):
     """linear_1 -> activation -> linear_2, named to match the diffusers checkpoint."""
 
-    def __init__(self, in_features: int, out_features: int, activation) -> None:
+    def __init__(self, in_features: int, out_features: int, activation, weight_init) -> None:
         super().__init__()
-        self.linear_1 = LinearLayer(in_features, out_features, True, weight_init=ttml.init.normal(0.0, 0.02))
-        self.linear_2 = LinearLayer(out_features, out_features, True, weight_init=ttml.init.normal(0.0, 0.02))
+        self.linear_1 = LinearLayer(in_features, out_features, True, weight_init=weight_init)
+        self.linear_2 = LinearLayer(out_features, out_features, True, weight_init=weight_init)
         self._activation = activation
 
     def forward(self, x):
@@ -58,11 +58,12 @@ class WanConditioning(AbstractModuleBase):
         self.dim = config.dim
         self.freq_dim = config.freq_dim
 
-        self.time_embedder = _ProjectionMLP(config.freq_dim, config.dim, ttml.ops.unary.silu)
+        init = config.weight_init()
+        self.time_embedder = _ProjectionMLP(config.freq_dim, config.dim, ttml.ops.unary.silu, init)
         self.time_proj = LinearLayer(
             config.dim, _MOD_CHUNKS * config.dim, True, weight_init=ttml.init.normal(0.0, 0.02)
         )
-        self.text_embedder = _ProjectionMLP(config.text_dim, config.dim, _gelu_tanh_nograd)
+        self.text_embedder = _ProjectionMLP(config.text_dim, config.dim, _gelu_tanh_nograd, init)
 
     def forward(self, timesteps, text_embed):
         """Return (timestep_proj (B,1,6,dim), temb (B,1,1,dim), prompt (B,1,L,dim)).
