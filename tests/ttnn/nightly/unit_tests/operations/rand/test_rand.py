@@ -95,6 +95,16 @@ def test_rand_preserves_legacy_low_precision_dtypes(device, dtype):
     assert torch.isfinite(ttnn.to_torch(tensor)).all()
 
 
+def test_rand_preserves_legacy_integer_dtype(device):
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=ttnn.int32, device=device, low=-100, high=100)
+    data = ttnn.to_torch(tensor)
+
+    assert tensor.dtype == ttnn.int32
+    assert data.dtype == torch.int32
+    assert tuple(data.shape) == DEFAULT_SHAPE
+    assert torch.unique(data).numel() > 1
+
+
 def test_rand_defaults(device):
     tensor = ttnn.rand(DEFAULT_SHAPE, device=device)
 

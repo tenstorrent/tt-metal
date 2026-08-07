@@ -122,7 +122,7 @@ inline InclusiveOutputRange make_inclusive_output_range(float from, float to, Da
         case DataType::FLOAT32:
             return validate_inclusive_output_range(
                 {smallest_supported_float32_at_least(from), largest_supported_float32_below(to)}, from, to);
-        default: __builtin_unreachable();
+        default: TT_THROW("Uniform: unsupported output dtype {}", output_dtype);
     }
 }
 

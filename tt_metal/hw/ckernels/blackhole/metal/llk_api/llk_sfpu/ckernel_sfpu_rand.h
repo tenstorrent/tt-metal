@@ -73,10 +73,11 @@ inline void finish_mix_uint32_mul24() {
     TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
 
-    // LOWER computes the low 23-bit product; SFPSETMAN below restores x[31:23].
+    // LOWER computes the low 23-bit product.
     TTI_SFPMUL24(p_sfpu::LREG5, p_sfpu::LCONST_0_8373, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_LOWER);
     // This independent PRNG read fills SFPMUL24's dependency slot.
     rand_prng<p_sfpu::LREG0>();
+    // Restore the mixed input's upper nine bits in the low product.
     TTI_SFPSETMAN(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
 
     TTI_SFPSHFT(8, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);

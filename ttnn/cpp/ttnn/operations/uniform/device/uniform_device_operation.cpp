@@ -16,6 +16,9 @@ void UniformDeviceOperation::validate_inputs(
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Uniform: Input tensor need to be allocated in buffers on device");
     TT_FATAL((tensor_args.input.layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
     TT_FATAL(
+        tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
+        "Uniform: Input tensor must be Float32 or Bfloat16");
+    TT_FATAL(
         operation_attributes.lower_bound <= operation_attributes.upper_bound,
         "Uniform: inclusive lower bound must be <= inclusive upper bound");
 }
