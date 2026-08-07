@@ -39,14 +39,15 @@ public:
     static NamedShm create(const std::string& name, size_t size);
 
     /**
-     * @brief Create an anonymous shared memory region using MAP_ANONYMOUS|MAP_SHARED.
+     * @brief Create an anonymous DMA-pinnable memory region (no shm_open).
      *
-     * Unlike create(), this does not use shm_open() — the backing memory is anonymous
-     * (not file-backed tmpfs). Anonymous pages can be DMA-pinned with CONTIGUOUS flag
-     * on systems without IOMMU (e.g. Blackhole P150). The region is zero-initialized
-     * by the kernel. There is no name; the region cannot be opened by another process.
+     * Unlike create(), this does not use shm_open() — the backing memory is not
+     * file-backed tmpfs. For requests larger than one host page, prefers a 1G
+     * hugetlb mapping so TENSTORRENT_PIN_PAGES_CONTIGUOUS succeeds without IOMMU;
+     * otherwise uses MAP_ANONYMOUS|MAP_SHARED. Zero-initialized by the kernel.
+     * There is no name; the region cannot be opened by another process.
      *
-     * @param size Size of the region in bytes.
+     * @param size Size of the region in bytes (mapping may be rounded up to 1G).
      * @return NamedShm owning the anonymous mapping. name() returns "".
      */
     static NamedShm create_anonymous(size_t size);
