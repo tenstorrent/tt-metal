@@ -91,9 +91,7 @@ FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
     }
 }
 
-// Advance chunk_start_tile past one chunk without moving data. Mirrors the
-// tile-advance tail of read_chunk/write_chunk so a direction that relays only
-// half of a split slice lands on the same M-block boundary a full traversal would.
+// Advance chunk_start_tile past one chunk without moving data
 FORCE_INLINE void advance_chunk_start_tile(
     uint32_t& chunk_start_tile, uint32_t chunk_width, uint32_t subchunk_height, uint32_t input_tensor_Wt) {
     uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
@@ -126,9 +124,7 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
     bool read_output,
-    // Must mirror write_chunk's band decomposition exactly: this reader is the CB producer feeding
-    // write_chunk (the consumer) on the same core, so the per-band tile order must match or the relay
-    // maps source tiles to the wrong output addresses. mm_sub_chunks==1 => whole-chunk (baseline).
+    // Must mirror write_chunk's band decomposition exactly: this reader is the CB producer feeding write_chunk
     uint32_t mm_cores_y = 1,
     uint32_t mm_sub_chunks = 1) {
     // Chunk values (chunk spans all mm cores)
@@ -185,7 +181,6 @@ FORCE_INLINE uint32_t read_chunk(
                     input_tensor_Ht);
                 if (tile_id >= 0) {
                     // Device 2.0 migration: legacy primitive retained, precomposed uint64_t address
-                    // from get_noc_addr(tile_id, accessor).
                     uint64_t noc_read_addr =
                         get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
                     noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
@@ -210,8 +205,7 @@ FORCE_INLINE uint32_t read_chunk(
     return 0;  // return value is unused by callers
 }
 
-// FabricSenderType is deduced from mux_connection so the same body serves any fabric sender that
-// satisfies the linear-API contract (WorkerToFabricMuxSender for Mux V1, FabricMuxV2Sender for V2).
+// FabricSenderType is deduced from mux_connection so the same body serves any fabric sender that satisfies
 template <typename AddrGenType, typename FabricSenderType>
 FORCE_INLINE uint32_t write_chunk(
     uint32_t& chunk_start_tile,
@@ -239,13 +233,7 @@ FORCE_INLINE uint32_t write_chunk(
     const uint32_t num_targets_forward_direction,
     const uint32_t num_targets_backward_direction,
     bool write_local,
-    // Streaming matmul signal (Option W, M sub-chunking). The chunk's subchunk_height M-rows are
-    // delivered as mm_sub_chunks row-bands: for each band the walk sweeps the band's rows of EVERY
-    // injector (injector-major, same as the whole-chunk walk but height-limited), then fires one
-    // matmul-aggregator inc. Because a band is a contiguous row-range of all injectors, "band s landed" is
-    // true for every injector at once -- the invariant the injector reader relies on. The out_ready
-    // sem and chunk_start advance stay per-chunk (the AG receiver counts one per chunk).
-    // mm_sub_chunks==1 => a single band spanning the whole chunk => byte-identical to no sub-chunking.
+    // Streaming matmul signal (Option W, M sub-chunking)
     uint32_t mm_cores_y = 1,
     uint32_t mm_sub_chunks = 1,
     bool mm_signal_enabled = false,
@@ -274,9 +262,7 @@ FORCE_INLINE uint32_t write_chunk(
         uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
         uint32_t band_tile_iter = 0;
 
-        // Subchunk tracker for this band: band_h rows of injector 0, starting band_lo rows into the
-        // chunk; advance_subchunk jumps subchunk_height_stride (== M_tiles_per_core) to the next
-        // injector's same band. Injector-major within the band.
+        // Subchunk tracker for this band: band_h rows of injector 0, starting band_lo rows into the chunk
         uint32_t band_start_row = chunk_start_row + band_lo;
         uint32_t subchunk_start_row = band_start_row;
         uint32_t subchunk_end_row = band_start_row + band_h - 1;
@@ -294,9 +280,7 @@ FORCE_INLINE uint32_t write_chunk(
             cb_output.wait_front(max_tiles_per_packet);
             size_t l1_read_addr = cb_output.get_read_ptr();
 
-            // Collect the packet's valid dest tiles. get_chunk_tile advances the row/col cursor each
-            // call and returns <0 for a padding hole; the reader front-packs the same valid tiles into
-            // the source CB in this order, so source tile k maps to noc_addrs[k].
+            // Collect the packet's valid dest tiles
             uint64_t noc_addrs[NOC_SCATTER_WRITE_MAX_CHUNKS] = {0, 0, 0, 0};
             uint64_t local_noc_addrs[NOC_SCATTER_WRITE_MAX_CHUNKS] = {0, 0, 0, 0};
             uint16_t chunk_sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1] = {

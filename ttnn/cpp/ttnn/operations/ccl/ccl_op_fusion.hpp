@@ -240,15 +240,11 @@ struct MinimalMatmulFusedOpSignaler {
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
-    // Semaphore layout: [backward_0..backward_{N-1}, forward_0..forward_{N-1}, self], where
-    // N = num_ag_workers. With N==1 (default / reader-signaled path) this is [backward, forward, self],
-    // identical to the legacy 3-semaphore layout. With N>1 (writer-signals-matmul path), each AG worker
-    // in a direction increments its own semaphore so the matmul can wait for all N portions of a k-block.
+    // Semaphore layout: [backward_0..backward_{N-1}, forward_0..forward_{N-1}, self], where N = num_ag_workers
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
-    // Number of all-gather workers per direction that will independently signal the matmul. Must be set
-    // before init_fused_op(). Defaults to 1 (single aggregated signal per direction, legacy behavior).
+    // Number of all-gather workers per direction that will independently signal the matmul
     uint32_t num_ag_workers = 1;
 
     /* All Gather specs */
@@ -293,9 +289,7 @@ struct StridedReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
-    // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core
-    // progress counter array. Each MM core increments its own slot; the RS reader waits per-tile on
-    // the producing core's slot. Set by the RS program factory to the backing buffer's address.
+    // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core progress counter
     uint32_t mm_progress_counters_addr = 0;
 
     bool initialized = false;

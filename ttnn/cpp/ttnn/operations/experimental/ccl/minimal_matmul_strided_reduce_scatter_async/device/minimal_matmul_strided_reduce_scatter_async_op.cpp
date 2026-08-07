@@ -172,11 +172,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
 
-    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS
-    // reader's TensorAccessor reads it directly from the matmul cores' L1 instead of round-tripping
-    // through DRAM (kills the ~M*N write + read that was causing the DRAM/NoC contention). The fused
-    // matmul disables core-grid transpose, so M is parallelized on grid.y and N on grid.x. Done last
-    // so the RS intermediate/output specs above keep their original (DRAM) memory config.
+    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS reader's
     if (attributes.matmul_struct.config.has_value() &&
         attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
         const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;

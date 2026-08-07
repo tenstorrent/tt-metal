@@ -59,10 +59,7 @@ FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
     return std::min(remaining_width, chunk_width_in_tiles);
 }
 
-// A tile advance decomposed into whole chunk-pieces / rows / columns. The two divisions that
-// produce it depend only on run-invariant quantities (advance_by_tiles, subchunk_size,
-// chunk_width_in_tiles), so it is computed ONCE per run with decompose_tile_advance() and the
-// per-tile get_next_tile_coordinates() below stays division-free (the Tensix RISC has no HW divide).
+// A tile advance decomposed into whole chunk-pieces / rows / columns
 struct TileAdvanceSteps {
     uint32_t pieces;  // whole chunk-pieces to advance (added to mm_core_idx)
     uint32_t rows;    // whole rows to advance within a chunk piece

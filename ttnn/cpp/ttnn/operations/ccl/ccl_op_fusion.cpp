@@ -133,7 +133,6 @@ void StridedAllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     }
 
     // Push the fused op signal semaphore addr at the requested index into the matmul's semaphore vector
-    // (layout: [backward_0..N-1, forward_0..N-1, self]).
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[signal_sem_index]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_signaler_mode == FusedOpSignalerMode::SINGLE ? 0 : 1));
 }
@@ -221,7 +220,6 @@ void StridedReduceScatterFusedOpSignaler::push_strided_reduce_scatter_fused_op_r
     std::vector<uint32_t>& out_rt_args) const {
     TT_FATAL(initialized, "StridedReduceScatterFusedOpSignaler not initialized.");
     // Per-core signaling: the reader takes the L1 base of the per-MM-core progress counter array
-    // (set by the RS program factory after allocating the backing buffer).
     out_rt_args.push_back(static_cast<uint32_t>(this->mm_progress_counters_addr));
 }
 
