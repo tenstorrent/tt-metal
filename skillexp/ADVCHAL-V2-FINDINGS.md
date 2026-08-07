@@ -201,18 +201,43 @@ intercepted, so the real `ttnn` op receives a `TracedTensor` and rejects it; the
 **So the answer to "is the problem in the advisor's input?" is yes.** Its objective, its scoring and its
 placement never see these ops. Nothing in tt-mlir's optimizer is implicated.
 
-**One loose end worth pulling, on north-mini onA.** Its report records
-`hard_error: "ttnn.sparse_matmul cannot consume interception_tracer.TracedTensor"`, which reads as a missing
-handler — but **a `sparse_matmul` handler does exist** at the pinned `618cd4e75d`
-(`interception_tracer.py:546`), and the copy installed in the toolchain venv is byte-identical to the source.
-The cell's call form is one the patch should intercept: `import ttnn` then `ttnn.sparse_matmul(...)`, so the
-`setattr` reaches it, and the extra kwargs it passes (`memory_config`, `output_tile`, `program_config`) are
-absorbed by the handler's `**kwargs`.
+### north-mini onA's sparse MoE: run to ground, and it is two gaps not one
 
-**Not established: why it failed anyway.** Either something earlier in the MoE chain broke and the cell
-attributed it to `sparse_matmul`, or the handler fails on this particular input. Settling it needs a re-run,
-not more reading. **If it is the former, north-mini onA's zero is recoverable** — that cell is one of the three
-whose headroom is currently unmeasured rather than zero.
+Re-run without the cell's `CHALLENGER_CAPTURE_ATTENTION_ONLY` flag, to see what actually fails:
+
+```
+ttnn_jit/_src/ttnn_emit_tracer.py:1177  in trace_ttnn        <- the tracer actually in use
+  .../tt/optimized_decoder.py:1016      in _sparse_decode_moe
+    gate_up = ttnn.sparse_matmul(
+  ttnn/decorators.py:473                                     <- the REAL ttnn op, not a handler
+TypeError: ttnn.sparse_matmul(): incompatible function arguments
+  Invoked with types: sparse_matmul_t, TracedTensor, Tensor, kwargs={sparsity: TracedTensor, ...}
+```
+
+**There are two tracers in `ttnn-jit`, and the handler is in the one not being used.** `shard_advisor.py:191`
+selects `ttnn_emit_tracer.trace_ttnn` when `tracer == "ttnn"`. `interception_tracer.trace_intercepted` is the
+other path — it *does* have a `sparse_matmul` handler at `:546`, and its `patch_ttnn` really does install it
+(checked directly: inside the patch, `type(ttnn.sparse_matmul)` becomes a traced stand-in). The emit tracer has
+no `sparse_matmul` coverage, so the call falls through to the real op, which rejects a `TracedTensor`.
+
+**And the emit tracer's own docstring says the optimizer could not have used it anyway:**
+
+> *"Not yet ported: ... and `ttnn.sparse_matmul` — the routed-expert path — for which **the whole optimizer has
+> no coverage anyway (the op is `OpModelExempt` and unregistered in the rule book)**, so a MoE capture must trace
+> its dense expert graph."*
+
+**So it is not recoverable by re-running.** Attribution:
+
+| responsible | what exactly |
+|---|---|
+| **tt-mlir optimizer** | `sparse_matmul` is **`OpModelExempt` and unregistered in the rule book**, so even a captured `sparse_matmul` could not be placed. **This is the binding gap** and the one to fix first |
+| **ttnn-jit** | `sparse_matmul` is not ported to the emit tracer, which is the tracer `shard_advisor` uses. Deliberate and documented — but it leaves the two tracers with different coverage, and the failure surfaces as a raw `TypeError` from the real op rather than a named "unsupported op" |
+| **the cell (agent)** | Correctly identified the terminal. But it invented a private `CHALLENGER_CAPTURE_ATTENTION_ONLY` flag and truncated at the *attention* boundary, where the documented remedy is to *"trace its dense expert graph"*. The dense expert path may have been capturable, so the cell captured **less than it could have** |
+| **the stage/skill** | The capture template names `ttnn.sparse_matmul` as terminal — **correct** — but offers no supported way to handle it, which is why the cell wrote its own flag. That flag exists in exactly one cell and in no template |
+
+**The actionable item is not the tracer.** It is `sparse_matmul` rule-book coverage in tt-mlir; until that exists,
+capturing the op would only move the failure downstream. Separately, the skill should carry the
+dense-expert-graph recipe the docstring prescribes, so cells stop inventing private flags.
 
 | model | unreachable | cause |
 |---|---|---|

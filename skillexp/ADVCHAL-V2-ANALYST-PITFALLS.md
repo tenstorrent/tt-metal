@@ -28,6 +28,13 @@ is lossy in ways that are not flagged.**
 as a human summary. Specifically distrust `cores=`, and never let a derived field (`advised_cores`) stand in for
 the artefact when the artefact is one file away.
 
+| I claimed | what was true | how it was caught |
+|---|---|---|
+| The capture template's *"`ttnn.sparse_matmul` is terminal in the tracer"* must be stale, since a `sparse_matmul` handler exists at `interception_tracer.py:546` and its `patch_ttnn` installs it | **There are two tracers in `ttnn-jit` and I read the wrong one.** `shard_advisor.py:191` uses `ttnn_emit_tracer.trace_ttnn`, which has no `sparse_matmul` coverage. The template was **correct** | Re-running the capture and reading the *traceback frames*, which name the tracer actually in use |
+
+**The check:** when a component has two implementations of the same role, find out which one runs before
+concluding anything from reading either. A traceback names it in one line; source-reading does not.
+
 ---
 
 ## Pattern 2 — I blamed the tool for my own reconstruction's failure
