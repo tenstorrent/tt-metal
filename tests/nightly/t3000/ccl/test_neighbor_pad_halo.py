@@ -2,12 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test for the standalone halo-only op ttnn.experimental.neighbor_pad_halo.
-#
-# The op emits ONLY the compact halo buffer [H-top | H-bot | W-left | W-right] (no interior copy,
-# no conv). We reuse the standalone neighbor_pad_async 2D golden (a full per-device padded tensor),
-# then slice out exactly the halo bands in the compact-buffer stick order and compare byte-for-byte
-# (bf16 copy, no arithmetic).
+# PCC test for the standalone halo-only op ttnn.experimental.neighbor_pad_halo
 
 import os
 import time
@@ -188,8 +183,7 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
                             f"  {nm} bad_sticks={len(bad)}/{b-a} frames={frames[:8]}(n={len(frames)}/{outer}) "
                             f"cols={cols}(n={len(cols)}/{W_dev}) banks={sorted({c%8 for c in cols})}"
                         )
-                    # W sections: rows are [frame][h_row (0..H_dev+2pH)][pw]; flag which h_rows are bad and
-                    # whether they are corner rows (h_row < pH or >= pH+H_dev) — corners come from the H exchange.
+                    # W sections: rows are [frame][h_row (0..H_dev+2pH)][pw]
                     hh = H_dev + 2 * pH
                     for nm, a, b in [
                         ("Wleft", 2 * h_sec, 2 * h_sec + w_sec),
@@ -307,8 +301,7 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
         padding_mode="zeros",
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
-    # Step 2: halo_scatter allocates the padded buffer and fills interior (from inp) + border (from
-    # compact). The WHOLE padded buffer must then match neighbor_pad_async's full-pad output.
+    # Step 2: halo_scatter allocates the padded buffer and fills interior (from inp) + border (from compact)
     padded = ttnn.experimental.halo_scatter(compact, inp_mesh, np_padding_h=pH, np_padding_w=pW)
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 
@@ -408,8 +401,7 @@ def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape
     )
     ref = run(inp_mesh, 0, 0)
 
-    # Padded input: each device's [Hd,Wd] shard padded to [Hd+2,Wd+2] (interior == its shard, border 0),
-    # tiled into a global [.,(Hd+2)*hf,(Wd+2)*wf,.] so the 2D shard hands each device its padded block.
+    # Padded input: each device's [Hd,Wd] shard padded to [Hd+2,Wd+2] (interior == its shard, border 0)
     xp = torch.zeros(B, T, h_total * hf, (Wd + 2 * pW) * wf, C).bfloat16()
     for hi in range(hf):
         for wi in range(wf):
@@ -515,8 +507,7 @@ def test_halo_scatter_border_only(mesh_device, device_params, input_shape):
 
     # Reference: repack (allocate + interior from inp + border from compact).
     ref = ttnn.experimental.halo_scatter(compact, inp_mesh, np_padding_h=pH, np_padding_w=pW)
-    # border_only: xp = per-device padded [.,Hd+2,Wd+2,.] with interior=inp shard, border=0 (as conv would
-    # leave it); scatter writes ONLY the border in place.
+    # border_only: xp = per-device padded [.,Hd+2,Wd+2,.] with interior=inp shard, border=0
     xp = torch.zeros(B, T, h_total * hf, (Wd + 2 * pW) * wf, C).bfloat16()
     for hi in range(hf):
         for wi in range(wf):
@@ -699,8 +690,7 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
         )
 
     if os.environ.get("NP_DEVTIME"):
-        # Op-level device-FW ratio: isolates op work from the fixed per-program launch floor that trace-wall
-        # includes (that floor is identical for both ops and overlaps when the op runs inside the decode trace).
+        # Op-level device-FW ratio: isolates op work from the fixed per-program launch floor that trace-wall includes
         h_dev = _device_fw_us(mesh_device, run_halo)
         a_dev = _device_fw_us(mesh_device, run_async)
         print(f"\n=== DEVTIME shape={input_shape} outer={outer} 2x4 ===")
@@ -712,9 +702,6 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
     halo_us = _trace_and_time(mesh_device, run_halo)
     async_us = _trace_and_time(mesh_device, run_async)
     # Effective halo-transport bandwidth vs the ~50 GB/s aggregate 2-link fabric ceiling
-    # (12.5 GB/s/link/dir x 2 links x 2 dir). Bytes = the essential halo crossing the fabric per device:
-    # one H-edge (W_dev sticks) + one W-edge (H_dev sticks) per frame. The compact BUFFER is ~2x this and
-    # also holds edge zero-fill that never leaves the chip, so buffer-size/time overstates bandwidth ~4x.
     transfer_bytes = outer * (H_dev + W_dev) * C * 2  # bf16, minimal halo transport per device
     gbps = transfer_bytes / (halo_us * 1e-6) / 1e9
     print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} outer={outer} 2x4 ===")
@@ -734,21 +721,13 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
 )
 @pytest.mark.parametrize("T", [8, 32, 96], ids=["T8", "T32", "T96"])
 def test_neighbor_pad_halo_perf(mesh_device, device_params, T):
-    # s4_out-like at varying T: outer=T, per-device H=136, W=120, C=128, k333 halo. Small T is
-    # barrier-dominated; large T shifts the op toward bandwidth-bound (fixed barriers, scaling data).
-    # num_links is HARDWARE-CAPPED at 2 on BH-LB: each inter-chip hop has exactly 2 ethernet channels
-    # (num_links=4 => TT_FATAL "Requested link index 2 is out of bounds. 2 ethernet channels available").
-    # The op already uses both, so "more fabric links" is not a lever here.
+    # s4_out-like at varying T: outer=T, per-device H=136, W=120, C=128, k333 halo
     run_halo_vs_async_perf(
         mesh_device, input_shape=[1, T, 272, 480, 128], h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
     )
 
 
-# Production LTX 1080p 2x4 decoder NP-bound layers, as full [B,T,H,W,C] (per-device = H/2, W/4). All k333
-# (pH=pW=1). Verifies the mux speedup holds on the real deployed shapes, not just the synthetic sweep.
-# All distinct LTX VAE-decoder NP inputs routed on the 2x4 mesh (kernel (3,3,3) => pH=pW=1). Collapsed
-# from models/tt_dit/utils/conv3d.py LTX table (lines ~414-429): 10 conv sites -> 6 unique (T, H, W, C_in).
-# H/W here are the FULL spatial dims (H = per-dev*2 on axis-0, W = per-dev*4 on axis-1).
+# Production LTX 1080p 2x4 decoder NP-bound layers, as full [B,T,H,W,C] (per-device = H/2, W/4)
 _LTX_PROD_2x4 = [
     ([1, 21, 34, 60, 128], "s0_conv_in_C128"),  # per-dev  17x15,  C_in=128
     ([1, 21, 34, 60, 1024], "s0_res_up_C1024"),  # per-dev  17x15,  C_in=1024 (2048B page, largest)
@@ -759,11 +738,6 @@ _LTX_PROD_2x4 = [
 ]
 
 # 4x8 physical shapes (h_factor=4, w_factor=8), CAPTURED live from the all-standalone decode
-# (prof_vae_ltx NP_CAPTURE_SHAPES, LTX_USE_FUSED=0). The latent 34x60 pads once to 36x64 at the decode
-# input (34->36 div4=9, 60->64 div8=8) and that padding PROPAGATES through the x2 upsamples, so every
-# stage's physical dims are the per-device shard x factor: 36x64 -> 72x128 -> 144x256 -> 288x512 (the
-# masked pad region is carried, not re-trimmed). These differ from _LTX_PROD_2x4's logical dims. The
-# trailing comment is the per-call count in one decode (relative op-time weight).
 _LTX_PROD_4x8 = [
     ([1, 21, 36, 64, 128], "s0_conv_in_C128"),  # per-dev  9x8,   C_in=128    (x1)
     ([1, 21, 36, 64, 1024], "s0_res_up_C1024"),  # per-dev  9x8,   C_in=1024   (x5, 2048B page, largest)
@@ -786,10 +760,7 @@ def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, sh
     )
 
 
-# Same shapes, but with an 8 KB fabric packet payload (default is 4352 B). The factory sizes its coalesce
-# to the fabric max payload, so this ships ~2x the sticks per packet — tests whether packet count (fabric
-# forwarding overhead) is a bound on the mid/large shapes. FabricRouterConfig has no kwargs ctor; set the
-# field after default construction.
+# Same shapes, but with an 8 KB fabric packet payload (default is 4352 B)
 def _fabric_router_config_8k():
     frc = ttnn.FabricRouterConfig()
     frc.max_packet_payload_size_bytes = int(os.environ.get("NP_FABRIC_PAYLOAD", "8192"))  # BH max 15232
@@ -816,8 +787,7 @@ def test_neighbor_pad_halo_prod_perf_8k(mesh_device, device_params, input_shape,
     )
 
 
-# Byte-exact PCC with the 8 KB fabric payload: the coalesce forms larger (up to 32-stick) bank packets, so
-# this guards that the bigger-packet path is still exact.
+# Byte-exact PCC with the 8 KB fabric payload: the coalesce forms larger (up to 32-stick) bank packets
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize(
@@ -841,9 +811,7 @@ def test_neighbor_pad_halo_prod_pcc_8k(mesh_device, device_params, input_shape, 
     )
 
 
-# Scaling to longer cluster axes than 2x4 (a 4x8 mesh needs 32 chips; on an 8-chip BH-LB the runnable proxy
-# is 4x2 = H-axis length 4 with MIDDLE devices, the case never exercised at 2x4 where both H devices are
-# edges). H div by 4, W div by 2. Validates the 1-hop neighbor exchange + startup barrier on a >2 axis.
+# Scaling to longer cluster axes than 2x4
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 2)], ids=["4x2"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -864,8 +832,7 @@ def test_neighbor_pad_halo_4x2(mesh_device, device_params, padding_mode, input_s
     )
 
 
-# LTX-2.3 spatial latent upsampler (x2) on 2x4 (conv3d.py "spatial latent upsampler" block). Small spatial
-# (per-dev down to 9x8) and one k=(1,3,3) site — still spatial pH=pW=1. Not covered by the decoder set above.
+# LTX-2.3 spatial latent upsampler (x2) on 2x4 (conv3d.py "spatial latent upsampler" block)
 _LTX_UPSAMPLER_2x4 = [
     ([1, 21, 18, 32, 128], "ups_initial_C128"),  # per-dev 9x8
     ([1, 21, 18, 32, 1024], "ups_pre_res_C1024"),  # per-dev 9x8
@@ -979,9 +946,7 @@ def test_neighbor_pad_halo_devfw(mesh_device, device_params):
     mesh_device.clear_loaded_sub_device_manager()
 
 
-# Halo-aware conv3d correctness: the compact two-dispatch (neighbor_pad_halo -> conv3d halo mode) must
-# equal the current full-pad two-dispatch (neighbor_pad_async -> conv3d) on device. Same weight/input;
-# both compute conv on the neighbor-padded input, so a device-to-device match proves the halo read.
+# Halo-aware conv3d correctness: the compact two-dispatch (neighbor_pad_halo -> conv3d halo mode) must equal
 def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, pH, pW, num_links=2):
     h_dim, w_dim, h_axis, w_axis = 2, 3, 0, 1
     mesh_shape = tuple(mesh_device.shape)
@@ -1116,9 +1081,7 @@ def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, 
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 
     if os.environ.get("NP_CONV_PERF"):
-        # Decompose the e2e halo-vs-fullpad delta: halo_path = np_halo + conv_halo_read; fullpad_path =
-        # np_async(persistent) + conv_plain. Isolates whether the halo-mode conv3d (spatial padding active
-        # -> boundary blocks skip the coalesced gather) is the net-loss source on small 4x8 shards.
+        # Decompose the e2e halo-vs-fullpad delta: halo_path = np_halo + conv_halo_read
         def _np_async():
             return ttnn.experimental.neighbor_pad_async(
                 inp_mesh,
@@ -1207,9 +1170,7 @@ def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out, 
     )
 
 
-# Reuse test: the decode calls neighbor_pad_halo ~30x sharing the manager's ping-pong sems. A single-op
-# test can't catch a missing on-device self-reset — this loops the op N times reusing ONE sem set (no
-# ping-pong to mask it). If call 2+ hangs, a semaphore isn't reset between runs.
+# Reuse test: the decode calls neighbor_pad_halo ~30x sharing the manager's ping-pong sems
 @pytest.mark.timeout(200)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
