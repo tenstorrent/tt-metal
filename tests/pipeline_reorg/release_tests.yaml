@@ -22,7 +22,7 @@
   skus:
     wh_n150:
       timeout: 18
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet
 
@@ -40,7 +40,7 @@
   skus:
     wh_n150:
       timeout: 45
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: sdxl
 
@@ -49,7 +49,7 @@
   skus:
     wh_n150:
       timeout: 24
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet
 
@@ -177,7 +177,7 @@
   skus:
     wh_n300:
       timeout: 18
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet
 
@@ -274,7 +274,7 @@
   skus:
     wh_llmbox_perf:
       timeout: 12
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet50
 
@@ -441,7 +441,7 @@
   skus:
     wh_galaxy:
       timeout: 20
-  owner_id: U08BH66EXAL # Radoica Draskic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
 
 - name: Galaxy Llama 3.3-70B e2e tests
