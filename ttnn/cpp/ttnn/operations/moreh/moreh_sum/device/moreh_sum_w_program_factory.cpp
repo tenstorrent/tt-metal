@@ -246,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
                 .endpoint_type = DFBEndpointType::CONSUMER,
             },
             // masked_input is packed by this kernel and immediately re-read as the matmul input: the
-            // kernel switches its `cb_input` handle over to it for the final tile of a masked row.
+            // kernel switches its `input_dfb` handle over to it for the final tile of a masked row.
             DFBBinding{
                 .dfb_spec_name = MASKED_INPUT_DFB,
                 .accessor_name = "masked_input",
