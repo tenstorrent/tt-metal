@@ -16,6 +16,7 @@ on:
         options:
           - all
           - mistral-small-3.1-24b
+          - devstral-small-2-24b
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo

@@ -1,0 +1,2 @@
+mistral-common>=1.8.6
+git+https://github.com/huggingface/transformers

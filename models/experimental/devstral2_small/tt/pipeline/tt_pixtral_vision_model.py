@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# TT PixtralVisionModel: patch conv, ln_pre, RoPE, transformer.
+
+from __future__ import annotations
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstral2_small.devstral_utils.pixtral_seq_chunk import vision_seq_memcfg, vision_slice_memcfg
+from models.experimental.devstral2_small.tt.tt_pixtral_patch_conv import TtPixtralPatchConv
+from models.experimental.devstral2_small.tt.tt_pixtral_rotary_emb import TtPixtralRotaryEmbedding
+from models.experimental.devstral2_small.tt.tt_pixtral_transformer import TtPixtralTransformer
+from models.experimental.devstral2_small.tt.tt_pixtralnorm import TtPixtralRMSNorm
+
+
+class TtPixtralVisionModel(LightweightModule):
+    """HF PixtralVisionModel path (torch [N,C,H,W] bf16 → patch conv → TT transformer)."""
+
+    def __init__(
+        self,
+        mesh_device,
+        tt_ccl,
+        state_dict,
+        configuration,
+        weight_cache_path,
+        dtype,
+        vision_config,
+        n_layers: int | None = None,
+        vision_prefix: str = "vision_tower.",
+    ):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.patch_size = int(configuration.vision_patch_size)
+        self.hidden_size = int(configuration.vision_dim)
+        self.vision_prefix = vision_prefix
+
+        pc_pref = f"{vision_prefix}patch_conv."
+        self.patch_conv = TtPixtralPatchConv(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix=pc_pref,
+            dtype=dtype,
+            in_channels=int(configuration.vision_in_channels),
+            out_channels=self.hidden_size,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+            bias=False,
+        )
+
+        ln_eps = float(getattr(vision_config, "rms_norm_eps", getattr(vision_config, "norm_eps", 1e-5)))
+        self.ln_pre = TtPixtralRMSNorm(
+            mesh_device,
+            state_dict,
+            eps=ln_eps,
+            weight_key=f"{vision_prefix}ln_pre.weight",
+            dtype=dtype,
+        )
+
+        self.patch_positional_embedding = TtPixtralRotaryEmbedding(mesh_device, vision_config, datatype=dtype)
+
+        self.transformer = TtPixtralTransformer(
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            state_dict=state_dict,
+            configuration=configuration,
+            weight_cache_path=weight_cache_path,
+            dtype=dtype,
+            n_layers=n_layers,
+            vision_prefix=f"{vision_prefix}transformer.layers.",
+        )
+
+    def forward(self, pixel_values, image_sizes: list[tuple[int, int]], position_ids):
+        """pixel_values: torch ``[N,C,H,W]`` bf16; image_sizes aligned with batch; position_ids torch ``[1,seq]`` long."""
+        if len(image_sizes) > 1 and len({tuple(sz) for sz in image_sizes}) > 1:
+            raise ValueError(
+                "TtPixtralVisionModel supports one image size per batch; " f"got mixed image_sizes={image_sizes!r}"
+            )
+
+        patch_embeds = self.patch_conv(pixel_values)
+        bsz = int(patch_embeds.shape[0])
+        num_patches = int(patch_embeds.shape[1])
+        h0, w0 = image_sizes[0]
+        gh, gw = h0 // self.patch_size, w0 // self.patch_size
+
+        if bsz == 1 and len(image_sizes) == 1 and num_patches == gh * gw:
+            # No padding to crop and no batch concat: the transpose/grid-reshape/slice round-trip is identity.
+            patch_embeds = ttnn.reshape(patch_embeds, (1, 1, num_patches, self.hidden_size))
+        else:
+            patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
+            slice_mem_cfg = vision_slice_memcfg(gh * gw)
+            patch_embeds = ttnn.reshape(patch_embeds, [bsz, self.hidden_size, gh, gw], memory_config=slice_mem_cfg)
+            if (
+                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
+                and patch_embeds.memory_config().buffer_type != ttnn.BufferType.L1
+            ):
+                patch_embeds = ttnn.to_memory_config(patch_embeds, slice_mem_cfg)
+
+            patch_embeds_list = [
+                ttnn.slice(
+                    patch_embeds,
+                    [0, 0, 0, 0],
+                    [bsz, self.hidden_size, sz[0] // self.patch_size, sz[1] // self.patch_size],
+                    memory_config=slice_mem_cfg,
+                )
+                for sz in image_sizes
+            ]
+
+            reshaped = []
+            for p in patch_embeds_list:
+                p = ttnn.reshape(p, (1, self.hidden_size, -1))
+                p = ttnn.transpose(p, 1, 2)
+                reshaped.append(p)
+            if len(reshaped) == 1:
+                patch_embeds = reshaped[0]
+            else:
+                patch_embeds = ttnn.concat(reshaped, dim=0)
+            patch_embeds = ttnn.reshape(
+                patch_embeds,
+                (1, 1, patch_embeds.shape[-2], patch_embeds.shape[-1]),
+            )
+        seq_len = int(patch_embeds.shape[-2])
+        ln_mem = vision_seq_memcfg(seq_len, self.hidden_size)
+        if patch_embeds.memory_config().buffer_type != ln_mem.buffer_type:
+            patch_embeds = ttnn.to_memory_config(patch_embeds, ln_mem)
+        patch_embeds = self.ln_pre(patch_embeds)
+
+        cos, sin = self.patch_positional_embedding(patch_embeds, position_ids)
+        return self.transformer(patch_embeds, attention_mask=None, position_embeddings=(cos, sin))
+
+
+__all__ = ["TtPixtralVisionModel"]
