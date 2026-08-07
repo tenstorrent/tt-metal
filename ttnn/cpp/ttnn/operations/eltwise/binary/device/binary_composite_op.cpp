@@ -886,6 +886,11 @@ Tensor bias_gelu(
         resolved_sub_core_grids);
 }
 
+// At/below this activation width (routed-expert moe_intermediate_size) the composite's
+// intermediates fit in L1, so they are kept there to skip the DRAM round-trip between the
+// composed ops. Wider activations (shared-expert / dense FFN) fall back to DRAM.
+constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 2048;
+
 Tensor situ_glu(
     const Tensor& gate,
     const Tensor& up,
@@ -893,14 +898,21 @@ Tensor situ_glu(
     std::optional<float> beta2,
     const std::optional<MemoryConfig>& output_mem_config) {
     using namespace operations::unary;
+
+    // Keep intermediates resident in L1 for the widths that fit; the final output always
+    // uses the caller's memory config.
+    const std::optional<MemoryConfig> interm_mem = gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN
+                                                       ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG)
+                                                       : output_mem_config;
+
     // gate half: beta1 * tanh(gate / beta1) * sigmoid(gate).
     Tensor situ_a = ttnn::multiply(
-        ttnn::softcap(gate, beta1, output_mem_config),
-        ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, output_mem_config),
+        ttnn::softcap(gate, beta1, interm_mem),
+        ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, interm_mem),
         std::nullopt,
-        output_mem_config);
+        interm_mem);
     // up half: softcapped by beta2 when provided, otherwise left untouched.
-    Tensor up_half = beta2.has_value() ? ttnn::softcap(up, *beta2, output_mem_config) : up;
+    Tensor up_half = beta2.has_value() ? ttnn::softcap(up, *beta2, interm_mem) : up;
     return ttnn::multiply(situ_a, up_half, std::nullopt, output_mem_config);
 }
 
