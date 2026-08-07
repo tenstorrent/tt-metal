@@ -114,6 +114,14 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
     init_done.erase(key);
 }
 
+void DispatchKernelInitializer::mark_as_torn_down(std::unordered_set<InitializerKey>& init_done) {
+    // Used by DispatchContext when it has already terminated command queues manually.
+    // Just clear state without re-running teardown logic.
+    devices_.clear();
+    initialized_ = false;
+    init_done.erase(key);
+}
+
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }
 
 void DispatchKernelInitializer::compile_dispatch_kernels() {

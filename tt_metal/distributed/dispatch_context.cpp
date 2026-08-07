@@ -176,6 +176,10 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         device->command_queues_.clear();
     }
 
+    // Teardown dispatch firmware so is_dispatch_firmware_active() returns false.
+    // This must happen before set_fast_dispatch_mode(false) so profiler sync can run correctly.
+    device_manager->teardown_dispatch_firmware();
+
     fast_dispatch_enabled_ = false;
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
