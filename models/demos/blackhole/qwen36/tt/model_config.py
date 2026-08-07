@@ -7,6 +7,7 @@ hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable h
 Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
+
 import os
 from pathlib import Path
 
@@ -135,38 +136,43 @@ class Qwen36ModelArgs(ModelArgs):
         # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
         # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
-        # WORMHOLE: pad this width up so its TILE COUNT factors well for the prefill matmul. The
-        # 2048x4096x6176 in-proj is K-PASS bound, not subblock bound — its cost tracks
-        # per_core_N / out_block_w — and 6176 = 193 tiles is PRIME, so at 8 columns per_core_N=25 whose
-        # only divisors are 1/5/25; out_block_w can only be 5 (five passes over K, each re-reading the
-        # 16MB DRAM-resident in0) because 25 overflows L1. prefill_kpass_width picks the smallest wider
-        # width that minimises those passes: 216 tiles => per_core_N=27, out_block_w=9, 3 passes, still
-        # all 64 cores. See its docstring for the width sweep this is derived from.
+        # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
+        # geometry, cache key and decode progcfgs all use the natural width; see the history below,
+        # because the reason this is safe now is NOT the reason it was originally padded.
         #
-        # CONFIRMED IN THE REAL LAYER (single-layer GDN prefill, seq 2048, N300):
-        #     op 287  2,155us @ 36.5% of peak FLOPs  ->  1,512us @ 58.3%   (-643us)
-        #     layer   18,644us -> 17,916us  (-728us, -3.9%)
-        # It becomes the most efficient matmul in the layer, above the o_proj's 48.6%. PCC is unchanged:
-        # the pad rows sit past every slice offset in _project_qkvzab, so they are never read.
+        # The 2048x4096x6176 in-proj is K-PASS bound, not subblock bound: its cost tracks
+        # ceil(per_core_N / out_block_w), each pass re-reading the 16MB DRAM-resident in0. 6176 = 193
+        # tiles is PRIME, so at 8 columns per_core_N=25, whose only divisors are 1/5/25. The pad existed
+        # because out_block_w=25 (one pass) overflowed L1, leaving 5 as the best available: padding to
+        # 216 tiles bought per_core_N=27 / out_block_w=9 / 3 passes and measured -643us on the op.
         #
-        # KNOWN COST, ACCEPTED: this width also sizes gdn_qkvzab_weight_memcfg and both decode
-        # progcfgs, and the same weight serves decode — so decode's in-proj does ~11.9% more work and
-        # reads ~11.9% more weight bytes. Prefill is the current target and decode is a later pass; when
-        # decode is tuned, re-measure. If the decode cost turns out to matter, the fix is a second
-        # unpadded weight for decode (+~12.6MB/layer of DRAM) rather than giving up the prefill win.
+        # That L1 overflow was an artifact of fp32_dest_acc_en, not a property of the shape. With
+        # COMPUTE_HIFI2_NO_FP32_ACC the intermediate CB halves and the output-subblock ceiling rises
+        # from 4 to 8, so per_core_N=25 gets out_subblock_w=5 and out_block_w=25 — ONE K pass — at the
+        # unpadded width. MEASURED (device kernel duration, N150, M=2048 K=4096; the full sweep is in
+        # tests/perf/test_gdn_inproj_sweep.py):
+        #     N=6912  sub_w=3 blk_w=9   fp32_acc ON   3 passes  1493us   <- the padded config
+        #     N=6912  sub_w=3 blk_w=27  fp32_acc OFF  1 pass    1403us
+        #     N=6176  sub_w=5 blk_w=25  fp32_acc OFF  1 pass    1255us   -16.0%, and 12% less work
+        # So the pad is now strictly worse: one K pass makes the prime tile count harmless, and the
+        # unpadded width does 11.9% fewer FLOPs. Reverting it also gives back the pad's accepted costs
+        # — ~12.6MB/layer of weight DRAM and decode's ~11.9% extra in-proj work.
         #
-        # Deliberately NOT env-gated. Unlike the runtime dtype switches elsewhere in this model
-        # (QWEN35_GDN_OUT_FP32 etc.), this changes weight GEOMETRY — the DRAM-sharded memcfg, both
-        # decode progcfgs and the weight cache key — so a flag would let two processes build different
-        # weights for the same model. To revert, delete this block; prefill_kpass_width() is a no-op on
-        # widths that already factor well, so nothing else needs touching. Blackhole is excluded: its
-        # grid, L1 budget and TP all differ and its blocking was tuned at the unpadded width.
+        # CONFIRMED IN THE REAL LAYER (Tracy, single-layer GDN prefill, seq 2048, N300, Qwen3.5-9B):
+        #     op 277  2048x4096x6912  1,514us @ 58.2% of peak FLOPs
+        #          -> 2048x4096x6176  1,265us @ 62.2%   (-249us, -16.4%; layer share 9.3% -> 7.9%)
+        # Every other matmul in the layer is byte-for-byte unchanged (o_proj 536->538us, MLP
+        # 1328/1181/1105 -> 1332/1182/1104), which is the check that the scoping held. The two
+        # ReduceScatter rows moved -164us/-17us; those are CCL capture variance, not this change.
+        #
+        # The trade is accuracy, not geometry: PCC against an fp32 reference goes 0.99997 -> 0.99992.
+        # test_gdn_tp (11 tests, decode + prefill, N300) passes with min PCC 0.99959.
+        #
+        # gdn_qkvzab_pad_tiles is kept (as 0) rather than deleted because load_gdn_weights_tp reads it
+        # to qualify the weight cache key with `.pad{N}` — 0 selects the unpadded cache file, so a
+        # previously cached padded weight cannot be silently reloaded at the wrong width. To restore
+        # the pad, set it from prefill_kpass_width here AND drop gdn_qkvzab_prefill_progcfg below.
         self.gdn_qkvzab_pad_tiles = 0
-        if not tpc.is_blackhole():
-            _pad_to = tpc.prefill_kpass_width(self.gdn_qkvzab_dim_tp)
-            if _pad_to > self.gdn_qkvzab_dim_tp:
-                self.gdn_qkvzab_pad_tiles = (_pad_to - self.gdn_qkvzab_dim_tp) // tpc.TILE_SIZE
-                self.gdn_qkvzab_dim_tp = _pad_to
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
@@ -275,6 +281,28 @@ class Qwen36ModelArgs(ModelArgs):
             grid_size=self._prefill_grid,
             tuning=self.prefill_tuning,
             halve_out_block=not tpc.is_blackhole(),
+        )
+        # WORMHOLE ONLY: dedicated one-K-pass factory for the GDN in-projection, paired with
+        # COMPUTE_HIFI2_NO_FP32_ACC (gdn/tp.py's _col_proj passes both together — the blocking is only
+        # legal with fp32 dest accumulation off). Worth -16.0% on that matmul; see the
+        # gdn_qkvzab_pad_tiles note above for the measurements and the accuracy trade.
+        #
+        # Scoped to this ONE matmul on purpose. prefill_progcfg above is shared by the MLP down-proj and
+        # both attention projections, which were tuned with fp32 dest accumulation ON and are NOT
+        # covered by tests/perf/test_gdn_inproj_sweep.py. Widening this needs its own sweep per shape:
+        # one K pass means the full per_core_N-wide CB, and WH's L1 does not have room for every
+        # projection in a layer to do that (which is exactly why halve_out_block exists above).
+        #
+        # None on Blackhole: BH prefill takes the fused all_gather_matmul_prefill path, which pins its
+        # own grid and progcfg, so this would never be consulted there.
+        self.gdn_qkvzab_prefill_progcfg = (
+            None
+            if tpc.is_blackhole()
+            else (
+                lambda seq_len, k, n: tpc.create_prefill_kpass1_matmul_program_config(
+                    seq_len, k, n, grid_size=self._prefill_grid
+                )
+            )
         )
 
         # Activation shard configs

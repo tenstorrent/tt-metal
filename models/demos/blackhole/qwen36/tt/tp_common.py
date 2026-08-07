@@ -5,6 +5,7 @@
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+
 import math
 import os
 
@@ -19,11 +20,38 @@ DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
 
 
+# Output-subblock ceilings on out_subblock_h * out_subblock_w, set by the DST register budget: an fp32
+# destination tile takes two half-DST slots, so enabling fp32_dest_acc_en halves how many fit.
+DST_TILES = 8
+DST_TILES_FP32_ACC = 4
+
+
 # Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+# Same fidelity, fp32 destination accumulation OFF. Used ONLY by the GDN prefill in-projection (see
+# create_prefill_kpass1_matmul_program_config). Turning fp32 dest acc off does two things for that
+# matmul: it halves the intermediate CB, and it raises the output-subblock ceiling from 4 to 8. Both
+# are what make a ONE-K-PASS blocking (out_block_w == per_core_N) fit L1 at all -- with fp32 dest acc
+# on, every one-pass variant is rejected with "circular buffers grow to 1524288/1615808/1798848 B
+# beyond max L1 size of 1499136 B".
+#
+# MEASURED (N150, M=2048 K=4096, DEVICE KERNEL DURATION; tests/perf/test_gdn_inproj_sweep.py):
+#     N=6912 cols=8 sub_w=3 blk_w=9  fp32_acc ON   3 K-passes  1493us   <- previous config
+#     N=6176 cols=8 sub_w=5 blk_w=25 fp32_acc OFF  1 K-pass    1255us   -16.0%
+# The accuracy cost is small but real: PCC against an fp32 torch reference goes 0.99997 -> 0.99992.
+# Deliberately a SEPARATE constant rather than a change to COMPUTE_HIFI2: that config is shared by the
+# MLP down-proj and both attention projections, which were tuned with fp32 dest accumulation on and
+# are not covered by the sweep above.
+COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
@@ -199,8 +227,15 @@ def create_activation_shard_config(k):
 
 
 # 2D prefill matmul config
-def _get_out_subblock_w(per_core_n, out_subblock_h):
-    for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
+def _get_out_subblock_w(per_core_n, out_subblock_h, max_hw=DST_TILES_FP32_ACC):
+    """Widest out_subblock_w that divides per_core_n within the DST budget.
+
+    max_hw is the out_subblock_h*out_subblock_w ceiling, which depends on the compute kernel config:
+    DST_TILES_FP32_ACC (4) when fp32_dest_acc_en is on, DST_TILES (8) when it is off. The default is
+    the conservative 4 because tp_common.COMPUTE_HIFI2 (the model's shared config) enables fp32 dest
+    accumulation; only callers that pass a non-fp32-acc compute config may raise it.
+    """
+    for w in range(min(per_core_n, max_hw // out_subblock_h), 0, -1):
         if per_core_n % w == 0:
             return w
     return 1
@@ -247,7 +282,13 @@ def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
     So: pad the width until the tile count factors well. Candidates are multiples of grid_size[0] (so
     per_core_N divides exactly and every column of the grid is used), within max_waste extra tiles.
     Scored by (passes, waste) -- fewest K passes, then least padding. Returns n unchanged when nothing
-    beats it, so callers can use it unconditionally."""
+    beats it, so callers can use it unconditionally.
+
+    NOT CURRENTLY CALLED BY THE MODEL. Its one user was the GDN in-proj width, which now reaches ONE K
+    pass unpadded via create_prefill_kpass1_matmul_program_config -- padding to improve the tile count's
+    factorization only helps when out_block_w must divide per_core_N into several blocks. Kept because it
+    is the right tool for any shape stuck on the multi-pass path (and see the gdn_qkvzab_pad_tiles note
+    in model_config.py for how to restore the pad); tests/perf/test_gdn_inproj_sweep.py still sweeps it."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     cols = grid_size[0]
@@ -316,6 +357,45 @@ def create_prefill_matmul_program_config(
     if out_block_w is not None:
         kwargs["out_block_w"] = out_block_w
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+
+def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+    """2D prefill progcfg that walks K exactly ONCE: out_block_w == per_core_N.
+
+    A 2D prefill matmul re-traverses K once per N-block (ceil(per_core_N / out_block_w) blocks),
+    re-reading a DRAM-resident in0 every time, and prefill_kpass_width's measurements show that pass
+    count is the dominant cost term for the GDN in-proj shape. One pass is the floor.
+
+    REQUIRES a compute kernel config with fp32_dest_acc_en=False (COMPUTE_HIFI2_NO_FP32_ACC). Two
+    reasons, both load-bearing:
+      * the full per_core_N-wide output/intermediate CB only fits L1 at half the element size, and
+      * out_subblock_w is picked against the DST_TILES (8) ceiling, not DST_TILES_FP32_ACC (4) --
+        e.g. per_core_N=25 gives sub_w=5 at the 8 ceiling but collapses to 1 at the 4 ceiling, and
+        out_block_w must be a multiple of out_subblock_w, so a sub_w of 1 cannot reach 25 anyway.
+    Passing an fp32-dest-acc config here will fail at program creation with a CB overflow, not
+    silently degrade -- which is the intended behaviour.
+
+    Unlike create_prefill_matmul_program_config there is no halve_out_block escape hatch: halving the
+    block IS the multi-pass behaviour this exists to avoid. Callers whose (m, k, n) does not fit must
+    use the general factory instead.
+    """
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=min(4, max(1, k_tiles // grid_size[0])),
+        out_subblock_h=1,
+        out_subblock_w=_get_out_subblock_w(per_core_N, 1, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
 
 
 def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
@@ -742,13 +822,19 @@ def sharded_decode_matmul(
     prefill_progcfg_fn,
     prefill_k,
     decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    prefill_compute_cfg=None,
 ):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
     Decode (M<=32): L1-sharded act + DRAM-sharded kernel. Prefill: 2D matmul.
     Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Decode result placement is
     `decode_out_memory_config` (default DRAM-interleaved; pass L1 to keep the small decode
-    activation resident). Prefill result is always DRAM-interleaved."""
+    activation resident). Prefill result is always DRAM-interleaved.
+
+    prefill_compute_cfg: compute kernel config for the PREFILL branch only (defaults to compute_cfg).
+    Exists because a prefill progcfg and its compute config are coupled — create_prefill_kpass1_
+    matmul_program_config's blocking is only legal with fp32_dest_acc_en off — while decode keeps the
+    shared COMPUTE_HIFI2. Pass both together or neither."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
         # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
@@ -766,7 +852,11 @@ def sharded_decode_matmul(
         return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x,
+        weight,
+        compute_kernel_config=prefill_compute_cfg or compute_cfg,
+        program_config=pc,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
