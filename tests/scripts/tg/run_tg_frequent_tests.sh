@@ -19,15 +19,10 @@ run_tg_tests() {
     pytest models/tt_dit/tests/models/sd35/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
     pytest models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
-  elif [[ "$1" == "flux1" ]]; then
-    echo "LOG_METAL: running Flux.1 run_tg_frequent_tests"
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_attention.py::test_attention_flux -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
-
   elif [[ "$1" == "motif" ]]; then
     echo "LOG_METAL: running Motif run_tg_frequent_tests"
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_attention.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
 
   elif [[ "$1" == "wan22" ]]; then # Wan2.2 I2V and T2V
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"

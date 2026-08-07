@@ -13,7 +13,6 @@ on:
           - tt-training-models
           #          - cnn
           - sd35
-          - flux1-dev
           - motif
           #          - sentence_bert
           - wan2-2

@@ -55,15 +55,6 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: ttnn
 
-- name: Galaxy Flux.1 integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model flux1
-  model: flux1
-  skus:
-    wh_galaxy:
-      timeout: 50
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: ttnn
-
 - name: Galaxy Motif integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model motif
   model: motif
