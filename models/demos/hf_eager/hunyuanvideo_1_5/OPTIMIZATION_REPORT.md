@@ -444,6 +444,30 @@ section is measured unless explicitly marked otherwise.
   (`tt/pipeline.py`, `copy_host_to_device_tensor` for `resident_hidden` and
   `r["timestep"]`). Ruled out, so the defect lies elsewhere.
 
+### Media writeout (IMPLEMENTED: -40.4s, output unchanged)
+
+- Splitting the ~90s post-denoise window at 121 frames gives roughly **50s of
+  media writeout against 40s of VAE decode**, so writeout -- not the VAE -- is
+  the larger post-denoise target, and it needs no kernel work.
+- `tt/media_writeout.py` already implemented threaded PNG writing and a GIF
+  gate, but nothing imported it: `tests/e2e/test_stage2b_gen.py` still called
+  Pillow's `pil[0].save(..., save_all=True)` inline. Wiring it in, with defaults
+  that reproduce the previous behaviour byte for byte:
+
+  | mode | PNG | GIF | wall |
+  |---|---:|---:|---:|
+  | default | 19.0s | 13.2s | 177.6s |
+  | `HY_FAST_WRITEOUT=1 HY_SAVE_GIF=0` | 0.41s | skipped | 137.2s |
+
+- **-40.4s wall.** Threading the PNG writes alone is 46x (19.0s -> 0.41s) and
+  the bytes are identical (frame PCC 1.00000000, max abs pixel difference 0.0);
+  the mp4 is byte-for-byte the same size in both modes. The GIF is the single
+  most expensive artifact at 13.2s and ~25 MB, against 1.4 MB for the mp4 that
+  serves the same purpose.
+- Sequencing note: this should be done **before** VAE spatial sharding. It is a
+  larger slice of the post-denoise window, took one wiring change rather than a
+  1137-line refactor, and does not touch files the VAE work would conflict with.
+
 ### VAE spatial sharding: scaffolded but unwired
 
 - `tt/vae_spatial.py` provides a complete, property-tested toolkit

@@ -43,6 +43,7 @@ import pytest
 import ttnn
 from models.demos.hf_eager.hunyuanvideo_1_5.tests.e2e.test_real_weight_pcc import coerce_bf16
 from models.demos.hf_eager.hunyuanvideo_1_5.tt import pipeline as P
+from models.demos.hf_eager.hunyuanvideo_1_5.tt.media_writeout import save_generated_frames
 
 _COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"
 _I2V_COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v"
@@ -399,47 +400,28 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         flush=True,
     )
 
-    os.makedirs(outdir, exist_ok=True)
-    with _phase("frame_writeout_s"):
-        pil = [
-            f if isinstance(f, Image.Image) else Image.fromarray((np.asarray(f).clip(0, 1) * 255).astype("uint8"))
-            for f in out
-        ]
-        for i, im in enumerate(pil):
-            im.save(f"{outdir}/frame_{i:03d}.png")
-        pil[0].save(f"{outdir}/tt_blackhole.gif", save_all=True, append_images=pil[1:], duration=125, loop=0)
-
+    # Media writeout via tt/media_writeout.py. At 121 frames this stage is ~50s,
+    # comparable to VAE decode, and most of it is the animated GIF: a host profile
+    # measured Pillow GIF at 2.43s per 13 frames (~22.6s at 121) against 0.65s for
+    # serial PNG and 0.079s for 16-thread PNG. The gates below are therefore worth
+    # real time on long generations:
+    #   HY_FAST_WRITEOUT=1  thread the PNG writes   (~6.1s -> ~0.7s at 121f)
+    #   HY_SAVE_GIF=0       skip the GIF entirely   (~22.6s at 121f; mp4 still written)
+    # Defaults reproduce the previous inline behaviour byte for byte.
     fps = int(os.environ.get("HY_FPS", "24"))
-    mp4_path = f"{outdir}/tt_blackhole.mp4"
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg:
-        with _phase("mp4_encode_s"):
-            subprocess.run(
-                [
-                    ffmpeg,
-                    "-y",
-                    "-framerate",
-                    str(fps),
-                    "-i",
-                    f"{outdir}/frame_%03d.png",
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    mp4_path,
-                ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        print(
-            f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif + tt_blackhole.mp4 ({fps}fps) -> {outdir}",
-            flush=True,
-        )
-    else:
-        print(
-            f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif -> {outdir} (ffmpeg not found, no mp4)", flush=True
-        )
+    with _phase("frame_writeout_s"):
+        timings = save_generated_frames(out, outdir, fps=fps)
+
+    n = timings["frames"]
+    parts = [f"{n} frames"]
+    if timings.get("gif"):
+        parts.append("tt_blackhole.gif")
+    if timings.get("mp4"):
+        parts.append(f"tt_blackhole.mp4 ({fps}fps)")
+    detail = " + ".join(parts)
+    suffix = "" if timings.get("mp4") else " (ffmpeg not found, no mp4)"
+    print(f"[{label}] SAVED {detail} -> {outdir}{suffix}", flush=True)
+    print(f"[{label}] writeout timings: {timings}", flush=True)
 
     in_function = time.perf_counter() - _t_fn_start
     phase_sum = sum(_PHASES.values())
