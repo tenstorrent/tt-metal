@@ -3774,6 +3774,66 @@ next to the device version for a side-by-side.
 measurable defect belongs to the model. What remains is listening, which no metric here
 substitutes for.**
 
+### 6.59 — an automated MOS eval, and an MCD that failed calibration and was discarded
+
+§6.58 said naturalness could not be assessed without human raters. That was **too strong**: MOS
+proper needs humans, but a no-reference MOS PREDICTOR is the standard automated proxy and had
+never been run. DistillMOS (xls-r-sqa distilled, predicts 1–5 from the waveform alone) in an
+ISOLATED venv — it requires `torchaudio`, which §2 records as breaking `transformers` in the main
+one, so `/tmp/mosvenv` makes that impossible rather than merely unlikely. Verified after: the main
+venv still has no `torchaudio`.
+
+**DEVICE vs fp32 REFERENCE on identical prompts — the comparison that matters**, since a
+predictor's absolute scale is not calibrated for this domain but a paired delta is:
+
+| pair | device | fp32 reference | delta |
+|---|---|---|---|
+| case 1, cheerful_female, seed 0 | 4.574 | 4.591 | **−0.017** |
+| case 6, de_male, seed 1 (the click case) | 3.831 | 3.858 | **−0.027** |
+
+**The device is perceptually indistinguishable from the fp32 reference.** Both deltas are far
+inside predictor noise, and the click case scores the same as the reference that clicks *more*.
+
+**Across all 90 utterances**, and §6.52 did not cost anything perceptually:
+
+| arm | n | mean | median | min | max |
+|---|---|---|---|---|---|
+| baseline | 45 | 4.007 | 4.077 | 2.507 | 4.755 |
+| **§6.52 (HEAD)** | 45 | **4.023** | 4.169 | 2.583 | 4.735 |
+
+**Long-form cases — the WER bucket, and what a user actually hears — mean MOS 4.627.** The 4.02
+overall is dragged down by very short adversarial prompts, and the two worst are the SAME in both
+arms, so they are the model or the prompt, not the port: **case 8** (`it_male`, *"Ciao! Però…
+non è così, vero?"*, 6 words, 37–44% silence) at 2.58–2.70, and **case 14** (`nl_male`, literal
+`Tab\tand\nnewline handling.`) at 2.78–3.01. Case 4 is one word (*"Hello."*) and swings 2.84–4.17
+across seeds, which is the short-prompt instability §6.7 already documents.
+
+**MCD WAS ATTEMPTED AND DISCARDED — the self-test is the result.** Mel-cepstral distortion is the
+standard objective TTS distance, and three implementations all failed calibration:
+
+| attempt | MCD(x, x) | MCD(x, x+1e-4 noise) | MCD(x, different utterance) |
+|---|---|---|---|
+| librosa MFCC + standard constant | 0 | 24.9 | 117.8 |
+| natural-log mel-cepstra | 0 | 24.9 | 115.4 |
+| + relative floor, + energy gate | 0 | 14.2–16.8 | 111.7–123.5 |
+
+A correct MCD reads **≪1 dB for imperceptible noise and ~8–15 dB for different utterances**. Every
+attempt is ~10× too large, because a DCT of an 80-bin log-mel is not the mel-generalised cepstrum
+the constant assumes and there is no SPTK/pysptk here. **No MCD number is reported.** The first
+run printed 181 dB — an impossible value that nothing would have flagged without the self-test.
+**Calibrate an instrument on known inputs before believing anything it says about unknown ones.**
+
+**What DID survive, sample-aligned (same codes through both codecs, so no DTW and no divergence):**
+SNR **42.94 dB**, log-spectral distance **0.620 dB** — both well past the >20 dB / <1 dB
+transparency thresholds for speech coding. Block 3 is perceptually transparent.
+
+**F0, with the control that makes it readable.** Device-vs-reference log-F0 correlation is 0.687
+(case 1) and 0.667 (case 6). On its own that means nothing — generation is stochastic, so two
+legitimate samples differ too. Two DEVICE seeds of case 1 correlate at only **0.202** with 61.9%
+voicing agreement, against **0.687 / 74.6%** device-vs-reference. **The device tracks the fp32
+reference's prosody far more closely than the model tracks its own seeds.** (Case 6 inverts —
+0.856 seed-to-seed vs 0.667 — but it is 2.4 s with few voiced frames; treat it as underpowered.)
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
