@@ -80,8 +80,10 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxOperation::MorehSoftmaxHSmallFactory
         }}},
     });
     // max scaler
+    // max scaler: a full/partial pair, so the max reduce can exclude the padding rows of the last
+    // H tile without staging a masked copy of it.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * tile_size_data,
+        .total_size = 2 * tile_size_data,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
@@ -149,16 +151,8 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxOperation::MorehSoftmaxHSmallFactory
             .page_size = tile_size_intermed,
         }}},
     });
-    // tmp
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * tile_size_intermed,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_28),
-            .data_format = intermed_data_format,
-            .page_size = tile_size_intermed,
-        }}},
-    });
+    // c_28 (tmp) is gone: it only ever staged the masked copy of the last H tile for the max reduce,
+    // which the partial max scaler now handles in place.
 
     // create read/write kernel
     KernelDescriptor::CompileTimeArgs reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};

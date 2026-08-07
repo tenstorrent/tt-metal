@@ -33,9 +33,16 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<1>();
     const auto src_in = TensorAccessor(in_args, src_addr);
 
-    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul).
+    //
+    // The MAX scaler is a full/partial pair so the max reduce can exclude the padding columns of the
+    // last W tile without staging a masked copy of it. mask_w is a runtime value here (this op
+    // compiles one kernel per core-split, not per shape), so this uses the runtime-count overload;
+    // when W is tile-aligned the host passes TILE_WIDTH and tile 1 comes out identical to tile 0.
+    dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+        cb_max_scaler,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW>(mask_w);
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 

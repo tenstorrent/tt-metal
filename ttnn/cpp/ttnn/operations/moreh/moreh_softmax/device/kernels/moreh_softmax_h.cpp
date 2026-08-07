@@ -27,8 +27,8 @@ void kernel_main() {
     DataflowBuffer dfb_max_obj(cb_max);
     constexpr auto cb_x_m_max = tt::CBIndex::c_27;
     DataflowBuffer dfb_x_m_max_obj(cb_x_m_max);
-    constexpr auto cb_tmp = tt::CBIndex::c_28;
-    DataflowBuffer dfb_tmp_obj(cb_tmp);
+    // c_28 (masked-input scratch) is gone: the max reduce now takes the ragged tail through the
+    // partial scaler instead of staging a masked copy of the last tile.
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -40,32 +40,34 @@ void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(1);
 
     dfb_mask_obj.wait_front(onetile);
-    dfb_max_scaler_obj.wait_front(onetile);
+    // cb_max_scaler carries a full/partial pair; cb_sum_scaler stays a single tile because the sum
+    // still consumes exps that this kernel masked in place (see the exp loop below).
+    dfb_max_scaler_obj.wait_front(2);
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
-        if (Ht == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            compute_kernel_lib::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_COL,
-                cb_in0,
-                cb_max_scaler,
-                cb_max,
-                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
-
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
-        }
+        //
+        // The reader emits cb_max_scaler as a full/partial pair (tile 1 fills only the valid rows of
+        // the last H tile), so the ragged tail is handled inside a single reduce. This replaces a
+        // two-phase split that reduced Ht-1 tiles, masked the last one into a scratch CB with
+        // mask_tile, and folded it back in with an accumulating reduce.
+        //
+        // It also fixes a latent bug: mask_tile masks with 0, so a column whose values are all
+        // negative used to reduce to max(values, 0) == 0. The partial scaler genuinely excludes the
+        // padding instead. Softmax is shift-invariant so the final result was unaffected either way.
+        compute_kernel_lib::reduce<
+            PoolType::MAX,
+            ReduceDim::REDUCE_COL,
+            cb_in0,
+            cb_max_scaler,
+            cb_max,
+            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            compute_kernel_lib::ReducePartialScaler::last_tile_at(1));
 
         // compute x - max(x)
         dfb_x_m_max_obj.reserve_back(Ht);
