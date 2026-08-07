@@ -9,8 +9,6 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 
-using namespace sfpi;
-
 namespace ckernel::sfpu {
 
 constexpr std::uint32_t sfpsetsgn_mod1_arg_imm = 1;
@@ -109,7 +107,7 @@ inline void rand_row() {
     // speculative prime after the final row is harmless.
     begin_mix_uint32_fast();
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
-    dst_reg++;
+    TTI_INCRWC(0, 2, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE>
