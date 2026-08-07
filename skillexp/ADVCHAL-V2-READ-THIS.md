@@ -4,8 +4,9 @@
 how much of a decoder's speed can the shard advisor be credited with, on a decoder already optimised without
 it? Every number below is from the cells' own artefacts or from my re-measurements on the same hardware.
 
-**This file is the few-minute version.** The evidence — 29 findings, the method, every correction — is in
-[`FINDINGS`](ADVCHAL-V2-FINDINGS.md). **Every `§` reference below points there**, not into this file.
+**This file is the few-minute version.** The evidence — 29 findings and the method — is in
+[`FINDINGS`](ADVCHAL-V2-FINDINGS.md); **every `§` reference below points there**, not into this file. What the
+analysis itself got wrong is in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
 
 ---
 
@@ -144,7 +145,7 @@ run**, not disagreement, and it is worth knowing which is which:
 | Δ with no unit qualifier | **per layer**. Model-level figures always say so |
 
 Where a claim is an assumption rather than a measurement it is labelled. Where a claim of mine was refuted,
-§9 records it rather than deleting it.
+[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) records it rather than deleting it.
 
 ---
 
@@ -153,7 +154,8 @@ Where a claim is an assumption rather than a measurement it is labelled. Where a
 | file | what's in it |
 |---|---|
 | **this file** | the verdict, the cells, the ledger — a few minutes |
-| [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the evidence: 29 findings, the method, every correction** — this is where `§3.x` lives |
+| [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the evidence: 29 findings and the method** — this is where `§3.x` lives |
+| [`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md) | **what this analysis got wrong** — 30 corrections in 7 error patterns, plus what is still unverified. Read it before doing the next analysis |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
@@ -175,6 +177,5 @@ Where a claim is an assumption rather than a measurement it is labelled. Where a
 | `advchal-v2-narrative.json`, `advchal-v2-data.json` | machine-readable |
 
 Everything is reconstructed from the cells' own session transcripts and artefacts, not their self-reported
-summaries. **Two of my own findings were retracted** in the 2026-08-07 pass — the "advisor gave an unrunnable
-layout" claim and the advised core counts; those and every earlier correction are in
-[`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §9.
+summaries. Facts are sourced; where something is my inference it says so, and where a claim of mine was later
+refuted it is recorded in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md) rather than quietly deleted.

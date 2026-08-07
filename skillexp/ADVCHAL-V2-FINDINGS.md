@@ -1013,26 +1013,12 @@ gives 0.807535 → 0.663507 ms/layer × 32 layers (§3.27). The corpus total mov
 
 What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).
 
-## 9. Corrections to earlier published versions of these documents
+## 9. What this analysis got wrong
 
-| claim | correction |
-|---|---|
-| phi FN "screened 11 cores only, measured slower" | It swept 11/12/24, all faster. Rejected by the oracle, not by timing |
-| phi FN missed the 32-core exactly-dividing grid | Measured: 11→48 is a plateau. Nothing was missed |
-| phi FN chose its 0.999999 bar in a vacuum | The skill instructs "moves PCC at all → reject" and recommends a differential oracle |
-| north-mini should have tried 44 and 88 cores | Both are illegal (`TT_FATAL`). But **16** was available and is better |
-| Arm labels (`FN`/`B` inverted) | `FN` = fuse-noadvise, `B` = nofuse-noadvise, from the driver claim lines |
-| gemma-4-26B: "the fusing arm had already fixed it" | The *fastest* arm is a `nofuse` arm. The variable is stage-02 quality |
-| The advisor has a "fewer-cores bias" | Its ordering prefers *more* cores, at level 6 of 7. The low values come from elsewhere — §3.3, open question |
-| qwen's unreachable linear layers are "~91 %" of its model time | **97 %** — recomputed from its own per-kind medians and layer counts |
-| "Re-measure an overlapping candidate at 4× replays" (my proposal) | **Refuted by experiment.** No separation, and the floor got 3–4× worse (§3.7, E8) |
-| "The advisor's rope advice is illegal" (my first claim) | **Superseded twice — see the row below for the final position.** I first blamed my probe's *slices*, then re-framed it as a validation gap. Both were wrong: the advised shard is (32,64) and every op in the real plan runs (§3.23) |
-| Implicit: that the wins generalise across batch | They do **not** — phi is batch-32-pinned by construction (E17), and nothing records it |
-| Row 46/54 `linear` "follows the advice" | **Downgraded to *family only*.** Both were already L1 width-sharded before the change, and the advised grid differs (88c vs 32c, 88c vs 12c). I had credited the advisor with the incumbent's own choice |
-| Seven rows read as "does not follow the advice" / "op removed" | **Downgraded to *undecidable*.** All seven are `pair_confidence: position` — the tool's own documented guess. I had been reading positional pairings as findings (§3.24) |
-| Implicit: that "improved" means the advice was followed | **It does not.** Two of the three largest wins were booked by cells that recorded **0 kept chains** and whose feasibility said `not_measurable` (§3.25) |
-| `advchal-v2-data.json` covers the corpus | **It has 14 rows, not 15** — gemma-4-26B FN is missing. Counts taken from that file alone are one cell short ([`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md)) |
-| **"The advisor gave an unrunnable layout / there is a tt-mlir↔tt-metal validation gap"** | **RETRACTED IN FULL — my error.** The advised shard is **(32,64)**, tile-aligned, on **32** cores; I probed **(32,48)**, a shape the advisor never specified. Every op in its real plan runs (isolated single-op test), and the plan verbatim is **−10.43 % at PCC 1.0** vs the −4.88 % shipped (§3.23, E25) |
-| The advisor advised 22 cores for phi's rope (and 11/22 generally) | **It advised 32.** `cores=` in `report.json` is a lossy single-range rendering of a two-range `CoreRangeSet`; `reconcile.py` parses it. **58.3 % of advised core counts corpus-wide are understated** (§3.23b) |
-| The advisor "advised DRAM interleaved" for SDPA / `nlp_concat_heads_decode` | **It declared the op `unfixable` and reported the exact `TT_FATAL`.** The DRAM layout in `ops[]` is a fallback after a declared failure, not a recommendation. The stage screens 41 of 54 such declarations anyway (§3.28) |
-| Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |
+Every claim I published as fact and later retracted, downgraded or re-derived — 30 of them, grouped by the
+error pattern that produced them, each with the check that would have caught it first. Kept as a separate file
+because the patterns are what transfer, not the individual corrections:
+
+→ **[`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md)**
+
+It also records what is **still unverified** in this corpus, so nobody inherits an open question as a fact.
