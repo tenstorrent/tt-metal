@@ -191,8 +191,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         self.synchronize_devices()
 
         self._tracers = [Tracer(self._traced_step, device=submesh, prep_run=False) for submesh in self.submesh_devices]
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
-        self._solvers = [EulerSolver() for _ in self.submesh_devices]
+        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._solvers = [EulerSolver(scheduler=scheduler) for _ in self.submesh_devices]
 
         self._num_channels_latents = checkpoint.num_channels_latents
         self._joint_attention_dim = checkpoint.joint_attention_dim
@@ -285,11 +285,9 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
         logger.info("preparing timesteps...")
 
-        self._scheduler.set_timesteps(num_inference_steps)
-        sigmas = self._scheduler.sigmas.tolist()
         for solver in self._solvers:
-            solver.set_schedule(sigmas)
-        timesteps = self._scheduler.timesteps
+            solver.set_schedule(num_inference_steps)
+        timesteps = self._solvers[0].timesteps
 
         logger.info("preparing latents...")
 
