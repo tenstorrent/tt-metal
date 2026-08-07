@@ -116,6 +116,8 @@ class Semaphore {
     static uintptr_t sem_l1_offset(uint32_t id) {
 #ifdef ARCH_QUASAR
         if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
+            // Covers the raw-id ctor too; the token ctor also checks this at compile time.
+            ASSERT(id * L1_ALIGNMENT < MEM_DM_CACHED_SEM_SIZE);
             return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * L1_ALIGNMENT;
         }
 #endif
