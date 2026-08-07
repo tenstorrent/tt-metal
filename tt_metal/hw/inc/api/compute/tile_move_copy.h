@@ -28,8 +28,10 @@ namespace ckernel {
  * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
  * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set  | False    |
  * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
+ * | is_fp32_dest_acc_en | Select FP32 DEST layout for datacopy MOP addressing | bool | true/false (default: DST_ACCUM_MODE). Must match the template parameter used in copy_tile. A non-default value is only valid while enable_fp32_dest_acc() is in effect. | False |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_tile_to_dst_init_short(
     uint32_t cbid,
     uint32_t transpose = 0,
@@ -47,9 +49,9 @@ ALWI void copy_tile_to_dst_init_short(
     // 4th template arg is arch-divergent (unpack_to_dest on Quasar, is_int_fpu_en on WH/BH); keep it
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
 #ifndef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
 #else
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));
 #endif
 }
@@ -57,9 +59,10 @@ ALWI void copy_tile_to_dst_init_short(
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-    copy_tile_to_dst_init_short(cbid, 0, false, call_line);
+    copy_tile_to_dst_init_short<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
 }
 
 // clang-format off
@@ -103,15 +106,17 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
  * | in_cb_id       | The identifier of the source circular buffer (CB) | uint32_t  | 0 to 31                                             | True     |
  * | in_tile_index  | The index of the tile to copy from the input CB   | uint32_t  | Must be less than the size of the CB                | True     |
  * | dst_tile_index | The index of the tile in the DST register         | uint32_t  | Must be less than the size of the DST register (16) | True     |
+ * | is_fp32_dest_acc_en | Select FP32 DEST layout for datacopy MOP addressing | bool | true/false (default: DST_ACCUM_MODE). Must match the template parameter used in copy_tile_init. A non-default value is only valid while enable_fp32_dest_acc() is in effect. | False |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
 
@@ -138,15 +143,17 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
  * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
  * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
+ * | is_fp32_dest_acc_en  | Select FP32 DEST layout for datacopy MOP addressing        | bool      | true/false (default: DST_ACCUM_MODE). Must match the template parameter used in copy_tile_init. A non-default value is only valid while enable_fp32_dest_acc() is in effect. | False |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
 }
 
@@ -166,10 +173,11 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
 copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
-    copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
+    copy_block<is_fp32_dest_acc_en>(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 
 }  // namespace ckernel
