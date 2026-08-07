@@ -25,12 +25,12 @@
  * Metal 2.0 named resources:
  *   CTAs:  W_tiles, H_tiles; W_mod32 (only when the right mask is bound),
  *          H_mod32 (only when the bottom mask is bound).
- *   Defines: FILL_PAD_HAS_RIGHT_PAD / FILL_PAD_HAS_BOTTOM_PAD gate the
+ *   Defines: HAS_RIGHT_PAD / HAS_BOTTOM_PAD gate the
  *            conditionally-bound right / bottom mask DFBs (promoted from the
  *            legacy has_right_pad / has_bottom_pad compile-time args).
  *   DFBs:  dfb::right_mask (PRODUCER, conditional), dfb::bot_mask (PRODUCER,
  *          conditional), dfb::data_out (this writer is its CONSUMER).
- *   tensor: tensor::input (in-place tensor; base address auto-injected).
+ *   tensor: tensor::dst (in-place tensor; base address auto-injected).
  *   RTAs:  start_right, num_right, start_bottom, num_bottom, start_corner, num_corner.
  */
 
@@ -48,12 +48,12 @@ void kernel_main() {
 
     // has_right_pad / has_bottom_pad are carried as preprocessor defines (not CTAs),
     // because they gate references to the conditionally-bound right / bottom mask DFBs.
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     constexpr std::uint32_t has_right_pad = 1;
 #else
     constexpr std::uint32_t has_right_pad = 0;
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     constexpr std::uint32_t has_bottom_pad = 1;
 #else
     constexpr std::uint32_t has_bottom_pad = 0;
@@ -75,29 +75,29 @@ void kernel_main() {
     const auto start_corner = get_arg(args::start_corner);
     const auto num_corner = get_arg(args::num_corner);
 
-    // Tensor base address and layout metadata are supplied by the tensor::input binding.
-    const auto s = TensorAccessor(tensor::input);
+    // Tensor base address and layout metadata are supplied by the tensor::dst binding.
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     DataflowBuffer dfb_right_mask(dfb::right_mask);
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     DataflowBuffer dfb_bot_mask(dfb::bot_mask);
 #endif
     DataflowBuffer dfb_data_out(dfb::data_out);
     const std::uint32_t tile_bytes = dfb_data_out.get_entry_size();
 
     // ---- Phase 1: generate and push mask tile(s) ----
-#if defined(FILL_PAD_HAS_RIGHT_PAD) || defined(FILL_PAD_HAS_BOTTOM_PAD)
+#if defined(HAS_RIGHT_PAD) || defined(HAS_BOTTOM_PAD)
     using mask_t = MASK_ELEM_UINT;
     constexpr std::uint32_t TILE = 32;
 #endif
-#ifdef FILL_PAD_HAS_RIGHT_PAD
+#ifdef HAS_RIGHT_PAD
     constexpr auto W_mod32 = get_arg(args::W_mod32);
     push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
-#ifdef FILL_PAD_HAS_BOTTOM_PAD
+#ifdef HAS_BOTTOM_PAD
     constexpr auto H_mod32 = get_arg(args::H_mod32);
     push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
