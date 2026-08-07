@@ -45,6 +45,49 @@ namespace fabric_detail{
     template <bool STATEFUL_NOC>
     void update_credits_and_slots(WorkerToFabricEdmSender*);
 }
+
+/*
+ * Layout of the producer-position word that a worker leaves in the router's L1 at
+ * `edm_copy_of_wr_counter_addr` when it closes a connection, and that the next worker to connect
+ * picks up. One 32-bit inline write, one 32-bit read -- the router itself never touches it.
+ *
+ *     [31:24] slot index    - which buffer slot the next producer must write first
+ *     [23: 0] write counter - total packets ever injected on this channel, modulo 2^24
+ *
+ * WHY THE INDEX IS STORED RATHER THAN DERIVED
+ * -------------------------------------------
+ * This word used to hold the bare write counter, and the reconnecting producer recovered its slot
+ * index as `counter % num_buffers`. That is only correct while the counter has never wrapped,
+ * because the router's own cursor is a pure mod-num_buffers counter that never passes through a
+ * uint32 (fabric_erisc_datamover_channels.hpp: it is zeroed once at bring-up and bumped per packet).
+ * After P packets the router sits at `P % num_buffers` but the producer computes
+ * `(P % 2^W) % num_buffers`, and those agree for every P only if num_buffers divides 2^W -- i.e.
+ * only for power-of-two depths. At depth 18, `2^32 % 18 == 4`, so the first wrap left the producer
+ * permanently 4 slots behind the router and the channel silently transmitted stale slots with
+ * credits still balanced. Storing the index removes the constraint for every depth.
+ *
+ * WHY 24 BITS IS ENOUGH FOR THE COUNTER
+ * -------------------------------------
+ * The counter's only consumer is `used_slots = write_counter - edm_read_counter` in
+ * get_num_free_write_slots(), and the true value of that difference never exceeds num_buffers
+ * (<= 255). The reconnecting producer rebuilds a full-width counter from the router's read counter
+ * (see open_finish), so 24 bits of the producer's counter is ample and the hot path keeps its plain
+ * wrap-safe uint32 subtraction.
+ */
+namespace connection_handoff {
+constexpr uint32_t COUNTER_BITS = 24;
+constexpr uint32_t COUNTER_MASK = (1u << COUNTER_BITS) - 1;
+
+constexpr uint32_t pack(uint8_t slot_index, uint32_t write_counter) {
+    return (static_cast<uint32_t>(slot_index) << COUNTER_BITS) | (write_counter & COUNTER_MASK);
+}
+constexpr uint8_t slot_index_of(uint32_t packed) { return static_cast<uint8_t>(packed >> COUNTER_BITS); }
+constexpr uint32_t counter_of(uint32_t packed) { return packed & COUNTER_MASK; }
+
+// A freshly zeroed word must decode to "slot 0, counter 0", which is the correct state for the
+// first producer to connect after fabric bring-up.
+static_assert(slot_index_of(0) == 0 && counter_of(0) == 0);
+}  // namespace connection_handoff
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -514,10 +557,28 @@ struct WorkerToFabricEdmSenderBase {
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            // Restore the producer position from the packed handoff word the previous producer left
+            // behind (see connection_handoff above for the layout and the reasoning).
+            //
+            // The slot index is taken verbatim -- it is NOT re-derived as `counter % num_buffers`,
+            // because the counter only survives modulo 2^COUNTER_BITS and re-deriving would only be
+            // correct when num_buffers divides that modulus, i.e. only for power-of-two depths.
+            //
+            // The full-width counter is then reconstructed from the router's read counter:
+            //     outstanding = (P - R) mod 2^COUNTER_BITS, and outstanding <= num_buffers < 2^24,
+            //     so R + outstanding == P exactly.
+            // That keeps `counter - edm_read_counter` in get_num_free_write_slots() a plain
+            // wrap-safe uint32 subtraction with no masking in the hot path.
+            invalidate_l1_cache();
+            const uint32_t handoff = *this->worker_teardown_addr;
+            const uint32_t edm_read_counter = *this->edm_buffer_local_free_slots_read_ptr;
+            const uint32_t outstanding =
+                (connection_handoff::counter_of(handoff) - edm_read_counter) & connection_handoff::COUNTER_MASK;
             this->buffer_slot_write_counter.reset();
-            this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
-            this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
+            this->buffer_slot_write_counter.counter = edm_read_counter + outstanding;
+            this->buffer_slot_write_counter.index = BufferIndex{connection_handoff::slot_index_of(handoff)};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
+            ASSERT(this->buffer_slot_index.get() < this->num_buffers_per_channel);
         } else {
             this->buffer_slot_index = BufferIndex(0);
         }
@@ -558,8 +619,13 @@ struct WorkerToFabricEdmSenderBase {
         // buffer index stored at location after handshake addr
         if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
+            // Hand off BOTH the slot index and the write counter. The index must be carried
+            // explicitly; it cannot be recovered from the counter alone (see connection_handoff).
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
-                remote_buffer_index_addr, this->buffer_slot_write_counter.counter, 0xF, WORKER_HANDSHAKE_NOC);
+                remote_buffer_index_addr,
+                connection_handoff::pack(this->get_buffer_slot_index(), this->buffer_slot_write_counter.counter),
+                0xF,
+                WORKER_HANDSHAKE_NOC);
         } else {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
