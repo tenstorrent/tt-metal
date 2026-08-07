@@ -375,6 +375,84 @@ def test_follow_up_turn_continues_the_session() -> None:
     assert second["prompt_tokens"] < pos_before, "second turn re-prefilled the whole history"
 
 
+def test_request_logging_shows_the_sender_options_and_messages() -> None:
+    body = {
+        "model": "deepseek",
+        "stream": True,
+        "temperature": 0.7,
+        "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+    }
+    text = S._describe_request("chatcmpl-abc", "10.0.0.4:5122", "alice", body)
+
+    assert "chatcmpl-abc" in text and "10.0.0.4:5122" in text and "user='alice'" in text
+    assert "stream=True" in text and "temperature=0.7" in text
+    assert "2 messages, 10 chars" in text
+    assert "[system] be brief" in text and "[user] hi" in text
+    # Absent options stay out of the line rather than showing as None.
+    assert "top_p" not in text and "thinking" not in text
+
+
+def test_request_logging_shows_the_message_whole_by_default() -> None:
+    """The log is what you debug a prompt with, so it is not previewed by default."""
+    body = {"messages": [{"role": "user", "content": "x" * 5000}]}
+    assert "x" * 5000 in S._describe_request("chatcmpl-abc", "10.0.0.4:5122", "alice", body)
+
+
+def test_a_logged_message_stays_one_record() -> None:
+    """Newlines are collapsed so a message cannot masquerade as several log lines."""
+    body = {"messages": [{"role": "user", "content": "first\nsecond\n\nthird"}]}
+    text = S._describe_request("chatcmpl-abc", "10.0.0.4:5122", "alice", body)
+
+    assert "[user] first second third" in text
+    assert len(text.splitlines()) == 3, "header, count, and one line for the message"
+
+
+def test_content_parts_are_accepted_like_a_plain_string() -> None:
+    """OpenAI's array-of-parts ``content`` carries the same prompt as the string form."""
+    parts = [{"type": "text", "text": "hello "}, {"type": "text", "text": "world"}]
+    assert S._normalized_messages([{"role": "user", "content": parts}]) == [{"role": "user", "content": "hello world"}]
+
+
+def test_normalising_strips_the_extras_a_client_echoes_back() -> None:
+    """An echoed assistant reply still matches the stored one, so the turn continues.
+
+    Clients replay the whole history including fields the server never stored; comparing
+    the raw dicts would miss the prefix and re-prefill the conversation from scratch.
+    """
+    stored = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey"}]
+    echoed = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": "hey", "reasoning_content": None, "tool_calls": None},
+        {"role": "user", "content": "again"},
+    ]
+    assert S._normalized_messages(echoed)[: len(stored)] == stored
+
+
+def test_non_text_content_is_refused_rather_than_dropped(expect_error) -> None:
+    """Silently discarding an image part would answer a prompt the user did not send."""
+    image = [{"type": "image_url", "image_url": {"url": "http://example/x.png"}}]
+    with expect_error(S.RequestError, "text only") as excinfo:
+        S._normalized_messages([{"role": "user", "content": image}])
+    assert excinfo.value.status == 400
+
+
+@pytest.mark.parametrize(
+    "messages, reason",
+    [
+        ([], "empty"),
+        ("hello", "not a list"),
+        ([{"content": "hi"}], "no role"),
+        (["hi"], "not an object"),
+        ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey"}], "assistant last"),
+        ([{"role": "user", "content": 7}], "content is a number"),
+    ],
+)
+def test_malformed_messages_are_rejected(messages, reason: str, expect_error) -> None:
+    with expect_error(S.RequestError, "") as excinfo:
+        S._normalized_messages(messages)
+    assert excinfo.value.status == 400, reason
+
+
 @pytest.mark.parametrize(
     "body, greedy",
     [
