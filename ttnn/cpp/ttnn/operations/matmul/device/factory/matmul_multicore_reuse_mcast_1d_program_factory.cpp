@@ -258,7 +258,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreRangeSet in0_mcast_sender_cores =
         num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
-    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
@@ -269,57 +268,24 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             global_cb->receiver_cores(),
             all_cores_with_work);
     }
-    CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
-    uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
-    uint32_t in0_mcast_receiver_num_dests = std::min(
-        in0_mcast_receiver_num_cores,
-        num_cores);  // should always be number of cores in receiver grid up to number of active cores
+    const CoreRange in0_mcast_rect = (in0_is_sharded ? all_cores : all_cores_with_work).bounding_box();
 
     CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
-    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
-    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work;
     CoreRangeSet in0_mcast_receivers;
-    std::vector<uint32_t> in0_mcast_noc_x;
-    std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
         in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
-
-        if (in0_mcast_receiver_num_dests > num_cores_with_work) {
-            const uint32_t in0_mcast_cores_without_work_and_in_receiver_grid_num_cores =
-                in0_mcast_receiver_num_dests - num_cores_with_work;
+        if (num_cores > num_cores_with_work) {
             uint32_t core_idx_x = num_cores_with_work % num_cores_c;
             uint32_t core_idx_y = num_cores_with_work / num_cores_c;
-            CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
-                start_core, in0_mcast_cores_without_work_and_in_receiver_grid_num_cores, matmul_core_rect, row_major);
-        }
-
-        if (in0_sender_num_cores > in0_mcast_receiver_num_dests) {
-            const uint32_t in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores =
-                in0_sender_num_cores - in0_mcast_receiver_num_dests;
-            uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
-            uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
-            CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
-                start_core,
-                in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
-                matmul_core_rect,
-                row_major);
-        }
-
-        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
-        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
-        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
-        }
-        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+            const CoreCoord first_no_work_core = {
+                (std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+            in0_mcast_cores_without_work = num_cores_to_corerangeset_in_subcoregrids(
+                first_no_work_core, num_cores - num_cores_with_work, matmul_core_rect, row_major);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
-        if (in0_mcast_receiver_num_cores > 1) {
+        if (in0_mcast_rect.size() > 1) {
             // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
             // sub-devices anchored away from (0, 0) wrap correctly.
             auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
@@ -329,14 +295,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
     }
 
-    // Mcast args
-    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
+        device,
+        CoreRangeSet(in0_mcast_rect),
+        start_core,
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
+            .rotating_sender = in0_is_sharded,
+            .base_sem_id = 0},
+        num_cores - 1);
+    ttnn::kernel_lib::host::create_owned_semaphores(program, in0_mcast.owned_semaphores());
+    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -370,34 +339,25 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
         in0_sender_compile_time_args = {
-            (std::uint32_t)1,  // core_has_output_block_work
-            (std::uint32_t)1,  // core_in_in0_receiver_mcast_grid
-
+            (std::uint32_t)1,                                           // core_has_output_block_work
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
             (std::uint32_t)in0_last_ktile_h,
-
-            // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_num_dests,  // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores,  // in0_mcast_num_cores
-            (std::uint32_t)(in0_mcast_sender_cores_grid.x),
-            (std::uint32_t)(in0_mcast_sender_cores_grid.y),
-            (std::uint32_t)(false),
-            (std::uint32_t)(in0_shard_width_in_tiles),
-            (std::uint32_t)(in0_shard_height_in_tiles),
-            (std::uint32_t)(in0_block_w),
-            (std::uint32_t)in0_block_h,  // in0_block_h
-
-            // batch args
-            (std::uint32_t)B  // batch
         };
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(),
+            {in0_shard_width_in_tiles,
+             in0_shard_height_in_tiles,
+             in0_block_w,
+             in0_block_h,
+             B,
+             (std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather())});
     } else {
         in0_sender_compile_time_args = {
             // in0 tensor args
@@ -418,27 +378,28 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
-            // batch args
-            (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)B,      // batch
-            (std::uint32_t)B,      // batch
-            (std::uint32_t)false,  // reuse_in0_in_CB
-            // sparsity args
-            (std::uint32_t)0,     // batchB
-            (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
-            (std::uint32_t)true,  // bcast_A
-            (std::uint32_t)false  // get_batch_from_reader
         };
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(),
+            {
+                // batch args
+                (std::uint32_t)M * K,  // MtKt
+                (std::uint32_t)B,      // batch
+                (std::uint32_t)B,      // batch
+                (std::uint32_t)false,  // reuse_in0_in_CB
+                                       // sparsity args
+                (std::uint32_t)0,      // batchB
+                (std::uint32_t)0,      // sparsity_pagesize (placeholder since sparsity not used in this case)
+                (std::uint32_t)true,   // bcast_A
+                (std::uint32_t)false   // get_batch_from_reader
+            });
+        in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
+        tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+        in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
-    in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
-    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -507,17 +468,23 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)B,     // batch
-        (std::uint32_t)false  // get_batch_from_reader
     };
+    in0_receiver_compile_time_args.insert(
+        in0_receiver_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+    in0_receiver_compile_time_args.insert(
+        in0_receiver_compile_time_args.end(),
+        {
+            // batch args
+            (std::uint32_t)B,     // batch
+            (std::uint32_t)false  // get_batch_from_reader
+        });
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    if (!in0_is_sharded) {
+        mm_kernel_in0_sender_writer_defines["MCAST_ARGS"] = "1";
+    }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -559,36 +526,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
-    // skipping We can use this flag to turn off unnecessary mcast overhead if necessary
-    if (in0_mcast_receiver_num_cores == 1) {
+    if (!in0_mcast.active()) {
         mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-
-    // Intermediate CB read
-    /*
-    Blackhole architecture alignment issue workaround for tiny tiles:
-
-    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
-    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
-    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
-
-    Example scenario:
-    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
-    - CB configured with size=2 to hold both tiles
-
-    Result:
-    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
-    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
-
-    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
-    the intermediate CB first, then copy to the destination CB. This ensures proper
-    alignment at the cost of additional memory bandwidth overhead.
-
-    Note: This workaround should only be used for this specific alignment issue case.
-    */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -623,47 +565,24 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_sparsity", tt::CBIndex::c_6},
             }});
 
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
-    if (in0_is_sharded) {
-        if (in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0) {
-            in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
-            in0_sender_compile_time_args[1] = 1;  // core_in_in0_receiver_mcast_grid
-            mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                in0_mcast_cores_without_work_and_in_receiver_grid,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines,
-                    .named_compile_args = {
-                        {"cb_in0", tt::CBIndex::c_0},
-                        {"cb_in0_sharded", tt::CBIndex::c_2},
-                        {"cb_l1_array", tt::CBIndex::c_6},
-                    }});
-        }
-        if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
-            in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
-            in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
-            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                in0_mcast_cores_without_work_and_not_in_receiver_grid,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines,
-                    .named_compile_args = {
-                        {"cb_in0", tt::CBIndex::c_0},
-                        {"cb_in0_sharded", tt::CBIndex::c_2},
-                        {"cb_l1_array", tt::CBIndex::c_6},
-                    }});
-        }
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_id = 0;
+    if (in0_is_sharded && in0_mcast_cores_without_work.num_cores() > 0) {
+        in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
+        mm_kernel_in0_mcast_cores_without_work_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+            in0_mcast_cores_without_work,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_sender_compile_time_args,
+                .defines = mm_kernel_in0_sender_writer_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_l1_array", tt::CBIndex::c_6},
+                }});
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -1008,12 +927,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in0_last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - in0_last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
-
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
@@ -1021,15 +934,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mm_in0_sender_args.push_back(i);
-            mm_in0_sender_args.push_back(start_core_noc.x);
-            mm_in0_sender_args.push_back(start_core_noc.y);
-            mm_in0_sender_args.push_back(end_core_noc.x);
-            mm_in0_sender_args.push_back(end_core_noc.y);
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+            std::vector<uint32_t> mm_in0_sender_args = {i};
+            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -1041,38 +949,26 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                     mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
                     core,
                     mm_in0_sender_args);  // RISCV_0_default
-            } else if (i < in0_mcast_receiver_num_dests) {
-                tt_metal::SetRuntimeArgs(
-                    program,
-                    mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id,
-                    core,
-                    mm_in0_sender_args);  // RISCV_0_default
             } else {
                 tt_metal::SetRuntimeArgs(
-                    program,
-                    mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id,
-                    core,
-                    mm_in0_sender_args);  // RISCV_0_default
+                    program, mm_kernel_in0_mcast_cores_without_work_id, core, mm_in0_sender_args);  // RISCV_0_default
             }
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
+            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
-
-                // padding args
-                (std::uint32_t)in0_last_out_block_h,  // last_block_h
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
-            };
+                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y};  // in0_tensor_start_tile_id
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(),
+                {
+                    (std::uint32_t)in0_last_out_block_h,  // last_block_h
+                    (std::uint32_t)0,                     // sparsity_addr
+                });
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -1086,13 +982,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         // in0 receiver and in 1 sender
         else {
-            std::vector<uint32_t> mm_in0_receiver_args = {
-                // in0 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
-            };
             tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);  // RISCV_1_default
+                program, mm_kernel_in0_receiver_id, core, in0_mcast.runtime_args(core));  // RISCV_1_default
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -1594,29 +1485,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (in1_mcast_receiver_num_cores == 1) {
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
-
-    // Intermediate CB read
-    /*
-    Blackhole architecture alignment issue workaround for tiny tiles:
-
-    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
-    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
-    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
-
-    Example scenario:
-    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
-    - CB configured with size=2 to hold both tiles
-
-    Result:
-    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
-    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
-
-    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
-    the intermediate CB first, then copy to the destination CB. This ensures proper
-    alignment at the cost of additional memory bandwidth overhead.
-
-    Note: This workaround should only be used for this specific alignment issue case.
-    */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -3275,61 +3143,27 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     CoreRangeSet in0_mcast_sender_cores =
         num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
-    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
-    CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
-    uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
-    uint32_t in0_mcast_receiver_num_dests = std::min(
-        in0_mcast_receiver_num_cores,
-        num_cores);  // should always be number of cores in receiver grid up to number of active cores
+    const CoreRange in0_mcast_rect = (in0_is_sharded ? all_cores : all_cores_with_work).bounding_box();
 
     CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
-    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
-    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work;
     CoreRangeSet in0_mcast_receivers;
-    std::vector<uint32_t> in0_mcast_noc_x;
-    std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
         in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
-
-        if (in0_mcast_receiver_num_dests > num_cores_with_work) {
-            const uint32_t in0_mcast_cores_without_work_and_in_receiver_grid_num_cores =
-                in0_mcast_receiver_num_dests - num_cores_with_work;
+        if (num_cores > num_cores_with_work) {
             uint32_t core_idx_x = num_cores_with_work % num_cores_c;
             uint32_t core_idx_y = num_cores_with_work / num_cores_c;
-            CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
-                start_core, in0_mcast_cores_without_work_and_in_receiver_grid_num_cores, matmul_core_rect, row_major);
-        }
-
-        if (in0_sender_num_cores > in0_mcast_receiver_num_dests) {
-            const uint32_t in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores =
-                in0_sender_num_cores - in0_mcast_receiver_num_dests;
-            uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
-            uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
-            CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
-                start_core,
-                in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
-                matmul_core_rect,
-                row_major);
-        }
-
-        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
-        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
-        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
-        }
-        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+            const CoreCoord first_no_work_core = {
+                (std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+            in0_mcast_cores_without_work = num_cores_to_corerangeset_in_subcoregrids(
+                first_no_work_core, num_cores - num_cores_with_work, matmul_core_rect, row_major);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
-        if (in0_mcast_receiver_num_cores > 1) {
+        if (in0_mcast_rect.size() > 1) {
             // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
             // sub-devices anchored away from (0, 0) wrap correctly.
             auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
@@ -3339,14 +3173,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
+        device,
+        CoreRangeSet(in0_mcast_rect),
+        start_core,
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
+            .rotating_sender = in0_is_sharded,
+            .base_sem_id = 0},
+        num_cores - 1);
+    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3380,34 +3216,25 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
         in0_sender_compile_time_args = {
-            (std::uint32_t)1,  // core_has_output_block_work
-            (std::uint32_t)1,  // core_in_in0_receiver_mcast_grid
-
+            (std::uint32_t)1,                                           // core_has_output_block_work
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
             (std::uint32_t)in0_last_ktile_h,
-
-            // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_num_dests,  // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores,  // in0_mcast_num_cores
-            (std::uint32_t)(in0_mcast_sender_cores_grid.x),
-            (std::uint32_t)(in0_mcast_sender_cores_grid.y),
-            (std::uint32_t)(false),
-            (std::uint32_t)(in0_shard_width_in_tiles),
-            (std::uint32_t)(in0_shard_height_in_tiles),
-            (std::uint32_t)(in0_block_w),
-            (std::uint32_t)in0_block_h,  // in0_block_h
-
-            // batch args
-            (std::uint32_t)in0_B  // batch
         };
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(),
+            {in0_shard_width_in_tiles,
+             in0_shard_height_in_tiles,
+             in0_block_w,
+             in0_block_h,
+             in0_B,
+             (std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather())});
     } else {
         in0_sender_compile_time_args = {
             // in0 tensor args
@@ -3428,27 +3255,28 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
-            // batch args
-            (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)in0_B,  // batch
-            (std::uint32_t)in1_B,  // batch
-            (std::uint32_t)false,  // reuse_in0_in_CB
-            // sparsity args
-            (std::uint32_t)0,     // batchB
-            (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
-            (std::uint32_t)true,  // bcast_A
-            (std::uint32_t)false  // get_batch_from_reader
         };
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(),
+            {
+                // batch args
+                (std::uint32_t)M * K,  // MtKt
+                (std::uint32_t)in0_B,  // batch
+                (std::uint32_t)in1_B,  // batch
+                (std::uint32_t)false,  // reuse_in0_in_CB
+                                       // sparsity args
+                (std::uint32_t)0,      // batchB
+                (std::uint32_t)0,      // sparsity_pagesize (placeholder since sparsity not used in this case)
+                (std::uint32_t)true,   // bcast_A
+                (std::uint32_t)false   // get_batch_from_reader
+            });
+        in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
+        tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+        in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
-    in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
-    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -3517,17 +3345,23 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)false   // get_batch_from_reader
     };
+    in0_receiver_compile_time_args.insert(
+        in0_receiver_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
+    in0_receiver_compile_time_args.insert(
+        in0_receiver_compile_time_args.end(),
+        {
+            // batch args
+            (std::uint32_t)in0_B,  // batch
+            (std::uint32_t)false   // get_batch_from_reader
+        });
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    if (!in0_is_sharded) {
+        mm_kernel_in0_sender_writer_defines["MCAST_ARGS"] = "1";
+    }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -3566,9 +3400,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
-    // skipping We can use this flag to turn off unnecessary mcast overhead if necessary
-    if (in0_mcast_receiver_num_cores == 1) {
+    if (!in0_mcast.active()) {
         mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
@@ -3594,10 +3426,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     //                      Build Kernel Descriptors
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor in0_sender_kernel_desc;
-    KernelDescriptor in0_no_work_in_receiver_kernel_desc;
-    bool has_in0_no_work_in_receiver_kernel = false;
-    KernelDescriptor in0_no_work_not_in_receiver_kernel_desc;
-    bool has_in0_no_work_not_in_receiver_kernel = false;
+    KernelDescriptor in0_no_work_kernel_desc;
+    bool has_in0_no_work_kernel = false;
     KernelDescriptor in0_receiver_kernel_desc;
     bool has_in0_receiver_kernel = false;
     KernelDescriptor in1_sender_writer_kernel_desc;
@@ -3629,47 +3459,24 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     in0_sender_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
 
-    if (in0_is_sharded) {
-        if (in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0) {
-            has_in0_no_work_in_receiver_kernel = true;
-            auto no_work_ct_args = in0_sender_compile_time_args;
-            no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 1;  // core_in_in0_receiver_mcast_grid
-            in0_no_work_in_receiver_kernel_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
-            in0_no_work_in_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            in0_no_work_in_receiver_kernel_desc.core_ranges = in0_mcast_cores_without_work_and_in_receiver_grid;
-            in0_no_work_in_receiver_kernel_desc.compile_time_args = no_work_ct_args;
-            in0_no_work_in_receiver_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
-            in0_no_work_in_receiver_kernel_desc.named_compile_time_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in0_sharded", tt::CBIndex::c_2},
-                {"cb_l1_array", tt::CBIndex::c_6},
-            };
-            in0_no_work_in_receiver_kernel_desc.config =
-                DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-        }
-        if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
-            has_in0_no_work_not_in_receiver_kernel = true;
-            auto no_work_ct_args = in0_sender_compile_time_args;
-            no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 0;  // core_in_in0_receiver_mcast_grid
-            in0_no_work_not_in_receiver_kernel_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
-            in0_no_work_not_in_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            in0_no_work_not_in_receiver_kernel_desc.core_ranges = in0_mcast_cores_without_work_and_not_in_receiver_grid;
-            in0_no_work_not_in_receiver_kernel_desc.compile_time_args = no_work_ct_args;
-            in0_no_work_not_in_receiver_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
-            in0_no_work_not_in_receiver_kernel_desc.named_compile_time_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in0_sharded", tt::CBIndex::c_2},
-                {"cb_l1_array", tt::CBIndex::c_6},
-            };
-            in0_no_work_not_in_receiver_kernel_desc.config =
-                DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-        }
+    if (in0_is_sharded && in0_mcast_cores_without_work.num_cores() > 0) {
+        has_in0_no_work_kernel = true;
+        auto no_work_ct_args = in0_sender_compile_time_args;
+        no_work_ct_args[0] = 0;  // core_has_output_block_work
+        in0_no_work_kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
+        in0_no_work_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        in0_no_work_kernel_desc.core_ranges = in0_mcast_cores_without_work;
+        in0_no_work_kernel_desc.compile_time_args = no_work_ct_args;
+        in0_no_work_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
+        in0_no_work_kernel_desc.named_compile_time_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in0_sharded", tt::CBIndex::c_2},
+            {"cb_l1_array", tt::CBIndex::c_6},
+        };
+        in0_no_work_kernel_desc.config =
+            DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
     }
 
     if (!in0_is_sharded && in0_mcast_receivers.num_cores() > 0) {
@@ -3963,10 +3770,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Semaphore Descriptors
     ////////////////////////////////////////////////////////////////////////////
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
+    const auto in0_mcast_semaphores = in0_mcast.owned_semaphores();
+    desc.semaphores.insert(desc.semaphores.end(), in0_mcast_semaphores.begin(), in0_mcast_semaphores.end());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -3995,12 +3800,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t in0_last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - in0_last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
-
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
@@ -4008,15 +3807,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mm_in0_sender_args.push_back(i);
-            mm_in0_sender_args.push_back(start_core_noc.x);
-            mm_in0_sender_args.push_back(start_core_noc.y);
-            mm_in0_sender_args.push_back(end_core_noc.x);
-            mm_in0_sender_args.push_back(end_core_noc.y);
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+            std::vector<uint32_t> mm_in0_sender_args = {i};
+            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -4024,30 +3818,25 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
             if (i < num_cores_with_work) {
                 in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
-            } else if (i < in0_mcast_receiver_num_dests) {
-                in0_no_work_in_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
             } else {
-                in0_no_work_not_in_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+                in0_no_work_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
             }
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
+            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
-
-                // padding args
-                (std::uint32_t)in0_last_out_block_h,  // last_block_h
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
-            };
+                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y};  // in0_tensor_start_tile_id
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
+            mm_in0_sender_args.insert(
+                mm_in0_sender_args.end(),
+                {
+                    (std::uint32_t)in0_last_out_block_h,  // last_block_h
+                    (std::uint32_t)0,                     // sparsity_addr
+                });
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -4062,12 +3851,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         // in0 receiver and in 1 sender
         else {
-            std::vector<uint32_t> mm_in0_receiver_args = {
-                // in0 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
-            };
-            in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
+            in0_receiver_kernel_desc.runtime_args.emplace_back(core, in0_mcast.runtime_args(core));
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -4153,11 +3937,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     //                      Push kernels to descriptor
     ////////////////////////////////////////////////////////////////////////////
     desc.kernels.push_back(std::move(in0_sender_kernel_desc));
-    if (has_in0_no_work_in_receiver_kernel) {
-        desc.kernels.push_back(std::move(in0_no_work_in_receiver_kernel_desc));
-    }
-    if (has_in0_no_work_not_in_receiver_kernel) {
-        desc.kernels.push_back(std::move(in0_no_work_not_in_receiver_kernel_desc));
+    if (has_in0_no_work_kernel) {
+        desc.kernels.push_back(std::move(in0_no_work_kernel_desc));
     }
     if (has_in0_receiver_kernel) {
         desc.kernels.push_back(std::move(in0_receiver_kernel_desc));
