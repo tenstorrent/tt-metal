@@ -1180,11 +1180,17 @@ def _bridge_depth_env(
     devices: str,
     node,
     case,
-    cov: int,
+    cov,
     full_hint: int = 0,
     full_blocks: int = 0,
     knob=None,
 ) -> dict:
+    """Verify that the depth cap(s) actually reduce work, and return the env vars to enforce them.
+
+    `cov` may be a plain int (single-stack, backward compat) or a dict mapping stack_id to depth
+    (multi-stack).  Either way the probe is run once with ALL caps applied simultaneously and the
+    combined op-count is checked against the uncapped baseline.
+    """
     if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
         return {}
     cached = _depth_cache_get(repo_root, node)
@@ -1197,25 +1203,32 @@ def _bridge_depth_env(
         return {}
     full_op = int(full_hint)
     full_sp = int(full_blocks)
+    # Use the primary depth value for the uncapped probe (an int regardless of single/multi-stack).
+    _cov_int = next(iter(cov.values())) if isinstance(cov, dict) else int(cov)
     if full_op <= 0:
-        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
+        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, _cov_int)
         full_op = _work_signal(seq)
         full_sp = _blocks_ran(seq)
     if full_op <= 0:
         print("  [optimize/cc] depth-knob bridge: full-model work-signal is 0 (probe empty); skipping")
         _depth_cache_put(repo_root, node, {})
         return {}
-    env = dict(knob) if knob else _llm_depth_env(model_root, cov)
+    env = dict(knob) if knob else _llm_depth_env(model_root, _cov_int)
     if not env:
         print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full_op})")
         _depth_cache_put(repo_root, node, {})
         return {}
     _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
     if _numkey:
-        _set_depth(env, cov, key=_numkey)  # see _knob_at: never write the cap without clearing FORCE_ALL
+        _set_depth(env, _cov_int, key=_numkey)  # see _knob_at: never write the cap without clearing FORCE_ALL
+    # Multi-stack: also apply per-stack env vars to the probe env so the combined cap is tested.
+    if isinstance(cov, dict) and len(cov) > 1:
+        for _i, (_sid, _depth) in enumerate(sorted(cov.items())):
+            _stack_key = f"TT_PERF_STACK{_i}_LAYERS"
+            env[_stack_key] = str(_depth)
     probe_env = dict(mcp_env)
     probe_env.update(env)
-    _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
+    _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, _cov_int)
     cap_op = _work_signal(seq2)
     cap_sp = _blocks_ran(seq2)
     if full_sp > 1 and cap_sp >= 1 and cap_sp <= full_sp * 0.7:
@@ -3200,20 +3213,49 @@ def optimize_pipeline(
         config_ref=config_ref,
         depth_knob=_depth_knob or None,
     )
-    # _coverage_layers now returns a dict {stack_id: depth} or None.
-    # Compat shim: extract single int when dict has exactly one entry so that
-    # existing _set_depth / _bridge_depth_env calls still receive an int.
-    # Multi-stack wiring (Task 4) will replace this shim.
-    if isinstance(_cov, dict):
-        _cov = next(iter(_cov.values())) if len(_cov) == 1 else _cov
+    # _coverage_layers returns a dict {stack_id: depth} or None/0.
+    # Wire the coverage depths into per-stack env vars.
     if _cov:
         from agent.layer_depth import set_depth as _set_depth
 
-        _set_depth(_cov_env, _cov)
-        print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
-        _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
-        if _depth_env:
-            _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)
+        if isinstance(_cov, dict) and len(_cov) > 1:
+            # Multi-stack: set TT_PERF_STACK{N}_LAYERS for each stack in sorted order.
+            _profile_extra: dict = {}
+            for _i, (_sid, _depth) in enumerate(sorted(_cov.items())):
+                _stack_key = f"TT_PERF_STACK{_i}_LAYERS"
+                _cov_env[_stack_key] = str(_depth)
+                _profile_extra[_stack_key] = str(_depth)
+            # Merge per-stack vars into PERF_MCP_PROFILE_ENV so the tracy subprocess sees them.
+            try:
+                _existing_prof = json.loads(_cov_env.get("PERF_MCP_PROFILE_ENV") or "{}")
+            except (ValueError, TypeError):
+                _existing_prof = {}
+            _existing_prof.update(_profile_extra)
+            _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_existing_prof)
+            _cov_repr = ", ".join(
+                f"TT_PERF_STACK{_i}_LAYERS={_d}" for _i, (_sid, _d) in enumerate(sorted(_cov.items()))
+            )
+            print(f"  [optimize/cc] coverage-sized profiling window (multi-stack): {_cov_repr}")
+            _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
+            if _depth_env:
+                try:
+                    _ep2 = json.loads(_cov_env.get("PERF_MCP_PROFILE_ENV") or "{}")
+                except (ValueError, TypeError):
+                    _ep2 = {}
+                _ep2.update(_depth_env)
+                _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_ep2)
+        else:
+            # Single-stack (dict with 1 entry, or plain int): use existing TT_PERF_LAYERS convention.
+            _cov_single = next(iter(_cov.values())) if isinstance(_cov, dict) else _cov
+            _set_depth(_cov_env, _cov_single)
+            print(
+                f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov_single} (covers all block types)"
+            )
+            _depth_env = _bridge_depth_env(
+                repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov_single
+            )
+            if _depth_env:
+                _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)
     tools = list(_ALLOWED_TOOLS)
     hitl_dir = None
     if hitl:
