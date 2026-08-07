@@ -33,27 +33,31 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 // ---------------------------------------------------------------------------------------------
 // Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) state tracker.
 //
-// The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/ELW/MVMUL (the math thread),
-// so the math thread owns it via a small state machine. The recorded state lets format reconfigs and op
-// inits compose instead of clobbering each other:
+// The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/MOVB2A/MVMUL/ELWADD/ELWMUL (the
+// math thread), and is NOT read by the SFPU. So the math thread owns it via a small state machine.
 //
-//   DEFAULT        : flag follows the operand formats (UInt16 -> 1, else 0). Established by the
-//                    format-aware math config (_llk_math_hw_configure_ / reconfig), which also
-//                    clears any stale op-state before the next FP matmul/binary/reduce.
-//   UNARY_PRESERVE : flag = 1. Selected by eltwise unary / SFPU / datacopy inits to preserve
-//                    bf16 -0.0 and 16-bit-integer datums.
-//   MOV_OPS        : flag = 1. Selected by transpose_dest / 32b hi16-lo16 MOV sequences.
+// Programming model: EVERY op establishes its own zero-flag policy in its init — no op inherits it,
+// so the flag's value is always determined by the current op, never by execution history. There are
+// exactly two policies (UNCONFIGURED is only the power-on sentinel that forces the first write):
 //
-// Each configurator early-returns when already in its state (DEFAULT additionally re-applies when
-// the cached operand formats changed), so steady-state ops pay no extra cfg writes.
-// See ckernel::requires_disabled_src_zero_flag for the UInt16 rationale.
+//   PRESERVE : flag = 1 (keep). Data-movement ops (datacopy / copy_init / transpose_dest / reduce
+//              mov-phase) pass values through faithfully. This preserves bf16 -0.0 (which the SFPU
+//              sign ops signbit/copysign read back out of DEST) and the 16b/32b integer datums that
+//              would otherwise be corrupted. See ckernel::requires_disabled_src_zero_flag.
+//   DEFAULT  : flag follows the operand formats (keep for the int formats that require it, flush
+//              otherwise). FP-compute ops (matmul / eltwise-binary / reduce compute-phase) and format
+//              reconfigs use this; it is the characterized, shipped behavior for MVMUL / ELW.
+//
+// Each configurator early-returns when already in its policy (DEFAULT additionally re-applies when
+// the cached operand formats changed), so steady-state ops pay no extra cfg writes. Any path that
+// writes the flag directly (bypassing the tracker) MUST call _invalidate_src_zero_flag_state_() so
+// the next configurator re-applies regardless of the skip-if-set fast path.
 // ---------------------------------------------------------------------------------------------
 enum class SrcZeroFlagState : std::uint8_t
 {
-    UNCONFIGURED   = 0,
-    DEFAULT        = 1,
-    UNARY_PRESERVE = 2,
-    MOV_OPS        = 3,
+    UNCONFIGURED = 0,
+    DEFAULT      = 1,
+    PRESERVE     = 2,
 };
 
 static SrcZeroFlagState src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
@@ -79,25 +83,15 @@ inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_for
     _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
 }
 
-// UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
-inline void _configure_unary_preserve_zero_flag_state_()
+// PRESERVE: data-movement ops (datacopy / copy_init / transpose_dest / reduce mov-phase) keep the
+// flag disabled so values pass through faithfully (preserves bf16 -0.0 and 16b/32b int datums).
+inline void _configure_preserve_zero_flag_state_()
 {
-    if (src_zero_flag_state == SrcZeroFlagState::UNARY_PRESERVE)
+    if (src_zero_flag_state == SrcZeroFlagState::PRESERVE)
     {
         return;
     }
-    src_zero_flag_state = SrcZeroFlagState::UNARY_PRESERVE;
-    _configure_src_zero_flag_(true);
-}
-
-// MOV_OPS: transpose_dest / 32b hi16-lo16 MOV sequences keep the flag disabled.
-inline void _configure_mov_ops_zero_flag_state_()
-{
-    if (src_zero_flag_state == SrcZeroFlagState::MOV_OPS)
-    {
-        return;
-    }
-    src_zero_flag_state = SrcZeroFlagState::MOV_OPS;
+    src_zero_flag_state = SrcZeroFlagState::PRESERVE;
     _configure_src_zero_flag_(true);
 }
 

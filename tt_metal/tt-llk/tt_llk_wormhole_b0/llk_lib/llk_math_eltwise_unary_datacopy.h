@@ -65,7 +65,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
         // zero-substitution flag via the math state tracker.
-        math::_configure_mov_ops_zero_flag_state_();
+        math::_configure_preserve_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {

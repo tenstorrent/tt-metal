@@ -40,7 +40,7 @@ inline void reduce_row_perform_transpose()
     // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
     // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
     // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_mov_ops_zero_flag_state_();
+    math::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_int_fpu_en)
     {

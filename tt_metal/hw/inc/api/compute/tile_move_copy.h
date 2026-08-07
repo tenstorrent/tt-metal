@@ -59,7 +59,7 @@ ALWI void copy_init(
     // Folded into the canonical copy init so it is a drop-in for the eltwise-unary short init; this
     // also preserves the zero flag on the plain-copy path. MATH-only config: it records no
     // format-reconfig diff, so the single-SrcA reconfig tracking is unchanged. Not present on Quasar.
-    MATH((ckernel::math::_configure_unary_preserve_zero_flag_state_()));
+    MATH((ckernel::math::_configure_preserve_zero_flag_state_()));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));

@@ -184,7 +184,9 @@ template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_()
 {
     generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    // Transpose-dest is a data-movement op -> PRESERVE. Route through the tracker (not a raw write) so a
+    // later matmul/eltwise-binary re-establishes DEFAULT instead of skipping and inheriting this keep flag.
+    math::_configure_preserve_zero_flag_state_();
 }
 
 // Initialize for single face transpose
