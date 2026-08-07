@@ -139,8 +139,7 @@ class LTXAttention(Module):
         # kwargs forward through LoRAColParallelLinear's **kwargs to the base linear.
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
-        # Fuse the per-head gate into the QKV/Q matmul via variable-width chunks; only the fused AGMM
-        # path (TP>1 on Ring) honours them, so fall back to a standalone gate op elsewhere.
+        # Fuse the per-head gate into the QKV/Q matmul via variable-width chunks
         tp_factor = parallel_config.tensor_parallel.factor
         uses_fused_agmm = tp_factor > 1 and ccl_manager is not None and ccl_manager.topology == ttnn.Topology.Ring
         # A fused linear carries a single weight dtype, but the quant profile holds the gate at bf16
@@ -189,8 +188,7 @@ class LTXAttention(Module):
             **qk("out"),
         )
 
-        # Per-head gate, sharded on num_heads to match the SDPA-output head layout (bf16, sigmoid and
-        # the ×2 stay standalone ops).
+        # Per-head gate, sharded on num_heads to match the SDPA-output head layout
         self.apply_gated_attention = apply_gated_attention
         if apply_gated_attention and not self.fuse_gate:
             # Standalone gate weight stays bf16 (the model's working dtype) while consuming the shared
@@ -457,8 +455,7 @@ class LTXAttention(Module):
             M, K, N_out = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
-            # Known shapes route the addcmul to_out to the strided AG-matmul (out = a + scalar*matmul*b);
-            # a miss falls through to the all_gather_minimal_matmul_async addcmul path below.
+            # Known shapes route the addcmul to_out to the strided AG-matmul (out = a + scalar*matmul*b)
             fabric_cfg = get_fabric_agmm_config(K, N_out, 1, full_grid)
             if fabric_cfg is not None:
                 tp_axis = parallel_config.tensor_parallel.mesh_axis

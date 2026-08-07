@@ -21,11 +21,7 @@
 
 namespace tt_dit_planar {
 
-// ---------------------------------------------------------------------------
-// Static thread pool — created lazily on first use, kept alive for the rest
-// of the process lifetime.  Matches the warm-pool semantics of the Python
-// `_get_default_reassemble_pool()` it replaces.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Static thread pool
 
 namespace {
 
@@ -49,9 +45,7 @@ public:
         }
     }
 
-    // Submit `n_tasks` tasks; each task is `fn(task_idx)`.  Blocks until all
-    // complete.  Re-entrant calls are supported but rare (the planar path
-    // doesn't recurse).
+    // Submit `n_tasks` tasks
     template <typename Fn>
     void run(int n_tasks, Fn fn) {
         if (n_tasks <= 0) {
@@ -110,8 +104,7 @@ private:
     bool stop_;
 };
 
-// Process-wide singleton.  Configured via set_thread_pool_size() before
-// first use; otherwise defaults to min(8, hardware_concurrency()).
+// Process-wide singleton
 static int g_requested_threads = 0;
 static std::once_flag g_init_flag;
 static ThreadPool* g_pool = nullptr;
@@ -138,33 +131,11 @@ void set_thread_pool_size(int n_threads) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Inner per-shard scatter kernels.
-//
-// Both kernels write a (T, h_per, w_per) destination region for one shard.
-// The dest pointer (`out_plane_base`) is the byte address of plane row 0,
-// pixel (r * h_per, c * w_per) — i.e. the upper-left of this shard's
-// rectangle in the plane.  The dest stride between successive `t` rows is
-// `row_stride` bytes; between successive `h_g` rows of one frame it's
-// `plane_W` bytes; W stride is 1 byte.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Inner per-shard scatter kernels
 
 namespace {
 
-// Non-temporal copy of `n` bytes: writes via SSE/AVX streaming stores so the
-// destination cache lines aren't pulled into L1/L2 (skipping read-for-
-// ownership traffic).  Caller must `_mm_sfence()` before any later read of
-// the destination region.
-//
-// Path selection by alignment:
-//   - dst & 31 == 0 and n % 32 == 0  → AVX2 32-byte streams.
-//   - dst & 15 == 0 and n % 16 == 0  → SSE2 16-byte streams.
-//   - otherwise                       → libc memcpy (fallback).
-//
-// Loads are unaligned (`loadu`) — sources come from arbitrary torch tensor
-// allocations whose alignment we don't control.  All our actual call sites
-// hit the AVX2 path (Y plane, w_per=160, dst always 32-aligned) or the SSE2
-// path (UV plane, w_per=80, dst at least 16-aligned for any c).
+// Non-temporal copy of `n` bytes: writes via SSE/AVX streaming stores so the destination cache lines aren't pulled
 static inline void stream_copy_n(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     const uintptr_t addr = reinterpret_cast<uintptr_t>(dst);
     if ((addr & 31u) == 0 && (n & 31u) == 0) {
@@ -184,11 +155,7 @@ static inline void stream_copy_n(uint8_t* __restrict dst, const uint8_t* __restr
     std::memcpy(dst, src, n);
 }
 
-// CTHW: src layout is (T, h_per, w_per), W innermost (stride 1).  For each
-// (t, h), we have w_per contiguous source bytes that go to w_per
-// contiguous dest bytes — a straight copy.  We use non-temporal stores so the
-// 112 MB output buffer doesn't displace useful data from L2/L3 and so we
-// don't pay the read-for-ownership tax on every cache line written.
+// CTHW: src layout is (T, h_per, w_per), W innermost (stride 1)
 void scatter_one_cthw(
     const uint8_t* src,
     uint8_t* dst,
@@ -207,20 +174,11 @@ void scatter_one_cthw(
                 static_cast<size_t>(valid_w));
         }
     }
-    // Drain WC buffers so subsequent readers (other threads, the Python
-    // caller) see the data.  Cheap when no streaming stores were issued
-    // (i.e. fallback memcpy path).
+    // Drain WC buffers so subsequent readers (other threads, the Python caller) see the data
     _mm_sfence();
 }
 
-// CHWT: src layout is (h_per, w_per, T), T innermost (stride 1).  Dest has
-// W innermost (stride 1) and T at stride row_stride.  Per-h slice is a
-// (w_per, T) → (T, w_per) byte transpose, tiled in 32×32 blocks.
-//
-// w_per for our case is in {160, 80}.  T is 81 (2 full 32-T tiles + a
-// 17-T tail).  We handle both:
-//   - w_chunks of 32 (Y: 5 chunks; UV: 2 full chunks + 1 tail of 16).
-//   - t_chunks of 32 (full: 2; tail: 1 of 17).
+// CHWT: src layout is (h_per, w_per, T), T innermost (stride 1)
 void scatter_one_chwt(
     const uint8_t* src,
     uint8_t* dst,
@@ -261,18 +219,7 @@ void scatter_one_chwt(
             }
         }
 
-        // W-tail (when w_per % 32 != 0).
-        //
-        // Fast path for w_tail == 16 (UV plane, w_per_uv = 80 = 2*32 + 16):
-        // 16 W-source rows × 32 T-source cols → 32 T-dest rows × 16 W-dest
-        // cols, done with two back-to-back 16×16 SSE transposes.  No bounce
-        // buffer, no zero-padding pass.
-        //
-        // General path (w_tail in [1, 31] \ {16}): zero-pad source into a
-        // 32×32 stack temp, transpose, copy only the valid w_tail cols from
-        // each output row.  Slower but covers every shape we might see.
-        // (Currently only triggered if w_tail != 16, which doesn't happen for
-        // 720p Y/UV; kept for safety.)
+        // W-tail (when w_per % 32 != 0)
         if (w_tail > 0) {
             const uint8_t* src_w = src_h + static_cast<std::ptrdiff_t>(n_w_full_tiles) * 32 * T;
             uint8_t* dst_w = dst_h + static_cast<std::ptrdiff_t>(n_w_full_tiles) * 32;
@@ -286,8 +233,7 @@ void scatter_one_chwt(
                         row_stride);
                 }
                 if (t_tail > 0) {
-                    // T-tail × 16 W-cols: small enough to keep the bounce
-                    // buffer; reduces case explosion in this code path.
+                    // T-tail × 16 W-cols: small enough to keep the bounce buffer
                     alignas(32) uint8_t tmp_src[32 * 32];
                     alignas(32) uint8_t tmp_dst[32 * 32];
                     std::memset(tmp_src, 0, sizeof(tmp_src));
@@ -384,10 +330,7 @@ void planar_concat(
     const int out_uv = out_Hu * out_Wu;
     const int row_stride = out_hw + 2 * out_uv;
 
-    // Build a flat task list across all 3 components so the thread pool can
-    // load-balance Y (4× the bytes of UV) against UV.  Each entry is a
-    // resolved per-shard task.  ``bound_h``/``bound_w`` are the logical plane
-    // extents used to clamp each shard's write.
+    // Build a flat task list across all 3 components so the thread pool can load-balance Y
     struct Task {
         const ShardView* shard;
         int plane_offset;

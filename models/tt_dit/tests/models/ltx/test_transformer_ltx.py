@@ -1506,10 +1506,7 @@ def test_ltx_per_token_timestep_nonuniform(
     assert_quality(ref_video, out_tt, pcc=0.99, relative_rmse=0.03)
 
 
-# ---------------------------------------------------------------------------
-# Trace-based perf: VIDEO stage-2 ring only (measures StridedAllGatherMinimalMatmulAsync
-# and block wall-clock at steady state under a ttnn trace). Perf-only: no PCC.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Trace-based perf: VIDEO stage-2 ring
 def _build_video_trace_setup(
     *,
     mesh_device,
@@ -1835,8 +1832,7 @@ def test_ltx_transformer_trace_perf(
         checkpoint_variant=checkpoint_variant,
     )
 
-    # AV emits far more markers than video; keep warm/replay counts low (overridable via env) so the
-    # per-core profiler buffer doesn't overflow before the post-capture drain below.
+    # AV emits far more markers than video
     n_warm = int(os.environ.get("LTX_PERF_N_WARM", "1" if has_audio else "2"))
     n_replay = int(os.environ.get("LTX_PERF_N_REPLAY", "3" if has_audio else "5"))
 
@@ -1867,8 +1863,7 @@ def test_ltx_transformer_trace_perf(
     signpost("stop")
     logger.info(f"trace replay ({n_replay}x): {replay_s:.3f}s → {replay_s / n_replay * 1e3:.2f} ms/step")
 
-    # Perf-only: crop SP-padding tail, assert shape + finiteness (no PCC).
-    # AV mode returns (video, audio); video-only returns a single tensor.
+    # Perf-only: crop SP-padding tail, assert shape + finiteness (no PCC)
     video_out = result[0] if isinstance(result, tuple) else result
     tt_video = LTXTransformerModel.device_to_host(video_out).squeeze(0)[:, :video_N_real, :]
     assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
@@ -1891,8 +1886,7 @@ def _build_block_trace_setup(
     """
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
-    # Real latent grid → SP-padded sequence (mirrors LTXPipeline). video_N is the padded device
-    # length; video_N_real is the logical token count fed to SDPA's logical_n / padding masks.
+    # Real latent grid → SP-padded sequence (mirrors LTXPipeline)
     video_N_real = F * H * W
     video_N = _sp_pad_len(video_N_real, sp_factor)
     audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
@@ -1932,8 +1926,7 @@ def _build_block_trace_setup(
     temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)  # 9 adaln params
     prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)  # 2 adaln params for prompt
 
-    # TT video tensors. Sequence SP-padded to video_N; rope pads with identity rotation; video_N_real
-    # (logical) goes to the block for SDPA masking.
+    # TT video tensors
     spatial = _pad_seq_dim(x, video_N, dim=1).unsqueeze(0)
     tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
@@ -2025,8 +2018,7 @@ def _build_block_trace_setup(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    # Same ring stage-2 8k config as test_ltx_transformer_trace_perf (ring_params_8k = FABRIC_1D_RING
-    # + 8192-B fabric router payload). Do NOT add other-mesh params here.
+    # Same ring stage-2 8k config as test_ltx_transformer_trace_perf
     [pytest.param((4, 8), 1, 0, 2, ring_params_8k, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0_8k")],
     indirect=["mesh_device", "device_params"],
 )
@@ -2070,14 +2062,10 @@ def test_ltx_transformer_block_trace_perf(
         checkpoint_variant=checkpoint_variant,
     )
 
-    # Trace the block forward with the same Tracer settings inner_step uses (prep_run=False:
-    # kernels are precompiled by the eager warm calls below; clone_prep_inputs=False).
+    # Trace the block forward with the same Tracer settings inner_step uses
     tracer = Tracer(tt_block.forward, device=mesh_device, prep_run=False, clone_prep_inputs=False)
 
-    # AV runs many more ops than video (audio self/cross + a2v/v2a + audio ff/RS). The per-core
-    # 12000-marker profiler DRAM buffer is drained only at end-of-run, so warm + capture + replay
-    # markers pile up and overflow. We drain the profiler after capture (below) so only the
-    # signposted replays count against the budget; AV also uses fewer warm/replays for headroom.
+    # AV runs many more ops than video (audio self/cross + a2v/v2a + audio ff/RS)
     n_warm = 1 if has_audio else 2
     n_replay = 3 if has_audio else 5
 
@@ -2095,7 +2083,6 @@ def test_ltx_transformer_block_trace_perf(
     logger.info(f"trace capture: {time.time() - t0:.1f}s")
 
     # Drain warm+capture markers so ONLY the signposted replays occupy the profiler DRAM buffer
-    # (the AV profiler-overflow fix, mirroring test_ltx_transformer_trace_perf).
     ttnn.ReadDeviceProfiler(mesh_device)
 
     # Steady-state replay under the signpost bracket for tt-perf-report --start/end-signpost.
@@ -2109,8 +2096,7 @@ def test_ltx_transformer_block_trace_perf(
     signpost("stop")
     logger.info(f"trace replay ({n_replay}x): {replay_s:.3f}s → {replay_s / n_replay * 1e3:.2f} ms/step")
 
-    # Perf-only: crop SP-padding tail, assert shape + finiteness (no PCC).
-    # AV mode returns (video, audio); video-only returns a single tensor.
+    # Perf-only: crop SP-padding tail, assert shape + finiteness (no PCC)
     tt_v = result[0] if isinstance(result, tuple) else result
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
