@@ -456,7 +456,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         };
     }
 
-    // MIN on Int32 uses -MAX(-x) in reduce_h_neg.
+    // Int32 MIN uses the base reduce.cpp SFPU path (negate=false); float/bf16 MIN uses -MAX(-x) in
+    // reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

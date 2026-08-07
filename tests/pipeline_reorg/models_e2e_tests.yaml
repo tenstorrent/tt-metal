@@ -110,7 +110,7 @@
       timeout: 20
       tier: 1
       release_ready: false
-  owner_id: U08BH66EXAL # Radoica Draskic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
 
 - name: Llama 3.2-1B e2e tests

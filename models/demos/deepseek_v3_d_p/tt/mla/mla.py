@@ -1148,11 +1148,12 @@ class ttMLA:
         qr = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
 
         # DSA dispatch (v3.2 / GLM): the op graph is fixed by CONFIG — self._indexer and self._attention
-        # are bound once at construction (sparsity × chunking), never by the runtime sequence length — so
-        # a single recorded op trace replays identically for any input. (At seq_len <= index_topk the
-        # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
-        # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
-        # separate warm-up write is needed.
+        # are bound once at construction (sparsity × chunking), never by the runtime sequence length.
+        # Host-scalar cache slot/start/length arguments are still rebound on each eager dispatch; a captured
+        # device trace therefore remains specific to the values used during capture. (At seq_len <=
+        # index_topk the indexer top-k simply selects all available causal keys, so sparse is numerically
+        # equal to dense there.) The indexer's forward also writes its K-cache (a no-op on the dense
+        # null-indexer), so no separate warm-up write is needed.
         # GLM-5.2 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
         indices = (
