@@ -22,10 +22,8 @@ this file was split out of READ-THIS.
    across cells) and the **band** (floor × layer count — a model gain smaller than its band isn't
    established).
 
-**What this method is for, and what it is not.** The question the stage exists to answer is *can the advisor
-contribute meaningfully to performance, and how much*. Strict attribution — freeze the control, count only the
-delta — is how it gets a trustworthy answer, not the answer itself. It is deliberately conservative, and it
-undercounts in at least three known ways: the ceiling prices in-chain re-grids at **0.000 µs** (§3.6), the
+Strict attribution — freeze the control, count only the delta — is how this procedure gets a trustworthy number,
+and it is deliberately conservative. It undercounts in at least three known ways: the ceiling prices in-chain re-grids at **0.000 µs** (§3.6), the
 accounting records the one direction the advisor reliably gets right as `kept: 0` (§3.14), and nothing ever
 applies the advised plan as written (§3.27). Read a cell's delta as *what this procedure credited*, and the
 `reachable` figures as *what was there* — [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §2 gives both side by side.
@@ -465,12 +463,10 @@ the depthwise conv as a **matmul against a banded matrix**, tile-native by const
 
 **Could the advisor have found it? No — four independent reasons:**
 
-| # | reason |
-|---|---|
-| 1 | **Row-major candidates are never enumerated** — `rowMajorEnabled` defaults `false` and the advisor's option string never sets it |
-| 2 | Even enabled, `RowMajorLayoutPropagation` starts only from **integer-typed function inputs** (*"Currently restricted to integer tensor types only"*) — it deletes redundant RM→Tile on page tables, it does not build RM compute chains |
-| 3 | **The score cannot price a tilize.** `requiresReshard` is a **boolean**; `LayoutScore` has no tilize/`isTiled`/element-type term. An **819 µs untilize and a 1.5 µs L1 regrid are the same value to it** |
-| 4 | **Structurally, the advisor assigns layouts to a fixed graph** — it cannot delete a `permute`, `slice` or `concat`. Every fix above is a graph rewrite |
+1. **Row-major candidates are never enumerated** — `rowMajorEnabled` defaults `false` and the advisor's option string never sets it
+2. Even enabled, `RowMajorLayoutPropagation` starts only from **integer-typed function inputs** (*"Currently restricted to integer tensor types only"*) — it deletes redundant RM→Tile on page tables, it does not build RM compute chains
+3. **The score cannot price a tilize.** `requiresReshard` is a **boolean**; `LayoutScore` has no tilize/`isTiled`/element-type term. An **819 µs untilize and a 1.5 µs L1 regrid are the same value to it**
+4. **Structurally, the advisor assigns layouts to a fixed graph** — it cannot delete a `permute`, `slice` or `concat`. Every fix above is a graph rewrite
 
 Reason 4 is load-bearing: 1–3 are fixable, but even a perfect layout assigner would miss this, because the
 defect is **which axis the data lives on**, not where the tensor is placed.
@@ -498,7 +494,7 @@ Scoring every cell's bounded window with the tool's own classifier:
 | **mean** | **63.2** | **16.5** | **5.6** | **14.7** |
 
 **This rubric predicts the corpus's outcomes better than the advisor does.** The two cells that returned
-*honest zeros* after exhaustive screening are exactly the two cleanest (TM 0.9 %, 1.1 %); the cells where wins
+zeros after exhaustive screening are exactly the two cleanest (TM 0.9 %, 1.1 %); the cells where wins
 were found or missed are the dirty ones (phi 17–26 %, qwen B 53 %).
 
 **And splitting the non-compute time answers "could the advisor help?" directly:**
@@ -864,9 +860,9 @@ the matmul item gets dropped *with a measurement behind the decision* — which 
 
 ### 3.29 The advisor is topology-sensitive and memory-config-blind — which is why replaying its advice is valid, and re-advising is cheap
 
-**Methodology, tested rather than asserted.** §3.27–§3.28 apply each cell's *committed* advice — captured once
-against the frozen incumbent — to a decoder I had progressively modified. I re-ran `ttnn-advise` on the diverged
-graphs to check whether that invalidates them: **the advice is byte-identical across all four graphs**, because
+§3.27–§3.28 apply each cell's *committed* advice — captured once against the frozen incumbent — to a decoder that
+had progressively been modified, which on its own would make those numbers estimates. Re-running `ttnn-advise` on
+the diverged graphs settles it: **the advice is byte-identical across all four graphs**, because
 the advisor discards the input's memory configs and re-places everything, so it responds to graph *topology* and
 not to the memory-config changes I made. My control run also reproduces the cell's committed advice exactly, so
 the advisor is deterministic at pin `618cd4e75d`. **`ttnn-advise` costs ~18 s end to end** (18.4/18.4/18.1/18.6 s

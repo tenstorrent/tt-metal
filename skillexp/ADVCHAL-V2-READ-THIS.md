@@ -38,22 +38,31 @@ answers come out differently.
 **Cautiously yes — as a detector and a starting configuration, not yet as a grid chooser.** The evidence, both
 directions:
 
-| supports it | measured |
-|---|---|
-| Its **direction** on the dominant defect class — widen a starved reduction — was right in **4 of 4** cells where anyone measured it | §3.2, §3.14 |
-| Its **exact plan**, applied verbatim, contained more than the stage extracted: **−10.43 % at PCC 1.0** where the cell shipped −4.88 % | §3.27 — *one cell; the only one with the artefacts to test it end to end* |
-| It adds **precision** to detection: "and the advisor wants more cores" narrows a 7-cell flag list to 5 with the same recall | §3.14 |
-| It **declares what it cannot place**, with the exact runtime error — a genuinely useful output the stage discards | §3.28 |
-| **Deterministic**, and **~18 s** to run end to end | §3.29 |
+**What supports it**
 
-| limits it | measured |
-|---|---|
-| **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three ladders that were swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %** | §3.3, §3.14 — the sharpest number against it |
-| **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value | §4 |
-| A detection rule using only the shipped profile, **no advisor**, catches all 4 win cells. So it buys precision, **not recall** | §3.14 |
-| Its per-op hit rate over the 118 rows the corpus measured is **49 %** — but that population is dominated by boundary candidates and structurally excludes the direction it gets right, so it understates the advisor | §3.14 |
-| **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside it — 97 % of one model's | §3.5 |
-| The corpus's **largest single cost** — 191 ms/model — is a graph-shape choice **no layout advisor could reach** | §3.18–3.19 |
+- Its **direction** on the dominant defect class — widen a starved reduction — was right in **4 of 4** cells
+  where anyone measured it. *(§3.2, §3.14)*
+- Its **exact plan, applied verbatim, contained more than the stage extracted**: **−10.43 % at PCC 1.0** where the
+  cell shipped −4.88 %. *(§3.27 — one cell, the only one with the artefacts to test it end to end)*
+- It adds **precision** to detection: adding "and the advisor wants more cores" narrows a 7-cell flag list to 5
+  with the same recall. *(§3.14)*
+- It **declares what it cannot place**, with the exact runtime error — an output the stage discards. *(§3.28)*
+- **Deterministic**, and **~18 s** to run end to end. *(§3.29)*
+
+**What limits it**
+
+- **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three
+  ladders that were swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %**.
+  That is the sharpest number against it. *(§3.3, §3.14)*
+- **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value. *(§4)*
+- A detection rule using only the shipped profile, **no advisor**, catches all 4 win cells. It buys precision,
+  **not recall**. *(§3.14)*
+- Its per-op hit rate over the 118 measured rows is **49 %** — though that population is dominated by boundary
+  candidates and structurally excludes the direction it gets right, so it understates the advisor. *(§3.14)*
+- **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside
+  it — 97 % of one model's. *(§3.5)*
+- The corpus's **largest single cost**, 191 ms/model, is a graph-shape choice **no layout advisor could reach**.
+  *(§3.18–3.19)*
 
 What limited the advisor in v2 was not the advisor. It was the stage's use of it — ten cheap defects — plus
 tracer coverage, and both are more tractable than a cost model. The 82 %-vs-99.4 % gap is the part to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
