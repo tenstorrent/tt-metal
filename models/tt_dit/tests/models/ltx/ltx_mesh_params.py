@@ -96,9 +96,14 @@ LTX_ONE_STAGE_MESH_PARAMS_DL = [
 
 # Two-stages (Pro) drives the same audio vocoder, so it needs the same pool for the same reason,
 # plus a trace region: stage 1 holds one trace per guidance branch (4 at the default scales) at
-# half-res and stage 2 one at full-res, against the distilled pipeline's two. Budget scales with
-# that count — 1.2 GB covers the measured per-trace command streams with headroom.
-_GUIDED_TRACE_POOLS = {"trace_region_size": 1_200_000_000, "l1_small_size": 32768}
+# half-res and stage 2 one at full-res, against the distilled pipeline's two at 500 MB. A trace
+# region is carved out of DRAM up front, so oversizing it starves the weights — Pro already holds
+# both transformer variants resident. LTX_TRACE_REGION_MB retunes it per host: too small fails
+# capture, too large OOMs the DiT.
+_GUIDED_TRACE_POOLS = {
+    "trace_region_size": int(os.environ.get("LTX_TRACE_REGION_MB", "700")) * 1024 * 1024,
+    "l1_small_size": 32768,
+}
 # fabric_router_config (8 KB payload) on the ring: the strided all-gather packs 4 bf16 tiles/packet.
 _LTX_TWO_STAGES_TRACED = {
     "4x8sp1tp0nl2_ring_is_fsdp0": {**ring_params_8k_req_exact_devices, **_GUIDED_TRACE_POOLS},
