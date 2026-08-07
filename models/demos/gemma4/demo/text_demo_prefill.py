@@ -2415,7 +2415,10 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     warm_iters = int(os.environ.get("GEMMA4_PERF_WARMUP_ITERS", "5"))
 
     tt_layer, forward, host_input, mesh_config, layer_idx = _build_perf_layer(mesh_device, layer_type, chunk)
-    logger.info(f"[layer_perf] {layer_type} layer_idx={layer_idx} chunk={chunk} iters={iters}")
+    logger.info(
+        f"[layer_perf] {layer_type} layer_idx={layer_idx} chunk={chunk} "
+        f"warmup_replays={warm_iters} measured_replays=1"
+    )
 
     device_input = ttnn.to_device(host_input, device=mesh_device)
 
@@ -2423,9 +2426,9 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     # deallocates its own input (it consumes the residual), so every pass — warmup,
     # capture and replay — has to hand it a clone of the persistent buffer.
     t0 = time.time()
-    warm = forward(ttnn.clone(device_input))
+    compile_out = forward(ttnn.clone(device_input))
     ttnn.synchronize_device(mesh_device)
-    warm.deallocate(True)
+    compile_out.deallocate(True)
     compile_s = time.time() - t0
 
     t0 = time.time()
