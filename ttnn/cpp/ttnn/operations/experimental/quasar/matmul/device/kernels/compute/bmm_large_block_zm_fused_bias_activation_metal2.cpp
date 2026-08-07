@@ -42,19 +42,6 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
-#include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// [#48552 DIAG - REVERT AFTER] Neutralize ALL compute DPRINT again, then re-enable ONLY the `mmpre` marker via
-// MMPRE (DEVICE_PRINT survives the #undef). This isolates whether the marker RIGHT BEFORE matmul_block ALONE
-// masks the single-core K-spill TILE_COUNTERS 0x10000 race -- i.e. whether the wait->matmul-unpack boundary is
-// the TEN-4746 trap point. All other DPRINTs (pre-existing MMC* + got_in/acq/reload/mmpost) become no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
-// [#48552] MMPRE masking RE-ENABLED: the copy_tile TDMA interpose in the mm_partials drains is a PARTIAL fix
-// (it covers the drain wait->pop, but conv2's FUSE_BIAS matmul hung with the mask off -> there are more bare
-// wait->pop sites, e.g. the bias epilogue + a per-subblock site from the bisection). Keep the DPRINT mask until
-// every wait->pop has a real interpose; the copy_tile interpose stays (harmless under the mask, real progress).
-#define MMPRE(...) DEVICE_PRINT(__VA_ARGS__)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -174,7 +161,6 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("MMC start\n");  // DEBUG: stem conv1 Program-B hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -299,7 +285,6 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                MMPRE("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] unscoped, enabled for bisect
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -338,18 +323,9 @@ void kernel_main() {
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
-                    // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
-                    // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
-                    UNPACK(MMPRE("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] enabled for bisect
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -365,14 +341,8 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            MMPRE("MMC sb{} preacq\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
                             tile_regs_acquire();
-                            UNPACK(MMPRE(
-                                "U acq sb={},{}\n",
-                                (uint32_t)in0_subblock,
-                                (uint32_t)in1_subblock));  // [#48552 DIAG] enabled for bisect
                             if (enable_reload) {
-                                UNPACK(DPRINT("U reload sb={}\n", (uint32_t)in0_subblock));  // [#48552 DIAG]
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -396,13 +366,6 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                UNPACK(MMPRE(  // [#48552 DIAG] ONLY active marker: matmul-unpack boundary
-                                    "U mmpre sb={},{} k={} in0i={} in1i={}\n",
-                                    (uint32_t)in0_subblock,
-                                    (uint32_t)in1_subblock,
-                                    (uint32_t)inner_dim_idx,
-                                    (uint32_t)in0_index,
-                                    (uint32_t)in1_index));
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -413,19 +376,16 @@ void kernel_main() {
                                     effective_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
-                                UNPACK(DPRINT("U mmpost k={}\n", (uint32_t)inner_dim_idx));  // [#48552 DIAG]
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
                             }
 
 #endif  // SKIP_COMPUTE
-                            MMPRE("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
 
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
-                                DPRINT("MMC sb{} resv_ok\n", in0_subblock);  // DEBUG #48552 out reserve returned
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -461,11 +421,7 @@ void kernel_main() {
                             } else {
                                 tile_regs_commit();
                                 // [DEBUG mm_partials TILE_COUNTERS localization] which producer step faults?
-                                // 0xC0FFEE03 = pre-reserve (+block idx next); 04 = reserved; 05 = packed; 06 = pushed.
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE03u));
-                                PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE04u));
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -482,18 +438,15 @@ void kernel_main() {
 
                                 uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE05u));
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE06u));
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    MMPRE("MMC pack blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -565,11 +518,9 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
-                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
-                DPRINT("MMC bias\n");  // DEBUG: inner-dim block loop done, entering bias+activation epilogue
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -706,5 +657,4 @@ void kernel_main() {
     // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
     // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
     // on the DM producer/consumer kernels.
-    DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }

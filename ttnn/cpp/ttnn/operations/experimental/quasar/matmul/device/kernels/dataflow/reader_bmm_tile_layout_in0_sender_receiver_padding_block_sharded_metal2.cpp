@@ -29,8 +29,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [DEBUG #47797] in0 mcast handshake diagnosis
-#include "api/debug/ring_buffer.h"  // [DEBUG #47797] PREBARRIER counters (DPRINT MMIO path unsupported on craq-sim)
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_arg(args::core_has_output_block_work);
@@ -122,47 +120,6 @@ void kernel_main() {
     }
     receiver_sem.set(VALID);
 
-    // [DEBUG mcast2d hang] Watcher-reliable (unlike DPRINT on craq-sim) dump of the mcast axis args the
-    // kernel actually received: marker 0x5E4D0000, num_x, num_y, in0_mcast_num_dests, and the first two
-    // resolved remote-sender coords. If num_x==1/num_y>1 (or remote_sender0/1 share an x and differ in y)
-    // the receiver is acking a COLUMN while the sender counts num_dests along the row -> the deadlock.
-    WATCHER_RING_BUFFER_PUSH(0x5E4D0000u);
-    WATCHER_RING_BUFFER_PUSH((uint32_t)num_x);
-    WATCHER_RING_BUFFER_PUSH((uint32_t)num_y);
-    WATCHER_RING_BUFFER_PUSH((uint32_t)in0_mcast_num_dests);
-    WATCHER_RING_BUFFER_PUSH(remote_sender_noc_x[0]);
-    WATCHER_RING_BUFFER_PUSH(remote_sender_noc_y[0]);
-    if constexpr (num_remote_senders > 1) {
-        WATCHER_RING_BUFFER_PUSH(remote_sender_noc_x[1]);
-        WATCHER_RING_BUFFER_PUSH(remote_sender_noc_y[1]);
-    }
-
-    // ---- [DEBUG #47797] one-shot per-core dump of the in0 mcast handshake config. ----
-    // For block 0, block_id == 0, so the core whose sender_id == 0 must take the sender branch
-    // (line `if (block_id == sender_id)`). If NO core prints sender_id==0, nobody multicasts VALID
-    // and every receiver hangs at `receiver_sem.wait(VALID)`. Compare `sid` here against the host
-    // log_info "[in0bs-host]" line for the same core; they must agree (sid == core.x non-transpose).
-    DPRINT(
-        "[in0bs-dev] sid={} noc={} cir={} tm={} nbps={} nblk={} ndst={} ncore={} nx={} ny={}\n",
-        (uint32_t)sender_id,
-        (uint32_t)noc_index,  // [DEBUG #47797] actual NOC the framework launched this kernel on
-        (uint32_t)core_in_in0_receiver_mcast_grid,
-        (uint32_t)transpose_mcast,
-        (uint32_t)num_blocks_per_shard,
-        (uint32_t)num_blocks_inner_dim,
-        (uint32_t)in0_mcast_num_dests,
-        (uint32_t)in0_mcast_num_cores,
-        (uint32_t)num_x,
-        (uint32_t)num_y);
-    DPRINT(
-        "[in0bs-dev] dst_x[{}..{}] dst_y[{}..{}] remote_sender0=({},{})\n",
-        (uint32_t)in0_mcast_dest_noc_start_x,
-        (uint32_t)in0_mcast_dest_noc_end_x,
-        (uint32_t)in0_mcast_dest_noc_start_y,
-        (uint32_t)in0_mcast_dest_noc_end_y,
-        (uint32_t)remote_sender_noc_x[0],
-        (uint32_t)remote_sender_noc_y[0]);
-
     // The resident in0 shard is reached by L1 base address from a local TensorAccessor over the in0
     // tensor (no borrowed self-loop CB, which Metal 2.0 forbids on DM kernels).
     uint32_t in0_tensor_shard_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::in0).get_noc_addr(0));
@@ -194,14 +151,6 @@ void kernel_main() {
                     // LAST "enter" line per core file shows the block it is stuck on; the matching
                     // "SENT" line (below) for that block tells us whether its sender actually issued
                     // the multicast. Print only first batch/h/w slice to bound spam to <=num_blocks lines.
-                    if (b == 0 && bh == 0 && bw == 0) {
-                        DPRINT(
-                            "[in0bs-dev] enter block={} block_id={} sid={} role={}\n",
-                            (uint32_t)block,
-                            (uint32_t)block_id,
-                            (uint32_t)sender_id,
-                            (uint32_t)(block_id == sender_id));
-                    }
 
                     cb_in0.reserve_back(in0_block_num_tiles);
 
@@ -292,11 +241,6 @@ void kernel_main() {
                         // flood the 32-entry ring buffer and hide the compute-side stall. Re-enable if the
                         // handshake regresses.]
 #if 0
-                        WATCHER_RING_BUFFER_PUSH(0x5E4D0001u);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)sender_sem.get_value());
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)(core_in_in0_receiver_mcast_grid ? in0_mcast_num_dests - 1
-                                                                                            : in0_mcast_num_dests));
 #endif
                         if constexpr (core_in_in0_receiver_mcast_grid) {
                             // wait for every core in receiver grid EXCLUDING myself
@@ -401,28 +345,12 @@ void kernel_main() {
                         // this block on `noc`. If this prints for the stuck block but the receivers
                         // never advance past it, the multicast/flag is not landing (NOC/geometry),
                         // not an arg problem. (b==0,bh==0,bw==0 slice only, to bound spam.)
-                        if (b == 0 && bh == 0 && bw == 0) {
-                            DPRINT(
-                                "[in0bs-dev] SENT block={} noc={} ncore={} dst_x[{}..{}] dst_y[{}..{}]\n",
-                                (uint32_t)block,
-                                (uint32_t)noc_index,
-                                (uint32_t)in0_mcast_num_cores,
-                                (uint32_t)in0_mcast_dest_noc_start_x,
-                                (uint32_t)in0_mcast_dest_noc_end_x,
-                                (uint32_t)in0_mcast_dest_noc_start_y,
-                                (uint32_t)in0_mcast_dest_noc_end_y);
-                        }
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         // [DEBUG #47797] RECEIVER ack: marker 0x5E4D0002, noc, block_id, the sender coords
                         // this .up targets. If the sender is stuck at 0x5E4D0001, check these coords resolve
                         // to the actual sender core.
                         // [DISABLED — handshake confirmed working; see note at 0x5E4D0001 above.]
 #if 0
-                        WATCHER_RING_BUFFER_PUSH(0x5E4D0002u);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)block_id);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)remote_sender_noc_x[block_id]);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)remote_sender_noc_y[block_id]);
 #endif
                         // Increment remote sender's semaphore using pre-computed coordinates
                         sender_sem.up(noc, remote_sender_noc_x[block_id], remote_sender_noc_y[block_id], 1);
@@ -434,10 +362,6 @@ void kernel_main() {
                         // sender's receiver_sem.set_multicast(VALID) isn't reaching this receiver.
                         // [DISABLED — handshake confirmed working; see note at 0x5E4D0001 above.]
 #if 0
-                        WATCHER_RING_BUFFER_PUSH(0x5E4D0003u);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)receiver_sem.get_value());
-                        WATCHER_RING_BUFFER_PUSH((uint32_t)VALID);
 #endif
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         receiver_sem.wait(VALID);
@@ -458,13 +382,6 @@ void kernel_main() {
     // If reads_issued is non-zero here (this kernel issues no source-level reads when
     // extract_shard_sub_blocks is false), a metal2 primitive over-incremented the issued counter.
     // reads_flushed / npw_sent == 0 means that category will block the barrier forever.
-    DPRINT(
-        "[in0bs-dev] PREBARRIER noc={} reads_issued={} npw_issued={} reads_flushed={} npw_sent={}\n",
-        (uint32_t)noc_index,
-        (uint32_t)noc_reads_num_issued[noc_index],
-        (uint32_t)noc_nonposted_writes_num_issued[noc_index],
-        (uint32_t)ncrisc_noc_reads_flushed(noc_index),
-        (uint32_t)ncrisc_noc_nonposted_writes_sent(noc_index));
     // [DEBUG #47797] PREBARRIER counter ring-buffer dump REMOVED: the barrier isn't the hang
     // (scmdbuf_tr_ack is stubbed to 0 in craq-sim, so async_full_barrier passes). The handshake dumps
     // are now at the sender_sem.wait / receiver_sem.wait / sender_sem.up sites (markers 0x5E4D000{1,2,3}).

@@ -23,7 +23,6 @@
 #include "api/scratchpad.h"  // Scratchpad<> (non-aligned TRID staging)
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [#48552 DIAG] remove after
 
 void kernel_main() {
     const uint32_t src_byte_offset = get_arg(args::src_byte_offset);  // per-core src offset (begins+width-misalign)
@@ -56,15 +55,6 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb_in0(dfb::in0);
     const auto s0 = TensorAccessor(tensor::src);
-    DPRINT(
-        "[PSR] entry na={} nspc={} nspcr={} nrpb={} start_id={} usz={} sso={}\n",
-        (uint32_t)is_non_aligned,
-        num_sticks_per_core,
-        num_sticks_per_core_read,
-        num_read_per_barrier,
-        start_id,
-        unpadded_stick_size,
-        stick_size_offset);
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
@@ -161,14 +151,11 @@ void kernel_main() {
             self_ep, /*size_bytes=*/0, {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = 0}, NocOptVals{.trid = 0});
     } else {
         // Aligned path (the resnet stem's path): direct src->output DFB reads.
-        DPRINT("[PSR] aligned begin\n");
         for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
             cb_in0.reserve_back(num_read_per_barrier);
-            DPRINT("[PSR] iter={} reserved sr={}\n", iter, sticks_read);
             uint32_t dest_off = 0;
             for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
                 sticks_read++;
-                DPRINT("[PSR] rd i={} sid(page)={} sr={} doff={}\n", i, src_stick_id, sticks_read, dest_off);
                 noc.async_read(
                     s0,
                     cb_in0,
@@ -187,12 +174,8 @@ void kernel_main() {
                     }
                 }
             }
-            DPRINT("[PSR] iter={} pre-barrier\n", iter);
             noc.async_read_barrier();
-            DPRINT("[PSR] iter={} pre-push\n", iter);
             cb_in0.push_back(num_read_per_barrier);
-            DPRINT("[PSR] iter={} post-push\n", iter);
         }
-        DPRINT("[PSR] aligned DONE\n");
     }
 }

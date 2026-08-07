@@ -20,7 +20,6 @@
 #define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
-#include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
 #include "tools/profiler/kernel_profiler.hpp"
