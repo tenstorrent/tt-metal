@@ -459,6 +459,28 @@ def create_tt_model(
             False,  # use_prefix_caching
             0.0,  # prefix_cached_ratio
         ),
+        (  # ci-eval-1 - 6 repeat batches (batch-1) with paired-batch output comparison
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            2048,  # max_seq_len (longest prompt is ~750 tokens; leaves room for max_generated_tokens)
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos    #NOTE: must stay False; the decode perf aggregation assumes every repeat batch generates the same number of tokens
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded    #NOTE: currently cur pos/ page table sharding is not supported on repeat batch runs
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
         (  # long-4k-b1 - Single user, 4K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             True,  # instruct mode
@@ -786,6 +808,7 @@ def create_tt_model(
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
         "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "repeat2",  # latency with 2 repeat batches
+        "ci-eval-1",  # CI 6 repeat batches (batch-1) with paired-batch output comparison
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
         "long-16k-b1",  # 16K context for 1 user
@@ -1068,6 +1091,7 @@ def test_demo_text(
         repeat_batch_prompts = [[token_acc.prepare_ref_tokens(tokenizer)]]
 
     num_tokens_generated_decode = []
+    repeat_batch_outputs = []  # Final decoded output per repeat batch, used by the ci-eval-1 comparison
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
@@ -1528,8 +1552,18 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-                # TODO This check is only for the config `repeat2`.
 
+            # Store the final output of each repeat batch so paired batches can be compared once
+            # all batches have run. Paired prompts mean batches (0,1), (2,3), ... must match exactly.
+            if not users_decoding and "ci-eval-1" in test_id:
+                text = tokenizer.decode(all_outputs[0])
+                prompt_including_assistant_tags = tokenizer.decode(
+                    model_args.encode_prompt(input_prompts[0], instruct=instruct)
+                )
+                repeat_batch_outputs.append(text.replace(prompt_including_assistant_tags, "", 1).strip())
+                logger.info(f"Stored output for batch {batch_idx}: {repeat_batch_outputs[-1][:100]}...")
+
+            # TODO This check is only for the config `repeat2`.
             # Since right now that config is the only using a repeat_batches=2 this if statement works
             if not users_decoding and batch_size == 1 and repeat_batches == 2:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
@@ -1687,8 +1721,30 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
+    # The ci-eval-1 prompt file pairs its prompts ([A, A, B, B, ...]), so consecutive repeat batches
+    # run identical inputs and must produce identical outputs. A mismatch means state is leaking
+    # across repeat batches (or decode is non-deterministic), which the accuracy checks cannot catch.
+    if "ci-eval-1" in test_id:
+        # Fail loudly rather than skipping the comparison if any batch failed to record its output
+        assert (
+            len(repeat_batch_outputs) == repeat_batches
+        ), f"Expected one stored output per repeat batch, got {len(repeat_batch_outputs)} of {repeat_batches}"
+        logger.info("=== Repeat Batch Output Comparison ===")
+        all_matches = True
+        for first_idx in range(0, repeat_batches - 1, 2):
+            second_idx = first_idx + 1
+            if repeat_batch_outputs[first_idx] == repeat_batch_outputs[second_idx]:
+                logger.info(f"Batches {first_idx} and {second_idx} comparison PASSED: outputs match")
+            else:
+                logger.warning(f"Batches {first_idx} and {second_idx} comparison FAILED: outputs differ")
+                logger.info(f"  Batch {first_idx} output: {repeat_batch_outputs[first_idx][:100]}...")
+                logger.info(f"  Batch {second_idx} output: {repeat_batch_outputs[second_idx][:100]}...")
+                all_matches = False
+
+        assert all_matches, "Repeat batch outputs should be identical"
+
     test_id = request.node.callspec.id
-    if "repeat2" in test_id:  #  test_id will be changed to eval-1 and eval-32 in the future
+    if "ci-eval-1" in test_id:
         sku = get_current_device_sku_name()
         resolved_targets = resolve_perf_targets(
             model_name=model_args.base_model_name,
