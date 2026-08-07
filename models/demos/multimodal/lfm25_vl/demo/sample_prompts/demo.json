@@ -1,0 +1,6 @@
+[
+    {
+        "image": "ocr_image.jpeg",
+        "prompt": "What is the full text of this image? Do OCR."
+    }
+]
