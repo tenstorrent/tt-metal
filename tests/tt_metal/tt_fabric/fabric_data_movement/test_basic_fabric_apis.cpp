@@ -1699,6 +1699,9 @@ TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDi
 // 2D Dynamic Routing Unicast Tests
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
     CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     for (uint32_t i = 0; i < 10; i++) {
@@ -1716,6 +1719,9 @@ TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestGetNextHopRouterDirectionMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+        GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+    }
     CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     RunGetNextHopRouterDirectionTest(this, true);

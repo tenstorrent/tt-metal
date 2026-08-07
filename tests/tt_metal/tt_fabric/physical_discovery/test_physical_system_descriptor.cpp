@@ -95,22 +95,30 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     // Local Connectivity
     for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
         auto chip_id = asic_id_to_chip_id.at(asic);
-        auto eth_links = local_eth_links.at(chip_id);
         auto neighbors = physical_system_desc.get_asic_neighbors(asic);
+        // Looked up lazily: a chip with no local ethernet links is only a failure if the descriptor
+        // claims it has a local neighbor, so assert inside the loop rather than throwing from .at() here.
+        auto eth_links_it = local_eth_links.find(chip_id);
 
         for (auto neighbor : neighbors) {
             if (physical_system_desc.get_host_name_for_asic(neighbor) != my_host) {
                 // Skip exit nodes
                 continue;
             }
+            ASSERT_NE(eth_links_it, local_eth_links.end())
+                << "Local neighbor exists for asic " << *asic << " but tt_cluster has no local ethernet links for chip "
+                << chip_id;
+            const auto& eth_links = eth_links_it->second;
             // Ensure that local eth links are populated correctly on the current host
             // This is done by cross referencing eth connectivity returned by the physical
             // descriptor with tt_cluster
             auto dst_chip = asic_id_to_chip_id.at(neighbor);
             auto eth_conns = physical_system_desc.get_eth_connections(asic, neighbor);
             for (const auto& eth_conn : eth_conns) {
-                auto [remote_chip, remote_chan] = eth_links.at(eth_conn.src_chan);
-                EXPECT_NE(eth_links.find(eth_conn.src_chan), eth_links.end());
+                auto eth_link_it = eth_links.find(eth_conn.src_chan);
+                ASSERT_NE(eth_link_it, eth_links.end())
+                    << "tt_cluster has no local ethernet link on chip " << chip_id << " channel " << eth_conn.src_chan;
+                auto [remote_chip, remote_chan] = eth_link_it->second;
                 EXPECT_EQ(dst_chip, remote_chip);
                 EXPECT_EQ(eth_conn.dst_chan, remote_chan);
 

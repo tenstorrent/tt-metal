@@ -129,6 +129,45 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     return physical_chip_ids_mapping;
 }
 
+bool has_physical_chip_mapping_for_eth_coords(const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords) {
+    // Mirrors the lookup get_physical_chip_mapping_from_eth_coords_mapping() performs, but reports a
+    // missing coordinate instead of TT_FATAL-ing, so a caller can skip rather than fail on a cluster
+    // that does not expose the expected coordinates.
+    //
+    // Deliberately not implemented as try/catch around get_physical_chip_id_from_eth_coord(): swallowing
+    // the exception would also swallow a genuine regression in coordinate lookup, turning a real failure
+    // into a silent skip. Comparing against the cluster's own coordinate map keeps the miss path
+    // exception-free and lets us name the coordinate that is absent.
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto chip_coords = cluster.get_all_chip_ethernet_coordinates();
+
+    std::set<EthCoord> available_coords;
+    for (const auto& [physical_chip_id, coord] : chip_coords) {
+        available_coords.insert(coord);
+    }
+
+    for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
+        for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
+            const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
+            if (available_coords.find(eth_coord) == available_coords.end()) {
+                log_info(
+                    tt::LogTest,
+                    "Cluster has no physical chip for eth coord (cluster_id={}, x={}, y={}, rack={}, shelf={}) "
+                    "required by mesh {} chip {}",
+                    eth_coord.cluster_id,
+                    eth_coord.x,
+                    eth_coord.y,
+                    eth_coord.rack,
+                    eth_coord.shelf,
+                    mesh_id,
+                    chip_id);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
     if (!std::filesystem::exists(generated_file)) {
         log_error(tt::LogTest, "Generated file does not exist: {}", generated_file.string());
