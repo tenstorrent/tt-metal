@@ -1,0 +1,291 @@
+# Post-Port Fix — Convert sync-free DFBs to their proper shapes
+
+> **Procedure:** [`pass_procedure.md`](../pass_procedure.md). Read it first; it is the *how*. This
+> file is the *what*, and it uses the procedure's steps unchanged.
+>
+> **Behaviour-preserving?** Yes. Results, numerics and observable behaviour are identical. L1
+> allocation *order* shifts — scratchpads are allocated alongside DFBs, from the same region — but
+> nothing functional depends on that ordering.
+>
+> **Target:** Gen1 (Wormhole / Blackhole) ops already ported to Metal 2.0.
+
+---
+
+## What this fix is
+
+The legacy API gave you one on-core buffer construct — the CircularBuffer — so op authors used it
+for everything that needed L1, whether or not it had anything to do with a FIFO. Those uses came
+through the Metal 2.0 port unchanged, as DataflowBuffers, because the port is a mechanical CB→DFB
+swap and correctly changes nothing else.
+
+A DFB is a **software FIFO for handing data between a producer and a consumer**. When a buffer
+never uses any of that machinery, calling it a DFB is a misdescription that the reader has to see
+through. It is really one of two things, and Metal 2.0 has a construct for each:
+
+- **A view onto memory the op already owns** → `LocalTensorAccessor`.
+- **A private scratch region a kernel scribbles in** → `Scratchpad`.
+
+This pass finds the misdescribed ones and gives them their right shape.
+
+**Why it matters.** The primary reason is that the ported corpus is what everyone downstream learns
+Metal 2.0 from, and a buffer declared as a FIFO that is not one teaches the API wrong. There is a
+concrete secondary benefit: every DFB removed frees a DFB id, and the id budget is genuinely tight
+— a recently discovered hardware bug constrains the number of available DFBs further still. For a
+DM self-loop the conversion is also a Quasar prerequisite, since that shape does not survive to
+Gen2 — but treat that as a bonus rather than the reason.
+
+## The criterion
+
+**A DFB is sync-free when no kernel that binds it ever calls any of these four methods on it:**
+
+```
+reserve_back   push_back   wait_front   pop_front
+```
+
+That is the whole test on Gen1. Nothing else counts as synchronization here: the implicit-sync
+mechanism (NOC transfers exchanging credits without FIFO calls) is a Gen2 concept and does not
+exist on the Gen1 hardware you are targeting.
+
+The test is **per DFB, across every kernel that binds it** — not per kernel and not per file.
+
+### Four ways to get this wrong
+
+Each of these is a real pattern, and the first two appear *side by side in a single file*
+(`moreh_fold`'s `reader_fold_rm.cpp`), which is worth reading before you start.
+
+**1. A self-loop is not the same as sync-free.** A DFB bound `PRODUCER` *and* `CONSUMER` by one
+kernel is a self-loop — that is a statement about endpoints, not about synchronization. A kernel
+can absolutely run a full FIFO against itself: reserve space, fill it, push, wait, read, pop, as a
+bounded staging buffer. `moreh_fold` binds its input DFB exactly that way and it uses all four
+methods. **Not a site.** Self-loops are a good place to *look*, never a verdict.
+
+**2. Neither pointer getter tells you anything — in either direction.** A sync-free DFB still needs
+its base address, and since nothing ever advances either pointer, `get_read_ptr()` and
+`get_write_ptr()` both return the base for the buffer's entire lifetime. So a sync-free kernel may
+reasonably call either one, or both, and which it picked is arbitrary. Meanwhile a fully
+synchronized DFB calls them too, between its reserve and its push, because that is ordinary FIFO
+usage. The getters appear on both sides of the line and carry no information about it. **Do not
+read a pattern into which getter a kernel used.** Only the absence of the four sync methods
+decides.
+
+**3. A DFB is only sync-free if it is sync-free *everywhere*.** Check every kernel that binds it.
+A buffer that looks like an untouched scratch region in the kernel you are reading may be waited on
+by a second kernel you have not opened. Enumerate the binding kernels from the host spec, not from
+the kernel you happen to have in front of you.
+
+**4. A grep for the four methods can come back clean on a synchronized DFB.** The calls do not have
+to appear in the kernel you are reading — a helper can make them on its behalf, and then the buffer
+reads as untouched. Two real shapes:
+
+- **An RAII guard.** `integral_image`'s `device/kernels/common.hpp` defines `ReadCBGuard` and
+  `WriteCBGuard`, whose constructor and destructor call `wait_front`/`pop_front` and
+  `reserve_back`/`push_back`. A kernel that says `ReadCBGuard g(dfb::acc, n);` contains none of the
+  four names, and the calls inside the guard are made on a `DataflowBuffer(cb)` temporary, so there
+  is no named handle to attribute them to either.
+- **A shared kernel library, outside the op entirely.** `moreh_dot`'s compute kernel calls
+  `compute_kernel_lib::reduce<…>` with the synchronization chosen as a *template argument* —
+  `ReduceInputPolicy::WaitAndPopPerTile` — and the FIFO calls live in
+  `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl`. That file is not under the op directory, so
+  even a recursive grep of the whole op finds nothing.
+
+This is the one item on this list that is **unsafe** rather than merely wrong. The other three make
+you miss a site; this one makes you convert a buffer whose synchronization is real. A `Scratchpad`
+has no synchronization semantics at all, so the conversion does not preserve that synchronization —
+it deletes it. On a compute kernel, where Unpack / Math / Pack run on different physical cores, the
+result is a race, and a race that happens to pass your sentinels looks exactly like a clean pass.
+
+**Absence of a grep hit is only evidence when nothing opaque touched the buffer.** If the DFB's
+handle — or the id it was constructed from — is ever passed to a function, a constructor, or a
+template argument, follow it before concluding anything.
+
+## Step 2 — Survey
+
+Work from the host spec outwards; it is the only place the complete picture exists.
+
+1. **List every `DataflowBufferSpec`** in the op's program factory (or factories).
+2. **For each, list every `DFBBinding` that names it**, and note the kernel each binding sits on.
+   Include conditional bindings — a DFB bound inside an `if` still counts.
+3. **For each DFB, open every binding kernel** and search for the four sync methods *on that DFB's
+   handle*:
+
+   ```bash
+   grep -nE "reserve_back|push_back|wait_front|pop_front" <each binding kernel>
+   ```
+
+   Any hit on that handle → synchronized, not a site.
+
+4. **A clean grep is not yet a verdict — first follow the handle.** Per
+   [way 4](#four-ways-to-get-this-wrong), the calls may be made by a helper on the kernel's behalf.
+   Before you may conclude sync-free, check whether the DFB's handle, or the id it was built from,
+   is passed anywhere: into a function, a constructor (including an RAII guard), or a template
+   argument. If it is, open that callee and apply the same test there — following it out of the op
+   directory if it leads there, as `ttnn/cpp/ttnn/kernel_lib/` will.
+
+   No hits on that handle in any binding kernel, **and** nothing opaque taking it → **sync-free**.
+
+5. **For each sync-free DFB, read `borrowed_from` on its spec.** That field decides its end-state
+   and is the whole fork:
+
+   | `borrowed_from` | What it is | Becomes |
+   |---|---|---|
+   | set (names a `TensorParamName`) | a view onto memory the op already owns | **`LocalTensorAccessor`** |
+   | unset | a private scratch region | **`Scratchpad`** |
+
+An op with no sync-free DFBs is a legitimate zero-site pass, and most ops with a heavy FIFO
+pipeline will be exactly that.
+
+> **If the op also has a fake-FIFO DM self-loop, run [that pass](dm_self_loop_dfbs.md) first.** Both
+> passes end at a `Scratchpad` and one op can hold a site for each, so they meet in the same file.
+> That one rewrites control flow; this one is small and local, and reads more cleanly layered on top.
+> They never contend for the same buffer — a DFB either calls the FIFO machinery or it does not.
+
+## Step 3 — Apply
+
+**Don't pattern-match on how the old code wrapped the address.** The examples below show the address
+being grabbed into a `CoreLocalMem<T>`, which is the tidy Device 2.0 form, but ported kernels carry
+at least three shapes and all of them collapse to the same replacement:
+
+```cpp
+CoreLocalMem<uint16_t> lut(dfb.get_read_ptr());                            // Device 2.0 wrapper
+auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());  // raw cast
+uint32_t addr = dfb.get_write_ptr();                                       // bare address, passed on
+```
+
+What identifies the code you are replacing is that **an address is taken from the DFB and memory is
+then reached through it directly**. The wrapper — or its absence — is incidental. Expect to meet all
+three, and note that the rawest form tends to sit on the most obviously-scratch buffers.
+
+### Borrowed → `LocalTensorAccessor`
+
+The DFB was never a buffer; it was a window onto a tensor. Give the kernel the tensor directly.
+
+**Host.** Delete the `DataflowBufferSpec` and every `DFBBinding` naming it. The tensor it borrowed
+from — the `TensorParamName` in `borrowed_from` — must be bound to each kernel that used it, as a
+`TensorBinding` with an accessor name. If such a binding already exists on that kernel, reuse it;
+do not add a second one for the same tensor.
+
+**Kernel.** Replace the `DataflowBuffer` local and its pointer arithmetic with an accessor built
+from the tensor binding token, indexing directly:
+
+```cpp
+// before
+DataflowBuffer lut_dfb(dfb::lut);
+CoreLocalMem<uint16_t> lut(lut_dfb.get_read_ptr());
+… lut[i] …
+
+// after
+LocalTensorAccessor<uint16_t> lut(tensor::lut);
+… lut[i] …
+```
+
+`T` is the element type the kernel actually reads, chosen by you. Element access is **not**
+bounds-checked, exactly as the raw-pointer form wasn't — this is not a safety regression, but do
+not present it as a safety improvement in your report either.
+
+### Regular-backed → `Scratchpad`
+
+**First, check the node rule.** The invariant is simple: **one scratchpad instance serves exactly one
+kernel instance.** On any given node the mapping is 1:1 — that is what a scratchpad *is*, private
+working memory belonging to one kernel, with no synchronization to share it through.
+
+A `ScratchpadSpec`, though, spans every node its bound kernels run on. So two `KernelSpec`s may bind
+the same spec provided their node sets are **disjoint**: each node still gets its own instance
+serving its own single kernel, and you have merely saved yourself declaring two identical specs.
+That allowance is host-side convenience; it does not loosen the 1:1 rule.
+
+So the question is just: **does any single node have two kernels touching this DFB?**
+
+- **No** — one binding kernel (every self-loop, and the common case), or several over disjoint node
+  sets → convert.
+- **Yes** — it cannot become a scratchpad. **Stop and raise a feature request**, see [When you can't
+  convert a shared scratch DFB](#when-you-cant-convert-a-shared-scratch-dfb). Do not convert it and
+  do not work around it.
+
+**Host.** Delete the `DataflowBufferSpec` and its `DFBBinding`s. Add a `ScratchpadSpec` to the
+ProgramSpec and a `ScratchpadBinding` to each kernel that used it:
+
+```cpp
+// ProgramSpec
+ScratchpadSpec{
+    .unique_id = SCRATCH,
+    .size_per_node = <the bytes the DFB reserved per node>,
+},
+
+// KernelSpec
+.scratchpad_bindings = {
+    ScratchpadBinding{.scratchpad_spec_name = SCRATCH, .accessor_name = "scratch"},
+},
+```
+
+`size_per_node` is the same number of bytes the DFB reserved on each node — carry it across, do not
+recompute it from tile counts. A DFB sized as *entries × entry size* becomes that product.
+
+If the DFB was **conditionally bound**, the scratchpad is conditionally bound the same way, and the
+kernel-side `#ifdef` guarding it stays exactly as it is.
+
+**Kernel.** Construct from the binding token and index it:
+
+```cpp
+// before
+DataflowBuffer scratch_dfb(dfb::scratch);
+… .addr = scratch_dfb.get_write_ptr() …
+
+// after
+Scratchpad<uint8_t> scratch(scratch::scratch);
+… .addr = scratch.get_base_address() …
+```
+
+`Scratchpad` is a template over the element type the kernel views the region as, and that type
+**cannot be deduced** from the binding token — write it explicitly. Use `uint8_t` when the kernel
+only ever hands the region's address to something else; use the actual element type when it indexes
+into it.
+
+Pick the accessor by what the destination wants:
+
+- **`get_base_address()`** returns a `uint32_t` L1 address — the form NOC transfers and LLK
+  configuration consume, and the direct replacement for `get_write_ptr()` / `get_read_ptr()`.
+- **`operator[]`** for element access. Unlike the raw-pointer form it replaces, it is bounds-checked
+  against the region's extent, so prefer it wherever the kernel is actually reading or writing
+  elements.
+
+Do not take the address of an element (`&scratch[0]`) to feed an address-consuming API — that is a
+`T*`, not the `uint32_t` those APIs take, and it will not compile.
+
+**A note on compute kernels.** A scratchpad has no synchronization semantics at all, and in a
+compute kernel the Unpack / Math / Pack stages run on different physical RISC-V cores. Converting a
+*genuinely* sync-free DFB removes no synchronization, so the conversion is safe by construction —
+but if that reasoning feels strained for the site in front of you, that is a sign the DFB was not
+sync-free after all. Re-check the criterion rather than proceeding.
+
+## When you can't convert a shared scratch DFB
+
+A regular-backed sync-free DFB touched by two or more kernels **on the same node** has no
+scratchpad equivalent today. Stop, leave the DFB exactly as it is, and report it as a **feature
+request**, not merely as a note — the Metal 2.0 host-API owner wants to know when this shape occurs
+in real ops, and this pass is the only thing that will ever see it.
+
+Write it so your invoker can forward it as a standalone ticket:
+
+> **Feature request — Scratchpad shared by kernels on the same node.**
+> Op / factory: …
+> The DFB `<name>` is sync-free and regular-backed, so it is a scratchpad by nature, but it is
+> bound by `<kernels>`, which share nodes — and a `ScratchpadSpec` may be bound by multiple
+> `KernelSpec`s only over disjoint node sets. What the kernels use it for: …
+> Left as a DFB; no workaround applied.
+
+Report it under both the pass's [Outcome](../pass_procedure.md#step-5--report) and its own heading,
+so it does not get filed away with the ordinary "noticed, not done" observations.
+
+## When to stop
+
+Per [When the fix doesn't fit](../pass_procedure.md#when-the-fix-doesnt-fit). Specifically here:
+
+- The shared-node scratch case above.
+- The borrowed tensor is not reachable as a `TensorBinding` on a kernel that needs it — for
+  instance because binding it would exceed a limit, or the tensor is not a program input at all.
+- A DFB that is sync-free in every kernel but whose size or layout you cannot account for, so you
+  cannot carry `size_per_node` across without guessing.
+- Anything that makes you want to change *how* the kernel accesses the memory rather than *what it
+  calls the memory*. This pass renames a construct; it does not restructure access patterns. If the
+  access has to change for the conversion to work, the DFB was doing something this recipe has not
+  anticipated, and that is worth reporting in full.
