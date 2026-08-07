@@ -143,10 +143,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     [[maybe_unused]] const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
-    // Fabric-sender chain indices, supplied by the host (order: forward then backward). Read
-    // unconditionally so argidx stays aligned across every kernel variant. The in0 chain runs
-    // decreasing on NOC_1 (non-transposed core grid), so these are NOT necessarily the chain tail --
-    // never re-derive them from in0_core_order_size.
+    // Fabric-sender chain indices, supplied by the host (order: forward then backward)
     const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 

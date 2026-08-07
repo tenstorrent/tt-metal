@@ -108,9 +108,7 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        // The progress-counter address is baked into the reader + MM runtime args at build time and
-        // is not re-pointed here, so a caller-supplied array must stay put for the cached program's
-        // life; otherwise the kernels would signal/poll whatever now occupies that L1 address.
+        // The progress-counter address is baked into the reader + MM runtime args at build time
         if (tensor_args.mm_progress_counters.has_value()) {
             TT_FATAL(
                 static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address()) ==

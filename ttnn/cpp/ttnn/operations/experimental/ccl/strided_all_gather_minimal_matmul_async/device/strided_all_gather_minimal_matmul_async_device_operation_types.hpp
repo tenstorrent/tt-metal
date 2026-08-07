@@ -68,8 +68,7 @@ struct StridedAllGatherMinimalMatmulAsyncInputs {
     const std::optional<Tensor> persistent_output_buffer;
     const std::optional<const Tensor> bias = std::nullopt;
 
-    // Fused addcmul: matmul_output = ternary_a + fused_ternary_scalar * matmul_out * ternary_b.
-    // Presence of both a and b enables FUSE_TERNARY in the matmul factory; the scalar rides in matmul_struct.
+    // Fused addcmul: matmul_output = ternary_a + fused_ternary_scalar * matmul_out * ternary_b
     const std::optional<const Tensor> fused_ternary_input_a = std::nullopt;
     const std::optional<const Tensor> fused_ternary_input_b = std::nullopt;
 };

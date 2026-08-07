@@ -61,16 +61,12 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
 
 inline constexpr uint32_t sharded_args_start_idx = 24 + ccl_routing_utils::num_line_unicast_args;
 
-// Streaming matmul signal: each chunk's M-rows are delivered as this many row-bands, with one
-// matmul-aggregator inc per band. Default 1 = single inc per chunk (legacy). Must match the value
-// the matmul in0 kernel and the aggregator are built with.
+// Streaming matmul signal: each chunk's M-rows are delivered as this many row-bands
 #ifndef IN0_SUB_CHUNKS
 #define IN0_SUB_CHUNKS 1
 #endif
 
-// Mirrors the out_ready_sem gate inside write_chunk(): this writer forwards a chunk over fabric to a
-// remote device only when its direction has a target. When true, the writer also owns signaling the
-// remote device's matmul (semaphores[dir]) for each chunk it delivers (see writer_signals_mm).
+// Mirrors the out_ready_sem gate inside write_chunk(): this writer forwards a chunk over fabric to a remote device
 inline constexpr bool has_remote_target =
     (direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction);
 
@@ -113,10 +109,7 @@ void kernel_main() {
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
 #if defined(USE_MUX_V2)
-    // V2 is fully runtime-arg driven; build_from_args consumes the 11 client-connection args the
-    // host appends via FabricMuxV2Config::append_client_connection_rt_args. No worker-side
-    // termination protocol: the mux self-drains once every client closes.
-    // build_from_args takes size_t&; bridge through a size_t since arg_idx is uint32_t here.
+    // V2 is fully runtime-arg driven
 #define EAGER_STAGING false
     size_t mux_arg_idx = arg_idx;
     auto mux_connection = tt::tt_fabric::FabricMuxV2Sender<EAGER_STAGING>::build_from_args(mux_arg_idx);
@@ -145,8 +138,7 @@ void kernel_main() {
     if constexpr (fuse_op) {
         op_signaler_sender = OpSignaler(arg_idx);
         writer_signals_mm = get_arg_val<uint32_t>(arg_idx++) == 1;
-        // Option W: this worker signals its own per-worker semaphore on the direction's aggregation
-        // core (a single remote core), which collects all N workers and signals the matmul once.
+        // Option W: this worker signals its own per-worker semaphore on the direction's aggregation core
         agg_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
         agg_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
         // GlobalSemaphore L1 address (already resolved host-side); do NOT get_semaphore() it.
@@ -198,8 +190,7 @@ void kernel_main() {
     }
 
     auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
-    // Template holds the max-arity payload/chunk layout; each write overrides DstAddrs plus the actual
-    // ChunkSizes/PayloadSize, since a packet may carry fewer tiles than max_tiles_per_packet (tail/holes).
+    // Template holds the max-arity payload/chunk layout
     uint64_t scatter_dummy_addrs[NOC_SCATTER_WRITE_MAX_CHUNKS] = {0, 0, 0, 0};
     uint16_t scatter_init_chunk_sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1] = {
         static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)};
@@ -225,8 +216,7 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
 
-    // Dedicated header for signaling the remote device's matmul directly (writer_signals_mm). Only
-    // allocated when enabled, to avoid consuming a packet-header pool slot on the default path.
+    // Dedicated header for signaling the remote device's matmul directly (writer_signals_mm)
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_mm_sem_inc = nullptr;
     if (fuse_op && writer_signals_mm && has_remote_target) {
         pkt_hdr_mm_sem_inc = PacketHeaderPool::allocate_header();
@@ -260,11 +250,7 @@ void kernel_main() {
 
     Noc noc_obj;
 
-    // On an even ring the diametric device's slice is the last one relayed and would otherwise
-    // traverse the full half-ring on one link while the other idles. Relay its first half on
-    // direction 0 and its second half on direction 1 so both links share the final hop; direction 1
-    // gains one relay to carry that second half. Gated to the reader-signaled path: the
-    // writer-signals aggregator expects whole per-sender slices per direction.
+    // On an even ring the diametric device's slice is the last one relayed and would otherwise traverse the full
     bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         writes_expected++;
@@ -288,8 +274,7 @@ void kernel_main() {
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
                 uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
-                // write_chunk fires the per-worker aggregator inc once per row-band (IN0_SUB_CHUNKS
-                // total per chunk), replacing the single post-chunk inc that used to live here.
+                // write_chunk fires the per-worker aggregator inc once per row-band
                 bool mm_sig_local = fuse_op && writer_signals_mm && has_remote_target;
                 uint64_t agg_sem_noc_addr_local =
                     mm_sig_local ? safe_get_noc_addr(
@@ -346,8 +331,7 @@ void kernel_main() {
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                         input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
 
-                    // Direction 0 relays the first half of a split slice, direction 1 the second;
-                    // each walks past the half it does not relay.
+                    // Direction 0 relays the first half of a split slice, direction 1 the second
                     bool relay_this_chunk =
                         !is_split_forwarded_slice ||
                         (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
@@ -409,8 +393,7 @@ void kernel_main() {
 
     if (mux_connection_valid) {
 #if defined(USE_MUX_V2)
-        // close() requests teardown and blocks on the manager's ack. The mux self-terminates once
-        // all clients have closed, so there is no termination-master election on the worker side.
+        // close() requests teardown and blocks on the manager's ack
         mux_connection.close();
 #else
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

@@ -49,9 +49,7 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
     bool fuse_swiglu = false);
 
-// Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
-// Unlike minimal_matmul_fabric_bound_factory_helper, this function takes a number of output tensors as an argument
-// (N_chunks) and a vector of output tensors.
+// Shared implementation for variable number of output tensors
 MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric_bound_factory_helper_common(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,

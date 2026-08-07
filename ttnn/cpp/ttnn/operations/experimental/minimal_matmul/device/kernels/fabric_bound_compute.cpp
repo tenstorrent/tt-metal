@@ -47,14 +47,11 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
 }
 
 #ifdef SPLIT_OUTPUT_WRITE
-// Percent of the block's M-rows routed to NOC_1 (dm_in1 / out_cb_a); the rest go to NOC_0 (dm_in0 /
-// out_cb_b). Must match dm_in0/dm_in1 so the c_2/c_8 counts stay in lockstep.
+// Percent of the block's M-rows routed to NOC_1 (dm_in1 / out_cb_a)
 #ifndef AG_SPLIT_NOC1_PCT
 #define AG_SPLIT_NOC1_PCT 50
 #endif
-// Two-NoC output-write split: pack the block's first split_rows M-rows into out_cb_a (drained by the NOC_1
-// writer dm_in1) and the rest into out_cb_b (drained by the NOC_0 writer dm_in0). Same per-row pack as
-// copy_block; only the destination CB switches at the row boundary. Both CBs share the output format.
+// Two-NoC output-write split: pack the block's first split_rows M-rows into out_cb_a
 void copy_block_split(
     uint32_t in_cb,
     uint32_t out_cb_a,
@@ -101,9 +98,7 @@ void copy_block_split(
 }
 
 #ifdef FUSE_BIAS
-// Bias variant of copy_block_split: add the row-broadcast bias (and the fused activation, if any) per tile,
-// packing the block's first split_rows M-rows into out_cb_a (c_2) and the rest into out_cb_b (c_8). Same
-// two-NoC split as copy_block_split; the DM writers drain their halves unchanged.
+// Bias variant of copy_block_split: add the row-broadcast bias (and the fused activation, if any) per tile
 void add_bias_block_split(
     uint32_t in_cb,
     uint32_t bias_cb,
@@ -153,17 +148,7 @@ void add_bias_block_split(
 #endif  // SPLIT_OUTPUT_WRITE
 
 #ifdef FUSE_SWIGLU
-// Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in
-// `in_cb` (the intermediate accumulator): within each M row, column tile 2p is the
-// gate projection and 2p+1 is the up projection (the weight was tile-pair interleaved
-// on the host). For each pair we emit one output tile = silu(gate) * up, so the block
-// shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / no extra DRAM
-// round-trip: silu runs on the gate DST reg and the multiply is an SFPU dst*dst op.
-//
-// With FUSE_BIAS: bias is interleaved identically (tile 2p = gate bias, 2p+1 = up bias)
-// and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
-//
-// N_block_tiles must be even (enforced host-side).
+// Fused SwiGLU output stage
 void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
 #ifdef FUSE_BIAS
     reconfig_data_format(in_cb, bias_cb);
@@ -253,8 +238,7 @@ void add_bias_and_addcmul_block(
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
     uint32_t broadcast_ternary_b) {
-    // Note: unary_bcast_tile does not work with fp32_acc_to_dest=True.
-    // As a workaround, we perform addcmul through multiple LLKs calls (mul_tiles, mul_unary_tile, add_tiles_bcast).
+    // Note: unary_bcast_tile does not work with fp32_acc_to_dest=True
 
     const uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
@@ -266,10 +250,7 @@ void add_bias_and_addcmul_block(
 
     constexpr uint32_t DST_ID = 0;
 #ifdef FUSE_BIAS
-    // ============================================
-    // STEP 1: Add bias block
-    // Read from intermediate_cb and write back to intermediate_cb
-    // ============================================
+    // ============================================ STEP 1: Add bias block Read from intermediate_cb and write back
 
     add_bcast_rows_init_short(intermediate_cb, bias_cb);
     reconfig_data_format(intermediate_cb, bias_cb);
@@ -295,9 +276,7 @@ void add_bias_and_addcmul_block(
         }
     }
 
-    // Pop input and push output ONCE at the end
-    // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
-    // cb_pop_front(intermediate_cb, out_block_num_tiles);
+    // Pop input and push output ONCE at the end cb_wait_front(intermediate_cb, out_block_num_tiles)
     cb_bias.pop_front(N_block_tiles);
 
     cb_intermediate.pop_front(out_block_num_tiles);
@@ -307,11 +286,7 @@ void add_bias_and_addcmul_block(
     cb_intermediate.push_back(out_block_num_tiles);
 #endif  // FUSE_BIAS
 
-    // ============================================
-    // STEP 2: Multiply by ternary_b and scalar
-    // Read from intermediate_cb and write back to intermediate_cb
-    // broadcast_ternary_b: 1 = single row broadcast, 0 = row-by-row streaming
-    // ============================================
+    // ============================================ STEP 2: Multiply by ternary_b and scalar Read
 
     cb_intermediate.wait_front(out_block_num_tiles);
 
@@ -439,12 +414,7 @@ void add_bias_and_addcmul_block(
     cb_intermediate.pop_front(out_block_num_tiles);
 }
 
-// Slightly modified from compute_common.hpp
-//
-// m_out_tile_offset shifts where this call's rows land in the (full) output block. When in0 is
-// delivered as M-row sub-chunk bands, each band's in0 CB slot is 0-based (M_block_tiles == band_h,
-// in0 indexing starts at 0) but the band's results must accumulate into rows [band_lo, band_lo+band_h)
-// of the intermediate block, so pass m_out_tile_offset = band_lo. Whole-block callers pass 0.
+// Slightly modified from compute_common.hpp m_out_tile_offset shifts where this call's rows land
 void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
@@ -459,12 +429,7 @@ void matmul_blocks(
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
-        // The in0 CB slot is padded to a uniform (M_block_tiles / nb) rows, so a ragged band whose
-        // height is not a multiple of subblock_h still has real tiles for a full subblock_h read -- the
-        // trailing rows are slack. Compute the full subblock (a smaller rt_dim would need an
-        // mm_block_init_short re-init that stalls the engine), then pack only the real rows so a ragged
-        // band never writes into the next band's output rows. subblock_h | (M_block_tiles/nb) (host
-        // guard) keeps the deep read inside the slot.
+        // The in0 CB slot is padded to a uniform (M_block_tiles / nb) rows
         const uint32_t real_h = std::min(subblock_h, M_block_tiles - M_start);
         uint32_t in1_index_offset = 0;
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
@@ -517,10 +482,7 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
-    // Number of leading (self/local) k-block positions this device owns. The AG schedule always drains
-    // the local slice first, so positions [0, num_local_k_blocks) are local (never sub-chunked) and the
-    // rest are remote (sub-chunked into IN0_SUB_CHUNKS M-row bands on the first N-block). Kept identical
-    // across the dm_in0/dm_in1 senders so per-band CB push/pop counts match.
+    // Number of leading (self/local) k-block positions this device owns
     [[maybe_unused]] constexpr uint32_t num_local_k_blocks = get_compile_time_arg_val(8);
 
     uint32_t argidx = 0;
@@ -602,21 +564,12 @@ void kernel_main() {
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
             cb_intermediate.reserve_back(out_block_num_tiles);
-            // Sub-chunked (banded) matmul. Remote k-blocks on the first N-block arrive as IN0_SUB_CHUNKS
-            // M-row bands; local k-blocks and every k-block on later N-blocks arrive whole (nb == 1). in1
-            // is re-presented once per band (read once, pushed nb times by the in1 sender), so in0 and in1
-            // advance in lockstep and the matmul fires per band. Each k-block position is delivered fresh
-            // (no N-stride in0 reuse). With IN0_SUB_CHUNKS == 1 this degenerates to one whole band per
-            // position.
+            // Sub-chunked (banded) matmul
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 const uint32_t nb =
                     (n_block_iter == 0 && k_block >= num_local_k_blocks) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
 #ifdef AG_INTERLEAVE_BANDS
-                // Interleave a forward remote k-block with the following backward one at band granularity:
-                // A.b0, B.b0, A.b1, B.b1, ... Both members share band_lo and accumulate into the same
-                // output rows; both are past k-block 0 so L1 accumulation is already on, so the two partials
-                // sum correctly regardless of order. The position-based pairing matches dm_in0/dm_in1 so the
-                // per-band in0/in1 CB counts stay in lockstep.
+                // Interleave a forward remote k-block with the following backward one at band granularity: A.b0
                 if (n_block_iter == 0 && nb > 1 && k_block >= num_local_k_blocks && (k_block + 1) < K_num_blocks &&
                     ((k_block - num_local_k_blocks) & 1u) == 0) {
                     for (uint32_t band = 0; band < nb; band++) {
@@ -625,9 +578,7 @@ void kernel_main() {
                         if (band_h == 0) {
                             break;
                         }
-                        // Reserve a uniform slot of M_block_tiles/nb rows for every band (not the ragged
-                        // band_h) so each band tiles the in0 CB exactly and no reservation wraps
-                        // fifo_limit mid-block. matmul reads band_h rows and packs the real ones.
+                        // Reserve a uniform slot of M_block_tiles/nb rows for every band
                         const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
                         for (uint32_t member = 0; member < 2; member++) {
                             cb_in0.wait_front(band_slot_tiles);
@@ -657,9 +608,7 @@ void kernel_main() {
                     if (band_h == 0) {
                         break;  // only when nb > current_M_block_tiles
                     }
-                    // Reserve a uniform slot of M_block_tiles/nb rows for every band (not the ragged
-                    // band_h) so each band tiles the in0 CB exactly and no reservation wraps fifo_limit
-                    // mid-block. matmul reads band_h rows and packs the real ones.
+                    // Reserve a uniform slot of M_block_tiles/nb rows for every band
                     const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
                     cb_in0.wait_front(band_slot_tiles);
                     cb_in1.wait_front(in1_block_num_tiles);

@@ -119,10 +119,7 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input,
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
-    // Option W (writer-signals-matmul): the matmul cores keep the legacy 3 semaphores (backward,
-    // forward, self) and wait +1 per k-block. When the flag is on, a dedicated per-direction
-    // aggregation core (see the AG program factory) collects the N per-worker landing signals and
-    // provides that single +1 - so the matmul semaphore count is unchanged here (num_ag_workers = 1).
+    // Option W (writer-signals-matmul): the matmul cores keep the legacy 3 semaphores
 
     // Matmul outputs: one tensor per chunk (chunks == 1 -> single output).
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;

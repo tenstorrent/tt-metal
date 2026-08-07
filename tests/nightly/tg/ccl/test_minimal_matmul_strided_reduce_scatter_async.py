@@ -182,10 +182,6 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
         ),
         # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
-        # (K = ffn_dim/TP = 16384/4 = 4096, N = dim = 4096), HiFi2 (impl default).
-        # LTX has no fused_mmrs_configs entry for this shape (falls to the (8,7) default), which is a
-        # too-small grid. Start from the Wan-style (12,8)=96-core MM grid with a plain 8/8/8 blocking
-        # (subblock 2x2), leaving rows 8-9 for the RS workers; tune from here.
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
                 M=4864,
@@ -203,8 +199,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="ltx_ff2_4864_4096_4096_x12_y8_b888",
         ),
-        # LTX ff2, tuned: on the (12,8) grid (rows 8-9 reserved for RS workers), the default block is
-        # M/K/N = 4/5/7 tiles (subblock 4x1); run_ff2_block_sweep.py sweeps shapes to revisit.
+        # LTX ff2, tuned: on the (12,8) grid (rows 8-9 reserved for RS workers)
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
                 M=4864,
@@ -238,8 +233,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "enable_trace, num_iters",
     [
         (False, 1),
-        # Run the op twice back-to-back (no trace): iter 0 pays program build/first-dispatch, iter 1
-        # is a program-cache hit -> use the 2nd op in the profiler to rule out compile/first-run cost.
+        # Run the op twice back-to-back (no trace): iter 0 pays program build/first-dispatch
         (False, 2),
     ],
     ids=["check", "iter2"],
@@ -248,9 +242,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "rs_mode",
     [
         "fused",
-        # Unfused: run the standalone minimal_matmul (its own profiler op = the standalone matmul
-        # time) followed by a separate reduce-scatter. Note the standalone matmul uses the FULL
-        # compute grid, not the (12,8) the fused op reserves for RS workers.
+        # Unfused: run the standalone minimal_matmul (its own profiler op = the standalone matmul time) followed
         "separate_strided",
         "separate",
     ],
@@ -416,16 +408,7 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
     )
 
 
-# ---------------------------------------------------------------------------
-# Block-shape sweep: fixed LTX video ff2 shape (4864/4096/4096) on the (12,8) MM grid, HiFi2.
-# The mm_block_m / mm_block_k / mm_block_n ranges come from env vars so a driver can shard the
-# (large) sweep into small, profiler-friendly batches:
-#   SWEEP_M_BLOCKS / SWEEP_K_BLOCKS / SWEEP_N_BLOCKS  (each "lo:hi" inclusive, or "a,b,c"; tiles)
-# If none are set the parameter set is empty -> the test skips (empty_parameter_set_mark=skip),
-# so it never runs in nightly. N block is capped by the per-core N tiles (Nt // grid.x = 10 here);
-# subblock is auto-picked as the largest DST-fitting (sh*sw <= 4) divisor of the block.
-# Drive it with tests/nightly/tg/ccl/run_ff2_block_sweep.py.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Block-shape sweep: fixed LTX video ff2
 _SWEEP_M, _SWEEP_K, _SWEEP_N = 4864, 4096, 4096
 _SWEEP_GRID = (12, 8)
 _DEFAULT_BLOCK_RANGE = tuple(range(2, 17))  # 2..16 tiles (used per-axis when its env var is unset)
@@ -568,9 +551,7 @@ def test_minimal_matmul_strided_reduce_scatter_block_sweep(
     if not configs:
         pytest.skip("no SWEEP_{M,K,N}_BLOCKS env set; drive with run_ff2_block_sweep.py")
 
-    # Run every config back-to-back on the SAME device (opened once by the fixture) so the sweep is
-    # not dominated by per-config device open/close. Each op records its block config in the
-    # profiler ATTRIBUTES, so the driver still maps timings back to configs.
+    # Run every config back-to-back on the SAME device (opened once by the fixture) so the sweep is not dominated
     for idx, cfg in enumerate(configs):
         logger.info(
             f"[block sweep {idx + 1}/{len(configs)}] M_block={cfg.mm_block_m // 32} "

@@ -2,17 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Matmul-signal aggregation kernel for the writer-signals-matmul path (Option W).
-//
-// One aggregator runs per all-gather direction on the receiving device. Each of the N AG writer
-// workers in that direction fabric-increments its own per-worker semaphore on this core as soon as
-// its portion of a k-block lands (ordered after the data on that worker's fabric connection). This
-// aggregator waits for all N per-worker semaphores to advance, which means the whole k-block has
-// landed, then increments the matmul cores' single direction semaphore exactly once - decoupling the
-// matmul from the AG reader's forwarding pace while keeping the matmul cores at just 3 semaphores.
-//
-// The iteration cadence mirrors the reader's remote-receive loop so that the number and order of
-// matmul signals matches exactly what the (reader-signaled) legacy path produced.
+// Matmul-signal aggregation kernel for the writer-signals-matmul path (Option W)
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -21,16 +11,12 @@
 
 using ttnn::ccl::Topology;
 
-// Each AG writer worker fires this many per-worker incs per chunk (one per row-band). The aggregator
-// waits for all of them (event_target advances by IN0_SUB_CHUNKS per chunk) before signaling the
-// matmul once per chunk. Default 1 = single inc per chunk (legacy). Must match the writer.
+// Each AG writer worker fires this many per-worker incs per chunk (one per row-band)
 #ifndef IN0_SUB_CHUNKS
 #define IN0_SUB_CHUNKS 1
 #endif
 
-///////////////////////////////////////////////////
-// COMPILE TIME ARGS
-///////////////////////////////////////////////////
+// ///////////////////////////////////////////////// COMPILE TIME ARGS
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(1);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(2);
@@ -53,8 +39,7 @@ void kernel_main() {
         device_k_block_counts[d] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    // Per-worker semaphore addresses (this core's L1) that the AG writer workers increment.
-    // GlobalSemaphore L1 addresses (already resolved host-side); do NOT get_semaphore() them.
+    // Per-worker semaphore addresses (this core's L1) that the AG writer workers increment
     volatile tt_l1_ptr uint32_t* per_worker_sem_ptrs[num_ag_workers];
     for (uint32_t w = 0; w < num_ag_workers; w++) {
         per_worker_sem_ptrs[w] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
@@ -74,9 +59,7 @@ void kernel_main() {
         slices_expected = direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
     }
 
-    // Split-forwarding: on an even ring the diametric slice arrives split across both links, so the
-    // upstream writer fabric-increments this direction's per-worker sems only for its half. Mirror
-    // the reader's receive accounting exactly so event_target tracks what the writer actually sends.
+    // Split-forwarding: on an even ring the diametric slice arrives split across both links
     bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         slices_expected++;
@@ -93,8 +76,7 @@ void kernel_main() {
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
                 uint32_t num_chunks = device_k_block_counts[actual_sender_chip_id];
-                // The diametric slice (last one received) lands split across both links; wait on only
-                // this direction's half (direction 0 = first half, direction 1 = second half).
+                // The diametric slice (last one received) lands split across both links
                 bool is_split_received_slice =
                     split_forwarding_enabled && (slices_received == slices_expected - 1) && (num_chunks >= 2);
                 uint32_t first_half_chunks = num_chunks / 2;
@@ -105,9 +87,7 @@ void kernel_main() {
                     if (!receive_this_chunk) {
                         continue;
                     }
-                    // Writer fires IN0_SUB_CHUNKS per-worker incs per chunk (one per row-band). Signal
-                    // the matmul once per band as it lands, so the injector can read band s while band
-                    // s+1 is still on the fabric.
+                    // Writer fires IN0_SUB_CHUNKS per-worker incs per chunk (one per row-band)
                     for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
                         event_target++;
                         // Wait for all N workers' portion of this band to land.
@@ -125,19 +105,12 @@ void kernel_main() {
             }
         }
     }
-    // event_target counts up monotonically and each wait gates on it, so the per-worker sems must
-    // start every invocation at 0. Zero them here (all increments for this run have been observed by
-    // the final wait_min) so a trace replay begins clean instead of inheriting the prior run's value.
+    // event_target counts up monotonically and each wait gates
     for (uint32_t w = 0; w < num_ag_workers; w++) {
         noc_semaphore_set(per_worker_sem_ptrs[w], 0);
     }
 
-    // Drain the non-posted atomic increments issued to the matmul semaphores above. Without this the
-    // final noc_semaphore_inc's ack can still be in flight when this core is released; the next op
-    // reusing this core inherits the outstanding atomic on the NIU and its terminal
-    // noc_async_atomic_barrier() (which checks cumulative issued==acked) hangs off-by-one. This
-    // surfaces under NOC contention (8k fabric payload) as an intermittent, device-random,
-    // aggregator-core-fixed mesh deadlock. Mirrors the writer kernel's teardown barriers.
+    // Drain the non-posted atomic increments issued to the matmul semaphores above
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

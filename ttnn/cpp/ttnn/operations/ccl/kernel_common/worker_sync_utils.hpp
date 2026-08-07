@@ -112,15 +112,7 @@ struct OpSignaler {
         }
     }
 
-    // Per-core fused-op signaling (NO worker barrier). Each worker independently increments its
-    // OWN slot in a per-core counter array on every fused-op (RS) receiver core, then continues.
-    // Unlike synchronize_workers_and_signal_op, no worker waits for any peer, so per-block skew
-    // flows into the consumer's pipeline instead of stalling the whole grid.
-    //
-    //   counter_base_l1 : base L1 address of the per-core counter array on each receiver core
-    //                     (identical on every receiver core in the same program). This worker
-    //                     increments slot curr_worker_index; the consumer computes the same
-    //                     row-major index for the producing core of each tile and waits on it.
+    // Per-core fused-op signaling (NO worker barrier)
     void signal_op_per_core(uint32_t counter_base_l1) {
         ASSERT(this->initialized);
         const uint32_t counter_addr = counter_base_l1 + this->curr_worker_index * sizeof(uint32_t);

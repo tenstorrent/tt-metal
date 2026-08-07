@@ -406,9 +406,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::map<std::string, std::string> writer_compute_defines;
     std::map<std::string, std::string> reduce_compute_defines;
 
-    // The input (MM output) is always fed through TensorAccessorArgs (below), even when L1-sharded
-    // for the fused-MM handoff, so the reader's TensorAccessor path handles it. The reader's manual
-    // INPUT_IS_SHARDED read path is unimplemented, so do NOT define INPUT_IS_SHARDED.
+    // The input (MM output) is always fed through TensorAccessorArgs (below)
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
         writer_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -434,26 +432,20 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
     bool fuse_mm_op = mm_fused_op_signaler.has_value();
-    // Per-core MM signaling: L1 array of per-MM-core progress counters, one row per RS worker core.
-    // Only set on the fallback path where no shared array was supplied.
+    // Per-core MM signaling: L1 array of per-MM-core progress counters, one row per RS worker core
     std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
     uint32_t captured_mm_progress_counters_addr = 0;
     if (fuse_mm_op) {
         mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
         reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
 
-        // The counter array: one shard (row) per RS worker core, sized to the full device
-        // compute grid (a safe upper bound on the MM core count). HEIGHT_SHARDED => every RS core's
-        // row sits at the SAME local L1 address, which we bake into the reader + MM runtime args.
-        // The MM increments slot (row-major core id) on every RS core; the reader waits per-tile.
+        // The counter array: one shard (row) per RS worker core, sized to the full device compute grid
         const auto mm_grid = mesh_device->compute_with_storage_grid_size();
         const uint32_t num_mm_core_slots = mm_grid.x * mm_grid.y;
         const uint32_t counters_row_bytes = num_mm_core_slots * sizeof(uint32_t);
 
         if (mm_progress_counters.has_value()) {
-            // Caller-owned array, shared across programs. Preferred over allocating below: a private
-            // array is retained for the cached program's life, and those small permanent L1 blocks
-            // pin the freed regions above them, starving later ops of circular-buffer space.
+            // Caller-owned array, shared across programs
             const auto& counters = mm_progress_counters.value();
             const auto& counters_shard_spec = counters.memory_config().shard_spec();
             TT_FATAL(
@@ -476,9 +468,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_fused_op_signaler->mm_progress_counters_addr = static_cast<uint32_t>(counters.buffer()->address());
         } else {
             // BUILD-VERIFY: this is the ONE tt-metal buffer-API call to confirm against your tree
-            // (MeshDevice CreateBuffer/ShardedBufferConfig vs MeshBuffer, and the exact ShardSpecBuffer
-            // ctor args). Only mm_progress_counters_buffer->address() is consumed downstream, so the
-            // rest of the change is agnostic to how this line is spelled.
             const uint32_t num_rs_cores = sender_worker_core_range_set.num_cores();
             const auto counter_shard_spec = tt::tt_metal::ShardSpecBuffer(
                 sender_worker_core_range_set,
@@ -553,8 +542,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         slice_Ht,                           // [23] slice_Ht (total height in tiles across all MM cores)
     };
 
-    // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the
-    // reader's TensorAccessor path works for the fused-MM L1 handoff.
+    // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the reader's
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);

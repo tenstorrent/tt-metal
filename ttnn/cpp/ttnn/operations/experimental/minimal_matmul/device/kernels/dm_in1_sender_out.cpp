@@ -164,8 +164,7 @@ void kernel_main() {
     uint32_t mm_progress_counters_base = 0;
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
-        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array,
-        // pushed as the next RT arg right after the OpSignaler args.
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
     }
 #endif
