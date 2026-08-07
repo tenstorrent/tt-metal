@@ -46,7 +46,7 @@ def test_tt_full_decoder(device, xtts_state_dict, latent_len, ref_samples, pcc, 
     tt_dec = TtXttsHifiDecoder(device, reference)
     latents_dev = ttnn.from_torch(latents.float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
     wav_dev = ttnn.from_torch(
-        ref_wav.reshape(1, ref_samples, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+        ref_wav.reshape(1, ref_samples).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
 
     # Check the intermediate speaker embedding, then the full waveform.

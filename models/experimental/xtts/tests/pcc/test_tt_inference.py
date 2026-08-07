@@ -98,7 +98,7 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
     # TTNN end to end, same codes.
     tt = TtXtts(device, sd, reference.decoder_full)
     spk_wav_tt = ttnn.from_torch(
-        spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
     wav_tt_dev, _ = tt.inference(wrapped, wav, spk_wav_tt, force_codes=codes_ref[0].tolist())  # mel on device
     wav_tt = ttnn.to_torch(wav_tt_dev).float().permute(0, 2, 1)  # [1, T_out, 1] -> [1, 1, T_out]
@@ -158,7 +158,7 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
     # weights (no torch GPT here — generation is entirely on device).
     tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
     spk_wav_tt = ttnn.from_torch(
-        spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
 
     # Real (sampled) generation of the whole sentence — self-terminates via STOP; greedy is

@@ -49,9 +49,11 @@ class TtXtts(LightweightModule):
         self.generator = TtXttsGenerator(self.gpt)
         self.decoder = TtXttsHifiDecoder(device, ref_decoder_full)
 
-    def _wav_chunk_to_device(self, chunk):  # torch [1, Lc] @ 22050 -> ttnn [1, Lc, 1] ROW_MAJOR fp32
+    def _wav_chunk_to_device(self, chunk):  # torch [1, Lc] @ 22050 -> ttnn [1, Lc] ROW_MAJOR fp32
+        # [1, Lc], NOT [1, Lc, 1]: a rank-3 trailing-1 shape gives ROW_MAJOR 4-byte pages, and the
+        # mel frontend's reshape out of that costs 31.8 ms. See xtts_mel._flat_signal.
         return ttnn.from_torch(
-            chunk.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.float32
+            chunk.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.float32
         )
 
     def _style_from_mel(self, mel_dev):  # device fp32 mel [1, 80, s] -> conditioning style [1, 1024, 32]
