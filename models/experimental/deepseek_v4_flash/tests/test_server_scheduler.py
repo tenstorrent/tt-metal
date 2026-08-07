@@ -373,3 +373,50 @@ def test_follow_up_turn_continues_the_session() -> None:
     # ended on, and feeds only what the new turn adds rather than the whole history.
     assert engine.users[0].pos > pos_before, "second turn did not extend the cache"
     assert second["prompt_tokens"] < pos_before, "second turn re-prefilled the whole history"
+
+
+@pytest.mark.parametrize(
+    "body, greedy",
+    [
+        ({}, True),
+        ({"temperature": 0}, True),
+        ({"temperature": None, "top_p": None}, True),
+        ({"temperature": 0.7}, False),
+        ({"top_p": 0.9}, False),
+        ({"temperature": 0, "top_p": 0.9}, False),
+    ],
+)
+def test_sampler_is_greedy_unless_the_request_asks_otherwise(body: dict, greedy: bool) -> None:
+    """A request that names neither temperature nor top_p decodes greedily.
+
+    Greedy is both the documented default and the cheap one: the sampling path costs
+    the scheduler thread real milliseconds per token, so defaulting into it silently
+    taxes every request that never asked to sample.
+    """
+    sampler = S._make_sampler(body.get("temperature"), body.get("top_p"))
+    assert (sampler is None) == greedy
+
+
+def test_sampler_matches_the_exact_softmax() -> None:
+    """Truncating to the top-k logits must not skew the distribution it samples from."""
+    torch.manual_seed(0)
+    logits = torch.full((1, 129280), -30.0)
+    logits[0, 5], logits[0, 7], logits[0, 9] = 10.0, 9.0, 8.0
+    sample = S._make_sampler(1.0, None)
+
+    draws = [sample(logits) for _ in range(3000)]
+    assert set(draws) <= {5, 7, 9}, "sampled a token the tail should never reach"
+    expected = torch.softmax(torch.tensor([10.0, 9.0, 8.0]), dim=0)
+    for token, want in zip((5, 7, 9), expected.tolist()):
+        assert abs(draws.count(token) / len(draws) - want) < 0.03, f"token {token} is skewed"
+
+
+def test_top_p_keeps_the_nucleus_and_drops_the_tail() -> None:
+    """``top_p`` truncates to the smallest set of tokens covering the requested mass."""
+    torch.manual_seed(0)
+    logits = torch.full((1, 129280), -30.0)
+    logits[0, 5], logits[0, 7], logits[0, 9] = 10.0, 9.0, 2.0
+    sample = S._make_sampler(1.0, 0.9)
+
+    draws = {sample(logits) for _ in range(2000)}
+    assert draws == {5, 7}, f"nucleus should hold exactly the top two tokens, got {draws}"
