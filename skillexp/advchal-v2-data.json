@@ -5,7 +5,10 @@
   "attribution_channel_1": "us_advisor_drops -- conversions the advice does not place; prices removal only",
   "attribution_channel_2": "re-grid of an op inside a chain; removes no conversion so channel 1 prices it at 0. Split by direction: UP (advised>shipped, esp <=2 cores) is the candidate; DOWN is the fewer-cores bias.",
   "zero_ceiling": "drops==0 with large agrees = advisor endorses what is there. drops==0 with undetermined+unresolved dominant = no comparison was possible; not evidence of absence.",
-  "finding_class": "1-core RMSNorm: north-mini FN 22/32/64->32 (-10.23%), gemma-4-26B onA ->88 (-12.98%), phi arm FN screened only the advised 11, measured slower, abandoned 88.8us = 12.25% of its window"
+  "finding_class": "1-core RMSNorm: north-mini FN 22/32/64->32 (-10.23%), gemma-4-26B onA ->88 (-12.98%), phi arm FN screened only the advised 11, measured slower, abandoned 88.8us = 12.25% of its window",
+  "advised_cores_understated": "CORRECTION: advised_cores throughout this file is parsed from report.json's cores=(x0,y0)-(x1,y1), which prints only the FIRST range of a multi-range CoreRangeSet. It understates the advisor's real choice on 476 of 816 advised ops (58.3%). The AxB grid string is correct -- its product is the coreCount LayoutScore compares, validated 49/49 against three decision traces. 59 of 334 chain rows stop being disagreements once corrected, carrying 1908 of 5547 chain us (34.4%). Corrected per-op values: advchal-v2-corrected-advice.json. See ADVCHAL-V2-ADVICE-FAITHFULNESS.md section 1.",
+  "rows_incomplete": "CORRECTION: rows[] has 14 entries but the corpus is 15 cells -- gemma-4-26B fuse-noadvise is MISSING. Any count taken from this file alone is one cell short. The complete set is built from the cell branches in advchal-v2-followed.json and advchal-v2-corrected-advice.json.",
+  "dram_resident_includes_unfixable": "CORRECTION: dram_resident rows are not all advice. report.json's unfixable_ops declares ops the advisor could not place, with the exact TT_FATAL; for those the DRAM layout is a fallback after a declared failure. 54 declarations corpus-wide, 41 still presented as screenable. See ADVCHAL-V2-ADVICE-FAITHFULNESS.md section 11."
  },
  "rows": [
   {

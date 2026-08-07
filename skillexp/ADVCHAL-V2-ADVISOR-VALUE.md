@@ -10,6 +10,25 @@ Companion to [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md).
 
 ---
 
+> ## ⚠ CORRECTIONS from later work
+>
+> 1. **Advised core counts in this file are understated on 58.3 % of ops.** `reconcile.py` parses `cores=` from
+>    `report.json`, which prints only the first range of a multi-range `CoreRangeSet`. The grid-string product is
+>    correct (validated 49/49 against three decision traces). So "1→88" for gemma-4-26B is right, but "12→99",
+>    "12→77" and "1→22" style figures elsewhere need the corrected value —
+>    `advchal-v2-corrected-advice.json`. **59 of 334 `chain` rows stop being disagreements once corrected,
+>    carrying 34.4 % of all chain µs.** → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1.
+> 2. **§4's conclusion is strengthened, not weakened.** The "0 of 37 `rms_norm` rows recorded as `kept`" result
+>    stands, and the mechanism — the ceiling prices only boundary conversions — was later confirmed at corpus
+>    scale: two of the three biggest wins came from cells whose feasibility said `ceiling_us = 0` /
+>    `not_measurable` with **0 kept chains recorded**. → [`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md).
+> 3. **The `dram_resident` rows are not all advice.** The advisor declares ops it cannot place in
+>    `report.json`'s `unfixable_ops`, with the exact `TT_FATAL`; for those, the DRAM layout is a *fallback after
+>    a declared failure*. **54 such declarations corpus-wide, 41 still presented as screenable.** → §C5g.
+> 4. **The advisor's direction was later measured end to end on one cell.** Its plan implemented verbatim is
+>    **−10.43 %** against the **−4.88 %** that shipped, at **PCC 1.0**; with the advised norm too, −17.84 %.
+>    → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7.
+
 ## 1. Was the advisor needed to *find* the win?
 
 The corpus's four win cells all turned on the same thing: a reduction stuck on ≤2 cores. Two detection rules

@@ -772,9 +772,14 @@ candidate on its own.
 | `not_measurable` | 26 | 568.4 | 10.2 % | the cell's ceiling was under its noise floor |
 | `hard_error` | 1 | 0.0 | — | implementing it hit a `TT_FATAL` |
 
-**58 of 248 chains kept, 589 of 5547 µs = 10.6 %** — 8.8 % if you include the 86 `dram_resident` ops that get
-no chain at all. **17 of 26 (cell, layer-kind) pairs kept zero.** And that is an *upper bound*: `kept` means
-the chain shipped, not that the advised geometry was implemented.
+**58 of 248 chains kept, 589 of the 5,547 µs the stage counted as disagreed-on = 10.6 %.** **17 of 26 (cell,
+layer-kind) pairs kept zero.**
+
+⚠ **That denominator is inflated by a third.** With advised core counts corrected (§3.23b), **59 of 334 `chain`
+rows stop being disagreements at all — 1,908 µs, 34.4 %** — because the understated count pushes agreeing rows
+into `chain`. Against the genuine 3,639 µs the followed share is **16.2 %**. And `dram_resident` cannot just be
+added to the denominator: 41 of 54 advisor-declared-`unfixable` rows sit in it (§3.28). The `kept` figure is also
+an *upper bound*, since it means the chain shipped, not that the advised geometry was implemented.
 
 **Buffer type vs geometry, over the 9 cells that changed anything:**
 

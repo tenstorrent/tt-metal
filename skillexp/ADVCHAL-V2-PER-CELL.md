@@ -43,6 +43,14 @@
 
 Op-by-op detail per model and kind — including what was rejected as slower and what could have been tried and was not — is in [`ADVCHAL-V2-PER-OP.md`](ADVCHAL-V2-PER-OP.md).
 
+> **Two corrections from later work.** (1) Advised core counts derived from the reconciliation's
+> `advised_cores` are understated on **58.3 %** of ops — `report.json`'s `cores=` field prints only the first
+> range of a multi-range `CoreRangeSet`; the grid-string product is the correct value. **59 of 334 `chain` rows
+> stop being disagreements once corrected, carrying 34.4 % of chain µs.** Corrected per-op values:
+> `advchal-v2-corrected-advice.json`. (2) `dram_resident` rows for ops the advisor declared in `unfixable_ops`
+> are a *fallback after a declared failure*, not advice — 54 declarations corpus-wide, 41 presented as
+> screenable anyway. → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1 and §11.
+
 ## Classification — derived from the numbers above
 
 **gemma-4-12B** — `improved`, 2 optimization round(s)

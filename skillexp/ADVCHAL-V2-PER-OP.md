@@ -9,16 +9,42 @@ Cells of one model start from **different optimized decoders** — different arm
 machines — so the *shipped* column varies. The *advised* column is the interesting one: the advisor is
 deterministic and re-derives from DRAM-interleaved inputs, never seeing the shipped layout.
 
+> ## ⚠ CORRECTION — read this before any `advised` core count below
+>
+> Every advised core count in this file comes from the reconciliation's `advised_cores`, which
+> `reconcile.py:194` parses out of `report.json`'s `cores=(x0,y0)-(x1,y1)` field. **That field prints only the
+> first range of a multi-range `CoreRangeSet`, so it understates the advisor's real choice on 476 of 816
+> advised ops — 58.3 %.** The `AxB` grid string printed next to it is correct: its product is the value
+> `LayoutScore` actually compared, validated **49/49** against three decision traces
+> (`beam[0].score.coreCount`).
+>
+> **Common corrections:** 22→**32**, 88→**90** or **96**, 77→**80** or **86**, 55→**64**, 99→**103** or
+> **107**, 11→**16**, 1→**32**. The mapping is *not* uniform across cells, so do not substitute blindly —
+> per-op corrected values for all 15 cells are in **`advchal-v2-corrected-advice.json`**.
+>
+> **And it changes what counts as a disagreement. 59 of the 334 `chain` rows in this corpus stop being
+> disagreements once the count is corrected — they carry 1,908 of 5,547 chain µs, 34.4 %.** The classes
+> affected: `nlp_create_qkv_heads_decode` (advised 32, shipped 32 — every cell), `rotary_embedding` (16 or 32),
+> `linear` (80/86/96/103/107), and every `slice_static` advised `l1/interleaved` (no `cores=` field at all, so
+> `advised_cores` is `None` and the row lands in `chain` even at a matching 110 cores).
+>
+> → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1, [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §C5f
+
 ## Reading the cells
 
 `shipped→advised cores, op µs, verdict`, where **KEPT** shipped, `rej` measured slower than the incumbent,
 `below` was under the screening threshold, and `agree` means the row is `agrees_with_shipped`.
 
-> **A caution that caught me out.** An `agrees_with_shipped` row can still show a *different* advised core
-> count. `reconcile.py` treats a DRAM-sharded matmul as agreement when the **program-config family** matches,
-> even if the grids differ — so `12→99, agree` means *both are DS*, not that 87 cores were left on the table.
-> Only rows with a chain verdict are genuine disagreements. I initially misread these as un-screened headroom;
-> they are not. The tool should record `agreed_on: grid | ds_family` and currently does not.
+> **A caution that caught me out, and a second one behind it.** An `agrees_with_shipped` row can still show a
+> *different* advised core count, because `reconcile.py` treats a DRAM-sharded matmul as agreement when the
+> **program-config family** matches even if the grids differ — so `12→99, agree` means *both are DS*, not that
+> 87 cores were left on the table. That much stands.
+>
+> **The larger effect is the opposite one**, and I missed it at first: the `advised` value itself is wrong on
+> 58.3 % of ops (see the correction above), which sends rows into `chain` that actually **agree**. So this file
+> both under-counts agreement in the DS rows *and* over-counts disagreement everywhere else. Two more defects
+> in the same field: `agrees_with_shipped` never compares the **memory space** (C5c), and `advised_cores` is
+> `None` for interleaved advice so those rows can never register as agreement (C5f).
 
 
 ## phi-3.5

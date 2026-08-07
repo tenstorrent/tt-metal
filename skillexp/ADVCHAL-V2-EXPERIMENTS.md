@@ -11,6 +11,19 @@ claims the corpus data alone could not settle.
 | **corrected the mechanism behind a published conclusion** | E6 |
 | **validated a proposed fix by prediction** | E7 — a static, zero-device-time check flagged the cell before the run |
 
+> **Where the later experiments live.** This file holds E1–E8. E9–E23 are in
+> [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md); **E24 is retracted there** (my "the advisor advised an
+> unrunnable shard" claim — the error was mine, shard (32,64) not (32,48)); **E25** (the advisor's plan verbatim:
+> −10.43 % vs the −4.88 % shipped, PCC 1.0) is in COUNTERFACTUALS; **E26** (apply the advised plan together:
+> −17.84 %) and **E27** (the advised matmul placement is neutral) are in
+> [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7 and §10.
+>
+> **And a correction that touches E-numbers here:** advised core counts quoted in this file come from
+> `advised_cores`, which is understated on 58.3 % of ops — `report.json`'s `cores=` prints only the first range
+> of a multi-range `CoreRangeSet`. Corrected values: `advchal-v2-corrected-advice.json`. This does not change
+> any measured time in E1–E8; it changes the *label* on what was measured (e.g. phi's rope advice is 32 cores,
+> not 22). → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1.
+
 ## Method
 
 Isolated git worktrees off the cells' own run branches, so nothing touched any other agent's checkout:

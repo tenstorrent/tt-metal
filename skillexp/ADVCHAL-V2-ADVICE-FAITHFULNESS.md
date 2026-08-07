@@ -63,6 +63,33 @@ understated core count.** The largest classes:
 | 55 | **64** | 23 |
 | 1 | **32** | 8 |
 
+### And it inflates the disagreement by a third
+
+Re-running `reconcile.py`'s own bucket test (`same = adv["cores"] == dev["cores"] or both-DS`) with the
+corrected counts substituted:
+
+| | chain rows | chain µs |
+|---|---|---|
+| as the stage reported | 334 | 5,547.4 |
+| **stop being disagreements once corrected** | **59** | **1,908.4 — 34.4 %** |
+| genuine disagreements | 275 | 3,639.0 |
+
+The phantom rows, by class:
+
+| class | corrected advice | why it was mis-bucketed |
+|---|---|---|
+| `nlp_create_qkv_heads_decode` | 32, shipped 32 — **every cell** | reported 22 |
+| `rotary_embedding` | 16 or 32 | reported 11 or 22 |
+| `linear` | 80 / 86 / 96 / 103 / 107 | reported 77 / 88 / 99 |
+| `slice_static` advised `l1/interleaved` | 110, shipped 110 | **no `cores=` field at all**, so `advised_cores` is `None` and the row can never register as agreement |
+
+Biggest single rows: phi exp17 `linear` 183.0 µs (88→**96**, shipped 96), gemma-4-26B onA `linear` 158.8 µs
+(99→**107**, shipped 107), gemma-4-26B B `linear` 123.3 µs (77→**86**, shipped 86). All name-paired, so these
+are not pairing artefacts.
+
+**Consequence for the headline in [`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md):** the followed share is
+589.3 / 3,639.0 = **16.2 %**, not the 10.6 % computed against the stage's inflated denominator.
+
 **Whose fault.** Two separate things, neither of them the optimizer's *decision*:
 
 1. **The stage's, and it is the cheap fix:** `reconcile.py` derives `advised_cores` from the `cores=` bounding

@@ -13,7 +13,7 @@ measures and ships (see §3.24 of [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) for wha
 
 ## The headline
 
-**58 of 248 chains were kept, carrying 589 µs of 5547 µs of disagreed-on op cost — 10.6 %.**
+**58 of 248 chains were kept, carrying 589 µs of the 5,547 µs the stage counted as disagreed-on — 10.6 %. Corrected for the `advised_cores` defect, 589 of 3,639 µs = 16.2 %** (see the ladder below).
 
 | chain verdict | chains | µs | share of disagreed µs | what it means |
 |---|---|---|---|---|
@@ -27,6 +27,37 @@ Chains cover the `chain` bucket only. A further **86 ops / 1182 µs** sit in
 `dram_resident` — *"leave this in DRAM"* is advice too, and it gets no chain at all. Against the full
 disagreement (chain + dram_resident = 6729 µs) the followed share is
 **8.8 %**.
+
+### Corrected denominator: the disagreement was inflated by a third
+
+The 5,547 µs above is the stage's own figure, and it is too big. `advised_cores` is understated on 58.3 % of
+advised ops (§1 of [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md)), which pushes rows into the
+`chain` bucket that actually **agree** with the shipped placement. Re-running `reconcile.py`'s own test with the
+corrected counts:
+
+| | chain rows | chain µs |
+|---|---|---|
+| as the stage reported | 334 | 5,547.4 |
+| **stop being disagreements once corrected** | **59** | **1,908.4 (34.4 %)** |
+| genuine disagreements | 275 | **3,639.0** |
+
+The phantom rows are `nlp_create_qkv_heads_decode` (advised 32, shipped 32 — in every cell),
+`rotary_embedding` (16 or 32), several `linear`s (80/86/96/103/107), and every `slice_static` advised
+`l1/interleaved` — those carry no `cores=` field at all, so `advised_cores` is `None` and the row can never
+register as agreement even at a matching 110 cores.
+
+**So the followed share is a ladder, not a number:**
+
+| denominator | followed |
+|---|---|
+| chain µs as the stage reported it — 5,547.4 | 589.3 → **10.6 %** |
+| **chain µs with corrected core counts — 3,639.0** | 589.3 → **16.2 %** |
+| plus `dram_resident` (1,182 µs), *before* removing advisor-declared-unfixable ops | 589.3 → 12.2 % |
+
+**16.2 % is the honest figure for "of the placement the advisor genuinely disagreed about, how much shipped."**
+And the `dram_resident` bucket cannot simply be added to the denominator, because 41 of 54
+advisor-declared-`unfixable` rows sit in it — for those the DRAM layout is a fallback after a declared failure,
+not advice (§11).
 
 ⚠ **That is an upper bound.** `kept` means the *chain shipped*, not that the advised geometry was
 implemented. phi FN shows the difference: of its 12 kept chains, 6 took only the buffer type (DRAM→L1) and

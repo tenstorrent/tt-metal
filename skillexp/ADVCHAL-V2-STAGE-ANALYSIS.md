@@ -10,6 +10,19 @@ and the v2 corpus (15 cells, tags `done/advchal-v2/**`). This file grades the re
 `mvasiljevic/qb2/skillexp/challenger-skill-v2` @ `db00a44`. v1 baseline is the same paths at
 `67da647d5eb` (2026-07-30).
 
+> **Two corrections from later work.** (1) Advised core counts derived from the reconciliation's
+> `advised_cores` are understated on **58.3 %** of ops — `report.json`'s `cores=` field prints only the first
+> range of a multi-range `CoreRangeSet`; the grid-string product is the correct value. **59 of 334 `chain` rows
+> stop being disagreements once corrected, carrying 34.4 % of chain µs.** Corrected per-op values:
+> `advchal-v2-corrected-advice.json`. (2) `dram_resident` rows for ops the advisor declared in `unfixable_ops`
+> are a *fallback after a declared failure*, not advice — 54 declarations corpus-wide, 41 presented as
+> screenable anyway. → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1 and §11.
+
+> **And the biggest defect found after this file was written is one it does not grade: the screening
+> ORDER.** The skill builds up chain by chain from the incumbent. Applying the advisor's plan instead, on the
+> one cell where the counterfactual is measurable, gives **−17.84 % against the −4.88 % that shipped — 3.7×** —
+> with −10.43 % of it bit-identical to the incumbent. → [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §F5.
+
 ## The size of the rebuild
 
 ```

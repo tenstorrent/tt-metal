@@ -1,0 +1,628 @@
+{
+ "flips": [
+  [
+   "gemma-4-12B exp11",
+   "full_attention",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   13.0,
+   "name"
+  ],
+  [
+   "gemma-4-12B exp11",
+   "full_attention",
+   "rotary_embedding",
+   22,
+   32,
+   32,
+   24.5,
+   "name"
+  ],
+  [
+   "gemma-4-12B exp11",
+   "sliding_attention",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   15.3,
+   "name"
+  ],
+  [
+   "gemma-4-12B exp11",
+   "sliding_attention",
+   "rotary_embedding",
+   22,
+   32,
+   32,
+   12.0,
+   "name"
+  ],
+  [
+   "gemma-4-12B exp11",
+   "sliding_attention",
+   "rotary_embedding",
+   22,
+   32,
+   32,
+   12.2,
+   "name"
+  ],
+  [
+   "llama-3.1-8B exp17",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   17.8,
+   "name"
+  ],
+  [
+   "llama-3.1-8B exp17",
+   "dense",
+   "rotary_embedding_llama",
+   22,
+   32,
+   32,
+   3.0,
+   "name"
+  ],
+  [
+   "llama-3.1-8B exp17",
+   "dense",
+   "rotary_embedding_llama",
+   22,
+   32,
+   32,
+   2.9,
+   "name"
+  ],
+  [
+   "llama-3.2-1B exp17",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   14.9,
+   "name"
+  ],
+  [
+   "llama-3.2-1B exp17",
+   "dense",
+   "rotary_embedding_llama",
+   22,
+   32,
+   32,
+   2.5,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   31.8,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   7.0,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.6,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.1,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.3,
+   "name"
+  ],
+  [
+   "phi-3.5 exp17",
+   "dense",
+   "linear",
+   88,
+   96,
+   96,
+   183.0,
+   "name"
+  ],
+  [
+   "north-mini FN",
+   "dense_full_attention",
+   "multiply",
+   88,
+   96,
+   96,
+   2.5,
+   "position"
+  ],
+  [
+   "north-mini FN",
+   "full_attention_moe",
+   "linear",
+   77,
+   80,
+   80,
+   44.0,
+   "name"
+  ],
+  [
+   "north-mini FN",
+   "sliding_attention_moe",
+   "linear",
+   77,
+   80,
+   80,
+   44.0,
+   "name"
+  ],
+  [
+   "gemma-4-26B FN",
+   "full_attention",
+   "linear",
+   99,
+   107,
+   107,
+   143.6,
+   "name"
+  ],
+  [
+   "gemma-4-26B FN",
+   "full_attention",
+   "rotary_embedding",
+   11,
+   16,
+   16,
+   31.2,
+   "name"
+  ],
+  [
+   "gemma-4-26B FN",
+   "sliding_attention",
+   "linear",
+   77,
+   86,
+   86,
+   112.5,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "linear",
+   88,
+   96,
+   96,
+   72.6,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   56.6,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.8,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.6,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "linear",
+   99,
+   103,
+   103,
+   103.9,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.1,
+   "name"
+  ],
+  [
+   "phi-3.5 FN",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.3,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   2.5,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   1.9,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   2.0,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   16.2,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.3,
+   "name"
+  ],
+  [
+   "qwen3-27B FN",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.1,
+   "name"
+  ],
+  [
+   "north-mini onA",
+   "dense_full_attention",
+   "linear",
+   77,
+   80,
+   80,
+   43.8,
+   "name"
+  ],
+  [
+   "north-mini onA",
+   "dense_full_attention",
+   "linear",
+   88,
+   96,
+   96,
+   48.9,
+   "name"
+  ],
+  [
+   "north-mini onA",
+   "dense_full_attention",
+   "linear",
+   55,
+   64,
+   64,
+   55.5,
+   "name"
+  ],
+  [
+   "north-mini onA",
+   "full_attention_sparse_moe",
+   "linear",
+   77,
+   80,
+   80,
+   43.8,
+   "name"
+  ],
+  [
+   "north-mini onA",
+   "sliding_attention_sparse_moe",
+   "linear",
+   77,
+   80,
+   80,
+   43.8,
+   "name"
+  ],
+  [
+   "gemma-4-26B onA",
+   "full_attention",
+   "linear",
+   99,
+   107,
+   107,
+   158.8,
+   "name"
+  ],
+  [
+   "gemma-4-26B onA",
+   "full_attention",
+   "rotary_embedding",
+   11,
+   16,
+   16,
+   32.7,
+   "name"
+  ],
+  [
+   "gemma-4-26B onA",
+   "sliding_attention",
+   "linear",
+   77,
+   86,
+   86,
+   121.9,
+   "name"
+  ],
+  [
+   "phi-3.5 onA",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   16.4,
+   "name"
+  ],
+  [
+   "phi-3.5 onA",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.9,
+   "name"
+  ],
+  [
+   "phi-3.5 onA",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.7,
+   "name"
+  ],
+  [
+   "gemma-4-26B B",
+   "full_attention",
+   "linear",
+   99,
+   107,
+   107,
+   89.6,
+   "name"
+  ],
+  [
+   "gemma-4-26B B",
+   "full_attention",
+   "rotary_embedding",
+   11,
+   16,
+   16,
+   30.8,
+   "name"
+  ],
+  [
+   "gemma-4-26B B",
+   "sliding_attention",
+   "linear",
+   77,
+   86,
+   86,
+   123.3,
+   "name"
+  ],
+  [
+   "phi-3.5 B",
+   "dense",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   21.7,
+   "name"
+  ],
+  [
+   "phi-3.5 B",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   7.1,
+   "name"
+  ],
+  [
+   "phi-3.5 B",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   6.6,
+   "name"
+  ],
+  [
+   "phi-3.5 B",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   2.9,
+   "name"
+  ],
+  [
+   "phi-3.5 B",
+   "dense",
+   "slice_static",
+   null,
+   110,
+   110,
+   3.1,
+   "name"
+  ],
+  [
+   "qwen3-27B B",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   5.1,
+   "name"
+  ],
+  [
+   "qwen3-27B B",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   4.5,
+   "name"
+  ],
+  [
+   "qwen3-27B B",
+   "full_attention",
+   "nlp_create_qkv_heads_decode",
+   22,
+   32,
+   32,
+   16.1,
+   "name"
+  ],
+  [
+   "qwen3-27B B",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   2.8,
+   "name"
+  ],
+  [
+   "qwen3-27B B",
+   "full_attention",
+   "slice_static",
+   null,
+   110,
+   110,
+   2.9,
+   "name"
+  ]
+ ],
+ "us_flipped": {
+  "gemma-4-12B exp11": 77.049,
+  "llama-3.1-8B exp17": 23.697999999999997,
+  "llama-3.2-1B exp17": 17.421,
+  "phi-3.5 exp17": 234.923,
+  "north-mini FN": 90.41399999999999,
+  "gemma-4-26B FN": 287.233,
+  "phi-3.5 FN": 252.97500000000002,
+  "qwen3-27B FN": 28.891000000000002,
+  "north-mini onA": 235.833,
+  "gemma-4-26B onA": 313.393,
+  "phi-3.5 onA": 29.96,
+  "gemma-4-26B B": 243.73000000000002,
+  "phi-3.5 B": 41.447,
+  "qwen3-27B B": 31.394,
+  "north-mini B": 0.0
+ },
+ "us_chain": {
+  "gemma-4-12B exp11": 586.198,
+  "llama-3.1-8B exp17": 50.833000000000006,
+  "llama-3.2-1B exp17": 40.42,
+  "phi-3.5 exp17": 499.884,
+  "north-mini FN": 152.45600000000002,
+  "gemma-4-26B FN": 480.53400000000005,
+  "phi-3.5 FN": 450.61499999999995,
+  "qwen3-27B FN": 124.143,
+  "north-mini onA": 424.752,
+  "gemma-4-26B onA": 732.4239999999999,
+  "phi-3.5 onA": 122.729,
+  "north-mini B": 89.50800000000001,
+  "gemma-4-26B B": 658.0409999999998,
+  "phi-3.5 B": 134.762,
+  "qwen3-27B B": 1000.1490000000001
+ }
+}
