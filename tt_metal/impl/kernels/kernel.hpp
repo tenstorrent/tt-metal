@@ -241,7 +241,7 @@ public:
         scratchpad_binding_handles_ = std::move(handles);
     }
     // Only used by Metal 2.0.
-    // Metal 2.0's vararg CTAs does not reuse the legacy CTA infrastructure.
+    // Metal 2.0's vararg CTAs do not reuse the legacy CTA infrastructure.
     const std::vector<uint32_t>& get_compile_time_varargs() const override { return compile_time_varargs_; }
     void set_compile_time_varargs(std::vector<uint32_t> varargs) { compile_time_varargs_ = std::move(varargs); }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
