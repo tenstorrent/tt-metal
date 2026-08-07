@@ -27,19 +27,21 @@ host; next-token selection is on device (`ttnn.argmax`).
 
 ## This branch
 
-`xtts-v2-bringup` = the `tt_hw_planner`-generated bring-up plus three attention-fusion commits:
+`xtts-v2-bringup` = the `tt_hw_planner`-generated bring-up plus three attention-fusion commits
+(shas as on this branch):
 
 | Commit | Change |
 |---|---|
-| `4e17c472b9` | fuse GPT-2 attention head split/merge via `ttnn.transformer.split_query_key_value_and_split_heads` / `concatenate_heads` (removes per-head layout churn) |
-| `37d9c5660a` | fuse GPT-2 attention into `ttnn.transformer.scaled_dot_product_attention` (FlashAttention-2) |
-| `05a5f4aba0` | fuse the conditioning encoder's `QKVAttentionLegacy` into `ttnn` SDPA |
+| `7e5c6ce2e0d` | fuse GPT-2 attention head split/merge via `ttnn.transformer.split_query_key_value_and_split_heads` / `concatenate_heads` (removes per-head layout churn) |
+| `5d47c370785` | fuse GPT-2 attention into `ttnn.transformer.scaled_dot_product_attention` (FlashAttention-2) |
+| `be509653ad9` | fuse the conditioning encoder's `QKVAttentionLegacy` into `ttnn` SDPA |
 
-Base: `apande-TT/tt-metal` `feature/tt-hw-planner` @ `23e613b4`
-([tt-metal PR #46283](https://github.com/tenstorrent/tt-metal/pull/46283), 2026-07-07); that
-branch forks upstream `tenstorrent/tt-metal` @ `88873ad0` (2026-06-07). It therefore does **not**
-diff cleanly against current tt-metal `main` — a rebase would need the full e2e gate re-run to
-re-establish the numbers below.
+Base: `tenstorrent/tt-metal` main @ `587a4f30` (2026-08-06). The branch adds only
+`models/demos/xtts_v2/` on top of main, so it merges cleanly. The bring-up was originally
+scaffolded on `apande-TT/tt-metal` `feature/tt-hw-planner`
+([tt-metal PR #46283](https://github.com/tenstorrent/tt-metal/pull/46283)); this branch no longer
+carries that PR. Every gate below was re-run on the rebased tip, so the numbers are what current
+main produces.
 
 **Three further commits were tried and dropped.** Custom tt-lang kernels (head-split,
 residual-add, concat-heads) each passed their op-level check but end-to-end verification showed
@@ -51,7 +53,9 @@ top of SDPA PASS 0.9936. The generic lesson, since it applies to any op-level op
 **a device-time win measured per-op can still be an end-to-end correctness regression — re-run
 the e2e gate on the final tip, not just the op benchmark.**
 
-**Port-excellence commits on top (2026-08-06), each gated end-to-end:**
+**Port-excellence commits on top (2026-08-06), each gated end-to-end.** The Effect column records
+what was measured when each commit landed, on the pre-rebase base; the gates and performance
+sections below carry the current-tip numbers:
 
 | Change | Effect |
 |---|---|
@@ -148,6 +152,9 @@ python -m models.demos.xtts_v2.demo.demo_tts \
 # smoke: every stub forwards on device
 python -m pytest models/demos/xtts_v2/tests/e2e/test_00_forward_on_device.py -s
 
+# trace + 2CQ substrate self-tests and timing
+python -m pytest models/demos/xtts_v2/tests/e2e/test_trace_2cq.py models/demos/xtts_v2/tests/e2e/test_trace_2cq_timing.py -s
+
 # per-component PCC (needs golden tensors in _captured/, not committed — see Known limitations)
 python -m pytest models/demos/xtts_v2/tests/pcc/ -v
 ```
@@ -156,7 +163,8 @@ python -m pytest models/demos/xtts_v2/tests/pcc/ -v
 
 ## Correctness gates (text `"hello world."`, `en`, N = 40)
 
-Measured 2026-08-06 on this branch's tip, single Blackhole p300c chip (QuietBox-2), greedy decode
+Measured 2026-08-06 on the rebased tip (main @ `587a4f30`), single Blackhole p300c chip
+(QuietBox-2), greedy decode
 with repetition penalty. Every row is asserted by `tests/e2e/test_e2e_tts.py`; the demo wrote a
 valid 24 kHz WAV (44,544 samples) in the same session.
 
@@ -164,7 +172,7 @@ valid 24 kHz WAV (44,544 samples) in the same session.
 |---|---|
 | Gate 1 — routed stubs composed as-is as native TTNN (no reference module substituted in the chain) | PASS (structural) |
 | Gate 2 — all 29 graduated modules invoked in the real forward path | **PASS 29/29** (`missing=[]`) |
-| Gate 3 — e2e waveform PCC vs HF reference ≥ 0.95 | **0.9938 PASS** |
+| Gate 3 — e2e waveform PCC vs HF reference ≥ 0.95 | **0.9904 PASS** |
 
 Per-stage PCC (each TT stage vs the HF reference run on the previous TT output; every stage gated
 at ≥ 0.95):
@@ -172,13 +180,13 @@ at ≥ 0.95):
 | Stage | PCC |
 |---|---|
 | speaker embedding (`res_net_speaker_encoder`) | 0.9996 |
-| conditioning latent (encoder + perceiver) | 0.9987 |
+| conditioning latent (encoder + perceiver) | 0.9985 |
 | AR token match (TT vs HF greedy, capped N) | **1.0** |
 | AR per-step logits | 0.9993 |
 | GPT latents (`g_p_t` on TT codes) | 0.9994 |
-| waveform (the gated number) | **0.9938** |
-| _supplementary: full independent TT chain vs full HF chain_ | _0.9328_ |
-| _supplementary: full-chain log-mel spectral PCC / mean L1 (phase-insensitive)_ | _0.9965 / 0.291_ |
+| waveform (the gated number) | **0.9904** |
+| _supplementary: full independent TT chain vs full HF chain_ | _0.9279_ |
+| _supplementary: full-chain log-mel spectral PCC / mean L1 (phase-insensitive)_ | _0.9966 / 0.287_ |
 
 The supplementary full-chain numbers are printed, not gated: they compound every stage's error.
 The raw-sample number penalizes the phase HiFi-GAN generates; the log-mel spectral number absorbs
@@ -198,23 +206,23 @@ HiFi-GAN (PCC against the TT-chain waveform):
 
 | Comparison | PCC | Isolates |
 |---|---|---|
-| vocode(lat_tt, g_tt) vs vocode(lat_tt, **g_hf**) | 0.9858 | the d-vector alone |
-| vocode(**lat_tt**, g_tt) vs vocode(**lat_hf**, g_tt) | 0.9438 | the GPT latents alone |
-| vocode(lat_tt, g_tt) vs vocode(lat_hf, g_hf) | 0.9328 | both — the full-chain number |
+| vocode(lat_tt, g_tt) vs vocode(lat_tt, **g_hf**) | 0.9809 | the d-vector alone |
+| vocode(**lat_tt**, g_tt) vs vocode(**lat_hf**, g_tt) | 0.9401 | the GPT latents alone |
+| vocode(lat_tt, g_tt) vs vocode(lat_hf, g_hf) | 0.9279 | both — the full-chain number |
 
 The **latents term is a metric artifact, not a defect**: `latents_pcc` is 0.9994 and that
 6e-4-level error costs raw waveform PCC only because HiFi-GAN generates phase — the
-phase-insensitive log-mel PCC is 0.9965. The **d-vector term was root-caused to the bf16 upload
+phase-insensitive log-mel PCC is 0.9966. The **d-vector term was root-caused to the bf16 upload
 of the speaker waveform** (fixed, 2026-08-06): the front end runs fp32, but the 16 kHz input was
 uploaded as bf16; near-silent mel bins carry large relative error which `log(mel + 1e-6)`
 amplifies. Sub-stage PCCs vs the fp32 reference, before and after:
 
 | input dtype | mel | log-mel | InstanceNorm | embedding PCC | embedding cosine |
 |---|---|---|---|---|---|
-| bf16 (old) | 0.9999972 | 0.9924391 | 0.9673161 | 0.9710196 | 0.9710608 |
-| fp32 (current) | 0.9999998 | 0.9999438 | 0.9996391 | **0.9995909** | **0.9995930** |
+| bf16 (old) | 0.9999973 | 0.9924389 | 0.9673168 | 0.9713815 | 0.9714249 |
+| fp32 (current) | 0.9999998 | 0.9999438 | 0.9996410 | **0.9995873** | **0.9995895** |
 
-The fp32 upload moved the full-chain number from 0.7482 to 0.9328 (speaker embedding 0.9710 →
+The fp32 upload moved the full-chain number from 0.7482 to 0.9279 (speaker embedding 0.9714 →
 0.9996) with the gate's AR token match unchanged at 1.0.
 
 ## Performance
@@ -222,21 +230,24 @@ The fp32 upload moved the full-chain number from 0.7482 to 0.9328 (speaker embed
 **Honest summary: this workload is host-dispatch-bound, not kernel-bound.** The wins that
 survived end-to-end verification are host-side (build/upload hoisting, conv weight preparation);
 every structural decode lever below was implemented, measured, and hit a correctness ceiling —
-documented as such.
+documented as such. The rebase itself is fresh evidence for the diagnosis: moving from the
+2026-06 base to current main, with zero model-code changes, cut the warm wall ~3× — the drift
+between the two bases is tt-metal host-dispatch work, which is exactly where this model's time goes.
 
 Wall clock, resident pipeline (`build_pipeline` — weights upload once per process), N = 40 tokens
-(44,544 samples = 1.856 s of audio), single p300c chip at AICLK 1350 MHz, measured 2026-08-06:
+(44,544 samples = 1.856 s of audio), single p300c chip at AICLK 1350 MHz, measured 2026-08-06 on
+the rebased tip (second run for stability: 761.1 ms cold / 221.2 ms warm):
 
 | Metric | Value |
 |---|---|
-| Cold forward (includes one-time program compile) | 1523 ms (RTF 0.82) |
-| **Warm forward** | **695.9 ms (RTF 0.375)** |
-| Warm speedup vs per-forward weight upload (pre-`build_pipeline`) | **3.39×** |
-| Warm wall split — AR decode (40 eager steps) | 399 ms (57%) |
-| — HiFi-GAN vocoder | 166 ms (24%) |
-| — speaker encoder | 30 ms (4%) |
-| — latents / conditioning / perceiver | 22 ms (3%) |
-| — glue + host feature extraction | 79 ms (11%) |
+| Cold forward (includes one-time program compile) | 743.9 ms (RTF 0.40) |
+| **Warm forward** | **225.2 ms (RTF 0.121)** |
+| Warm speedup vs per-forward weight upload (pre-`build_pipeline`) | **3.39×** (measured at introduction, pre-rebase base) |
+
+Warm wall split, measured on the pre-rebase base (warm wall there 695.9 ms; the split is not
+re-measured on the rebased tip): AR decode (40 eager steps) 399 ms (57%), HiFi-GAN vocoder 166 ms
+(24%), speaker encoder 30 ms (4%), latents / conditioning / perceiver 22 ms (3%), glue + host
+feature extraction 79 ms (11%).
 
 Stage walls measured with device syncs around each stage entry point; the wrapped and unwrapped
 warm walls are identical, so stages fully serialize — there is no inter-stage overlap left to
@@ -269,11 +280,13 @@ engineering effort:
   performs a per-call host→device upload that trace capture forbids outright. The experiment was
   removed rather than shipped behind a flag.
 
-What remains is the eager AR decode's ~10 ms/step of host dispatch (57% of warm wall). Historical
+On the pre-rebase base, the eager AR decode's ~10 ms/step of host dispatch was 57% of the warm
+wall. Historical
 planner evidence: an automated `tt_hw_planner optimize` sweep (25 attempts across 14 ops) moved
 `device_ms` 98.52 → 98.49 (1.00×) with ~94.9 ms of ~98.5 ms being host dispatch overhead — op-level
 levers provably cannot reach this bottleneck. A whole-pipeline Tracy profile (reduced-depth
-configuration `TT_PERF_LAYERS=2`, 4 tokens — absolute numbers not comparable to the walls above):
+configuration `TT_PERF_LAYERS=2`, 4 tokens, pre-rebase base — absolute numbers not comparable to
+the walls above):
 21,752 op invocations, 247.9 ms device-kernel, 114.0 ms host-dispatch; `SliceDeviceOperation` alone
 is 3.2% of device time but 34% of host dispatch — the repeat-prefill signature of re-slicing a
 uniquely-shaped growing sequence tensor per token.
@@ -311,9 +324,11 @@ python -m pytest models/demos/xtts_v2/tests/e2e/test_trace_2cq_timing.py -s
 ## Determinism
 
 Decode is greedy (`do_sample=False`) with a fixed repetition penalty and `torch.manual_seed(0)` in
-the gate, and next-token argmax runs on device. Measured 2026-08-06 on this tip: three forwards in
+the gate, and next-token argmax runs on device. Measured 2026-08-06: three forwards in
 one process are bit-identical, and three fresh-process runs produce identical SHA-256 hashes for
-both the waveform and the codes. The AR token match against HF greedy decode is exact (1.0) at the
+both the waveform and the codes. Cross-process determinism also holds on the rebased tip: the e2e
+gate, the accuracy-decomposition test, and the demo (three separate processes) print the identical
+waveform PCC, 0.9903768689534943. The AR token match against HF greedy decode is exact (1.0) at the
 gated horizon.
 
 ## Reference (GPU) comparison
@@ -323,8 +338,8 @@ conditions do not match (this port is a single-chip bring-up at a capped AR hori
 
 | Path | Hardware | Metric | Value | Source |
 |---|---|---|---|---|
-| This work | 1× Blackhole p300c | e2e waveform PCC vs reference | 0.9938 | this branch, `test_e2e_tts.py` |
-| This work | 1× Blackhole p300c | real-time factor | 0.375 warm / 0.82 cold (resident pipeline, 40 tokens = 1.856 s audio) | this branch, stage-split measurement |
+| This work | 1× Blackhole p300c | e2e waveform PCC vs reference | 0.9904 | this branch, `test_e2e_tts.py` |
+| This work | 1× Blackhole p300c | real-time factor | 0.121 warm / 0.40 cold (resident pipeline, 40 tokens = 1.856 s audio) | this branch, `test_tts_perf.py::test_tts_perf_warm` |
 | Reference | GPU (RTX 5090 class) | RTF | ≈ 0.3× (≈3× faster than real-time) | [GIGAGPU TTS latency benchmarks](https://gigagpu.com/tts-latency-benchmarks/) |
 | Reference | GPU | first-chunk latency | 150–400 ms (320 ms on RTX 5090) | [GIGAGPU XTTS-v2 VRAM](https://gigagpu.com/xtts-v2-vram-requirements/) |
 | Reference | CPU | RTF | ≈ 1.41× (slower than real-time) | [GIGAGPU TTS latency benchmarks](https://gigagpu.com/tts-latency-benchmarks/) |
@@ -335,13 +350,10 @@ conditions do not match (this port is a single-chip bring-up at a capped AR hori
   decode exist as experimental opt-ins (`decode_mode="kv"` / `"trace"`) and are accuracy-capped at
   bf16 — see [Performance](#performance); they are not the default and the gate does not use them.
 - **Single chip only.** No mesh sharding or collectives.
-- **`demo/demo.py` is a dead auto-generated CPU scaffold** and fails on this checkpoint (coqui
-  runtime, not HF `AutoModel`). Use `demo/demo_tts.py`.
 - **Per-component PCC tests need golden tensors in `_captured/`**, which are gitignored and not
   committed. The e2e gate is the self-contained verification.
 - **`tests/pcc/test_mel_spectrogram.py` fails** on a framing mismatch vs the torch reference (open
   bug; the e2e path is unaffected — `mel_spectrogram` is invoked and gated there).
-- Branch base predates current tt-metal `main` (see [This branch](#this-branch)).
 
 ## Layout
 
@@ -356,7 +368,6 @@ models/demos/xtts_v2/
   tests/e2e/test_trace_2cq*.py       # trace + 2CQ self-tests and timing
   tests/pcc/                         # 29 per-component PCC tests (need _captured/ goldens)
   _stubs/*.py                        # the 29 graduated native TTNN stubs
-  e2e_plan.json                      # planner output
 ```
 
 `_stubs/*.best_native`, `*.last_good_native` and `*.preiter_native` are the optimizer's per-attempt
