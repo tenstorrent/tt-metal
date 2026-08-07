@@ -262,6 +262,186 @@ def _enclosing_stack(block):
     return best
 
 
+class StackInfo:
+    """Describes one repeated block stack found in a model.
+
+    Attributes:
+        path         Dot-separated attribute path from the root to the container,
+                     e.g. ``"audio_tower.layers"``.  Empty string when the stack
+                     is discovered upward (via GC referrers) rather than downward.
+        stack        The actual list of module objects in traversal order.
+        element_type The shared class of every element (the most-specific common
+                     base, for hybrid stacks; the single class for homogeneous ones).
+        count        ``len(stack)``.
+        stack_idx    0-based integer assigned in depth-first discovery order so
+                     callers can refer to stacks without holding the list.
+    """
+
+    __slots__ = ("path", "stack", "element_type", "count", "stack_idx")
+
+    def __init__(self, path, stack, element_type, count, stack_idx):
+        self.path = path
+        self.stack = stack
+        self.element_type = element_type
+        self.count = count
+        self.stack_idx = stack_idx
+
+    def __repr__(self):
+        return "StackInfo(path=%r, element_type=%s, count=%d, stack_idx=%d)" % (
+            self.path,
+            getattr(self.element_type, "__name__", repr(self.element_type)),
+            self.count,
+            self.stack_idx,
+        )
+
+
+def _dominant_type(members):
+    """Return the most-specific shared base class for `members`, or the most common type."""
+    kinds = {type(v) for v in members}
+    if len(kinds) == 1:
+        return next(iter(kinds))
+    base = _shared_base(kinds)
+    if base is not None:
+        return base
+    # fall back to the most common concrete type
+    return max(kinds, key=lambda k: sum(1 for v in members if type(v) is k))
+
+
+def _walk_for_stacks(root):
+    """Depth-first walk that yields (path, members) for every candidate block stack.
+
+    Visits nodes in DFS pre-order so the resulting list respects execution order.
+    Handles both ``torch.nn.Module`` trees (via ``named_modules()``) and arbitrary
+    Python objects (via ``__dict__``).  Each node is visited at most once.
+    """
+    seen_ids = set()
+
+    def _visit(node, prefix: str):
+        nid = id(node)
+        if nid in seen_ids or node is None or _is_atomic(node):
+            return
+        seen_ids.add(nid)
+
+        # --- Try torch.nn.Module.named_children() for proper torch trees ----------
+        named_children_fn = getattr(node, "named_children", None)
+        if named_children_fn is not None:
+            try:
+                for child_name, child in list(named_children_fn()):
+                    child_path = "%s.%s" % (prefix, child_name) if prefix else child_name
+                    # Check if the child itself is a ModuleList-like sequence
+                    seq = _node_sequence(child)
+                    if seq is None:
+                        # Also check via _modules dict directly
+                        modules_dict = getattr(child, "_modules", None)
+                        if isinstance(modules_dict, dict) and modules_dict:
+                            seq = list(modules_dict.values())
+                    if seq is not None:
+                        members = _stack_members(seq)
+                        if _is_block_stack(members) and len(members) >= 3:
+                            yield child_path, members
+                    # Recurse into the child
+                    yield from _visit(child, child_path)
+            except Exception:  # noqa: BLE001
+                pass
+            return  # torch.nn.Module children handled above; skip __dict__ walk
+
+        # --- Generic __dict__ walk for LightweightModule and plain objects --------
+        d = getattr(node, "__dict__", None)
+        if not isinstance(d, dict):
+            return
+        for attr, val in list(d.items()):
+            if val is None or _is_atomic(val):
+                continue
+            attr_path = "%s.%s" % (prefix, attr) if prefix else attr
+            seq = _node_sequence(val)
+            if seq is not None:
+                members = _stack_members(seq)
+                if _is_block_stack(members) and len(members) >= 3:
+                    yield attr_path, members
+            # Recurse: unwrap single-element containers that might wrap a real stack
+            if not _is_atomic(val) and id(val) not in seen_ids:
+                if isinstance(val, (list, tuple)):
+                    for item in list(val)[:_MAX_SEQ_SCAN]:
+                        yield from _visit(item, attr_path)
+                elif isinstance(val, dict):
+                    for item in list(val.values())[:_MAX_SEQ_SCAN]:
+                        yield from _visit(item, attr_path)
+                else:
+                    yield from _visit(val, attr_path)
+
+    yield from _visit(root, "")
+
+
+def find_all_stacks(root) -> list:
+    """Discover ALL repeating block stacks in `root`, not just the largest one.
+
+    Returns a list of :class:`StackInfo` sorted in depth-first (execution) order,
+    with ``stack_idx`` values 0, 1, 2, ...
+
+    Algorithm
+    ---------
+    1.  Walk the model depth-first, yielding every list/ModuleList with ≥3
+        same-typed (or same-base) elements.
+    2.  Deduplicate: when stack A's path is a strict prefix of stack B's path
+        *and* they share the same element type, keep only the deeper one (B).
+        This prevents double-counting a ``ModuleList`` that appears both as
+        ``model.layers`` and as its own ``_modules`` dict.
+    3.  Sort the survivors in discovery order and assign ``stack_idx``.
+
+    Both ``torch.nn.ModuleList`` and plain Python lists of ``LightweightModule``
+    (or any same-typed object with ``__dict__``) are found; no per-model code
+    is required.
+    """
+    # Step 1: collect all candidates in DFS order (path, members)
+    candidates = list(_walk_for_stacks(root))
+
+    if not candidates:
+        return []
+
+    # Step 2: deduplicate
+    # Build (path, members, element_type) triples
+    triples = []
+    for path, members in candidates:
+        etype = _dominant_type(members)
+        triples.append((path, members, etype))
+
+    # Remove any triple whose path is a strict prefix of another triple with the
+    # same element type — keep the deeper (more specific) one.
+    def _is_prefix_of(a_path: str, b_path: str) -> bool:
+        """True when a_path is a strict prefix component of b_path."""
+        if not a_path:
+            return bool(b_path)  # "" is prefix of everything non-empty
+        return b_path.startswith(a_path + ".")
+
+    n = len(triples)
+    dominated = [False] * n
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            path_i, _, etype_i = triples[i]
+            path_j, _, etype_j = triples[j]
+            if etype_i == etype_j and _is_prefix_of(path_i, path_j):
+                dominated[i] = True
+                break
+
+    survivors = [t for t, dom in zip(triples, dominated) if not dom]
+
+    # Step 3: assign stack_idx and build StackInfo objects
+    result = []
+    for idx, (path, members, etype) in enumerate(survivors):
+        result.append(
+            StackInfo(
+                path=path,
+                stack=members,
+                element_type=etype,
+                count=len(members),
+                stack_idx=idx,
+            )
+        )
+    return result
+
+
 def _find_stack(root):
     """The block stack for `root`, considering BOTH directions and keeping the better one.
 
