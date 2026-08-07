@@ -1728,3 +1728,49 @@ claim in this file, and it is grid-matched, dispatch-matched and core-type-match
 
 The four hang points -- runs 4, 16, 31, ~34 -- remain wildly variable, so this is a rare stochastic event with a
 strongly non-uniform cell preference, not a deterministic trigger. Mean ~21 runs to hang in that cell.
+
+## §N+12 — Bisection: egress-only is clean, NoC swap changes nothing (bh-05, 2026-08-06)
+
+Two ablations behind `TT_METAL_PERF_DEBUG_ABLATE`, plus a NoC swap behind `TT_METAL_PERF_DEBUG_NOC`.
+
+**Egress-only (`ABLATE=1`) does NOT hang: 98 runs, 0 hangs.** The drainer re-ships fixed mock bytes with no
+worker reads and no per-core processing; the PCIe push, socket credit loop, write barrier and notify are
+untouched. 378 MB and ~5,100 pushes per run. At the full config's rate (4/134) ~4 hangs were expected.
+CAVEAT: continuous shipping is CREDIT-BOUND at ~3.9 GB/s sustained, where a real run is bursty (268 busy sweeps
+of 15,477, ~1.7% duty) and bursts to 16 GB/s. The `ABLATE_SPIN` knob had NO effect at any value precisely
+because of this -- when you are already blocked on credits, a spin displaces wait time instead of reducing
+throughput. So what is shown is "egress at a lower burst rate is safe", not "egress is safe".
+
+**Read-only (`ABLATE=2`) is NOT YET MEASURABLE.** With egress compiled out the host writer waits for data that
+never arrives and teardown blocks past the harness timeout. The first attempt returned rc=124 at run 1 and
+looked like an instant hang -- the card was FINE (link 32 GT/s, next run clean, probes normal). Needs the host
+told not to expect data before this arm means anything. **rc=124 is a harness timeout, not a hang: always probe
+the card before believing it.**
+
+**The NoC swap changes nothing.** `TT_METAL_PERF_DEBUG_NOC=1` moves egress to NoC 1 and reads to NoC 0:
+
+| arm | egress | reads | egress rate | result |
+|---|---|---|---|---|
+| NoC 0 | NoC 0 | NoC 1 | 16.2 GB/s | hung at run 16 |
+| NoC 1 | NoC 1 | NoC 0 | 16.0 GB/s | **hung at run 16** |
+
+Load matched within 1%. **The hang is symmetric across both NIUs and both routes**, so "NoC 0's route from the
+DRAM endpoint to the PCIe tile" is dead as an explanation.
+
+Both arms hung at run 16, cycle 3, repeat 2 -- identical coordinates. Other churn hangs landed at run 4 and the
+ladders at 31/~34, so this is probably coincidence, but "repeat=2 after two clean cycles" is worth a targeted
+check before assuming randomness.
+
+### A wrong deduction, and how one run killed it
+
+Switching to NoC 1, I inferred from `NOC_0_X_PHYS_COORD(noc, size_x, x) = noc == 0 ? x : size_x - 1 - x` that
+the PCIe tile needed a mirrored encoding, and built a host-side override for it. **Wrong.** With the override,
+decode yields **0 markers from 2.37M pages**; without it, 5,501,058 markers decode correctly. That macro mirrors
+WORKER coordinates; the PCIe encoding is in TRANSLATED space -- the kernel is built with `PCIE_NOC_X=19,
+PCIE_NOC_Y=24`, both outside the 17x12 NOC0 grid, which was visible in the build line the whole time. The
+socket's NOC0-derived `pcie_xy_enc` is correct on BOTH NoCs. Mirroring is retained only behind
+`TT_METAL_PERF_DEBUG_NOC_MIRROR=1` so the dead end stays documented.
+
+**Diagnostic worth keeping: pages flowed while zero markers decoded.** Socket credits advance on a different
+path than the payload writes, so a wrong payload destination looks like healthy throughput -- 2.37M pages
+"delivered" into a ring full of nothing. A page count cannot tell you the data arrived; only decode can.
