@@ -30,7 +30,12 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 8
+      # Raised 8 -> 14 when the kimi_k3 cases joined this selector. K3's host_all path builds its
+      # reference gate over 896 experts x 25600 tokens on CPU and measures 158s warm (device_fp32 is
+      # 9s) -- ~2.8 min added to a stage that previously fit 16 tests in 8. Cold-JIT runs are
+      # substantially slower: a config change made the same pair take 475s and tripped pytest.ini's
+      # 300s per-test timeout on host_all. The headroom is for that case, not the warm one.
+      timeout: 14
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -316,6 +321,61 @@
   skus:
     bh_sc1:
       timeout: 24
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi K3 MoE"
+  cmd: |
+    # Kimi-K3 LatentMoE: 896 experts / top-16 with the routed side at the 3584 latent width, plus the
+    # down/up projections and latent RMSNorm around it. PCC only -- the device-perf case is its own
+    # high-power row below, mirroring how "Blaze - K3 MLA" and "Blaze - K3 MLA perf" are split.
+    #
+    # Device-vs-torch parity on identical seeded weights, running SiLU on BOTH sides: no TT kernel
+    # implements the checkpoint's SiTU-GLU yet (#51335), so this gates the dataflow -- dispatch and
+    # combine at 896/top-16, the latent projections, the latent norm, the routed/shared dim split --
+    # not the activation. Real-weight gate coverage rides on the shared "Blaze - MoE Gate" stage,
+    # which already collects the kimi_k3 cases at mesh-8x4.
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "fabric2d-mesh-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
+    '
+  test_type: kimi_k3_moe
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured end to end at 15m55s fully cold on an idle 8x4. Largest contributors: 9m55s to
+      # build the 896-expert weight cache, 2m45s to generate the weights, 1m31s in TtMoe's
+      # constructor and 67s in the forward; the ~2m balance is process startup, imports and device
+      # open. 26 leaves ~60% headroom. Was 36 when this row also carried the 25k perf case.
+      timeout: 26
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi K3 MoE perf"
+  cmd: |
+    # Device perf for the same block, at the 5K production shape (640 tokens/chip x 8 SP = 5120).
+    # Split from the PCC row above and onto the high-power SKU because it runs under the profiler,
+    # which needs a quiet, clock-stable box to produce a comparable number -- same reason
+    # "Blaze - K3 MLA perf" is separated from "Blaze - K3 MLA".
+    #
+    # Signpost-bracketed (MoE_START/MoE_END) so the figure is the forward only: at 896 experts the
+    # one-time weight-load tilize/typecast in TtMoe's constructor dominates process wall time but is
+    # not per-token cost.
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_kimi_k3_moe_perf_galaxy -vvv --tb=short
+    '
+  test_type: kimi_k3_moe_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # The profiler pass itself is 4m15s warm (two runs, 255s and 251s). On a cold runner add the
+      # 896-expert weight-cache build, ~9 min on an idle 8x4, plus first-run JIT: ~14 min expected,
+      # 22 for headroom. This SKU does not share a cache with the PCC row above, so it pays that
+      # build itself.
+      timeout: 22
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1

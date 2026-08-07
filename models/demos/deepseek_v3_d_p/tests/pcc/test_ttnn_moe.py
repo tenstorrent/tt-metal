@@ -961,16 +961,21 @@ def test_kimi_moe(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
         ),
+        # The 8x4 anchor is FABRIC_2D: it is the only K3 MoE config CI runs, and the rest of the K3
+        # blaze coverage (MLA, MLA perf) is already 2D, so keeping this leg on 1D would have been the
+        # one fabric outlier in the pipeline. The smaller meshes above stay 1D -- they are local
+        # proxies no pipeline selects, and 2D routing on a single-row mesh is meaningless.
         pytest.param(
             (8, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

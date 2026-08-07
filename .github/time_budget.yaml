@@ -391,9 +391,13 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 437
-    bh_sc1_high_power: 108
+    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840).
+    # 437 -> 465 for Kimi-K3 MoE: the new "Blaze - Kimi K3 MoE" PCC row (26) plus the
+    # "Blaze - MoE Gate" raise 8 -> 14, which K3's 896-expert host_all reference forced.
+    bh_sc1: 465
+    # 108 -> 129 for the new "Blaze - Kimi K3 MoE perf" row (22), split onto this SKU because it
+    # runs under the profiler and needs a clock-stable box.
+    bh_sc1_high_power: 129
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
