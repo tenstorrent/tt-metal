@@ -663,6 +663,13 @@ def run_request_loop(
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
     decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
+    # record_chunk() is host bookkeeping keyed on this chunk's slot/start/end, which the traced path never
+    # reads back. Fail here rather than skip the call: a driver that is never fed migrates nothing and the
+    # run still reports green.
+    assert migration_driver is None or decode_meta, (
+        "interleaved migration needs the host-side chunk metadata, which the traced path consumes "
+        "on-device; run untraced or disable interleaved migration"
+    )
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
@@ -687,7 +694,10 @@ def run_request_loop(
         if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
         else 0
     )
-    slot_id = 0  # last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated
+    # Last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated.
+    # Traced runs never see the scalars, so it stays 0; the bring-up producer that drives that check
+    # pushes slot 0.
+    slot_id = 0
     while not _shutdown:
         if n_selftest and c >= n_selftest:
             break
@@ -705,12 +715,13 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        slot = meta["slot_id"]
-        slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
-        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
-        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
+        if meta is not None:
+            slot = meta["slot_id"]
+            slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
+            chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+            # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
+            # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
+            real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
         )
