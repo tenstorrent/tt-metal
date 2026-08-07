@@ -237,6 +237,7 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
     h_dev = pipe.backbone.prefill_last(embeds)
 
     sem_bad = ac_bad = total_ac = 0
+    hist = {}
     print(f"  {'frame':>6} {'sem ref/dev':>14} {'acoustic diffs':>15} {'max |delta|':>12}")
     for i in range(n_frames):
         torch.manual_seed(1000 + i)          # same noise draw for both, so only the model differs
@@ -246,7 +247,10 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         s_ref, s_dev = int(c_ref[0, 0]), int(c_dev[0, 0])
         d = (c_ref[0, 1:] != c_dev[0, 1:])
         n_d = int(d.sum())
-        mx = int((c_ref[0, 1:] - c_dev[0, 1:]).abs().max())
+        dv = (c_ref[0, 1:] - c_dev[0, 1:]).abs()
+        mx = int(dv.max())
+        for v in dv[dv > 0].tolist():
+            hist[int(v)] = hist.get(int(v), 0) + 1
         sem_bad += s_ref != s_dev
         ac_bad += n_d
         total_ac += 36
@@ -259,20 +263,37 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         emb = bref.embed_frame(pipe.wb, c_ref[0])
         h_ref = ref_dec.step(emb)
         h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
+    ob1 = hist.get(1, 0)
     print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} "
           f"({ac_bad/max(total_ac,1)*100:.1f}%)")
+    print(f"     |delta| histogram {dict(sorted(hist.items()))}"
+          f"   off-by-one {ob1}/{max(ac_bad,1)} = {ob1/max(ac_bad,1)*100:.0f}% of diffs")
+    print(f"     (an acoustic code is 1 of 21 FSQ levels, so |delta|=1 is the smallest"
+          f" representable disagreement -- a bin-boundary flip, not an error)")
     return sem_bad, ac_bad, total_ac
 
 def gate_codes():
     dev = open_device()
     try:
         pipe = TtVoxtralPipeline(dev)
-        # Synthetic prompt embeddings: this checks the WIRING and the code agreement without
-        # needing the tokenizer or a voice preset. The real-text path is voxtral_pipeline_ref's job
-        # on host; swapping in build_inputs_embeds() is a one-liner once this is trusted.
+        # REAL PROMPTS FIRST -- this is the accuracy number. See STATUS.md 6.40: the synthetic
+        # block below reads 97/288 where real fixtures read 24/864, because Block 1's prefill is
+        # 22x less accurate off-manifold (PCC 0.9865 vs 0.999894). Same trap as #12.
+        print("=== REAL PROMPTS: device vs reference, INTEGER codes -- THIS IS THE ACCURACY NUMBER ===")
+        tot = [0, 0, 0]
+        for ci in (0, 2, 3):
+            print(f"  -- fixture case {ci}")
+            sb, ab, ta = compare_codes(pipe, fixture_embeds(ci, pipe.wb)[0], n_frames=8)
+            tot = [tot[0] + sb, tot[1] + ab, tot[2] + ta]
+        print(f"  ==> REAL pooled: semantic {tot[0]}/{tot[2]//36}, "
+              f"acoustic {tot[1]}/{tot[2]} ({tot[1]/max(tot[2],1)*100:.1f}%)")
+        print()
+        # Synthetic: a WIRING check only. It needs no tokenizer or voice preset, which is why it
+        # exists -- but it is NOT an accuracy figure and it cannot even RANK configs: it is
+        # non-monotonic in precision (better weights measured WORSE). STATUS.md 6.40.
         torch.manual_seed(0)
         embeds = torch.randn(1, 128, 3072) * 0.02
-        print("=== device vs reference, INTEGER codes (the test that predicts audio) ===")
+        print("=== SYNTHETIC randn*0.02: WIRING ONLY -- do NOT read as accuracy (6.40) ===")
         compare_codes(pipe, embeds, n_frames=8)
         print()
         print("=== end-to-end: generate + decode to waveform ===")

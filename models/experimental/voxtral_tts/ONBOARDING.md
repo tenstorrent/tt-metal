@@ -149,7 +149,7 @@ Weakest to strongest. Every claim in STATUS names which rungs it cleared.
 |---|---|---|
 | `pytest tests/` | 45 s | structure, shapes, invariants. 122 tests |
 | `--gate flow` / `--gate codec` | ~1 min | one block vs the fp32 reference |
-| `--gate codes` | ~1 min | integer codes, blocks 1+2, 8 frames |
+| `--gate codes` | ~2 min | integer codes, blocks 1+2. **Read the REAL-prompt block, not the synthetic one** (`§6.40`) |
 | `--gate decode` | ~4 min | Block 1 precision, 15 prompts × 22 frames |
 | **frame-count A/B** | ~90 s | **bit-exactness** — see below |
 | WER, ≥3 seeds | ~10 min | output quality |
@@ -217,6 +217,12 @@ layout conversion avoidable by reading the original layout, and a reduction sitt
 its result was already being shipped off it.
 
 ### Nine rules, each of which cost real time to learn
+
+0. **`N/288` MEANS TWO DIFFERENT THINGS IN THIS PROJECT.** `7/288`, `9/288`, `21/288` in NOTES and
+   `§6.8`/`§6.10` are **8 frames x 36 codes on ONE REAL fixture**. `gate_codes`' old `97/288` was **8
+   SYNTHETIC frames x 36**. Same denominator, incomparable — and the synthetic one is non-monotonic in
+   precision, so it cannot even rank configs (`§6.40`). Current real number: **24/864 (2.8%), 0
+   semantic, 100% off-by-one**.
 
 1. **ALWAYS GATE ON REAL PROMPTS.** Random activations read PCC 0.892 where real prompts gave 0.9994
    (trap #12). Written down, and *still* violated in `§6.31` — a bf16 change scored on 64 random

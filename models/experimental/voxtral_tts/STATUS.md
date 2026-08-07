@@ -2761,6 +2761,76 @@ reasons to decline, not one.
 PREFILL-only paths (~3% of wall time), and the codec's elementwise ops amortise to ~0.03 ms/frame. Both
 are below the noise floor of anything measurable here.
 
+### 6.40 — `gate_codes` was measuring accuracy on synthetic input, and its number is unusable
+
+Raised by the P150 fork, reproduced here independently, and it is a defect in OUR gate too. I quoted
+this gate's output as an accuracy figure repeatedly in §6.31/§6.37 without noting what it was fed.
+
+`gate_codes` feeds `torch.randn(1,128,3072)*0.02`. Its own comment says it "checks the WIRING … without
+needing the tokenizer or a voice preset" — an honest description that later got read as an accuracy
+number. Same comparison, same commit, only the input changed:
+
+| input | frames | acoustic | semantic | \|delta\| histogram | off-by-one |
+|---|---|---|---|---|---|
+| real fixture case 0 | 8 | 7/288 | 0 of 8 | `{1: 7}` | **100%** |
+| real fixture case 2 | 8 | 8/288 | 0 of 8 | `{1: 8}` | **100%** |
+| real fixture case 3 | 8 | 9/288 | 0 of 8 | `{1: 9}` | **100%** |
+| **REAL pooled** | **24** | **24/864 (2.8%)** | **0 of 24** | | **100%** |
+| synthetic `randn*0.02` | 8 | **97/288 (33.7%)** | 1 of 8 | `{1:75, 2:13, 3:4, 4:3, 6:1, 7:1}` | 77% |
+
+**On real prompts every differing code is off by exactly one FSQ level of 21** — the smallest
+representable disagreement, i.e. a bin-boundary flip. Synthetic input produces deltas up to **7**, which
+is the part that is not a rounding story.
+
+**AND IT CONFIRMS A DENOMINATOR COLLISION IN THIS FILE.** Case 0 measures exactly **7/288** and case 3
+exactly **9/288** — the numbers scattered through [gpt-*]/[flow-*] and §6.8/§6.10. Those were always
+REAL-prompt figures (8 frames x 36 codes on one fixture). `gate_codes`' 97/288 is 8 SYNTHETIC frames x 36.
+**Identical denominator, incomparable measurement.** Anyone comparing them is comparing nothing.
+
+**WHY, established by the fork's controls (which are the right ones and I would have asked for them):**
+
+    reference fp32 vs its own fp64      0/288 on BOTH inputs   -- the reference flips nothing
+    FSQ boundary margin, median         0.260 synthetic vs 0.253 real -- INDISTINGUISHABLE
+    Block 2 device error, h held fixed  0.0334 synthetic vs 0.0389 real -- real is slightly WORSE
+    Block 1 prefill PCC(h_dev, h_ref)   0.986540 synthetic vs 0.999894 real -- 22x, at step 0
+
+So it is not FSQ geometry and not Block 2. **It is Block 1's prefill collapsing off-manifold** —
+trap #12's PCC 0.892-vs-0.9994 arriving at the codes gate through Block 2. Mechanically: random
+Gaussian embeddings sit far outside the distribution the weights were trained on, so BFP8's
+shared-exponent blocks lose far more precision on the activations that result.
+
+**THE STRONGEST RESULT is that the synthetic metric is NON-MONOTONIC IN PRECISION.** On the fork,
+FF→bf16 — unambiguously better weights — made synthetic PCC *worse* (0.986540 → 0.976994). A metric
+that degrades when you improve precision **cannot rank configurations**. That is stronger than
+"pessimistic proxy": it is uninformative, and it must never be used to choose between arms.
+
+**THE MOST ACTIONABLE RESULT, from the same fork sweep:** real-prompt prefill error is pinned at
+**0.70% across the entire precision ladder** — shipped, +bf16 FF, and all-bf16 all read 0.70%, while
+PCC moves only 0.999894 → 0.999934 for **+4.91 ms/step (~12% slower)**. That confirms §6.16's knee from
+the other side and says the residual 0.70% **is not weight quantization** — there is no weight lever
+left to pull, on either card.
+
+**THE ASYMMETRY THAT DECIDES WHETHER THE GATE IS SALVAGEABLE**, and neither session stated it:
+
+| use | synthetic input |
+|---|---|
+| **paired** A-vs-B ("did my change move anything?") | **VALID** — identical is identical on any input |
+| **absolute** accuracy level ("we are at 33.7%") | **MEANINGLESS** |
+| **ranking** configs by accuracy | **WORSE THAN MEANINGLESS** — non-monotonic |
+
+My own §6.31/§6.37 usage was the paired one ("1, 97/288 → identical"), which is legitimate. What was
+wrong was printing the absolute figure with no label, so a reader takes 33.7% as an accuracy level.
+
+**FIXED IN `tt_gates.py`:** `--gate codes` now runs the three real fixtures FIRST under the heading
+"THIS IS THE ACCURACY NUMBER", prints a `|delta|` histogram and off-by-one fraction after every run
+with a note that a code is 1 of 21 FSQ levels, and labels the synthetic block "WIRING ONLY — do NOT
+read as accuracy".
+
+**And the P150 comparison, which is the question that started this:** N150 real **24/864 (2.8%)**,
+P150 real **34/864 (3.9%)**, both **0 semantic**, both all-off-by-one. The fork's 85-88/288 is the same
+synthetic artifact this card shows at 97/288, and their bisect showed the fork point (unmodified N150
+code) already reading 85/288. **No P150 regression.**
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
