@@ -28,8 +28,6 @@ void kernel_main() {
     DataflowBuffer dfb_max_obj(dfb_max);
     constexpr auto dfb_x_m_max = dfb::x_minus_max;
     DataflowBuffer dfb_x_m_max_obj(dfb_x_m_max);
-    constexpr auto dfb_tmp = dfb::tmp;
-    DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_out0);
 
@@ -43,38 +41,28 @@ void kernel_main() {
     std::uint32_t Wt = get_arg(args::Wt);
 
     dfb_mask_obj.wait_front(onetile);
-    dfb_max_scaler_obj.wait_front(onetile);
+    // max_scaler carries a full/partial pair; sum_scaler stays a single tile because the sum still
+    // consumes exps that this kernel masks in place (see the exp loop below).
+    dfb_max_scaler_obj.wait_front(2);
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
-        if (Wt == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb_max via the helper.
-            // dfb_in0 holds all Wt tiles persistently for later steps, so use
-            // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
-            compute_kernel_lib::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_ROW,
-                dfb_in0,
-                dfb_max_scaler,
-                dfb_max,
-                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-
-            // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
-            // into dfb_max via Accumulate. The accumulator and output are both dfb_max:
-            // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(1),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
-        }
+        // The reader emits max_scaler as a full/partial pair (tile 1 fills only the valid columns of
+        // the last W tile), so the ragged tail is handled inside a single reduce. dfb_in0 holds all Wt
+        // tiles persistently for later steps, so WaitUpfrontNoPop keeps them resident.
+        compute_kernel_lib::reduce<
+            PoolType::MAX,
+            ReduceDim::REDUCE_ROW,
+            dfb_in0,
+            dfb_max_scaler,
+            dfb_max,
+            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            compute_kernel_lib::ReducePartialScaler::last_tile_at(1));
 
         // compute x - max(x)
         dfb_x_m_max_obj.reserve_back(Wt);

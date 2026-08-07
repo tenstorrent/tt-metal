@@ -82,7 +82,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
     const DFBSpecName RECIP{"recip_sum_exps"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X_MINUS_MAX{"x_minus_max"};
-    const DFBSpecName TMP{"tmp"};
 
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
@@ -92,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
             .entry_size = tile_size_data,
-            .num_entries = 1,
+            .num_entries = 2,
             .data_format_metadata = data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
@@ -121,11 +120,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
             .unique_id = X_MINUS_MAX,
             .entry_size = tile_size_intermed,
             .num_entries = Ht,
-            .data_format_metadata = intermed_data_format},
-        DataflowBufferSpec{
-            .unique_id = TMP,
-            .entry_size = tile_size_intermed,
-            .num_entries = 1,
             .data_format_metadata = intermed_data_format},
     };
 
@@ -186,7 +180,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
             };
         }
         return hw;
@@ -217,8 +210,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
                 .dfb_spec_name = X_MINUS_MAX,
                 .accessor_name = "x_minus_max",
                 .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
         };
     };
 

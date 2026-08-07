@@ -294,4 +294,45 @@ FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
     prepare_partial_reduce_scalers<cb_id, pool_type, reduce_dim, partial_positions>(scaler_f);
 }
 
+// =============================================================================
+// Runtime-count variants (see the header for when to prefer these)
+// =============================================================================
+
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f, uint32_t partial_positions) {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Partial scalers are not supported for REDUCE_SCALAR. "
+        "REDUCE_SCALAR applies the scaler twice (row then col) so a single partial tile cannot encode both axes.");
+
+    // Reduce-axis dim of the tile bound to cb_id.
+    constexpr uint32_t full_dim =
+        (reduce_dim == ReduceDim::REDUCE_COL) ? get_tile_r_dim<cb_id>() : get_tile_c_dim<cb_id>();
+    ASSERT(partial_positions > 0 && partial_positions <= full_dim);
+
+    // Tile 0: full fill (every position holds the scaler).
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, full_dim);
+    // Tile 1: partial fill. Equals tile 0 when partial_positions == full_dim, which is the
+    // no-padding case — callers that compile one kernel per op rather than per shape rely on that.
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, partial_positions);
+}
+
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
+FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers(uint32_t partial_positions) {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR, "Partial scalers are not supported for REDUCE_SCALAR.");
+
+    // Compute the standard reduce scaler value (1/N for AVG REDUCE_ROW/COL; 1.0 for SUM/MAX).
+    // REDUCE_SCALAR is rejected above, so the 1/sqrt(N) branch is unreachable here.
+    float scaler_f;
+    if constexpr (pool_type == PoolType::AVG) {
+        static_assert(reduce_factor > 0, "reduce_factor must be greater than 0");
+        scaler_f = 1.0f / static_cast<float>(reduce_factor);
+    } else {
+        scaler_f = 1.0f;
+    }
+
+    prepare_partial_reduce_scalers<cb_id, pool_type, reduce_dim>(scaler_f, partial_positions);
+}
+
 }  // namespace dataflow_kernel_lib

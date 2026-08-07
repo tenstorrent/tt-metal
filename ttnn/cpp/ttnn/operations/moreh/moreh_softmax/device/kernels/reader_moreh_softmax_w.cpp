@@ -31,9 +31,13 @@ void kernel_main() {
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
 
-    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    // The MAX scaler is a full/partial pair so the max reduce can exclude the padding columns of the
+    // last W tile without staging a masked copy. mask_w is a runtime value; when W is tile-aligned,
+    // the host passes TILE_WIDTH and tile 1 is identical to tile 0.
+    dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+        dfb_max_scaler,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW>(mask_w);
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
