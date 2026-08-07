@@ -259,6 +259,11 @@ def build(
     # a safe key even though the number of f32() calls varies with the flags.
     _wcache_dir = None
     _wcount = [0]
+    # Every device weight this block allocates, so the caller can free them once
+    # the DiT is dead. In a one-shot generation the last denoise step is the last
+    # use of these: VAE decode follows and never touches them, and the resident
+    # DiT otherwise holds ~99% of DRAM, which is what blocks the H/W-sharded VAE.
+    _weights = []
     if _enabled(os.environ.get("HY_DIT_WEIGHT_CACHE", "0")):
         _root = (
             os.environ.get("HY_DIT_WEIGHT_CACHE_DIR")
@@ -362,7 +367,12 @@ def build(
             path = os.path.join(_wcache_dir, f"{weight_cache_prefix}.w{_wcount[0]}.tensorbin")
             _wcount[0] += 1
             if os.path.exists(path):
-                return ttnn.load_tensor(path, device=device)
+                cached = ttnn.load_tensor(path, device=device)
+                # Register cache hits too: on a warm cache EVERY weight takes
+                # this path, so skipping it leaves free_weights() with nothing
+                # to release.
+                _weights.append(cached)
+                return cached
 
         out = ttnn.from_torch(
             t.contiguous().float(),
@@ -373,6 +383,7 @@ def build(
         )
         if path is not None:
             ttnn.dump_tensor(path, out, mode=ttnn.DumpTensorMode.LOCAL)
+        _weights.append(out)
         return out
 
     def lin(linear):
@@ -1019,6 +1030,28 @@ def build(
             e = ttnn.typecast(e, ttnn.float32)
         return h, e
 
+    def _free_weights():
+        """Deallocate this block's device weights. Idempotent.
+
+        Weights are NOT offloaded to host -- the torch module they came from is
+        still resident, and with HY_DIT_WEIGHT_CACHE a rebuild reloads them in
+        ~4s, so there is nothing worth copying back."""
+        freed = 0
+        errors = []
+        for t in _weights:
+            try:
+                ttnn.deallocate(t)
+                freed += 1
+            except Exception as err:  # already freed, or never on device
+                errors.append(repr(err))
+        _weights.clear()
+        if errors and freed == 0:
+            # Silently returning 0 here once hid the real defect (a weight-cache
+            # early return that never registered its tensors), so surface it.
+            raise RuntimeError(f"free_weights() released nothing; first error: {errors[0]}")
+        return freed
+
+    forward.free_weights = _free_weights
     return forward
 
 

@@ -350,6 +350,30 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         placement = "separate chips" if vae_dev is not device else "shared with DiT"
         print(f"[{label}] VAE decode: ON DEVICE (ttnn) on {list(vae_dev.get_device_ids())} ({placement})", flush=True)
 
+        # HY_FREE_DIT_BEFORE_VAE=1: release the DiT's device weights on the first
+        # decode call. Decode is the last stage of a one-shot generation and never
+        # touches the DiT, but the resident DiT holds ~99% of DRAM (measured: 4.24
+        # of 4.27 GB per bank), which is why HY_VAE_HW_SHARD=1 OOMs at 121 frames
+        # on a 101 MB allocation. Hooking decode rather than the denoise loop keeps
+        # this correct if a caller decodes more than once -- the free is idempotent.
+        if os.environ.get("HY_FREE_DIT_BEFORE_VAE", "0") == "1":
+            _tt_for_free = getattr(tt, "_tt", tt)
+            _free = getattr(_tt_for_free, "free_dit_weights", None)
+            if _free is None:
+                raise RuntimeError("HY_FREE_DIT_BEFORE_VAE=1 but the TT pipeline exposes no free_dit_weights()")
+            _inner_decode = pipe.vae.decode
+
+            def _decode_after_free(*a, **k):
+                if not getattr(_decode_after_free, "_done", False):
+                    with _phase("free_dit_weights_s"):
+                        n = _free()
+                    _decode_after_free._done = True
+                    print(f"[{label}] freed {n} DiT weight tensors before VAE decode", flush=True)
+                return _inner_decode(*a, **k)
+
+            pipe.vae.decode = _decode_after_free
+            print(f"[{label}] DiT weights will be released before VAE decode (HY_FREE_DIT_BEFORE_VAE=1)", flush=True)
+
     # Optional: run the i2v SigLIP image-encoder on device (HY_TT_SIGLIP=1). The 27-layer
     # vision transformer runs REPLICATED on the full DiT mesh -- shared with the resident DiT,
     # the same way the VAE-decode and text-encode adapters run -- so it needs no spare chip and

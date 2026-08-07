@@ -211,6 +211,10 @@ class HunyuanVideo15Pipeline:
                 self.invoked.add(name)
                 return fwd(*a, **k)
 
+            # Carry the stub's weight-release hook through the wrapper so
+            # free_dit_weights() can reach it.
+            if hasattr(fwd, "free_weights"):
+                _call.free_weights = fwd.free_weights
             return _call
 
         def build(name, module, **extra):
@@ -251,6 +255,25 @@ class HunyuanVideo15Pipeline:
         self.s_adazero_ctx = [build("ada_layer_norm_zero", blk.norm1_context) for blk in m.transformer_blocks]
         self.s_ff = [build("feed_forward", blk.ff) for blk in m.transformer_blocks]
         self.s_ff_ctx = [build("feed_forward", blk.ff_context) for blk in m.transformer_blocks]
+
+        def _free_dit_weights():
+            """Release the 54 transformer blocks' device weights.
+
+            VAE decode is the last stage of a one-shot generation and never
+            touches the DiT, but the resident DiT holds ~99% of device DRAM --
+            enough that the H/W-sharded VAE (HY_VAE_HW_SHARD=1) cannot allocate
+            even a 101 MB buffer at 121 frames. Freeing here hands that DRAM to
+            the decoder. Weights are not offloaded: the torch modules are still
+            resident and HY_DIT_WEIGHT_CACHE reloads them in seconds, so there
+            is nothing worth copying back. Idempotent; safe if already freed."""
+            freed = 0
+            for blk in self.s_blocks:
+                hook = getattr(blk, "free_weights", None)
+                if hook is not None:
+                    freed += hook()
+            return freed
+
+        self.free_dit_weights = _free_dit_weights
 
         # --- deep-level stubs (context_embedder.* fine) ----------------------------
         tte = m.context_embedder.time_text_embed

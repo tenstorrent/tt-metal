@@ -500,7 +500,38 @@ section is measured unless explicitly marked otherwise.
   which relieves the exact constraint causing these OOMs *and* removes the
   45-50% redundant compute.
 
-### VAE spatial sharding: IMPLEMENTED and working, blocked only by DRAM
+### VAE spatial sharding at 121f: UNBLOCKED, and a REGRESSION (~72s slower)
+
+- Freeing the DiT before decode (`HY_FREE_DIT_BEFORE_VAE=1`, below) plus
+  non-materialising attention (`HY_VAE_ATTN_SDPA=1`) makes `HY_VAE_HW_SHARD=1`
+  run at 121 frames for the first time. Both arms pass. But it is **slower**,
+  not faster:
+
+  | configuration (480p i2v 121f/4-step) | wall |
+  |---|---:|
+  | tiled + free DiT | **150.4s** |
+  | hw-shard + free + `HY_VAE_ATTN_SDPA=1` | 232.2s |
+  | hw-shard + free + SDPA + `HY_VAE_ATTN_DIST=1` | 222.8s |
+
+- **~72s slower than the tiled path.** The earlier estimate in this report
+  (~18-20s *faster*, from removing 45-50% redundant overlap decode) had the sign
+  wrong. The redundancy is real, but the sharded path pays a per-convolution
+  halo exchange across 32 chips to avoid it, and there are many causal convs in
+  the decoder. On this Galaxy CCL is fully exposed -- every model program runs on
+  CQ0 in order, so a collective never overlaps compute (see the CQ0 note in the
+  MMRS entry) -- so that exchange is pure added latency.
+- The tiled path decodes 1.81x the image area yet wins, because tiles are
+  **independent**: it performs no cross-device communication during decode at
+  all. Redundant local compute is cheaper here than distributed communication.
+- Output at 121f vs tiled: frame PCC 0.99864060, max abs pixel difference 119,
+  mean 1.33 -- the same blending-vs-exact difference described for the 13f
+  comparison, not a defect.
+- **Conclusion: keep the tiled VAE.** Spatial sharding is fully implemented,
+  now demonstrably runnable at production length, and measurably worse. Revisit
+  only if the fabric gains collective/compute overlap, which would change the
+  trade that decides this.
+
+### How it was unblocked (retained: the DiT free is independently useful)
 
 - **Correction to an earlier entry in this report.** Spatial sharding is not
   "scaffolded but unwired" and is not a refactor waiting to be written. It is
