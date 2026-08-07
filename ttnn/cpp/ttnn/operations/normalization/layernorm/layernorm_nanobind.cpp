@@ -16,6 +16,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
 #include "device/layernorm_device_operation.hpp"
+#include "layernorm_program_factory_for_python.hpp"
 #include "device/layernorm_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "device/layernorm_types.hpp"
@@ -294,37 +295,18 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
 
             Returns:
                 ttnn.tt::tt_metal::TensorSpec: The output tensor specification.
-            )doc")
-        .def_static(
-            "select_program_factory",
-            &ttnn::prim::LayerNormDeviceOperation::select_program_factory,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Selects the appropriate program factory based on input tensor's memory layout.
-
-            Returns LayerNormShardedProgramFactory for sharded inputs,
-            LayerNormMultiCoreProgramFactory for non-sharded inputs.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
-
-            Returns:
-                Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory]:
-                    The appropriate program factory for the input tensor.
             )doc");
 }
 
 void bind_normalization_layernorm_program_factory(nb::module_& mod) {
-    nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
+    nb::class_<ttnn::for_python::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactoryForPython")
         .def_static(
             "create_descriptor",
             [](const ttnn::prim::LayerNormParams& operation_attributes,
                const ttnn::prim::LayerNormInputs& tensor_args,
                Tensor& tensor_return_value,
                const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
+                return ttnn::for_python::LayerNormMultiCoreProgramFactory::create_descriptor(
                     operation_attributes, tensor_args, tensor_return_value, core_range_set);
             },
             nb::arg("operation_attributes"),
@@ -346,7 +328,7 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
             )doc")
         .def_static(
             "default_core_range",
-            &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
+            &ttnn::for_python::LayerNormMultiCoreProgramFactory::default_core_range,
             nb::arg("device"),
             R"doc(
             Returns the default core range for non-sharded LayerNorm based on device compute grid.
@@ -358,14 +340,14 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                 ttnn.CoreRangeSet: The default core range covering the device's compute grid.
             )doc");
 
-    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
+    nb::class_<ttnn::for_python::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactoryForPython")
         .def_static(
             "create_descriptor",
             [](const ttnn::prim::LayerNormParams& operation_attributes,
                const ttnn::prim::LayerNormInputs& tensor_args,
                Tensor& tensor_return_value,
                const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
+                return ttnn::for_python::LayerNormShardedProgramFactory::create_descriptor(
                     operation_attributes, tensor_args, tensor_return_value, core_range_set);
             },
             nb::arg("operation_attributes"),
@@ -393,6 +375,46 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                 RuntimeError: If core_range_set is provided and the bounding box of the sharded tensor's shard grid
                     is not entirely contained within it.
             )doc");
+
+    mod.def(
+        "layernorm_select_program_factory_for_python",
+        &ttnn::for_python::select_layernorm_program_factory,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"));
+
+    // The live prim factories keep their existing Python names alongside the frozen ones; tests and
+    // callers already bind to these, so the for_python surface is additive.
+    nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::LayerNormParams& operation_attributes,
+               const ttnn::prim::LayerNormInputs& tensor_args,
+               Tensor& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = nb::none())
+        .def_static(
+            "default_core_range", &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range, nb::arg("device"));
+
+    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::LayerNormParams& operation_attributes,
+               const ttnn::prim::LayerNormInputs& tensor_args,
+               Tensor& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = nb::none());
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {
