@@ -4,6 +4,7 @@
 import itertools
 from dataclasses import dataclass, replace
 from enum import Enum
+from typing import Dict
 
 import pytest
 import torch
@@ -28,8 +29,10 @@ from helpers.param_config import (
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
+    edge_pair_values,
     exclude_undefined_pair,
     for_op,
+    integer_specials,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -125,14 +128,20 @@ def _positions_and_ramp(size):
 # =============================================================================
 # Which ops take their domain from _OP_DOMAIN_REGISTRY
 #
-# Float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run through
-# test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse to
-# {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
-# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
+# Every op driven through sfpu_binary() belongs to exactly one of the three sets below,
+# and _classify_stimuli_source() enforces that in the driver. The classification is the
+# only record of *why* an op is fed what it is fed, so an unclassified op is a coverage
+# question nobody asked rather than a default anybody chose.
 #
-# Everything else this suite drives is declared too -- in _UNREGISTERED_BINARY_OPS if it
-# has no registry entry, or _INT_ONLY_REGISTERED_OPS if it has one that integer stimuli
-# never consult -- so every op's domain decision is written down rather than defaulted to.
+#   _REGISTRY_DOMAIN_OPS            - rerouted onto the op's registered domain.
+#   _UNREGISTERED_BINARY_OPS        - no registry entry exists; keeps the format default.
+#   _REGISTERED_DEFAULT_STIMULI_OPS - a registry entry exists but is deliberately not
+#                                     used here, with the reason recorded per op.
+#
+# The reroute is float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run
+# through test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse
+# to {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
+# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
 # =============================================================================
 
 _REGISTRY_DOMAIN_OPS = frozenset(
@@ -188,38 +197,49 @@ _UNREGISTERED_BINARY_OPS = frozenset(
     }
 )
 
-# Registered ops this suite only ever drives under an integer format, where sfpu_binary's
-# `not is_integer()` conjunct blocks registry routing regardless of membership (a float
-# domain like uniform(-1, 1) would collapse to {-1, 0, 1} under Int32). They belong in
-# neither set above: not rerouted, but not unregistered either. Declared so the
-# completeness check below can account for every op the file drives.
-_INT_ONLY_REGISTERED_OPS = frozenset(
-    {
-        MathOperation.SfpuElwLeftShift,
-        MathOperation.SfpuElwRightShift,
-        MathOperation.SfpuElwLogicalRightShift,
-    }
-)
+# Ops with an _OP_DOMAIN_REGISTRY entry that this suite deliberately does not read, and
+# why. Distinct from _UNREGISTERED_BINARY_OPS: there the registry has nothing to offer,
+# here it has something we are choosing not to take. Without this set the three shift ops
+# sat outside both lists, so the consistency check below passed while saying nothing about
+# them — the exact silent-drift hole it exists to close.
+_REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
+    MathOperation.SfpuElwLeftShift: "driven as Int32 here; the registered float domain "
+    "uniform(0, 255) is for the shift *amount* and the value operand needs the full "
+    "int32 range, so crafted stimuli / the format default are what these want",
+    MathOperation.SfpuElwRightShift: "as SfpuElwLeftShift",
+    MathOperation.SfpuElwLogicalRightShift: "as SfpuElwLeftShift",
+}
 
-_DECLARED_BINARY_OPS = (
-    _REGISTRY_DOMAIN_OPS | _UNREGISTERED_BINARY_OPS | _INT_ONLY_REGISTERED_OPS
-)
+# Ops this file tests without going through sfpu_binary(), so no stimulus classification
+# applies to them. Declared rather than merely absent, so that routing one of them onto
+# the shared driver later forces a decision instead of silently picking the default.
+_OPS_NOT_USING_SHARED_DRIVER: Dict[MathOperation, str] = {
+    MathOperation.SfpuAddTopRow: "test_sfpu_binary_add_top_row builds its own stimuli, "
+    "golden and TestConfig (the top-row semantics need a [64, 32] single-pair layout)",
+}
 
 
 def _assert_domain_sets_consistent():
-    """The rerouted ops must be registered, the fallback ops must not be, and every
-    binary SFPU op must sit in exactly one of the three sets.
+    """The three stimulus-source sets must be disjoint and consistent with the registry.
 
-    All three halves fail quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no
-    registry entry raises deep inside the driver mid-sweep; an op that gains a domain
-    while sitting in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default;
-    and an op in none of the sets is the same silent default with nothing even claiming
-    responsibility for it -- which is how the shift ops went 39-declared-against-42-driven
-    until this check existed.
+    Each half fails quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no registry
+    entry raises deep inside the driver mid-sweep; an op that gains a domain while sitting
+    in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default; and an op in no
+    set at all keeps the default while looking, to a reader of this file, like it was never
+    considered.
+
+    Totality — every op reaching the driver is classified — cannot be asserted here,
+    because the set of ops this suite drives is only known once pytest has collected the
+    parametrize lists. _classify_stimuli_source() enforces it in the driver instead.
+
+    What *can* be asserted here is family totality: every op sfpu_domains records as a
+    binary SFPU op is either classified or declared as not using the shared driver. That
+    catches an op added to the family and to no list at all, which the driver-side check
+    cannot see until something drives it.
     """
     missing = sorted(
         op.name
-        for op in _REGISTRY_DOMAIN_OPS | _INT_ONLY_REGISTERED_OPS
+        for op in _REGISTRY_DOMAIN_OPS | _REGISTERED_DEFAULT_STIMULI_OPS.keys()
         if op not in _OP_DOMAIN_REGISTRY
     )
     assert not missing, (
@@ -231,37 +251,65 @@ def _assert_domain_sets_consistent():
     )
     assert not now_registered, (
         "these ops now have a domain in _OP_DOMAIN_REGISTRY but are still on the "
-        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops), "
-        "_INT_ONLY_REGISTERED_OPS (integer-only ops), or drop them from "
-        f"_UNREGISTERED_BINARY_OPS: {now_registered}"
+        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops) or "
+        f"to _REGISTERED_DEFAULT_STIMULI_OPS with a reason: {now_registered}"
     )
-    for left, right in (
-        ("_REGISTRY_DOMAIN_OPS", "_UNREGISTERED_BINARY_OPS"),
-        ("_REGISTRY_DOMAIN_OPS", "_INT_ONLY_REGISTERED_OPS"),
-        ("_UNREGISTERED_BINARY_OPS", "_INT_ONLY_REGISTERED_OPS"),
-    ):
-        overlap = globals()[left] & globals()[right]
-        assert not overlap, (
-            f"{left} and {right} must be disjoint, but share: "
-            f"{sorted(op.name for op in overlap)}"
-        )
-    # SfpuAddTopRow is the one member of the binary family that never reaches
-    # sfpu_binary (test_sfpu_binary_add_top_row builds its own stimuli), so it has no
-    # domain decision to declare.
+    unregistered = sorted(
+        op.name
+        for op in _REGISTERED_DEFAULT_STIMULI_OPS
+        if op not in _OP_DOMAIN_REGISTRY
+    )
+    assert not unregistered, (
+        "these ops are listed as registered-but-not-read, yet have no entry in "
+        f"_OP_DOMAIN_REGISTRY; move them to _UNREGISTERED_BINARY_OPS: {unregistered}"
+    )
+    sets = {
+        "_REGISTRY_DOMAIN_OPS": set(_REGISTRY_DOMAIN_OPS),
+        "_UNREGISTERED_BINARY_OPS": set(_UNREGISTERED_BINARY_OPS),
+        "_REGISTERED_DEFAULT_STIMULI_OPS": set(_REGISTERED_DEFAULT_STIMULI_OPS),
+    }
+    for a, b in itertools.combinations(sorted(sets), 2):
+        overlap = sorted(op.name for op in sets[a] & sets[b])
+        assert not overlap, f"{a} and {b} both claim: {overlap}"
     undeclared = sorted(
         op.name
         for op in _SFPU_BINARY_OPS
-        - {MathOperation.SfpuAddTopRow}
-        - _DECLARED_BINARY_OPS
+        - set().union(*sets.values())
+        - _OPS_NOT_USING_SHARED_DRIVER.keys()
     )
     assert not undeclared, (
-        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this "
-        "suite's three domain sets, so nothing states what they are fed: "
-        f"{undeclared}"
+        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this suite's "
+        "three stimulus-source sets, so nothing states what they are fed; classify them "
+        f"or declare them in _OPS_NOT_USING_SHARED_DRIVER: {undeclared}"
     )
 
 
 _assert_domain_sets_consistent()
+
+_CLASSIFIED_STIMULI_OPS = (
+    set(_REGISTRY_DOMAIN_OPS)
+    | set(_UNREGISTERED_BINARY_OPS)
+    | set(_REGISTERED_DEFAULT_STIMULI_OPS)
+)
+
+
+def _classify_stimuli_source(mathop):
+    """True if *mathop* reads its domain from the registry; False if it keeps the default.
+
+    Raises for an op in none of the three declared sets. That is the case the collection
+    -time assertion cannot see: adding an op to a parametrize list is enough to drive it,
+    and an unclassified op would silently inherit generate_stimuli's positive-only
+    uniform(0.1, 1.1) — which is finding #1 of the coverage audit, reintroduced one op at
+    a time.
+    """
+    if mathop not in _CLASSIFIED_STIMULI_OPS:
+        raise KeyError(
+            f"MathOperation.{mathop.name} is driven through sfpu_binary() but is in none "
+            "of _REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / "
+            "_REGISTERED_DEFAULT_STIMULI_OPS. Add it to whichever describes what it "
+            "should be fed; the last two want a recorded reason."
+        )
+    return mathop in _REGISTRY_DOMAIN_OPS
 
 
 def _mask_stimuli_specs():
@@ -361,16 +409,6 @@ def sfpu_binary(
     input_dimensions=None,
 ):
 
-    # Every op driven through here must have declared what it is fed. The collection-time
-    # check above covers the registered ops; this covers the rest, so a new op added to a
-    # `mathop` list and to neither set fails loudly instead of silently inheriting
-    # generate_stimuli's positive-only uniform(0.1, 1.1).
-    assert mathop in _DECLARED_BINARY_OPS, (
-        f"{mathop.name} is driven through sfpu_binary but appears in none of "
-        "_REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / _INT_ONLY_REGISTERED_OPS; "
-        "add it to the set that describes the domain it should get"
-    )
-
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
     # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
     # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
@@ -391,11 +429,8 @@ def sfpu_binary(
     # makes the registered undefined-range holes (SfpuElwdiv divisor, SfpuXlogy B,
     # SfpuElwpow A) reachable. Unlike the unary sweep, most ops here are not registered; a
     # missing entry falls back to generate_stimuli's format default rather than raising.
-    if (
-        spec_A is None
-        and mathop in _REGISTRY_DOMAIN_OPS
-        and not formats.input_format.is_integer()
-    ):
+    reads_registry = _classify_stimuli_source(mathop)
+    if spec_A is None and reads_registry and not formats.input_format.is_integer():
         specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
         spec_A, spec_B = specs.spec_A, specs.spec_B
 
@@ -1014,16 +1049,23 @@ def _build_shift_edge_case_src(mathop):
     dest_acc=[DestAccumulation.Yes],
 )
 def test_sfpu_binary_int_shift_edge_cases(
+    request,
     formats,
     dest_acc,
     mathop,
 ):
     if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            reason="Blackhole shift kernels (left / arithmetic right / logical right) are "
-            "unmigrated TTI microcode whose predicated out-of-range/sign handling breaks "
-            "under INT32_2S_COMP for negative operands, so all three diverge from the "
-            "two's-complement golden. See docs/SFPU_INT32_SHIFT.md."
+        # xfail rather than skip so a Blackhole kernel port surfaces as XPASS instead of
+        # staying silently green-by-omission. The bug is an external dependency of this
+        # suite, not a task in it, but a skip cannot tell us when it is fixed.
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Blackhole shift kernels (left / arithmetic right / logical right) "
+                "are unmigrated TTI microcode whose predicated out-of-range/sign handling "
+                "breaks under INT32_2S_COMP for negative operands, so all three diverge "
+                "from the two's-complement golden. See docs/SFPU_INT32_SHIFT.md.",
+                strict=False,
+            )
         )
 
     sfpu_binary(
@@ -1031,6 +1073,197 @@ def test_sfpu_binary_int_shift_edge_cases(
         dest_acc,
         mathop,
         src_A_override=_build_shift_edge_case_src(mathop),
+    )
+
+
+# =============================================================================
+# Deliberate edge values (Phase 4, binary side)
+#
+# _build_shift_edge_case_src above is the shape this generalizes: walk the cartesian
+# product of both operands' interesting values into a two-tile override tensor, which
+# tilize pairs by index. The product is the point — a divisor of 0 against a positive, a
+# negative and a zero numerator are three different cases, and element-wise pairing would
+# test one of them.
+#
+# Values come from sfpu_domains.edge_pair_values(), so the ops enrol by having a registered
+# singularity rather than by being listed here.
+# =============================================================================
+
+
+def _build_edge_pair_src(mathop, formats):
+    """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
+
+    Returns None when neither operand has an edge worth probing, which is the caller's cue
+    to skip. Cycles the pair list to fill a full tile the way the shift builder does, so
+    the override divides evenly into whatever buffer sfpu_binary picks.
+    """
+    pairs = edge_pair_values(mathop, formats.input_format, formats.output_format)
+    if not pairs:
+        return None
+    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
+    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
+    dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
+    return torch.tensor(a + b, dtype=dtype)
+
+
+# The float binary ops with a registered singularity on one operand: div and fmod/remainder
+# divide by B, xlogy takes log(B), pow evaluates exp(B·ln A). Kept as a derived list so an
+# op gaining a singularity enrols itself.
+_BINARY_EDGE_OPS = [
+    MathOperation.SfpuElwdiv,
+    MathOperation.SfpuXlogy,
+    MathOperation.SfpuElwpow,
+    MathOperation.SfpuBinaryFmod,
+    MathOperation.SfpuBinaryRemainder,
+]
+
+
+# What driving the poles found on Wormhole. Two root causes, and the first of them is the
+# same one the unary edge sweep turned up in signbit / sign / heaviside — so it now spans
+# both suites and seven ops:
+#
+#   The SFPU does not preserve the sign of zero. div(0, -x) returns +0.0 where IEEE gives
+#   -0.0; fmod and remainder do the same for a negative divisor; xlogy(0, tiny) likewise.
+#
+#   0/0 and x%0 return inf where IEEE says nan. div(0, 0) -> inf against a nan golden,
+#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. The finite poles agree
+#   exactly (div(-2, ±1/64) = ∓128, and every ±inf lines up), so this is specifically the
+#   0/0 indeterminate form, not a general pole problem.
+#
+# pow is its own case: 0**0 returns 0 where every convention (IEEE-754 powr aside, C, torch)
+# gives 1.
+#
+# Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
+# executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
+# dest_acc) rather than by predicate so a combination drifting in or out shows up here.
+_BINARY_EDGE_DIVERGENCES = {
+    MathOperation.SfpuElwdiv: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuXlogy: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuElwpow: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuBinaryFmod: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuBinaryRemainder: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+}
+
+_BINARY_EDGE_REASON = {
+    MathOperation.SfpuElwdiv: "div(0, -x) returns +0.0 not -0.0, and div(0, 0) returns "
+    "inf not nan. The finite poles and every ±inf agree exactly.",
+    MathOperation.SfpuXlogy: "xlogy(0, 0) returns -inf not nan, and xlogy(0, tiny) "
+    "returns +0.0 not -0.0.",
+    MathOperation.SfpuElwpow: "0**0 returns 0; C, torch and the golden all give 1.",
+    MathOperation.SfpuBinaryFmod: "fmod(x, 0) returns inf not nan, and a negative divisor "
+    "loses the sign of a zero result.",
+    MathOperation.SfpuBinaryRemainder: "remainder(x, 0) returns inf not nan, and a "
+    "negative divisor loses the sign of a zero result.",
+}
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=_BINARY_EDGE_OPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_edges(request, formats, dest_acc, mathop):
+    """Drive each binary op's registered pole against a spread of counterpart values."""
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    if (formats.input_format, formats.output_format, dest_acc) in (
+        _BINARY_EDGE_DIVERGENCES.get(mathop, ())
+    ):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_BINARY_EDGE_REASON[mathop], strict=False)
+        )
+
+    src = _build_edge_pair_src(mathop, formats)
+    if src is None:
+        pytest.skip(reason=f"{mathop.name} has no registered per-operand edge to probe")
+
+    sfpu_binary(formats, dest_acc, mathop, src_A_override=src)
+
+
+# Integer extremes (cat C). Delivered as a raw override rather than a StimuliSpec because
+# CustomStrategy clamps integers through _get_integer_bounds, which returns info.min + 1 —
+# so a spec asking for INT32_MIN silently yields INT32_MIN + 1, the worst failure mode for
+# an edge test.
+#
+# Scope is deliberately narrow, and _INT_BINARY_STIMULI above is why: almost every int
+# binary kernel documents a *sub-range* it is valid on (div/fmod < 2**24 for an exact
+# int->fp32 reciprocal, mul < ~46340 so the product stays under 2**31, lcm assuming
+# |a|,|b| < 2**15, max/min non-negative so signed and unsigned agree). Feeding those the
+# int32 extremes would produce failures that are documented limitations rather than
+# findings. The bitwise ops are the exception — "exact on the full default int range" — so
+# they and the exact eq/ne comparisons are what cat C can honestly cover here.
+#
+# INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
+# cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
+# (test_sfpu_binary_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
+_INT_EXTREME_OPS = [
+    MathOperation.SfpuBitwiseAnd,
+    MathOperation.SfpuBitwiseOr,
+    MathOperation.SfpuBitwiseXor,
+    MathOperation.SfpuEqInt,
+    MathOperation.SfpuNeInt,
+]
+
+
+def _build_int_extremes_src():
+    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
+    vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
+    pairs = [(a, b) for a in vals for b in vals]
+    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
+    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
+    return torch.tensor(a + b, dtype=torch.int32)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=_INT_EXTREME_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_extremes(formats, dest_acc, mathop):
+    # twos_complement=True is required, not decorative. Without it the buffer is packed
+    # sign-magnitude, and the bitwise kernels then operate on the wrong bits for negative
+    # operands: (INT32_MIN+1) & -1 came back as -1 instead of INT32_MIN+1. The existing
+    # test_sfpu_binary_bitwise never caught this because its default stimuli are
+    # positive-only, so nothing had established that these kernels need the two's-
+    # complement pack path. test_sfpu_binary_rsub_int32 already sets the same flag.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_int_extremes_src(),
+        twos_complement=True,
     )
 
 
