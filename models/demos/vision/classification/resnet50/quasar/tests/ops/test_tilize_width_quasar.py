@@ -95,6 +95,10 @@ _SHARDED_CASES = [
 @pytest.mark.parametrize("h_tiles, w_tiles, tid", _SHARDED_CASES, ids=[c[-1] for c in _SHARDED_CASES])
 def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):
     """HEIGHT_SHARDED RM [1,1,shard_h*2, C] -> quasar tilize -> PCC. Isolates the conv's internal tilize."""
+    # h49_w8_FAILCONFIG is an INTENTIONAL fail-config (256ch / 56x56 / 2-core: the exact failing tilize being
+    # documented). On WH it OOMs L1 at this 2-core scale; on Quasar it's the tilize repro. Expected-fail by design.
+    if tid == "h49_w8_FAILCONFIG":
+        pytest.xfail("intentional fail-config (documents the exact failing 2-core tilize; OOMs WH L1 at this scale)")
     device = mesh_device
     torch.manual_seed(0)
     num_cores = 2

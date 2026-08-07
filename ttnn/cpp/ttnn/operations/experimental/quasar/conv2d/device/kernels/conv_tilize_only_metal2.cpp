@@ -47,8 +47,8 @@ void kernel_main() {
     // Program A tilizes STRAIGHT INTO dfb::out — OUT is borrowed from the op's output tensor
     // (factory: DFB_OUT.borrowed_from = TP_OUTPUT), so the op's OUTPUT IS the tilized activation
     // [per-core M*32 rows, in0_block_w*32 cols]. Program B (host-level matmul in conv2d.cpp) then
-    // consumes this tilized activation. (The borrowed-OUT-vs-plain-DFB diagnostic is reverted: it
-    // proved the 0x19 is intrinsic to tilize_block, not the borrowed OUT — the fix is UnpackToDestEn.)
+    // consumes this tilized activation. (fix #3 tried a fresh intermediate dfb::act_tilized + writer; REVERTED —
+    // it still deadlocked identically in fast_tilize_block, so the borrowed OUT was not the cause.)
     constexpr uint32_t out_cb_id = dfb::out;
 
     // ==================== TILIZE-ORIENTED HW STARTUP (no matmul) ====================

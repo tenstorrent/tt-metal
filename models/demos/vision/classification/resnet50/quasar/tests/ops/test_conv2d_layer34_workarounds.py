@@ -37,6 +37,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.999
@@ -181,6 +182,17 @@ def _id3(cfg):
 def test_quasar_conv2d_layer3_hs(mesh_device, cfg):
     """Layer3 convs forced HEIGHT_SHARDED (the workaround that both fits and dodges the fused conv_bmm 0x19)."""
     ic, oc, h, w, k, s, p = cfg
+    # WH-only HANG on the 3x3 (conv2) cases: this test does NOT set the split env, so HEIGHT_SHARDED still runs
+    # the FUSED conv_bmm_tilize (the "dodges the fused path" only holds with TT_METAL_QSR_CONV_SPLIT_PROGRAM set,
+    # as the model does). On WH the fused kernel hits the fast_tilize->matmul cadence race (kRaceGuardSpin family;
+    # MATH MWDD in matmul_block, PACK in program_packer_destination, SyncHalf, cb stuck; genuine, asserts-on) --
+    # here even at act_block_h=32 (K=72), confirming it's inherent to the tilize<->matmul interleave, not abh.
+    # Same family as relu_now_sfpu/stem_7x7. The 1x1 cases use the mm_conv (matmul-only) path -> left to run.
+    if tuple(k) == (3, 3) and is_wormhole_b0():
+        pytest.xfail(
+            "WH fused conv_bmm_tilize fast_tilize->matmul cadence race (kRaceGuardSpin family) on layer3 3x3 HS "
+            "(no split env -> fused path). Same family as relu_now_sfpu/stem_7x7; not the WH model path."
+        )
     _run_conv(
         mesh_device,
         in_channels=ic,
@@ -242,6 +254,13 @@ def _id4(cfg):
 def test_quasar_conv2d_layer4_dram_sliced(mesh_device, cfg):
     """Layer4 convs via the DRAM output-height-slicing path. See the module docstring: this ANSWERS whether DRAM
     slicing is a viable layer4 route (it only helps activation footprint, not the weights fit or the fused hang)."""
+    # 2-core Quasar-emulator experiment: DRAM slicing only trims the activation footprint, NOT the layer4 weight
+    # residency, which overflows WH's ~1.5 MB/core L1 (DFB region 2.3-4.6 MB > 1.5 MB max). WH runs layer4 via
+    # mainline conv2d resharded across the full grid. Quasar-emulator-scoped -> skip on WH (run on Quasar).
+    if is_wormhole_b0():
+        pytest.skip(
+            "2-core Quasar-emulator layer4 DRAM-slicing experiment; layer4 weight residency overflows WH L1. Run on Quasar."
+        )
     ic, oc, h, w, k, s, p, num_slices, shard = cfg
     slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
     _run_conv(

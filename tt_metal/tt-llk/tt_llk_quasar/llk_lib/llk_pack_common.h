@@ -323,7 +323,7 @@ inline void _llk_pack_dest_semaphore_section_done_()
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
 
-    // Tell math that it can write again.
+    // Tell math that it can write again
     _llk_packer_set_math_semaphore_();
 
     if constexpr (DST == DstSync::SyncHalf)

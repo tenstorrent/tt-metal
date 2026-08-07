@@ -52,6 +52,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # bf16 + LoFi accumulation over a deep K (up to 144) is noisy -> 0.98 (matches test_matmul_dram_weights_kspill).
@@ -186,6 +187,12 @@ def _id4(cfg):
 def test_quasar_conv2d_layer4_l1_fit(mesh_device, cfg):
     """Each distinct layer4 conv HEIGHT_SHARDED via the K-spill L1-fit route (see module docstring). PASS =>
     layer4 fits in L1 and is functionally correct, ready to wire into the e2e model."""
+    # Designed for the 2-core Quasar emulator L1 budget (~3.7 MB/core). Layer4's weight-bound convs (full_K
+    # K-spill residency) overflow WH's ~1.5 MB/core L1 (DFB region grows to 2.3-4.6 MB > 1.5 MB max). On WH,
+    # layer4 runs via mainline ttnn.conv2d resharded across the full 8x8 grid, not this single-K-block K-spill
+    # route. Quasar-emulator-scoped -> skip on WH (run it on Quasar).
+    if is_wormhole_b0():
+        pytest.skip("2-core Quasar-emulator layer4 K-spill L1-fit test; overflows WH's ~1.5 MB/core L1. Run on Quasar.")
     ic, oc, h, w, k, s, p = cfg
     _run_conv(
         mesh_device,

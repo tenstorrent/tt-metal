@@ -57,6 +57,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # (shard_h, num_cores, id).  num_units_per_shard for a ROW_MAJOR height shard == shard_h (independent of C).
@@ -82,6 +83,12 @@ def test_quasar_s2i_credit_capacity(mesh_device, shard_h, num_cores, tid):
 
     The reader fake-pushes shard_h per-stick credits into a borrowed DFB. With the 16-bit-capacity infra fix
     the credit capacity is no longer truncated mod 256, so every case must round-trip (PCC ~1.0)."""
+    # The stem-scale shard (6272 sticks) needs ~1.6 MB/bank; WH's L1 bank is ~1.37 MB -> OOM (bank_manager).
+    # It fits the 2-core Quasar emulator's larger banks. Smaller-shard cases still run on WH. Run on Quasar.
+    if is_wormhole_b0() and tid == "sh6272_stem_scale":
+        pytest.skip(
+            "stem-scale shard (6272 sticks) OOMs WH's ~1.37 MB L1 bank; fits the 2-core Quasar emulator. Run on Quasar."
+        )
     torch.manual_seed(0)
     device = mesh_device
     c = 128  # matches the resnet conv2 activation channel count; num_units_per_shard is C-independent here

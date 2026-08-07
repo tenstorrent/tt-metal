@@ -1521,6 +1521,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         } else if (split_program_tilize_only) {
             // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
             // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
+            // (fix #3 tried a fresh intermediate DFB + writer here; REVERTED — it still deadlocked identically
+            // in fast_tilize_block, so the borrowed output was NOT the cause. See the WH split memory.)
         } else if (split_tilize_matmul) {
             // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
             // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
