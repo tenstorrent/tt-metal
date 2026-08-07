@@ -1114,3 +1114,626 @@ def exclude_undefined_pair(
     if Operand.B in op_ranges and new.spec_B is not None:
         new.spec_B = exclude_intervals(new.spec_B, op_ranges[Operand.B])
     return new
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edge values
+#
+# Everything above answers "what is safe to draw at random". Everything below answers
+# "which single values are worth hitting on purpose", which is a different question with
+# a different answer, and the two must not share a table.
+#
+# The reason they cannot is mechanical: exclude_intervals() *always* rewrites its result
+# into the `intervals` form, and the interval sampler consumes two torch.rand draws per
+# element where the plain low/high sampler consumes one. So adding an entry to
+# _SFPU_UNDEFINED_RANGES re-draws that op's whole stimulus set even when the subtraction
+# removes nothing (verified: uniform(1, 8) and intervals=[(1, 8)] are the same
+# distribution and different numbers at the same seed). Edge metadata therefore lives in
+# its own tables and never touches the random-draw path.
+#
+# The second reason is semantic. A hole in _SFPU_UNDEFINED_RANGES is a *guard band* —
+# Reciprocal's is (-1e-6, 1e-6), so its edges are ±1e-6 and the mathematically
+# interesting point, exactly 0, is inside the hole and never produced. Probing wants the
+# singularity itself, so _OP_SINGULARITIES records it directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Mantissa bits *after* the implicit leading 1, i.e. what sets the step between adjacent
+# representable values. Sourced from the same encodings _FORMAT_MAX_MAGNITUDE documents.
+# For the block floats this is the per-element magnitude width that utils.py's
+# _bfp_block_aware_compare uses (7 / 3 / 1).
+_FORMAT_MANTISSA_BITS: Dict[DataFormat, int] = {
+    DataFormat.Float32: 23,
+    DataFormat.Tf32: 10,
+    DataFormat.Float16: 10,  # e5m10
+    DataFormat.Float16_b: 7,  # e8m7
+    DataFormat.Bfp8: 7,
+    DataFormat.Bfp8_b: 7,
+    DataFormat.Bfp4_b: 3,
+    DataFormat.Bfp2_b: 1,
+    DataFormat.MxFp8R: 3,  # e4m3
+    DataFormat.Fp8_e4m3: 3,
+    DataFormat.MxFp8P: 2,  # e5m2
+    DataFormat.MxFp4: 1,  # e2m1
+}
+
+# Fall back to bfloat16's precision for anything unlisted: it is the coarsest of the
+# common float formats, so a probe spaced for it is spaced widely enough for the rest.
+_DEFAULT_MANTISSA_BITS = 7
+
+
+def format_ulp(fmt: DataFormat, magnitude: float = 1.0) -> float:
+    """Distance to the next representable value of *fmt* near |*magnitude*|.
+
+    This is what a boundary probe has to be offset by. A fixed epsilon does not work:
+    at a boundary of 1.0 in Float16_b, 1.0 - 1e-6 *is* 1.0, so the "just inside" and
+    "at" probes collapse onto one point and the pair silently tests half of what it
+    reads as testing.
+
+    For the block-float formats the real step is set by the exponent shared across the
+    16-element block, not by the element's own magnitude, so the value returned here is
+    a lower bound for a small element sitting inside a block with a large maximum. That
+    is the safe direction for a probe (too fine merely wastes a value; too coarse walks
+    past the boundary), but it means a block-float probe cannot be assumed distinct.
+    """
+    bits = _FORMAT_MANTISSA_BITS.get(fmt, _DEFAULT_MANTISSA_BITS)
+    magnitude = abs(magnitude)
+    if magnitude == 0.0 or not math.isfinite(magnitude):
+        # No exponent to work from. Use the step at 1.0, which is representable in every
+        # float format and is a visible distance from zero in all of them.
+        return 2.0**-bits
+    return 2.0 ** (math.floor(math.log2(magnitude)) - bits)
+
+
+# Exact singular points of each op, per operand — the pole, the branch cut, the value
+# where the function stops being defined. New per-op data, and deliberately so: the
+# undefined-range table records a guard band wide enough to keep a random draw away from
+# a singularity, which is not the same thing as the singularity's location.
+#
+# Held back on purpose: Lgamma, Digamma and Polygamma all have poles at 0 and the
+# negative integers, but their kernels are polynomial/LUT fits that only claim accuracy
+# well inside a positive domain (see their registry comments). A probe at their boundary
+# tests a value the kernel never promised, which produces a failure that is neither a bug
+# nor fixable. Add them if and when the kernels claim that range.
+# Each singularity carries **which side of it the op is defined on**, because that decides
+# whether a probe one ULP away is a legitimate edge case or a value the kernel never
+# promised anything about:
+#
+#   BOTH  - defined on both sides (1/x for x<0 and x>0); probe both, plus the point.
+#   ABOVE - defined only above (log, sqrt); probe the point and above it.
+#   BELOW - defined only below (the +1 end of asin/atanh).
+#
+# Measured need for this: without it, probing the undefined side failed for 8 ops, and in
+# every case the *golden* was the thing that broke — torch-backed goldens return `inf`
+# where the mathematical answer is `nan` (log(-eps) -> golden inf against a finite
+# hardware result; sqrt(-eps) -> golden inf against hardware 0). Those are golden defects
+# worth fixing, but they are not what a boundary probe is for, and they are Phase 5 work.
+# Pass include_undefined=True to probe the far side anyway once the goldens model it.
+SingularitySide = Enum("SingularitySide", "BOTH ABOVE BELOW")
+_BOTH, _ABOVE, _BELOW = (
+    SingularitySide.BOTH,
+    SingularitySide.ABOVE,
+    SingularitySide.BELOW,
+)
+
+_OP_SINGULARITIES: Dict[
+    MathOperation, Dict[Operand, Tuple[Tuple[float, SingularitySide], ...]]
+] = {
+    # 1/x and everything built on a reciprocal: pole at exactly 0, defined either side.
+    MathOperation.Reciprocal: {Operand.A: ((0.0, _BOTH),)},
+    MathOperation.Rdiv: {Operand.A: ((0.0, _BOTH),)},  # rdiv(x) = 2.0 / x
+    # log family: log(0) = -inf and negative arguments are undefined.
+    MathOperation.Log: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.LogWithBase: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.Log1p: {Operand.A: ((-1.0, _ABOVE),)},  # log1p(x) = log(1 + x)
+    # sqrt / rsqrt: 0 is the edge of the domain, and rsqrt's pole as well.
+    MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
+    # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
+    # side, so -1 is probed upward and +1 downward.
+    MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
+    MathOperation.Erfinv: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
+    MathOperation.Asin: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
+    MathOperation.Acos: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
+    MathOperation.Acosh: {Operand.A: ((1.0, _ABOVE),)},
+    # Binary: the singularity sits on one specific operand.
+    MathOperation.SfpuElwdiv: {Operand.B: ((0.0, _BOTH),)},
+    MathOperation.SfpuXlogy: {Operand.B: ((0.0, _ABOVE),)},
+    MathOperation.SfpuElwpow: {Operand.A: ((0.0, _ABOVE),)},
+    # fmod / remainder divide by B, so B = 0 is their pole. Neither has an entry in
+    # _SFPU_UNDEFINED_RANGES — they are on the positive-only format default — and adding
+    # one there would re-roll their stimuli (see the section header). Recording the
+    # singularity here instead is free, because this table never touches the draw path.
+    MathOperation.SfpuBinaryFmod: {Operand.B: ((0.0, _BOTH),)},
+    MathOperation.SfpuBinaryRemainder: {Operand.B: ((0.0, _BOTH),)},
+}
+
+
+def _dedup_representable(values: List[float], fmt: DataFormat) -> List[float]:
+    """Sort *values* and drop those *fmt* cannot tell apart from the previous one.
+
+    Two probes closer together than half a ULP quantize to the same value on the way to
+    the device, so keeping both spends a stimulus slot on a duplicate. Non-finite values
+    are kept verbatim and sorted to the front/back by Python's own ordering.
+
+    **-0.0 is exempt.** It compares equal to +0.0 and is zero ULPs away from it, so a
+    plain numeric dedup discards it — and for signbit, sign, heaviside and reciprocal the
+    difference between the two zeros is the entire point of the probe (1/+0 = +inf against
+    1/-0 = -inf, and the SFPU returns +inf for both, which is what forced Bfp4_b's tighter
+    reciprocal domain). Signed zeros are therefore keyed by sign, not by value.
+    """
+    finite = sorted(v for v in values if math.isfinite(v))
+    non_finite = [v for v in values if not math.isfinite(v)]
+    kept: List[float] = []
+    seen_zeros = set()
+    for v in finite:
+        if v == 0.0:
+            # math.copysign distinguishes the two zeros where == cannot.
+            sign = math.copysign(1.0, v)
+            if sign in seen_zeros:
+                continue
+            seen_zeros.add(sign)
+            kept.append(v)
+            continue
+        if kept and abs(v - kept[-1]) < 0.5 * format_ulp(
+            fmt, max(abs(v), abs(kept[-1]))
+        ):
+            continue
+        kept.append(v)
+    return kept + non_finite
+
+
+def boundary_probes(
+    op: MathOperation,
+    operand: Operand = Operand.A,
+    fmt: DataFormat = DataFormat.Float16_b,
+    ulps: int = 2,
+    include_undefined: bool = False,
+) -> List[float]:
+    """Values straddling every boundary of *op*'s defined region for *operand*.
+
+    Two sources, in order of preference for the operand asked about:
+
+    * _OP_SINGULARITIES, when it has an entry: the exact singular point *p*, plus one
+      probe on each side the op is actually *defined* on (see SingularitySide).
+      ``include_undefined=True`` adds the far side too.
+    * _SFPU_UNDEFINED_RANGES otherwise: each finite guard-band edge gives the edge plus
+      one probe on its defined side. This is the fallback that makes a *newly* declared
+      hole yield probes with no second table entry, which is the "derive it from data
+      that already exists" property worth keeping.
+
+    Deliberately not both. A guard band sits a fixed 1e-6 off the true boundary, so the
+    two sources disagree about which binade the boundary is in — at a boundary of 1.0 the
+    band edge 0.999999 has half the ULP that 1.0 has, and the pair emits a third probe
+    that is neither the boundary nor a clean step from it. The singularity is strictly
+    better information, so where it exists it wins outright.
+
+    ``eps`` is *ulps* steps of *fmt* at the boundary's own magnitude (see format_ulp),
+    not a fixed constant, so the probes stay distinct in low-precision formats.
+
+    Returns a sorted list with format-indistinguishable duplicates removed. Values are
+    *not* clipped to what *fmt* can represent or to the op's registered domain — that is
+    the caller's job, and for a sweep pairing input with output formats it has to be done
+    against the narrowest format in the pipeline, not against one end of it.
+    """
+    probes: List[float] = []
+
+    singularities = _OP_SINGULARITIES.get(op, {}).get(operand, ())
+    if singularities:
+        for point, side in singularities:
+            eps = ulps * format_ulp(fmt, point)
+            probes.append(point)
+            if include_undefined or side in (
+                SingularitySide.BOTH,
+                SingularitySide.BELOW,
+            ):
+                probes.append(point - eps)
+            if include_undefined or side in (
+                SingularitySide.BOTH,
+                SingularitySide.ABOVE,
+            ):
+                probes.append(point + eps)
+    else:
+        for lo, hi in _SFPU_UNDEFINED_RANGES.get(op, {}).get(operand, ()):
+            if math.isfinite(lo):
+                probes += [lo - ulps * format_ulp(fmt, lo), lo]
+            if math.isfinite(hi):
+                probes += [hi, hi + ulps * format_ulp(fmt, hi)]
+
+    return _dedup_representable(probes, fmt)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared special-value lists, by format class
+# ─────────────────────────────────────────────────────────────────────────────
+
+INT32_MIN = -(2**31)
+INT32_MAX = 2**31 - 1
+UINT32_MAX = 2**32 - 1
+
+# +0.0 and -0.0 are listed separately and both matter: signbit, sign, heaviside,
+# reciprocal and the comparison-to-zero ops all distinguish them, and reciprocal is the
+# op where they disagree most visibly (1/+0 = +inf against 1/-0 = -inf, and the SFPU
+# returns +inf for both — that sign disagreement is what forced Bfp4_b's tighter
+# reciprocal domain).
+FLOAT_SPECIALS: Tuple[float, ...] = (
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    0.0,
+    -0.0,
+)
+
+
+def integer_specials(fmt: DataFormat) -> Tuple[int, ...]:
+    """Extreme and near-extreme values for an integer *fmt*.
+
+    Derived from the format's width rather than hard-coded to 32 bits, so Int16/Int8 get
+    their own extremes instead of int32's clamped down to something meaningless.
+
+    The signed minimum is included and is the one value that cannot be delivered through
+    StimuliSpec: CustomStrategy clamps integers through _get_integer_bounds, which
+    returns ``info.min + 1`` because Dst stores integers as sign-magnitude and the
+    INT_MIN bit pattern is "negative zero" there. Deliver it as a raw override tensor
+    (see _build_shift_edge_case_src) and expect it to fail on hardware — that is a
+    documented HW limitation, not a test gap.
+    """
+    if not fmt.is_integer():
+        raise ValueError(f"{fmt.name} is not an integer format")
+    bits = int(fmt.size) * 8
+    if fmt.name.startswith("UInt"):
+        return (0, 1, 2**bits - 1)
+    signed_min = -(2 ** (bits - 1))
+    return (signed_min, signed_min + 1, -1, 0, 1, 2 ** (bits - 1) - 1)
+
+
+def format_specials(fmt: DataFormat) -> Tuple[float, ...]:
+    """IEEE specials for a float *fmt*, integer extremes for an integer one."""
+    if fmt.is_integer():
+        return integer_specials(fmt)
+    return FLOAT_SPECIALS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Op-specific discrete edges
+#
+# Only points that are not already a domain boundary: piecewise knees, comparison
+# thresholds, exact rounding ties. The registry's random domains are chosen to land
+# *near* several of these; this table is what lands *on* them.
+#
+# Every constant here is a dispatch constant shared with the golden, and the golden is
+# the authority. The attribute that owns each one is named in the comments, because the
+# coupling is invisible otherwise: change UnarySFPUGolden._UNARY_COMP_THRESHOLD and this
+# table starts probing a point that is no longer a threshold, which reads as full
+# coverage while testing nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Ops whose only interesting point is exactly zero, and where +0.0/-0.0 may differ.
+_ZERO_EDGE_OPS = (
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.Sign,  # -1 / 0 / +1, so 0 is the whole middle branch
+    MathOperation.Signbit,  # true for -0.0, false for +0.0
+    MathOperation.Heaviside,  # returns the dispatch value 0.5 at exactly 0
+    # Relu is deliberately absent: its knee is at 0 like the rest, but relu is applied by
+    # the packer (STACC_RELU) and is not a member of SfpuType, so no SFPU probe can reach
+    # it. See _NON_SFPU_UNARY_OPS.
+    MathOperation.Lrelu,  # _lrelu negative_slope = 0.1
+    MathOperation.Prelu,  # _prelu _PRELU_SLOPE = 0.25
+    MathOperation.Elu,
+    MathOperation.Celu,
+    MathOperation.Selu,
+    MathOperation.Xielu,  # _xielu switches alpha_p/alpha_n at 0
+    MathOperation.UnaryMax,  # _unary_max _UNARY_MAX_MIN_VALUE = 0.0
+    MathOperation.UnaryMin,  # _unary_min _UNARY_MAX_MIN_VALUE = 0.0
+)
+
+# Ops comparing against UnarySFPUGolden._UNARY_COMP_THRESHOLD = 0.5.
+_UNARY_COMPARISON_THRESHOLD = 0.5
+_COMPARISON_EDGE_OPS = (
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+)
+
+_OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
+    **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    **{op: (_UNARY_COMPARISON_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
+    # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
+    # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
+    # member — see the note in llk_params.py — so listing both would be one key.)
+    MathOperation.LogicalNot: (0.0, -0.0),
+    # Clamp bounds, fixed to the dispatch constants (_clamp / _hardtanh min_val, max_val).
+    MathOperation.Clamp: (-1.0, 1.0),
+    MathOperation.Hardtanh: (-1.0, 1.0),
+    # Shrinkage lambdas: _softshrink lambd = 0.5, _HARDSHRINK_LAMBDA = 0.5.
+    MathOperation.Softshrink: (-0.5, 0.5),
+    MathOperation.Hardshrink: (-0.5, 0.5),
+    # torch hardsigmoid is piecewise on [-3, 3].
+    MathOperation.Hardsigmoid: (-3.0, 3.0),
+    # hardmish(x) = x * clamp(0.5x + 1, 0, 1): the clamp saturates at x = -2 and x = 0.
+    MathOperation.Hardmish: (-2.0, 0.0),
+    # _threshold t = 5 (below it the output jumps to v = 10).
+    MathOperation.Threshold: (5.0,),
+    # _relu_max threshold = 5, and relu's own knee at 0; _relu_min threshold = 5.
+    MathOperation.ReluMax: (0.0, 5.0),
+    MathOperation.ReluMin: (5.0,),
+    # softplus goes linear at _SOFTPLUS_THRESHOLD = 20 with _SOFTPLUS_BETA = 1.
+    MathOperation.Softplus: (20.0,),
+    # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.
+    MathOperation.Round: (-2.5, -1.5, -0.5, 0.5, 1.5, 2.5),
+    # Integer knees. floor/ceil differ from trunc only on the negative side, and frac
+    # keeps the sign of x, so each list has to span both.
+    MathOperation.Floor: (-2.0, -1.0, 0.0, 1.0, 2.0),
+    MathOperation.Ceil: (-2.0, -1.0, 0.0, 1.0, 2.0),
+    MathOperation.Trunc: (-1.0, 0.0, 1.0),
+    MathOperation.Frac: (-1.5, -1.0, 1.0, 1.5),
+    # Integer scalar comparisons against UnarySFPUGolden._int_maxmin_scalar = 1000.
+    MathOperation.UnaryMaxInt32: (1000,),
+    MathOperation.UnaryMinInt32: (1000,),
+    MathOperation.UnaryMaxUint32: (1000,),
+    MathOperation.UnaryMinUint32: (1000,),
+}
+
+
+def op_edge_points(op: MathOperation) -> Tuple[float, ...]:
+    """Discrete edges of *op* that are not already a domain boundary; () if none."""
+    return _OP_EDGE_POINTS.get(op, ())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Where IEEE specials can actually be injected
+#
+# A cat-B sweep must not be a plain product over formats x dest_acc. Measured on
+# Wormhole (n150) by driving the isinf/isposinf/isneginf/isnan/isfinite predicates over
+# the full 5x5 format matrix x both dest_acc values with no skips — 250 variants, of
+# which 85 fail. The predicates are the right instrument because their output is 0.0/1.0,
+# representable in every format including the block floats, so a failure isolates "the
+# input's specialness did not survive unpack" from "the output cannot express a
+# non-finite result".
+#
+# Two independent breakers came out of it:
+#
+#   1. A Float16 (e5m10) anywhere in the pipeline. As an *input* it never preserves
+#      specials — all 5 predicates fail on all 5 output formats at both dest_acc values,
+#      10/10 cells. As an *output* it fails too, unless a 32-bit input is paired with
+#      dest_acc=Yes: Float32->Float16 at dest_acc=No fails all five, which is the exact
+#      pair Blackhole already guards in _skip_bh_unsupported_float_combo.
+#
+#   2. A 16-bit input with dest_acc=Yes. Float16_b input at dest_acc=Yes fails isinf,
+#      isneginf and isnan while isposinf and isfinite pass — i.e. +inf survives and -inf
+#      and NaN do not. That is precisely the "bf16->fp32 dest unpack does not preserve
+#      -inf/nan, mangling is_neg/is_nan" already recorded on
+#      test_eltwise_unary_sfpu_isinf_isnan, now with the per-predicate detail.
+#
+# A third constraint is not measurable this way and is applied statically: block-float
+# and MX *inputs* cannot carry specials in the first place. Verified host-side —
+# quantize_input_to_unpack_format() destroys NaN for Bfp8_b and Bfp4_b (±inf survives).
+# So a predicate passing on a block-float input is vacuous: golden and hardware agree
+# that there is no NaN, because neither ever saw one. Those rows are excluded rather
+# than trusted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Float formats whose unpack quantization leaves +inf, -inf and NaN intact, so the golden
+# still evaluates the op at the special the test meant to inject.
+_SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
+    {DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b}
+)
+
+
+def specials_safe(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: bool,
+) -> bool:
+    """May FLOAT_SPECIALS be injected on this (input, output, dest_acc) triple?
+
+    ``dest_acc`` is truthy for a 32-bit destination (pass
+    ``dest_acc == DestAccumulation.Yes``; the enum is not imported here to keep this
+    module free of llk_params' test-side types beyond MathOperation).
+
+    Returns False for anything not positively established, so a new format defaults to
+    "do not inject" rather than to a wall of failures with one root cause. Every rule
+    below reproduces a measured verdict; see the section comment for the measurement.
+    """
+    if input_format not in _SPECIALS_CARRYING_INPUTS:
+        return False  # block-float / MX / integer input cannot carry them at all
+
+    if input_format == DataFormat.Float16:
+        return False  # breaker 1: never preserves specials, any output, any dest_acc
+
+    if output_format == DataFormat.Float16:
+        # breaker 1 on the output side: only a 32-bit input into a 32-bit dest survives.
+        if not (input_format.is_32_bit() and dest_acc):
+            return False
+
+    if not input_format.is_32_bit() and dest_acc:
+        return False  # breaker 2: 16-bit -> fp32 dest unpack loses -inf and NaN
+
+    if output_format.is_block_float() or output_format.is_mx_format():
+        # Not a measured failure — the predicates pass here because their result is 0/1.
+        # Excluded on the golden's behalf: an inf/NaN result inside a block whose shared
+        # exponent is finite is not a value the format can express, so neither the
+        # lattice nor the tolerance criterion in passed_test means anything for it.
+        return False
+
+    return True
+
+
+def specials_safe_formats(
+    formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
+    dest_acc: bool,
+) -> List["InputOutputFormat"]:  # noqa: F821
+    """Filter an input_output_formats() list down to the triples that carry specials."""
+    return [
+        f for f in formats if specials_safe(f.input_format, f.output_format, dest_acc)
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# edge_spec — the one builder the per-family edge tests call
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def clip_to_format(values: List[float], fmt: DataFormat) -> List[float]:
+    """Drop finite values *fmt* cannot represent; keep non-finite ones verbatim.
+
+    Non-finite values are the *point* of a cat-B probe, so they are never clipped — the
+    decision about whether they belong at all is specials_safe()'s, made before this.
+    """
+    limit = _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE)
+    return [v for v in values if not math.isfinite(v) or abs(v) <= limit]
+
+
+def edge_values(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    operand: Operand = Operand.A,
+    specials: bool = False,
+    include_undefined: bool = False,
+) -> List[float]:
+    """Every value worth hitting on purpose for (*op*, *operand*) in this pipeline.
+
+    Three sources, matching the audit's edge categories:
+      * cat A — boundary_probes(): the op's singularities, straddled.
+      * cat D — op_edge_points(): knees, thresholds, exact rounding ties.
+      * cat B — format_specials(), only when *specials* is True. The caller decides via
+        specials_safe(input_format, output_format, dest_acc); it is off by default
+        because injecting them on the wrong triple is a wall of failures with one root
+        cause (see the section above).
+
+    Clipped against the *narrowest* format in the pipeline, not the input format. This is
+    the part the plan's original one-format signature got wrong: a caller that passes a
+    spec to a driver bypasses the driver's own for_op_pipeline() resolution entirely
+    (eltwise_unary_sfpu only resolves when spec_A is None), so a probe near a format
+    ceiling would otherwise reach a Float16 or MxFp4 output unclipped and overflow.
+    """
+    fmt = narrowest_range_format(input_format, output_format)
+    vals = list(boundary_probes(op, operand, fmt, include_undefined=include_undefined))
+    if operand == Operand.A:
+        # _OP_EDGE_POINTS describes the op's own input, i.e. operand A. A binary op's
+        # B-side knees, where they exist, are domain boundaries and come from cat A.
+        vals += list(op_edge_points(op))
+    if specials:
+        vals += list(format_specials(fmt))
+    return _dedup_representable(clip_to_format(vals, fmt), fmt)
+
+
+def edge_spec(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    operand: Operand = Operand.A,
+    specials: bool = False,
+    include_undefined: bool = False,
+    **kwargs,
+) -> Optional[StimuliSpec]:
+    """edge_values() as a StimuliSpec, or None if *op* has no edge worth probing.
+
+    Returns None rather than an empty spec so a caller can fall back to the op's random
+    domain: 47 of the 97 unary SFPU ops are smooth everywhere with no knee and no pole,
+    and for those an edge sweep has nothing to add beyond cat B.
+
+    ``custom`` places the values at the head of every face and zero-fills the remainder,
+    which is what we want — a face is far larger than these lists, and 0.0 is itself a
+    useful probe. Note it is per-face only (generate_full_tensor raises), so the values
+    repeat in every face; ``custom_faces`` is available when faces must differ.
+
+    Integer formats: format_specials() returns the integer extremes, but INT_MIN cannot
+    be delivered through any spec — CustomStrategy clamps through _get_integer_bounds,
+    which returns info.min + 1. Deliver integer extremes as a raw override tensor
+    instead (see _build_shift_edge_case_src); this raises rather than silently clamping.
+    """
+    vals = edge_values(
+        op, input_format, output_format, operand, specials, include_undefined
+    )
+    if not vals:
+        return None
+    if input_format.is_integer() and specials:
+        raise ValueError(
+            f"edge_spec(specials=True) cannot deliver integer extremes for "
+            f"{input_format.name}: StimuliSpec.custom clamps INT_MIN to INT_MIN + 1. "
+            f"Use a raw src_A_override tensor instead."
+        )
+    return StimuliSpec.custom(values=vals, seed=0, **kwargs)
+
+
+# Representative counterpart values for the operand that has *no* edge of its own. A
+# divisor-zero probe only means something when paired against a positive, a negative and a
+# zero numerator — three distinct cases — so the plain operand contributes a small spread
+# rather than one arbitrary value.
+_EDGE_COUNTERPARTS: Tuple[float, ...] = (-2.0, -1.0, 0.0, 1.0, 2.0)
+
+
+def _in_spec_domain(spec: Optional[StimuliSpec], value: float) -> bool:
+    """Is *value* inside what *spec* is allowed to draw? True when *spec* is None."""
+    if spec is None:
+        return True
+    if spec.intervals:
+        return any(lo <= value <= hi for lo, hi in spec.intervals)
+    if spec.low is None or spec.high is None:
+        return True
+    return spec.low <= value <= spec.high
+
+
+def edge_counterparts(
+    op: MathOperation,
+    fmt: DataFormat,
+    operand: Operand = Operand.A,
+) -> List[float]:
+    """In-domain representative values for an operand with no edge of its own.
+
+    Clipped to the op's registered domain for that operand where one exists, so pairing
+    pow's base-zero probe against an exponent of -2 (outside its registered [0, 3]) cannot
+    happen. Ops with no registry entry at all keep the full counterpart spread.
+    """
+    try:
+        specs = for_op(op, fmt)
+    except KeyError:
+        return list(_EDGE_COUNTERPARTS)
+    spec = specs.spec_A if operand == Operand.A else specs.spec_B
+    return [v for v in _EDGE_COUNTERPARTS if _in_spec_domain(spec, v)]
+
+
+def edge_pair_values(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    specials: bool = False,
+    include_undefined: bool = False,
+) -> List[Tuple[float, float]]:
+    """Cartesian product of both operands' edge values, for a binary op.
+
+    The product matters more than element-wise pairing here: a divisor of 0 against a
+    positive, a negative and a zero numerator are three different cases, and element-wise
+    pairing would test one of them. Whichever operand has no edge of its own contributes
+    edge_counterparts() instead, so the other operand's edge is still crossed with a
+    spread.
+
+    Returns [] when neither operand has anything to probe, which is the caller's cue to
+    skip rather than drive a meaningless variant.
+    """
+    a = edge_values(
+        op, input_format, output_format, Operand.A, specials, include_undefined
+    )
+    b = edge_values(
+        op, input_format, output_format, Operand.B, specials, include_undefined
+    )
+    if not a and not b:
+        return []
+    if not a:
+        a = edge_counterparts(op, input_format, Operand.A)
+    if not b:
+        b = edge_counterparts(op, input_format, Operand.B)
+    if not a or not b:
+        return []
+    return [(x, y) for x in a for y in b]
