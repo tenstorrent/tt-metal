@@ -42,6 +42,7 @@ class GLM52Adapter(MLAPrefillAdapter):
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
     l1_small_size = 512
     routing_use_l1_small_for_semaphores = True
+    supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -75,6 +76,9 @@ class GLM52Adapter(MLAPrefillAdapter):
             init_mla_kv_cache,
         )
 
+        # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
+        # tp_axis as the write op and the migration table.
+        kv_tp_axis = params.tp_axis if params.tp_shard_kv else None
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=hf_config,
@@ -84,6 +88,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
+            tp_axis=kv_tp_axis,
         )
         num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
         index_cache = init_kvpe_cache(
@@ -95,6 +100,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=num_index_layers,
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
+            tp_axis=kv_tp_axis,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 

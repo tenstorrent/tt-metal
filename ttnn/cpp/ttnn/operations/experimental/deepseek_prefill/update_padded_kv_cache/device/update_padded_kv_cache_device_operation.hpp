@@ -35,7 +35,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         uint32_t kv_actual_global;  // scalar path only
         uint32_t layer_idx;
         uint32_t num_layers;
-        uint32_t cluster_axis;
+        uint32_t cluster_axis;  // the SP (sequence-parallel) axis the cache is sharded on
+        // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
+        // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
+        std::optional<uint32_t> tp_axis;
     };
 
     struct tensor_args_t {
@@ -117,6 +120,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis);
+    uint32_t cluster_axis,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::prim

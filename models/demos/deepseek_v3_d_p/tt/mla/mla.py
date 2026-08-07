@@ -265,6 +265,7 @@ class ttMLA:
         kv_only: bool = False,
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        tp_shard_kv: bool = False,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -279,6 +280,9 @@ class ttMLA:
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.is_chunked = is_chunked
+        # KV dedup: KVPE (and indexer key) caches sharded across SP*TP. Writes pass tp_axis, reads add a
+        # TP-inner all-gather leg before the SP gather. Sparse (DSA) path only; the dense forward asserts.
+        self.tp_shard_kv = tp_shard_kv
         self.slot_num = slot_num
         self.layer_num = layer_num
         self.sparse_kv_cache_format = MlaKvCacheFormat(sparse_kv_cache_format or MlaKvCacheFormat.BF16_RM)
@@ -486,6 +490,7 @@ class ttMLA:
                     seq_len=seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
+                    tp_shard_kv=self.tp_shard_kv,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -768,6 +773,8 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
+        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
+        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -1034,7 +1041,14 @@ class ttMLA:
         cache_layer_idx: int,
         kv_actual_isl: int,
         metadata: Optional[ttnn.Tensor] = None,
+        tp_axis: Optional[int] = None,
     ) -> None:
+        # TP-sharded writes need the host kv_actual_global (the reader derives its 1/tp window from it),
+        # which the metadata path cannot supply. The op re-checks; assert here for a readable failure.
+        assert not (metadata is not None and tp_axis is not None), (
+            "tp_shard_kv is not supported on the metadata (traced) write path -- run with PREFILL_USE_TRACE=0, "
+            "or with PREFILL_KV_ONLY_LAST_LAYER=0 so the kv-only layer does not take the metadata path."
+        )
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
         if metadata is not None:
@@ -1046,6 +1060,7 @@ class ttMLA:
                 layer_idx=cache_layer_idx,
                 num_layers=self.layer_num,
                 cluster_axis=self.sp_axis,
+                tp_axis=tp_axis,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -1056,6 +1071,7 @@ class ttMLA:
                 num_layers=self.layer_num,
                 kv_actual_global=kv_actual_isl,
                 cluster_axis=self.sp_axis,
+                tp_axis=tp_axis,
             )
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1303,6 +1319,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
@@ -1379,6 +1396,7 @@ class ttMLA:
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
             metadata=metadata,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -1409,6 +1427,13 @@ class ttMLA:
             topology=topology,
             cluster_axis=cluster_axis,
         )
+
+    @property
+    def tp_shard_kv_axis(self) -> Optional[int]:
+        """The tp_axis to hand the cache-write ops, or None when the cache is TP-replicated. Every
+        update_padded_kv_cache call site takes it from here so the axis and the enabling flag cannot drift
+        apart (passing tp_axis with tp_shard_kv off would write a 1/tp window into a replicated cache)."""
+        return self.tp_axis if self.tp_shard_kv else None
 
     @property
     def _needs_head_to_seq_reshard(self) -> bool:
@@ -1497,6 +1522,8 @@ class ttMLA:
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
+            # KV dedup: _gather_kvpe_prefix returns an sp*tp-striped buffer, so decode chunk_local/tp.
+            block_cyclic_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
@@ -1554,12 +1581,18 @@ class ttMLA:
         is NO read-back dtype/layout conversion."""
 
         storage = ttnn.to_memory_config(kvpe_cache.storage, ttnn.DRAM_MEMORY_CONFIG)
+
+        # KV dedup: each device holds only 1/tp of its SP row's slab, so the slice below and the gather
+        # below that both work on the narrower per-device width.
+        tp = self.tp_factor if self.tp_shard_kv else 1
+
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
         seq_hi = storage.shape[2]
         if populated_global is not None and chunk_local is not None:
             chunk_size_global = chunk_local * self.sp_factor
-            num_slabs = -(-populated_global // chunk_size_global)
-            seq_hi = min(num_slabs * chunk_local, seq_hi)
+            num_slabs = -(-populated_global // chunk_size_global)  # ceil-div
+            cl_dev = chunk_local // tp  # per-DEVICE slab width (== chunk_local when not TP-sharded)
+            seq_hi = min(num_slabs * cl_dev, seq_hi)
 
         if storage.shape[0] > 1 or seq_hi != storage.shape[2]:
             selected = ttnn.slice(
@@ -1569,7 +1602,13 @@ class ttMLA:
             )
             ttnn.deallocate(storage)
             storage = selected
-        gathered = self._all_gather(storage, dim=2, cluster_axis=self.sp_axis)
+        # TP-inner gather (rebuild each SP row's slab from its tp sub-shards) BEFORE SP-outer: that order
+        # yields the linear chip-major buffer sparse_sdpa decodes with sp*tp stripes, for any slab count.
+        if self.tp_shard_kv and self.tp_factor > 1:
+            tp_full = self._all_gather(storage, dim=2, cluster_axis=self.tp_axis)  # → [1,1,seq_hi*tp,576] per SP row
+            ttnn.deallocate(storage)
+            storage = tp_full
+        gathered = self._all_gather(storage, dim=2, cluster_axis=self.sp_axis)  # → [1,1,chunk_global,576] block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(storage)
 

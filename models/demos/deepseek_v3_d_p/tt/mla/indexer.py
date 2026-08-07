@@ -234,6 +234,7 @@ class TtIndexer:
         seq_len: int = 1024,
         slot_num: int = 1,
         layer_num: int = 1,
+        tp_shard_kv: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -252,6 +253,9 @@ class TtIndexer:
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
         self.tp_factor = mesh_shape[tp_axis]
+        # KV dedup: index key cache sharded across SP*TP. Adds a TP-inner all-gather leg in
+        # _gather_index_kbuf and passes tp_axis to the write.
+        self.tp_shard_kv = tp_shard_kv
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
@@ -322,6 +326,12 @@ class TtIndexer:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+
+    @property
+    def tp_shard_kv_axis(self):
+        """The tp_axis to hand the index-cache write, or None when that cache is TP-replicated. Mirrors
+        ttMLA.tp_shard_kv_axis so the axis and its enabling flag cannot drift apart."""
+        return self.tp_axis if self.tp_shard_kv else None
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -488,6 +498,12 @@ class TtIndexer:
             )
             ttnn.deallocate(cache_i)
             cache_i = sel
+        # KV dedup: each device holds only 1/tp of its SP row's slab, so gather TP-inner BEFORE SP-outer.
+        # That order yields the linear chip-major buffer indexer_score_dsa decodes with sp*tp stripes.
+        if self.tp_shard_kv and self.tp_factor > 1:
+            tp_full = self._tp_all_gather(cache_i, dim=2)  # [1,1,T/sp,D_idx] per SP row
+            ttnn.deallocate(cache_i)
+            cache_i = tp_full
         full = self._sp_all_gather(cache_i, dim=2)  # [1,1,T,D_idx] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
@@ -535,6 +551,7 @@ class TtIndexer:
             num_layers=self._index_cache_layers,
             kv_actual_global=start_pos,
             cluster_axis=self.sp_axis,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(k)
 
@@ -684,6 +701,7 @@ class TtIndexer:
             cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+            block_cyclic_tp_sharded=self.tp_shard_kv,  # KV dedup: key remap decodes sp*tp stripes of seq_len/tp
             kv_len=end_pos,
         )
         ttnn.deallocate(k_full)
