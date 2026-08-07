@@ -644,6 +644,15 @@ void bind_sdpa(nb::module_& mod) {
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            tokens_per_frame (int, optional): Enables frame-block-sparse attention. Tokens
+                per frame, tile-aligned. Set together with num_frames_padded and sparse_frame_mask.
+                Defaults to None (dense).
+            num_frames_padded (int, optional): Frame count padded to a multiple of the ring size; the
+                trailing padded frames carry no real tokens. Defaults to None.
+            sparse_frame_mask (List[int], optional): Bit-packed [num_frames_padded x num_frames_padded]
+                allow table, row-major into uint32 words (bit q*num_frames_padded+k set iff query frame
+                q attends key frame k). Disallowed frame pairs are skipped by the reader and compute.
+                Empty (default) means dense.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
