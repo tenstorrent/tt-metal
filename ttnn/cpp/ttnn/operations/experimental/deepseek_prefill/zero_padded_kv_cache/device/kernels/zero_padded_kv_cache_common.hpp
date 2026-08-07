@@ -12,10 +12,31 @@
 // Common runtime arg layout (set in create_descriptor; indices 3 and 9 patched per call):
 //   0 my_sp_coord  1 sp_factor  2 chunk_local(tokens)  3 valid_global  4 pad_align
 //   5 layer_idx    6 num_layers 7 Wt                   8 cache_CH_pages 9 slot_idx
+//   10 slot_idx tensor addr    11 valid_global tensor addr  (metadata path; 0 on the scalar path)
+//   12 num_slots               13 global_capacity(tokens)   (structural bounds, see below)
 struct ZeroPadTokenRange {
     uint32_t count;
     uint32_t base_local_token;
 };
+
+// Bound the two per-call values against the structural limits the host put in common args 12/13.
+//
+// On the SCALAR path the host TT_FATALs (`slot_idx < num_slots`, `valid_global <= global_capacity`)
+// already guarantee both are in range, so these clamps are no-ops and the derived page ids are
+// byte-identical. On the METADATA path the values are NoC-read from 1-element DRAM tensors that the
+// host deliberately does not validate (they must stay off the dispatch path for trace safety), so a
+// stale or garbage value would otherwise produce unbounded DRAM page ids -- most dangerously in the
+// writer's multi-page async_write_zeros sweep. ASSERT() is compiled out in release builds and is
+// therefore NOT a bound; these clamps are unconditional.
+inline uint32_t zero_pad_clamp_slot(uint32_t slot) {
+    const uint32_t num_slots = get_common_arg_val<uint32_t>(12);
+    return slot < num_slots ? slot : (num_slots != 0 ? num_slots - 1 : 0);
+}
+
+inline uint32_t zero_pad_clamp_valid_global(uint32_t valid_global) {
+    const uint32_t global_capacity = get_common_arg_val<uint32_t>(13);
+    return valid_global < global_capacity ? valid_global : global_capacity;
+}
 
 // Validation guarantees that [valid_global, ceil_pad(valid_global)) remains in one block-cyclic slab.
 // Intersect that window with this chip's contiguous slice of the slab, then map the intersection to the
@@ -31,8 +52,12 @@ inline ZeroPadTokenRange zero_pad_compute_token_range(uint32_t valid_global) {
         return {0, 0};
     }
 
+    // chunk_global is sp*chunk_local and is 0 whenever either factor is 0 -- host validation
+    // (`% sp_factor == 0`, `% pad_align == 0`, `chunk_local % TILE_HEIGHT == 0`) is entirely satisfied
+    // by 0, so guard the division instead of trusting it. slab==0 then falls through to the
+    // begin >= end test below and this chip does no work.
     const uint32_t chunk_global = sp * chunk_local;
-    const uint32_t slab = valid_global / chunk_global;
+    const uint32_t slab = chunk_global == 0 ? 0 : valid_global / chunk_global;
     const uint32_t chip_begin = slab * chunk_global + my * chunk_local;
     const uint32_t chip_end = chip_begin + chunk_local;
     const uint32_t begin = valid_global > chip_begin ? valid_global : chip_begin;
@@ -63,6 +88,10 @@ inline ZeroPadChipWork zero_pad_compute_chip_work(uint32_t slot, uint32_t v) {
     const uint32_t Wt = get_common_arg_val<uint32_t>(7);
     const uint32_t cache_CHtWt = get_common_arg_val<uint32_t>(8);
 
+    // Bound both per-call values BEFORE they reach any page arithmetic (no-op on the scalar path).
+    slot = zero_pad_clamp_slot(slot);
+    v = zero_pad_clamp_valid_global(v);
+
     ZeroPadChipWork w{0, 0, 0, 0, Wt, (slot * num_layers + layer) * cache_CHtWt};
     const ZeroPadTokenRange range = zero_pad_compute_token_range(v);
     if (range.count == 0) {
@@ -74,6 +103,20 @@ inline ZeroPadChipWork zero_pad_compute_chip_work(uint32_t slot, uint32_t v) {
     w.count = (range.base_local_token + range.count) / tile_height - range.base_local_token / tile_height;
     w.row_start = range.base_local_token % tile_height;
     w.first_partial = w.row_start != 0 ? 1u : 0u;
+
+    // Last line of defence on the page range: this (slot,layer) batch slot owns exactly cache_CHtWt
+    // pages, i.e. cache_CHtWt/Wt local seq-tiles. In-range inputs already satisfy this (no-op), but the
+    // reader dereferences base_local_tile UNCONDITIONALLY (even when count==0) and the writer sweeps
+    // [base, base+count) pages, so cap both rather than trust the derivation.
+    const uint32_t local_tiles = Wt != 0 ? cache_CHtWt / Wt : 0;
+    if (w.base_local_tile >= local_tiles) {
+        w.base_local_tile = 0;
+        w.count = 0;
+        w.first_partial = 0;
+        w.row_start = 0;
+    } else if (w.count > local_tiles - w.base_local_tile) {
+        w.count = local_tiles - w.base_local_tile;
+    }
     return w;
 }
 
@@ -97,8 +140,20 @@ inline ZeroPadRowMajorChipWork zero_pad_compute_row_major_chip_work() {
     const uint32_t layer = get_common_arg_val<uint32_t>(5);
     const uint32_t num_layers = get_common_arg_val<uint32_t>(6);
     const uint32_t cache_CH_pages = get_common_arg_val<uint32_t>(8);
-    const uint32_t slot = get_common_arg_val<uint32_t>(9);
+    // Same unconditional bounds as the TILE path. ROW_MAJOR is scalar-only today (the host TT_FATALs
+    // apply, so this is a no-op), but the writer streams a contiguous page sweep, so the clamp stays.
+    const uint32_t slot = zero_pad_clamp_slot(get_common_arg_val<uint32_t>(9));
 
-    const ZeroPadTokenRange range = zero_pad_compute_token_range(get_common_arg_val<uint32_t>(3));
-    return {range.count, range.base_local_token, (slot * num_layers + layer) * cache_CH_pages};
+    const ZeroPadTokenRange range =
+        zero_pad_compute_token_range(zero_pad_clamp_valid_global(get_common_arg_val<uint32_t>(3)));
+    // A row is a page here, so the batch slot owns cache_CH_pages rows: cap the sweep to them.
+    uint32_t base_local_row = range.base_local_token;
+    uint32_t count = range.count;
+    if (base_local_row >= cache_CH_pages) {
+        base_local_row = 0;
+        count = 0;
+    } else if (count > cache_CH_pages - base_local_row) {
+        count = cache_CH_pages - base_local_row;
+    }
+    return {count, base_local_row, (slot * num_layers + layer) * cache_CH_pages};
 }
