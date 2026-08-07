@@ -141,6 +141,7 @@ void kernel_main() {
     // 3) silu'(U)
     // 4) dL/dlinear1
     init_sfpu(cb_linear1, cb_dL_dlinear1);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_linear1, cb_gate, cb_dL_dlinear1);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

@@ -503,6 +503,7 @@ void kernel_main() {
 #endif
 
     init_sfpu(cb_input_idx, cb_output_idx);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_output_idx);
     reconfig_data_format(cb_scaler_idx, cb_sum_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx);

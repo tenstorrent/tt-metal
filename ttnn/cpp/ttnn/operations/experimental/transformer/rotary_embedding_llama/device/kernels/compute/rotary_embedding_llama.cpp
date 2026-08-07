@@ -59,6 +59,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
     // Start from the state at the end of each iteration so same-format reconfigurations compile out.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cos_interm_dfb, sin_interm_dfb, out_dfb);
 
     // Get the trans_mat

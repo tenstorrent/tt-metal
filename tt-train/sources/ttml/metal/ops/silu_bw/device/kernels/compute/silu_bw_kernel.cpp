@@ -138,6 +138,7 @@ inline void compute_times_grad() {
 
 void kernel_main() {
     init_sfpu(cb_input_idx, cb_dL_da_idx);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_input_idx, cb_dL_out_idx, cb_dL_da_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {
