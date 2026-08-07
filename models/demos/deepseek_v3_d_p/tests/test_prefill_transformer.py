@@ -13,9 +13,9 @@ Reference sources are checked in priority order:
 3. HF model computation (creates HF DeepseekV3Model and runs forward on the fly)
 
 Parametrized over:
-- use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
-- (input_source, pcc_validation): coupled — only longbook_qa_eng has a golden, so only it pairs
-  with pcc_validation=True
+- (input_source, pcc_validation, use_pretrained): one coupled axis. A golden is a reference only
+  for the pretrained weights it was captured from, so PCC runs pair a single source per variant
+  with pretrained weights; everything else is smoke-only.
 - n_routed_experts / gate_fallback_mode: MoE configurations
 """
 
@@ -306,7 +306,11 @@ def run_model(
             with open(cached_path) as f:
                 prompt_text = json.load(f)["prompt"]
         else:
-            raise ValueError(f"Unknown input_source: {input_source}")
+            raise ValueError(
+                f"No tokens for input_source={input_source}: it has no prompt file, and "
+                f"variant.test_prefill_trace_default ({getattr(variant, 'test_prefill_trace_default', None)}) "
+                f"did not resolve"
+            )
         token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         profiler.end("tokenization")
         logger.info(
@@ -826,16 +830,27 @@ def run_model(
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source, pcc_validation",
+    "input_source, pcc_validation, use_pretrained",
     [
-        ("longbook_qa_eng", True),
-        ("longbook_qa_eng", False),
-        ("json_prompts", False),
-        ("random", False),
+        # The golden was captured from the pretrained model
+        ("longbook_qa_eng", True, True),
+        ("longbook_qa_eng", False, True),
+        ("longbook_qa_eng", False, False),
+        ("json_prompts", False, True),
+        ("json_prompts", False, False),
+        ("random", False, True),
+        ("random", False, False),
     ],
-    ids=["pcc-longbook_qa_eng", "smoke-longbook_qa_eng", "smoke-json_prompts", "smoke-random"],
+    ids=[
+        "pcc-longbook_qa_eng-pretrained",
+        "smoke-longbook_qa_eng-pretrained",
+        "smoke-longbook_qa_eng-random",
+        "smoke-json_prompts-pretrained",
+        "smoke-json_prompts-random",
+        "smoke-random-pretrained",
+        "smoke-random-random",
+    ],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
@@ -960,16 +975,22 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source, pcc_validation",
+    "input_source, pcc_validation, use_pretrained",
     [
-        ("longbook_qa_eng", True),
-        ("longbook_qa_eng", False),
-        ("json_prompts", False),
-        ("random", False),
+        ("code_debug", True, True),
+        ("json_prompts", False, True),
+        ("json_prompts", False, False),
+        ("random", False, True),
+        ("random", False, False),
     ],
-    ids=["pcc-longbook_qa_eng", "smoke-longbook_qa_eng", "smoke-json_prompts", "smoke-random"],
+    ids=[
+        "pcc-code_debug-pretrained",
+        "smoke-json_prompts-pretrained",
+        "smoke-json_prompts-random",
+        "smoke-random-pretrained",
+        "smoke-random-random",
+    ],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
@@ -1071,8 +1092,14 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
-@pytest.mark.parametrize("input_source", ["json_prompts"])
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize(
+    "input_source, pcc_validation",
+    [
+        ("code_debug", True),
+        ("json_prompts", False),
+    ],
+    ids=["pcc-code_debug", "smoke-json_prompts"],
+)
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
