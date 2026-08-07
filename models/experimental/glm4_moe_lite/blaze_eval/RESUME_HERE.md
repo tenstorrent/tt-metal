@@ -1273,3 +1273,33 @@ than simply un-sharing it.
 Next: confirm by giving one layer its own semaphore dict (single-layer run), or by asserting the
 semaphore's value at stage entry. `BLAZE_DEBUG_KERNELS=1` alone produced nothing useful — the
 device-side prints need DPRINT cores configured, so triage is the tool, not that flag.
+
+### Semaphore hypothesis: TESTED AND WRONG. The suspect is Mcast-under-trace.
+
+Gave the Q stage its own semaphore dict (`GLM4_MOE_LITE_BLAZE_Q_STAGE_OWN_SEM=1`, wired in
+`_build_q_stage_program`). **It still hangs**, in the same place. So sharing
+`_PROGRAM_SEMAPHORES` across 47 layers is not the cause, and that line of investigation is closed.
+
+Second triage, and the scale is the new information:
+
+| stalled | where |
+|---:|---|
+| **256 cores** | `DRAMStreamingMatmul::Op<glm_q_stage__norm_q_b__q_b_proj>`, `cb_wait_front`/`llk_wait_tiles` at op.hpp:329, plus 390/413/246 |
+| 64 cores | `GatherRowToDRAM::Op<glm_q_stage__output>` |
+
+256 = 8 bank workers x 32 chips — i.e. **every worker on every device**, uniformly. So this is
+structural in the stage, not a per-device or fabric problem.
+
+**The discriminating fact: the mcast-free `qkv_a` path runs fine under trace (it produced the
+36.8 ms/token number); the Q stage differs from it by having an `Mcast`.** And the Q stage runs
+clean *standalone without trace* in 13 s. That points at **Mcast inside a traced program**: the
+mcast rendezvous is a semaphore handshake, and trace capture/replay does not reproduce it, so
+`q_b_proj` waits on tiles the sender never pushes.
+
+**Next test, cheap and decisive:** run the Q stage with `--enable-trace` **omitted**. If it
+completes, Mcast-under-trace is confirmed and the fix is either to keep mcast out of traced
+programs or to make the handshake trace-safe. If it still hangs, the stage is broken in the
+multi-layer model context for some other reason and the next lever is a single-layer run.
+
+Recovery reminder: after every one of these hangs, TWO `tt-smi -r` cycles were needed; control
+then passes 6/6 in ~11 s.
