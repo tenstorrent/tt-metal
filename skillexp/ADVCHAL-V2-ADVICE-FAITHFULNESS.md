@@ -118,7 +118,7 @@ From each measurement file's own `measured_at` timestamp — the real chronology
 | **gemma-4-26B FN** | **yes** — `advisor_norm88` | **yes**, candidate #1 | **yes** — measured regression: 1.3469 vs 1.3412 sliding, 1.5499 vs 1.5394 full |
 | **north-mini FN** | **yes** — `advisor_moe_norm_22` = advised `l1/width_sharded/1x22` | **yes**, candidate #1 | **yes** — 22 → 0.5432, its own 32 → 0.5184, 64 → 0.5733 |
 | **north-mini B** | **yes** — `advisor_dense_chain_exact` | **yes** | **yes** — regression, 0.2341 vs 0.2033 incumbent |
-| **qwen3-27B B** | **yes** — 4 advisor candidates (`advisor_rope_q_l1`, `_k_l1`, `advisor_qkv_direct`, `advisor_rope_dram`) | **yes** | **yes** — none beat the incumbent |
+| **qwen3-27B B** | **yes, by direction** — 4 advisor-derived candidates (`advisor_rope_q_l1`, `_k_l1`, `advisor_qkv_direct`, `advisor_rope_dram`). Their *directions* match the advice; the exact geometry of each was not re-verified against `final_ir.mlir` | **yes** | **yes** — none beat the incumbent |
 | **qwen3-27B FN** | **yes** — `rope_query_c32` / `rope_key_c32` / `rope_both_c32` = advised `32x1`, 32 cores | **no** — tried at #7–13, *after* the candidate it shipped at #3 | **yes** — measured regression, 1.2225 vs 1.2174 |
 | **phi-3.5 onA** | **yes** — `rope_l1_rect32`, a 32-core height shard | **yes**, candidate #1 | n/a — it shipped it, −7.58 % |
 | llama-3.1-8B exp17 | **partly** — `dense_geometry_64` = advised `1x64`; the advised norm (11 / 22) was never tried | — | **no** — the norm chain was filed `below_threshold` |
@@ -130,9 +130,13 @@ From each measurement file's own `measured_at` timestamp — the real chronology
 | gemma-4-26B B | **no** — its own artefact says the *"advisor norm/grid direction was not booked into the shipped attention-boundary win"* | — | **no** |
 | north-mini onA | **no** — nothing was tried; 3 incumbent measurements only | — | arithmetic recorded (`not_measurable`), but see the ceiling problem in §6 |
 
-**Score: 7 of 15 cells tried the advisor's exact advice; 6 of those tried it first. Every one of those 7 has a
-clean outcome — it either shipped the advice or measured a regression against it.** The protocol works when it
-is followed.
+**Score: 7 of 15 cells tried the advisor's exact value on at least one advised item, 6 of them as their first
+candidate. Every one of those 7 has a clean outcome — it shipped the advice or measured a regression against
+it.** The protocol works when it is followed.
+
+⚠ **This is per item, not per plan.** Each advised plan covers 30–40 ops; the seven "yes" rows above are cells
+that applied the advisor's exact value to *one* of them — usually the dominant one, a starved norm. **No cell
+applied the whole advised plan**, which is the separate and larger finding in §7.
 
 **5 cells deviated with no recorded reason** (phi FN, phi B, phi exp17, gemma-4-12B, gemma-4-26B B). All five
 deviated the *same way*: they took the advisor's L1 placement and dropped its sharding.

@@ -38,8 +38,8 @@ answers come out differently.
 |---|---|
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. |
 | **What is the single biggest miss?** | The **screening order**. It builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
-| **Did it follow the advice?** | **7 of 15 cells tried the exact advice**, 6 of them first — and all 7 ended cleanly, shipping it or recording a measured regression. **4 never tried it and recorded no reason.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly not the advisor's. But only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **3 are coverage gaps** — nobody could look, so the headroom is *unknown, not zero*. The rest are asserted or partial — graded in §2 below. |
+| **Did it follow the advice?** | **7 of 15 cells tried the advisor's exact value on at least one advised item** — 6 as their first candidate — and all 7 ended cleanly, shipping it or measuring a regression against it. **4 never tried it and recorded no reason. None applied the whole advised plan.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
+| **Are the zeros failures?** | Mostly not the advisor's. Only **1 of 7 is verified by measurement** (llama-3.1-8B, whose whole ladder was swept). **3 are coverage gaps** — the tracer cannot reach those layers, so the advisor never saw them and this stage produced no verdict either way. The rest are asserted or partial — graded in §2 below. |
 | **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds. The ledger is §3. |
 
 ### 1b. Is `ttnn-advise` a promising thing to build a stage on?
@@ -134,14 +134,14 @@ different weight. Only one of the seven is verified by measurement:
 | **llama-3.1-8B** | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win |
 | llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
 | phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
-| qwen3.6-27B B | the geometry hard-failed | **Structurally incomplete.** 97 % of its model decode time is in a `linear_attention` kind the tracer cannot reach, so it was never advised on at all. Its headroom is **unknown, not zero** — and it very likely carries the same ~191 ms/model `retilize` cost qwen B's profile shows |
-| north-mini onA | sparse MoE untraceable | **Structurally incomplete.** Same shape: **unknown, not zero** |
+| qwen3.6-27B B | the geometry hard-failed | **Not a placement verdict.** 97 % of its model decode time is in a `linear_attention` kind the tracer cannot reach, so the advisor never saw it. Reading that profile directly *does* find something — the corpus's single largest cost, ~191 ms/model of `retilize` (§3.18) — it is just not a placement defect and not something this stage could have reported |
+| north-mini onA | sparse MoE untraceable | **Not a placement verdict.** `ttnn.sparse_matmul` rejects tracer tensors, so the advisor never saw the MoE tail. Its placement headroom is **unmeasured**, and no one has read that profile directly either |
 | north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
 | qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
 
 **1 verified, 1 asserted, 1 reasonable, 1 partial, 3 coverage gaps.** "7 of 15 returned zero" is true, but it
-does not mean seven decoders had no placement headroom — for three of them nobody could look, which is a tracer
-problem rather than an advisor result.
+does not mean seven decoders had no placement headroom. For three of them the advisor never saw the layer, so
+the zero records a tracer limitation rather than a measurement.
 
 Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
 

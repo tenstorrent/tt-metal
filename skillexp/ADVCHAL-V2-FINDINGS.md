@@ -740,21 +740,22 @@ claimed saving — 57× the floor means a **1.7 % saving on those ops would alre
 
 ---
 
-### 3.26 Was the exact advice tried, and tried first? In 7 of 15 cells
+### 3.26 Was the exact advice tried, and tried first? On one advised item, in 7 of 15 cells
 
 The principle: the advisor's advice implemented verbatim should be candidate #1, and every deviation needs a
 measured reason. From each cell's own `measured_at` chronology:
 
 | | cells |
 |---|---|
-| tried the exact advice, **first**, and either shipped it or measured a regression against it | **6** — gemma-4-26B onA, gemma-4-26B FN, north-mini FN, north-mini B, qwen3-27B B, phi-3.5 onA |
+| tried the advisor's exact value on an advised item, **first**, and either shipped it or measured a regression against it | **6** — gemma-4-26B onA, gemma-4-26B FN, north-mini FN, north-mini B, qwen3-27B B, phi-3.5 onA |
 | tried it, but **after** the candidate it shipped | 1 — qwen3-27B FN |
 | tried it **partly** | 3 — llama-3.1-8B, llama-3.2-1B, phi-3.5 B |
 | **never tried it**, no reason recorded | **4** — phi-3.5 FN, phi-3.5 exp17, gemma-4-12B exp11, gemma-4-26B B |
 | tried nothing at all | 1 — north-mini onA (`not_measurable`) |
 
 **Where the protocol was followed it worked cleanly** — all 7 either shipped the advice or have a measured
-regression on file. north-mini FN is the model case: it measured the advised 22 (0.5432), then its own 32
+regression on file. But note the scope: these are cells that applied the advisor's exact value to **one** op of a
+30–40 op plan. **No cell applied the whole plan**, which is §3.27. north-mini FN is the model case: it measured the advised 22 (0.5432), then its own 32
 (0.5184), then 64 (0.5733), and shipped 32 with the comparison recorded.
 
 **The 4 unproven deviations are all the same deviation:** take the advisor's L1 placement, drop its sharding.
