@@ -576,16 +576,26 @@ void kernel_main() {
                     }
                     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
                     sender.open();
+                    // ABLATE_NOPAYLOAD sends no bytes but still opens, credits and closes -- so the mux
+                    // plumbing, the credit traffic and the arrival dependency all stay, and only the payload
+                    // disappears. Timing only: consumers get a credit for data that never arrived.
+#if defined(ABLATE_NOPAYLOAD)
+                    constexpr uint32_t dl1_payload_bytes = 0u;
+#else
+                    constexpr uint32_t dl1_payload_bytes = slot0_bytes;
+#endif
                     // Slot 0 is CONTIGUOUS in L1, so the transfer is bounded only by the fabric packet, not
                     // by the tile. dl1_packet_bytes is as many whole bf16 tiles as one packet holds (the host
                     // derives it from the fabric's own max payload), which halves the packet count -- and with
                     // it the headers, mux slot handoffs and NoC transactions -- versus sending tile by tile.
                     // The last packet is short whenever slot0_bytes is not a whole multiple.
-                    for (uint32_t off0 = 0; off0 < slot0_bytes; off0 += kDl1Batch * dl1_packet_bytes) {
+                    for (uint32_t off0 = 0; off0 < dl1_payload_bytes; off0 += kDl1Batch * dl1_packet_bytes) {
                         uint32_t j = 0;
-                        for (uint32_t off = off0; off < slot0_bytes && j < kDl1Batch; off += dl1_packet_bytes, ++j) {
-                            const uint32_t n =
-                                ((slot0_bytes - off) < dl1_packet_bytes) ? (slot0_bytes - off) : dl1_packet_bytes;
+                        for (uint32_t off = off0; off < dl1_payload_bytes && j < kDl1Batch;
+                             off += dl1_packet_bytes, ++j) {
+                            const uint32_t n = ((dl1_payload_bytes - off) < dl1_packet_bytes)
+                                                   ? (dl1_payload_bytes - off)
+                                                   : dl1_packet_bytes;
                             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                                 &sender,
                                 hdr[j],
@@ -760,7 +770,14 @@ void kernel_main() {
                     // its address on the peer -- the fabric supplies only the chip hop. Built through the
                     // fabric addrgen helper because it emits noc0 coords and DRAM has no virtual coords on
                     // some archs; signature is (accessor, page_id, offset), NOT (page_id, accessor).
+                    // ABLATE_NOPAYLOAD: no payload bytes, but the round still credits and the sender still
+                    // opens/closes, so the schedule and the arrival dependency are untouched. Implemented on
+                    // this path too so the flag cannot silently no-op when direct-L1 is off.
+#if defined(ABLATE_NOPAYLOAD)
+                    const uint32_t fab_total = 0u;
+#else
                     const uint32_t fab_total = (fab_hi > fab_lo) ? (fab_hi - fab_lo) * k_shard_tiles : 0u;
+#endif
                     for (uint32_t t0 = 0; t0 < fab_total; t0 += kGatherBatch) {
                         const uint32_t nb = ((fab_total - t0) < kGatherBatch) ? (fab_total - t0) : kGatherBatch;
                         for (uint32_t j = 0; j < nb; ++j) {

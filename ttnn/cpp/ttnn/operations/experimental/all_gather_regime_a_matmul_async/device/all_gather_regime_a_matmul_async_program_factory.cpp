@@ -991,12 +991,40 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const char* ablate_env = std::getenv("TT_AGMM_ABLATE");
     const std::string ablate = ablate_env ? ablate_env : "";
     std::map<std::string, std::string> wdefs;
-    if (ablate == "nogather") {
+    // COMPOSABLE: TT_AGMM_ABLATE is matched by substring, so `nopayload,nowait` turns on both. It used to be
+    // an if/else chain, which silently made the two mutually exclusive -- and the one cell that needs BOTH is
+    // the one that separates the fabric's fixed cost from its latency cost:
+    //
+    //                     payload            no payload
+    //     wait            full               nopayload
+    //     no wait         nowait             nopayload,nowait   <-- unreachable before this
+    //
+    //   nopayload         - floor            = connections + credits + waiting on them, zero bytes
+    //   nopayload,nowait  - floor            = connections + credits alone
+    //   difference of the two                = what waiting on a credit costs when data is instant
+    //
+    // `nopayload` drops the fabric PAYLOAD writes and nothing else: mux connections still open and close,
+    // credits still cross the fabric, and consumers still wait on them, so the protocol, the client count,
+    // the hop structure and the arrival dependency are all held fixed while only the bytes go away.
+    // `nogather` cannot express any of this -- it deletes the muxes and the dependency structure too.
+    const bool ab_nogather = ablate.find("nogather") != std::string::npos;
+    const bool ab_nopayload = ablate.find("nopayload") != std::string::npos;
+    // nogather implies nowait: with nothing sent, a consumer that still waited would hang.
+    const bool ab_nowait = ab_nogather || ablate.find("nowait") != std::string::npos;
+    if (ab_nogather) {
         wdefs["ABLATE_NOGATHER"] = "1";
-        wdefs["ABLATE_NOWAIT"] = "1";
-    } else if (ablate == "nowait") {
+    }
+    if (ab_nopayload) {
+        wdefs["ABLATE_NOPAYLOAD"] = "1";
+    }
+    if (ab_nowait) {
         wdefs["ABLATE_NOWAIT"] = "1";
     }
+    TT_FATAL(
+        ablate.empty() || ab_nogather || ab_nopayload || ab_nowait,
+        "TT_AGMM_ABLATE='{}' matched no known ablation (nogather, nopayload, nowait; comma-separate to "
+        "combine). Refusing rather than silently measuring the unablated program as if it were ablated.",
+        ablate);
     // Fused fabric all-gather. A PREPROCESSOR define, not just a compile-time arg: the prologue declares a
     // TensorAccessorArgs that only exists when tp > 1, and `if constexpr` does NOT discard an ill-formed
     // branch in a non-template function -- it would still be compiled and fail deduction on the tp == 1 build.
@@ -1338,7 +1366,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         //
         // What this leaves running is the intended floor: the origin cores' local shard reads, the on-chip
         // ring, and the matmul -- everything except cross-device traffic.
-        if (ablate == "nogather") {
+        if (ab_nogather) {  // substring-matched above, so it composes with the other ablations
             for (auto& d : dl1_plan) {
                 d.send_fwd = false;
                 d.send_bwd = false;

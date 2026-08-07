@@ -187,14 +187,25 @@ T_ag and T_mm are read out of the SAME Phase-0 process (it is literally `all_gat
 matmul, two device ops per call), so they are at identical shapes and config by construction rather than by
 being configured to match.
 
-Phase 2 decomposes cleanly. `nogather` (no cross-device traffic at all: local shard reads + the on-chip ring
-+ the matmul) gives the floor directly, so none of these three terms is inferred:
+Phase 2 decomposes cleanly, and with the ablations composable (`nopayload,nowait`) the 2x2 closes, so every
+term below is measured rather than inferred:
 
-    76.0  floor -- TT_AGMM_ABLATE=nogather
-    25.7  the fabric traffic itself      (nowait 101.7 - floor 76.0)
-    19.0  pure dependency stall          (full 120.7 - nowait 101.7)
-    ----
-   120.7
+|             | payload | no payload |
+|-------------|--------:|-----------:|
+| **wait**    |  120.38 |      88.39 |
+| **no wait** |  100.79 |      76.51 |
+
+    75.24  floor -- TT_AGMM_ABLATE=nogather (no fabric at all)
+  +  1.3   fabric FIXED cost   -- 60 clients' open + credit + close, no payload, no waiting
+  + 24.3   payload OCCUPANCY   -- bytes actually moving        (nowait - nopayload,nowait)
+  + 19.6   WAITING             -- the dependency stall         (full - nowait)
+    -----
+   120.38
+
+The fixed cost of having 60 fabric clients instead of 8 masters is **1.3 us** -- negligible. An earlier
+version of this section split the same wall into "25.7 us of fabric traffic" and attributed ~13 us of it to
+connect/credit overhead; that was wrong, and the `nopayload,nowait` cell is what corrects it. Of the fabric's
+apparent cost, only 24.3 us is occupancy; the rest is latency, and latency is hideable.
 
 The floor is 3 us BELOW the 79.0 us mesh matmul, which is the byte-count win showing up as a measurement
 rather than an argument: the direct-L1 program reads roughly a quarter of the in0 bytes a full-K matmul does

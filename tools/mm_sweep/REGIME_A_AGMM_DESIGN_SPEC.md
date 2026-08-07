@@ -169,7 +169,7 @@ supports a core driving two muxes (the LINE-origin case) and gates on a single a
 stripe-granular antipode split is what keeps that true — a byte-level split would require two credits per
 slot and per-slot epochs.
 
-**STATUS: implemented, correct, and NOT the default.** Behind `TT_AGMM_DIRECT_L1_BALANCED=1`; the default
+**STATUS-A: implemented, correct, and NOT the default.** Behind `TT_AGMM_DIRECT_L1_BALANCED=1`; the default
 keeps one direction per ring position (depth `tp-1`). It passes the same 32/40 as the default, but measured
 on `medium`/ring/2 links it is neutral at tp=4 (120.16 vs 120.19) and **+5.2 us / +3.8% at tp=8** (141.6 vs
 136.4, repeated interleaved samples). It does reproducibly improve the fabric-only term
@@ -184,3 +184,92 @@ on-chip ring. That is the same mechanism that made a deferred fabric drain worse
 
 Expected to win once the dependency stall is removed by per-wave rings, at which point the burstiness stops
 gating — re-measure it then. Keep the spec's schedule as the target; the flag is the switch.
+
+## Appendix B: the wavefront — arrival-ordered consumption over the unicast in0 ring
+
+Delivers the spec's "never wait for the whole gathered tensor / each availability wave gives useful work"
+on the direct-L1 path. The on-chip distribution stays a UNICAST ring; multicast is explicitly out of scope
+until further notice.
+
+### What unicast can and cannot give
+
+A stripe reaches one new core per step, so "every core works on wave 0 at step 0" is unreachable: at step 0
+only the `ppr` cores owning wave-0 stripes hold data. What IS reachable, and is the whole content of the
+wavefront: **no core ever waits on a late wave while an earlier wave sits undelivered.** Today core `c`
+consumes position `c-s` at step `s`, so if `c-1` falls in the last wave, core `c` stalls at step 1 with
+wave-0 data available elsewhere on the ring.
+
+### Two structural facts this rests on
+
+1. Each stripe travels 7 hops (`o -> o+1 -> ... -> o+7`), so **each core forwards exactly 7 stripes over 7
+   steps, one per step, and WHICH stripe it forwards at each step is free** — constrained only by
+   receive-before-forward. Today that choice is implicitly "the one I just consumed", which is precisely
+   what chains every core's order to its predecessor's.
+2. A stripe's availability at core `c` is `T_arr(wave(o)) + hops(o->c)*delta`, which depends on `c`. So the
+   optimal consumption order is **per-core**, not device-global (device-global is true of *fabric* arrival,
+   not of on-chip availability). It is still fully static and host-computable: 8 cores x 8 stripes per ring.
+
+### Bound
+
+```text
+today       T_ready_max + T_mm          the last-arriving core still owes its WHOLE matmul
+per-wave    T_ready_max + T_mm/tp
+this        T_ready_max + T_mm/8        per-stripe granularity: after its last stripe a core owes 1/8
+```
+
+### Phases, each with its own gate
+
+| # | change | gate |
+|---|---|---|
+| 0 | Allow `nopayload`+`nowait` together (ablation composition) | **DONE** — closed the 2x2; see Target below. Fixed plumbing is 1.3 us, not the 13.4 us previously attributed to it |
+| 1 | Fixed position->slot layout: slot `p` holds position `p`; forward writes `base0 + pos*shard_bytes`; in1 reader takes an explicit order instead of `(ring_pos+G-step)%G` | **bit-identical** output, neutral perf |
+| 2 | Make the schedule EXPLICIT but unchanged: per-core consume order (8) + forward order (7) as runtime args, host-computed to reproduce today's rotation exactly | **bit-identical** output, neutral perf. Proves the arg plumbing and writer/in1-reader agreement before any behaviour moves |
+| 3 | Switch to an arrival-aware schedule (host greedy list-schedule: each core forwards the earliest-available stripe its successor still needs; consumes in availability order). Unicast, still 7 forwards/core, identical on-chip traffic | PCC-only (re-associates the K-sum), and the perf win |
+| 4 | Per-slot readiness — only if needed | the spec's per-slot-epoch clause targets out-of-order BIDIRECTIONAL FABRIC arrivals; under direct-L1 each core takes exactly one fabric stripe and the on-chip receive order is static from phase 2, so verify the existing monotone count still suffices rather than adding machinery |
+| 5 | Re-measure `TT_AGMM_DIRECT_L1_BALANCED=1` | its burstiness penalty should shrink once the ordering constraint is gone |
+
+Phase 1 and 2 being bit-identical is what separates "plumbing is wrong" from "numerics moved" — the
+writer/in1-reader desync is the failure mode this branch has hit twice.
+
+### Phase-gate test suite (not the full 40)
+
+Twelve tests, ~1 minute, run after every phase instead of the full suite:
+
+```bash
+-k "(medium and ring) or (large and ring) or sm2 or pk4 or (cache_replay and ring) or (single_chip and medium)"
+```
+
+Covers the perf shape (`medium`/ring at tp4 and tp8), a second shape (`large`), `Sm>1` (which caught the
+semaphore-budget regression), a second `Pk`, program-cache replay with fresh semaphores, and op-vs-op parity.
+Deliberately excludes `small` (picker chooses Ns=2 -> refused), line topology, and the fused epilogues
+(orthogonal to the gather). Run the full 40 only before committing a phase.
+
+### Target — from the closed 2x2 (phase 0, done)
+
+|            | payload | no payload |
+|------------|--------:|-----------:|
+| **wait**   |  120.38 |      88.39 |
+| **no wait**|  100.79 |      76.51 |
+
+with `floor` (no fabric at all) = 75.24. Which decomposes the whole thing:
+
+```text
+floor                            75.24
++  1.3   fabric FIXED cost       60 clients' open + credit + close, no payload, no waiting
++ 24.3   payload OCCUPANCY       bytes actually moving
++ 19.6   WAITING                 the dependency stall
+= 120.38
+```
+
+**The no-stall bound is `nowait` = 100.8 us**, not `nopayload`. `nowait` runs every read, every FP32 add,
+every fabric send, and stalls on nothing, so it is exactly the makespan a perfect schedule reaches.
+`nopayload` (88.4) is not a target — it is an artifact of deleting bytes that real work has to move.
+
+So the wavefront is worth **~19.6 us (16%)**: 120.4 -> ~101. That finally puts the fused path ~14 us BELOW
+the unfused Phase-0 composition (115.1), but still ~14 us above the 86.9 us gate. Closing the rest needs the
+24.3 us of payload occupancy to shrink, and that is bytes over links at `num_links=2`, which is the hardware
+maximum on this axis — so the gate is probably not reachable for this shape by scheduling alone.
+
+Two earlier claims are retracted by this table: that the fabric's fixed cost was ~13.4 us and "a client-count
+problem" (it is 1.3 us; the rest was credit-chain latency, which is waiting and therefore hideable), and that
+per-wave rings could reach the gate.
