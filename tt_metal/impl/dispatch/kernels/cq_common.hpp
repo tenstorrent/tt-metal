@@ -417,10 +417,29 @@ public:
             }
         }
 #endif
+        // #ifdef ARCH_QUASAR
+        //         // iDMA's payload never touches the NoC, so there is no flush-bit ordering trick available here.
+        //         // Ordering instead comes from the explicit local_copy_bytes_wait() barrier the caller already
+        //         // did before release_pages -- by the time we get here the payload is guaranteed landed, so a
+        //         // cheap local store is correct and sufficient; routing it over the NoC would just add cost.
+        //         Semaphore<programmable_core_type>(downstream_sem_id).up(n);
+        // #else
+        // The credit must travel the NoC on every arch, not a local store. The flush bit set on the
+        // last payload packet is enforced at the DESTINATION NIU, so it can only order a transaction
+        // that actually reaches that NIU -- a local DM store to the uncached alias bypasses it
+        // entirely and would leave the credit free to land before the payload.
+        //
+        // noc_semaphore_inc defaults to vc = NOC_UNICAST_WRITE_VC, which is 2 on Quasar and matches
+        // the write cmd buf's NOC_V2_WR_REQ_VC. That shared VC supplies the ordered arrival that the
+        // flush bit then converts into ordered commit.
+        //
+        // Note the address views: the NoC packet takes the PLAIN get_semaphore() offset, while every
+        // reader takes l1_uncached_addr(get_semaphore()). Those are the two aliases of one physical
+        // TL1 cell and the split is intentional -- the NoC atomic is serviced by the TL1 SRAM bank at
+        // the plain offset. Adding MEM_L1_UNCACHED_BASE here would target a different offset.
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
-            n,
-            noc_idx);
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
+        // #endif
     }
 
     uint32_t additional_count{0};

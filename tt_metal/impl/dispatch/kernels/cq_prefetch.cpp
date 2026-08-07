@@ -553,7 +553,7 @@ FORCE_INLINE void fd_bench_init_prefetch() {
 //     overlay::setup_wrapping_vcs_cmdbuf_0(
 //         /*wr=*/true,
 //         /*req_start_vc=*/0,
-//         /*req_end_vc=*/overlay::CMDBUF_WR_REQ_VC + 7);
+//         /*req_end_vc=*/7);
 //     overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
 // }
 
@@ -1278,7 +1278,9 @@ static uint32_t write_pages_to_dispatcher(
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
+    // #if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+    // #endif
 
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
@@ -3595,12 +3597,12 @@ void kernel_main_d() {
     // On Quasar, relay to the dispatcher is a same-core iDMA copy; no NOC init-state needed for that
     // path. RELAY_INLINE_NOFLUSH's header write also moved to local_copy_bytes_issue() on this arch, so
     // nothing here still depends on noc_async_write()'s init state.
-    // #if !defined(ARCH_QUASAR)
+#if !defined(ARCH_QUASAR)
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
-// #endif
+#endif
 #endif
 
     // Initialize cmd_ptr tracking for release_pages synchronization assertions
