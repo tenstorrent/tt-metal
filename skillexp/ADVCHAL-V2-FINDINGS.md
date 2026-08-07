@@ -187,6 +187,33 @@ token mixer; the surrounding shipped residual/norm/MLP envelope is captured"*.
 advisor never placed it'", so an untraced row is not by itself proof of absence. Here it was checked against the
 IR op-by-op, so for this cell it is.)*
 
+### Where in the pipeline the ops are lost, and it is not the optimizer
+
+`report.json` records `total_ops` — the size of the graph the tt-mlir pipeline was handed. For qwen B's
+`linear_attention` it is **9**. The profile of that window has 90 device rows. **The optimizer cannot have
+dropped 81 ops it was never given**, so the loss is entirely upstream, in the capture.
+
+The capture is **`ttnn-jit`** (`tools/ttnn-jit/_src/interception_tracer.py`). It monkey-patches `ttnn.*` for the
+duration of the trace — `patch_ttnn` installs a traced stand-in for every op in its handler tables
+(`_VALUE_HANDLERS`, `_TOPLEVEL_MULTI`, `_EXPERIMENTAL_*`, `_TRANSFORMER_VALUE`). An op with no handler is not
+intercepted, so the real `ttnn` op receives a `TracedTensor` and rejects it; the trace stops there.
+
+**So the answer to "is the problem in the advisor's input?" is yes.** Its objective, its scoring and its
+placement never see these ops. Nothing in tt-mlir's optimizer is implicated.
+
+**One loose end worth pulling, on north-mini onA.** Its report records
+`hard_error: "ttnn.sparse_matmul cannot consume interception_tracer.TracedTensor"`, which reads as a missing
+handler — but **a `sparse_matmul` handler does exist** at the pinned `618cd4e75d`
+(`interception_tracer.py:546`), and the copy installed in the toolchain venv is byte-identical to the source.
+The cell's call form is one the patch should intercept: `import ttnn` then `ttnn.sparse_matmul(...)`, so the
+`setattr` reaches it, and the extra kwargs it passes (`memory_config`, `output_tile`, `program_config`) are
+absorbed by the handler's `**kwargs`.
+
+**Not established: why it failed anyway.** Either something earlier in the MoE chain broke and the cell
+attributed it to `sparse_matmul`, or the handler fails on this particular input. Settling it needs a re-run,
+not more reading. **If it is the former, north-mini onA's zero is recoverable** — that cell is one of the three
+whose headroom is currently unmeasured rather than zero.
+
 | model | unreachable | cause |
 |---|---|---|
 | qwen3.6-27B (both arms) | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` |
