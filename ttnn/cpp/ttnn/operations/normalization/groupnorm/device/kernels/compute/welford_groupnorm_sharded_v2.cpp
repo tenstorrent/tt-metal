@@ -121,7 +121,7 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(dfb_in0_id, dfb_in0_id, dfb_in_id);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
@@ -152,7 +152,7 @@ void kernel_main() {
         dfb_in_welford.wait_front(per_core_MN);
     }
 #else
-    binary_op_init_common(dfb_in0_id, dfb_in0_id, dfb_in0_id);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
     // Sharded v2 does not use reciprocal lookup table, so we pass an empty array
@@ -288,7 +288,7 @@ void kernel_main() {
         dfb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
         reconfig_data_format_srcb(dfb_eps_id);
-        add_tiles_init(dfb_ex_global_id, dfb_eps_id);
+        add_init(dfb_ex_global_id, dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
@@ -334,7 +334,7 @@ void kernel_main() {
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
                     reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
-                    sub_tiles_bcast_scalar_init_short(dfb_in0_id, dfb_ex_global_id);
+                    sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
@@ -352,7 +352,7 @@ void kernel_main() {
                     const uint32_t mask_index = mask_offset + block_w_index;
 
                     reconfig_data_format(dfb_in0_id, dfb_input_mask_id, dfb_ex_global_id, dfb_ex2pe_id);
-                    mul_tiles_bcast_scalar_init_short(dfb_input_mask_id, dfb_ex2pe_id);
+                    mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
                     tile_regs_commit();
@@ -364,7 +364,7 @@ void kernel_main() {
                     // // c. a * b
                     dfb_xmm.wait_front(2);
                     reconfig_data_format(dfb_input_mask_id, dfb_xmm_id, dfb_ex2pe_id, dfb_xmm_id);
-                    mul_tiles_init(dfb_xmm_id, dfb_xmm_id);
+                    mul_init(dfb_xmm_id, dfb_xmm_id);
                     tile_regs_acquire();
                     mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
@@ -391,7 +391,7 @@ void kernel_main() {
                         // This is not the first group for this tile, so we need to add
                         // the results over what is already in cb_x_id
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
-                        add_tiles_init(dfb_x_id, dfb_xmm_id);
+                        add_init(dfb_x_id, dfb_xmm_id);
 
                         dfb_xmm.wait_front(1);
                         dfb_x.wait_front(1);
@@ -440,7 +440,7 @@ void kernel_main() {
 
                 if constexpr (do_gamma) {
                     reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                    mul_bcast_rows_init_short(dfb_x_id, dfb_gamma_id);
+                    mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
 
                     dfb_x.wait_front(1);
                     tile_regs_acquire();
@@ -456,7 +456,7 @@ void kernel_main() {
 
                 if constexpr (do_beta) {
                     reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                    add_bcast_rows_init_short(dfb_x_id, dfb_beta_id);
+                    add_bcast_rows_init(dfb_x_id, dfb_beta_id);
 
                     dfb_x.wait_front(1);
                     tile_regs_acquire();

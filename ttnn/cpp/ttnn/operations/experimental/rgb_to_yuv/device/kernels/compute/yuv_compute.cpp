@@ -50,7 +50,7 @@ FORCE_INLINE void mul_scalar_pack(uint32_t cb_tilized, uint32_t cb_scalar, uint3
     CircularBuffer tilized(cb_tilized), dst(cb_dst);
     tile_regs_acquire();
     tilized.wait_front(1);
-    mul_tiles_bcast_scalar_init_short(cb_tilized, cb_scalar);
+    mul_bcast_scalar_init(cb_tilized, cb_scalar);
     mul_tiles_bcast_scalar(cb_tilized, cb_scalar, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
@@ -66,7 +66,7 @@ FORCE_INLINE void add_and_pack(uint32_t cb_a, uint32_t cb_b, uint32_t cb_dst) {
     tile_regs_acquire();
     a.wait_front(1);
     b.wait_front(1);
-    add_tiles_init(cb_a, cb_b);
+    add_init(cb_a, cb_b);
     add_tiles(cb_a, cb_b, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
@@ -82,7 +82,7 @@ FORCE_INLINE void offset_clamp_pack(uint32_t cb_in, uint32_t cb_off, uint32_t cb
     CircularBuffer in(cb_in), sum(cb_sum);
     tile_regs_acquire();
     in.wait_front(1);
-    add_bcast_scalar_init_short(cb_in, cb_off);
+    add_bcast_scalar_init(cb_in, cb_off);
     add_tiles_bcast_scalar(cb_in, cb_off, 0, 0, 0);
     clamp_tile_init();
     clamp_tile(0, BF16_ZERO_BITS, BF16_255_BITS);

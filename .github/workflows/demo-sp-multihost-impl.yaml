@@ -86,67 +86,29 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      TT_METAL_HOME: /home/user/tt-metal
+      PYTHONPATH: /home/user/tt-metal
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       # Per-job NFS scratch for launch.log + --output-filename ranklogs (kimi pattern).
       # Keeps 64-rank tagged stdout off the 4Gi Actions runner; uploaded then removed.
       PIPELINE_DIR: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}
+      TTRUN_CWD: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # Consumed by the multihost runner container hook to provision remote worker pods.
+    # Job steps still run on the CPU/control runner; the hook handles worker image setup.
+    container:
+      image: ${{ inputs.docker-image }}
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ inputs.docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Extract allocation spec from SKU
-        id: extract-spec
-        run: |
-          pip3 install PyYAML
-          {
-            echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      - name: Create allocation for ${{ matrix.test-group.name }}
-        id: allocation
-        uses: ./.github/actions/ttop-create-allocation
-        timeout-minutes: 120
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
-
-      - name: Get allocation configs
-        uses: ./.github/actions/ttop-get-allocation-data
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-
-      - name: Create test environment
-        uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 30
-        with:
-          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: "true"
-          sharedVolumeEnabled: "true"
-          path: /etc/ttop
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -300,8 +262,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        # SC4 (legacy rank-binding) stays on local /home/user/tt-metal.
-        # SC16 automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
+        # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
@@ -314,7 +275,7 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
-      # MUST precede teardown: NFS staging stays until workers are reclaimed.
+      # MUST precede NFS cleanup: staging stays until logs are uploaded.
       # Cluster validation logs are written per-host under
       # $PIPELINE_DIR/cluster_validation_logs/<hostname>/ (not runner-local /tmp).
       - name: Upload launch + per-rank logs and automapper outputs
@@ -325,20 +286,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
-
-      - name: Delete test environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-
-      - name: Delete allocation
-        if: always()
-        uses: ./.github/actions/ttop-delete-allocation
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
 
       - name: Clean up shared staging dir
         if: always()

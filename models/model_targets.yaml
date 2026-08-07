@@ -245,6 +245,50 @@ targets:
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
+  gemma-2-2b:
+    aliases: ["gemma-2-2b", "google/gemma-2-2b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (90.0 / 100.0).
+      # N150 uses the same model path; CI will re-calibrate if it drifts.
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  gemma-2-9b:
+    aliases: ["gemma-2-9b", "google/gemma-2-9b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (91.8 / 99.8).
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 92
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
     skus:
