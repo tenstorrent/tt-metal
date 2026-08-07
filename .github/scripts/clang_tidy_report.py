@@ -83,10 +83,19 @@ def _build_suggestion(file_path: str, replacements: list) -> Suggestion | None:
     violation has a Replacement at all: compiler-diagnostic-class findings
     (clang-diagnostic-error and friends) have none, since clang can't auto-fix
     "no such member" the way it can auto-fix a stylistic clang-tidy check.
+
+    A Replacement carries its own FilePath, which is not always the diagnostic's
+    file (e.g. a fix in a macro/header pulled in by the diagnostic file). rdjson
+    suggestions have no path of their own — they inherit the diagnostic's — so a
+    replacement targeting a different file can't be represented as a suggestion;
+    doing so anyway would convert its offset against the wrong file's bytes and
+    could publish a corrupting one-click "fix".
     """
     if len(replacements) != 1 or not file_path:
         return None
     rep = replacements[0]
+    if rep.get("FilePath") != file_path:
+        return None
     offset, length = rep.get("Offset"), rep.get("Length")
     if not isinstance(offset, int) or not isinstance(length, int):
         return None
@@ -358,6 +367,40 @@ Diagnostics:
             self.assertEqual(v.suggestion.text, "long")
             self.assertEqual((v.suggestion.start_line, v.suggestion.start_col), (1, 1))
             self.assertEqual((v.suggestion.end_line, v.suggestion.end_col), (1, 4))
+
+    def test_replacement_targeting_another_file_does_not_become_a_suggestion(self):
+        # Regression (caught by Copilot review on the live demo PR): a Replacement's
+        # own FilePath can differ from the diagnostic's file (e.g. a fix inside a
+        # header pulled in by the diagnostic file). Converting its offset against
+        # the diagnostic file's bytes would compute a bogus line/col and could
+        # publish a corrupting one-click suggestion.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._write(tmp, "foo.cpp", "int x = 1;\nint y = 2;\n")
+            other = self._write(tmp, "foo.hpp", "int z = 3;\n")
+            self._write(
+                tmp,
+                "foo.cpp-abc.yaml",
+                f"""---
+MainSourceFile: '{src}'
+Diagnostics:
+  - DiagnosticName: modernize-use-nullptr
+    DiagnosticMessage:
+      Message: 'use nullptr'
+      FilePath: '{src}'
+      FileOffset: 0
+      Replacements:
+        - FilePath: '{other}'
+          Offset: 0
+          Length: 3
+          ReplacementText: 'long'
+    Level: Warning
+...
+""",
+            )
+            v = parse_fixes_dir(tmp)[0]
+            self.assertIsNone(v.suggestion)
 
     def test_multiple_replacements_do_not_become_a_suggestion(self):
         import tempfile
