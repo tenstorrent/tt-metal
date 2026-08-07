@@ -220,24 +220,53 @@ other path — it *does* have a `sparse_matmul` handler at `:546`, and its `patc
 (checked directly: inside the patch, `type(ttnn.sparse_matmul)` becomes a traced stand-in). The emit tracer has
 no `sparse_matmul` coverage, so the call falls through to the real op, which rejects a `TracedTensor`.
 
-**And the emit tracer's own docstring says the optimizer could not have used it anyway:**
+**"The documented terminal" the cell cites is the advisor's own setup doc.** `$shard-advise`'s `SETUP.md:80`:
+*"**Terminal (no TTIR op → skip these paths):** `ttnn.sparse_matmul`"*, echoed in `advisor-challenger/SKILL.md:455`
+and in the capture template. The cell was following instructions, and the instructions were right.
 
-> *"Not yet ported: ... and `ttnn.sparse_matmul` — the routed-expert path — for which **the whole optimizer has
-> no coverage anyway (the op is `OpModelExempt` and unregistered in the rule book)**, so a MoE capture must trace
-> its dense expert graph."*
+**The two gaps are not the same kind of gap**, and this is where I first got the attribution backwards.
 
-**So it is not recoverable by re-running.** Attribution:
+| responsible | what exactly | hard or soft |
+|---|---|---|
+| **ttnn-jit — the tracer** | `sparse_matmul` is not ported to `ttnn_emit_tracer`, the tracer `shard_advisor` uses. The capture dies with a `TypeError` from the real op, so **nothing downstream runs** — no IR, no placement, no advice, for the entire MoE tail | **HARD. This is the binding gap** |
+| **tt-mlir optimizer** | `sparse_matmul` carries `OpModelExempt` (`TTNNOps.td:1555`). Validation returns `notImplemented` precisely so the optimizer *"can fall back gracefully (e.g. evict L1 state) instead of treating the op as analyzable"* (`OpConstraintValidation.cpp:167-177`) | **SOFT. It would not break** — it would place everything *around* the op and simply give no advice *for* it |
+| **the cell (agent)** | Correctly identified the terminal and recorded the untraced share honestly (76.6 % / 77.2 %). But it invented a private `CHALLENGER_CAPTURE_ATTENTION_ONLY` flag and truncated at the **attention** boundary, where the emit tracer's own docstring prescribes tracing *"its dense expert graph"* — so it captured **less than it could have** | — |
+| **the stage/skill** | Names the op as terminal (correct) but offers no supported way to work around it, which is why the cell wrote its own flag. It exists in one cell and in no template | — |
 
-| responsible | what exactly |
-|---|---|
-| **tt-mlir optimizer** | `sparse_matmul` is **`OpModelExempt` and unregistered in the rule book**, so even a captured `sparse_matmul` could not be placed. **This is the binding gap** and the one to fix first |
-| **ttnn-jit** | `sparse_matmul` is not ported to the emit tracer, which is the tracer `shard_advisor` uses. Deliberate and documented — but it leaves the two tracers with different coverage, and the failure surfaces as a raw `TypeError` from the real op rather than a named "unsupported op" |
-| **the cell (agent)** | Correctly identified the terminal. But it invented a private `CHALLENGER_CAPTURE_ATTENTION_ONLY` flag and truncated at the *attention* boundary, where the documented remedy is to *"trace its dense expert graph"*. The dense expert path may have been capturable, so the cell captured **less than it could have** |
-| **the stage/skill** | The capture template names `ttnn.sparse_matmul` as terminal — **correct** — but offers no supported way to handle it, which is why the cell wrote its own flag. That flag exists in exactly one cell and in no template |
+**So the actionable item *is* the tracer, and it does not need rule-book coverage first.** Because the optimizer
+degrades gracefully on an exempt op, porting `sparse_matmul` to the emit tracer would immediately buy placement
+for everything *around* it — the router, the dense expert path, the residual and norms — which is exactly the
+coverage this corpus lacks. The op itself staying exempt costs only the advice for that one op.
 
-**The actionable item is not the tracer.** It is `sparse_matmul` rule-book coverage in tt-mlir; until that exists,
-capturing the op would only move the failure downstream. Separately, the skill should carry the
-dense-expert-graph recipe the docstring prescribes, so cells stop inventing private flags.
+Second, cheaper item: put the dense-expert-graph recipe in the skill, so a cell meeting a terminal has a
+supported route instead of inventing a private flag.
+
+### Five cells met this terminal. They did four different things, and the flag was the worst of them
+
+`sparse_matmul` is terminal for every MoE model in the corpus, so north-mini onA was not in a special position:
+
+| cell | what it did at the terminal | ops captured |
+|---|---|---|
+| **gemma-4-26B FN and onA** | Wrote a `decode()` that **substitutes the dense expert path** — `mlp_out = _DECODER._dense_mlp(mlp_in)` — and traces on through the post-FF norm. This is exactly the remedy the emit tracer's docstring prescribes | **29 / 25** and **30 / 26** |
+| north-mini B | Truncated **inside its own `decode()`** — `if decoder.mlp_type == "dense": …` else return the residual add — no env flag, comment explains why | **16 / 18** |
+| **north-mini onA** | Added a private env flag, `CHALLENGER_CAPTURE_ATTENTION_ONLY`, and truncated at the **attention** boundary | **14 / 16** |
+| north-mini FN | Nothing specific, and lost far more than the experts: `paged_fused_update_cache`, `paged_scaled_dot_product_attention_decode`, `nlp_concat_heads_decode`, `topk`, `scatter` as well | **5 / 7** |
+
+All five declared the op in `report.json`'s `uncapturable` field, which is the supported mechanism and which all
+five used correctly. The difference is entirely in **where they chose to stop**.
+
+**Was the flag the right call? No, on two counts.** A documented remedy existed and a cell in the same corpus
+used it to capture roughly **twice** as much of the layer. And even the simpler in-script truncation north-mini B
+chose captured more, without adding a mechanism that exists in exactly one cell.
+
+The flag itself is harmless — it is the truncation *point* that costs. Stopping before the MLP means onA's sparse
+kinds carry **no MLP placement advice at all**, where gemma's do. Its untraced shares, 76.6 % and 77.2 %, are
+partly a consequence of that choice rather than of the terminal.
+
+**What this says about the stage, not the cell:** four cells hitting one documented terminal produced four
+different capture scopes, and nothing in the skill or the gate compares them. The recipe belongs in the skill,
+and the reconciliation should record *how much of the layer the capture even attempted* so that a 14-op capture
+and a 30-op capture of the same op count are not read as the same evidence.
 
 | model | unreachable | cause |
 |---|---|---|
