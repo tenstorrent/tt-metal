@@ -146,6 +146,7 @@ inline void compute_recip_rms_a_bcasted() {
     // Computes reciprocal of RMS activation (1/rms_a) and broadcasts it across columns.
     const uint32_t reg_rms_a = 0;
     tile_regs_acquire();
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(cb_rms_a_idx, cb_recip_rms_a_bcasted_idx);
     unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx);
     unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ reg_rms_a);

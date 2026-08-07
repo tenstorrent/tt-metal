@@ -198,6 +198,7 @@ void emit_output_for_row() {
             tile_regs_acquire();
 
             // Seed the accumulator with coeff2 (cubic branch) and load x once.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
@@ -210,6 +211,7 @@ void emit_output_for_row() {
 
             // Horner step 2: acc = coeff1 + x·coeff2; then acc *= x.
             // Re-init bcast because the preceding copy_tile_init changed srcA to cb_input_pass_2.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_tmp);
@@ -219,6 +221,7 @@ void emit_output_for_row() {
             mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Horner step 3: acc = coeff0 + x·(coeff1 + x·coeff2); then acc *= x.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_tmp);

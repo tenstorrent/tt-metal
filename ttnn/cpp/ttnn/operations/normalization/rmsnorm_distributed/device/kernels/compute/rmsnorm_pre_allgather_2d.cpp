@@ -107,6 +107,7 @@ void kernel_main() {
         cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);

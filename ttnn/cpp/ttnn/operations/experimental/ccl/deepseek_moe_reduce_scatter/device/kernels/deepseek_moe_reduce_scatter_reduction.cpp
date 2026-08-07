@@ -82,6 +82,7 @@ void kernel_main() {
         CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
         CircularBuffer cb_compute(compute_cb_id);
 
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
         add_init(input_slice_cb_id, intermediate_slice_cb_id, false);
 

@@ -278,6 +278,7 @@ void calculate_sum_exp_x() {
 
     const uint32_t max_value_register = 2U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
     unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
@@ -404,6 +405,7 @@ void kernel_main() {
 
             tile_regs_acquire();
             reconfig_data_format(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
             unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction);
             unary_bcast<BroadcastType::COL>(

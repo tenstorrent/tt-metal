@@ -169,6 +169,7 @@ void kernel_main() {
             // layernorm_large_tensor.cpp's TILIZE_IN path). NOTE: compute_kernel_hw_startup
             // is documented call-once; correcting this re-init pattern is out of scope
             // for the init-cleanup rename and left to the sort kernel owners.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
             ckernel::topk_tile_init();
             transpose_init(dfb::input_tensor);
@@ -314,6 +315,7 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, Wt);
 
             // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_dfb.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(Wt);
@@ -327,6 +329,7 @@ void kernel_main() {
 
             // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only
             // rm_post_sort_index_dfb
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::rm_post_sort_index, dfb::rm_index_output);
             rm_post_sort_index_dfb.wait_front(Wt);

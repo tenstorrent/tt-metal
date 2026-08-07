@@ -51,6 +51,7 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0);
 

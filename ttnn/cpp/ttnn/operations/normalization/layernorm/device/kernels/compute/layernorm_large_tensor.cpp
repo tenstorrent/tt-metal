@@ -132,8 +132,10 @@ void kernel_main() {
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 #ifdef RMSNORM
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
@@ -252,6 +254,7 @@ void kernel_main() {
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe_id);
 
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(dfb_ex2pe_id, dfb_ex2pe_id);
         unary_bcast_init<BroadcastType::COL>(dfb_ex2pe_id);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe_id, 0, dst0);
@@ -282,8 +285,10 @@ void kernel_main() {
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 
 #ifdef RMSNORM
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif

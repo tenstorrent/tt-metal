@@ -116,6 +116,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(cb_in, cb_in, cb_x2);
 #endif
 
@@ -203,6 +204,7 @@ void kernel_main() {
     cb_signaling.pop_front(1);
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(cb_stats, post_cb_scaler_global, cb_var);
     index_subblock_w_offset = 0;
     index_h_offset = 0;

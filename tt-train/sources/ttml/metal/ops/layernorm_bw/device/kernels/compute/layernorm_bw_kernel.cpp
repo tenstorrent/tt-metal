@@ -484,6 +484,7 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_rstd_idx, onetile);
         reconfig_data_format(cb_rstd_idx, cb_rstd_idx);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(cb_rstd_idx, cb_rstd_idx);
         unary_bcast_init<BroadcastType::COL>(cb_rstd_idx);
         unary_bcast<BroadcastType::COL>(cb_rstd_idx, /* tile idx */ 0, /* reg tile idx */ 0);
@@ -495,6 +496,7 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_mean_idx, onetile);
         reconfig_data_format(cb_mean_idx, cb_mean_idx);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(cb_mean_idx, cb_mean_idx);
         unary_bcast_init<BroadcastType::COL>(cb_mean_idx);
         unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
