@@ -9,9 +9,18 @@ from typing import ClassVar
 
 import pandas as pd
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
-from .perf_schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf_schema import (
+    INIT_MARKER,
+    MARKER,
+    MEAN,
+    STD,
+    TILE_LOOP_MARKER,
+    stat_column,
+    stat_prefix,
+)
 from .test_config import TestConfig
 
 
@@ -79,6 +88,53 @@ class ProfilerData:
         if not start_entries.equals(end_entries):
             raise AssertionError("Zone START and END entries don't match")
 
+    @staticmethod
+    def _assert_zones_dont_overlap(starts: pd.DataFrame, ends: pd.DataFrame) -> None:
+        """No thread may open TILE_LOOP before every thread has closed INIT.
+
+        Pairing alone does not catch this. Within one thread the entries are written in program order,
+        so a zone cannot overlap itself, but nothing stops one thread racing ahead into TILE_LOOP while
+        another is still initialising. That is not hypothetical: the fast tilize and untilize kernels
+        opened their zones with bare ZONE_SCOPED and so had no entry barrier, and 51 to 59 percent of
+        the pack thread's INIT window overlapped TILE_LOOP. Both windows were then reported as if they
+        measured the phase they name, and because both builds were wrong identically it never showed up
+        as a with-counters versus no-counters difference.
+
+        START_PERF_MEASURE puts a three-way rendezvous at zone entry in both builds, which is what makes
+        this hold. Only markers that are reported are checked, so a kernel is free to keep an unreported
+        zone such as UNINIT on a thread that a run type happens to skip.
+
+        Blackhole and Wormhole only. Quasar's perf sources still open their zones with bare ZONE_SCOPED
+        and there is no rendezvous behind it: llk_barrier needs a semaphore nothing else uses, and
+        Quasar's three (MATH_PACK, UNPACK_MATH, PACK_UNPACK) are all owned by the ops. So the invariant
+        is not something Quasar can satisfy yet, and asserting it there would fail every perf test
+        rather than report a regression.
+        """
+        if get_chip_architecture() == ChipArchitecture.QUASAR:
+            return
+        if MARKER not in starts.columns or "timestamp" not in starts.columns:
+            return
+        # raw() is also called on several runs concatenated together, so compare within a run.
+        group_cols = ["run_index"] if "run_index" in starts.columns else []
+        keys = starts.groupby(group_cols).groups.keys() if group_cols else [None]
+        for key in keys:
+            s = starts if key is None else starts[starts["run_index"] == key]
+            e = ends if key is None else ends[ends["run_index"] == key]
+            init_end = e.loc[e[MARKER] == INIT_MARKER, "timestamp"]
+            loop_start = s.loc[s[MARKER] == TILE_LOOP_MARKER, "timestamp"]
+            if init_end.empty or loop_start.empty:
+                continue
+            if init_end.max() > loop_start.min():
+                where = "" if key is None else f" (run_index={key})"
+                raise AssertionError(
+                    f"Zones overlap across threads{where}: the last {INIT_MARKER} closed at "
+                    f"{init_end.max()} but the first {TILE_LOOP_MARKER} opened at {loop_start.min()}, "
+                    f"{init_end.max() - loop_start.min()} cycles earlier. Both windows therefore cover "
+                    f"time belonging to the other phase. The usual cause is a kernel opening its zones "
+                    f"with ZONE_SCOPED instead of START_PERF_MEASURE, which is what supplies the "
+                    f"cross-thread rendezvous at zone entry."
+                )
+
     def raw(self) -> pd.DataFrame:
         """Returns the raw event view of the underlying data"""
 
@@ -89,6 +145,7 @@ class ProfilerData:
         end_entries = self.df[self.df["type"] == "ZONE_END"]
 
         self._assert_zones_valid(start_entries, end_entries)
+        self._assert_zones_dont_overlap(start_entries, end_entries)
 
         return self.df
 
@@ -203,8 +260,7 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
-    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
-    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
+    # Defensive: skip if no zone events were captured (empty wall-clock dataset).
     if raw_data.empty:
         return pd.DataFrame()
 
@@ -255,7 +311,7 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
-    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
+    # Defensive: skip if no zone events were captured.
     if raw_thread.empty:
         return pd.DataFrame()
 

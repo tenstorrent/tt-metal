@@ -12,6 +12,10 @@ class PerfSchemaError(AssertionError):
 
 MARKER = "marker"
 
+# Zone markers that the report carries a column for. profiler.py enforces their ordering.
+INIT_MARKER = "INIT"
+TILE_LOOP_MARKER = "TILE_LOOP"
+
 FORMAT_HEADERS = (
     "formats.input_A",
     "formats.input_B",
@@ -119,6 +123,5 @@ METRIC_BASES = frozenset(
         "pack_utilization_pct",
         "pack_dest_eff_pct",
         "fidelity_stall_pct",
-        "math_src_stall_pct",
     }
 )

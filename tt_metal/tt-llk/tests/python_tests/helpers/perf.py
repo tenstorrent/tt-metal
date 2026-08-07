@@ -22,12 +22,14 @@ from .metrics import compute_metrics, export_counters, export_metrics, print_met
 from .perf_schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
+    INIT_MARKER,
     LOOP_FACTOR_COLUMN,
     MARKER,
     MEAN,
     STD,
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
+    TILE_LOOP_MARKER,
     PerfSchemaError,
     assert_unique_columns,
     stat_prefix,
@@ -41,8 +43,6 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
 # TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
-INIT_MARKER = "INIT"
-TILE_LOOP_MARKER = "TILE_LOOP"
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -767,10 +767,26 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
             if not stats_df.empty:
                 results.append(stats_df)
+
+            if not variant_counter_results and TestConfig.ENABLE_PERF_COUNTERS:
+                # Counters were requested but no zone returned any. The usual cause is a kernel whose
+                # zones use ZONE_SCOPED instead of START_PERF_MEASURE: only START_PERF_MEASURE
+                # instantiates perf_counter_scoped, which is the sole path that arms and freezes the
+                # counters, so nothing ever writes SYNC_ZONE_COMPLETE and every zone reads back unused.
+                # That produced counter-free CSVs and WC-vs-NC deltas of exactly zero, which then read
+                # as "no overhead" rather than "not measured".
+                logger.warning(
+                    "{} {}: --enable-perf-counters is set but no zone returned counter data for "
+                    "run type {}. The kernel is probably not instrumented with START_PERF_MEASURE, "
+                    "so counter and metric columns will be absent and any WC-vs-NC comparison for "
+                    "this test is vacuous.",
+                    self.test_name,
+                    self.variant_id,
+                    run_type.name,
+                )
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
