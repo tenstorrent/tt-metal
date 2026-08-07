@@ -198,7 +198,9 @@ def test_setup_run_honors_codegen_logs_root_override(worktree, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
     log_dir = Path(_bootstrap(worktree)["LOG_DIR"])
+    assert _bootstrap(worktree)["RUN_ID"]
     state = json.loads((log_dir / "state.json").read_text(encoding="utf-8"))
+    assert _bootstrap(worktree)["RUN_ID"] == state["RUN_ID"]
     assert log_dir.parent == logs_root / "issue_solver"
     assert state["CODEGEN_LOGS_ROOT"] == str(logs_root)
     assert state["DASHBOARD_PROJECT_ID"] == "issue_solver"
