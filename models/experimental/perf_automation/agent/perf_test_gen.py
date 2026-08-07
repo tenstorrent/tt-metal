@@ -1056,11 +1056,16 @@ def generate_perf_test(
     source_abs: str | Path | None = None,
     source_kind: str = "demo",
     validate: bool | None = None,
+    stacks: list | None = None,
 ) -> str | None:
     """Write tests/e2e/test_<task>_perf.py by lifting build+run from a source — the WHOLE pipeline
     forward (prefill + a capped decode loop when the source has one). Returns the node id
     'tests/e2e/test_<task>_perf.py::test_<task>_perf' on success, else None. `runner` (prompt->str)
     overrides the default claude call (for tests).
+
+    stacks: optional list of StackInfo objects discovered by find_all_stacks(). When provided and
+    len > 1, per-stack depth variable instructions (TT_PERF_STACK0_LAYERS, TT_PERF_STACK1_LAYERS,
+    ...) are included in the LLM prompt instead of the single-stack TT_PERF_LAYERS instruction.
 
     Source: source_kind='demo' (default) lifts from `demo_rel` (under model_root); source_kind='pcc'
     lifts from `source_abs` (the e2e PCC test, which may live outside model_root) and DROPS the
@@ -1239,6 +1244,25 @@ def generate_perf_test(
         "- Lift the imports + build args straight from the demo above.\n\n"
         f"Use this structural skeleton (adapt the build+run to the demo):\n{skeleton_for(root)}\n"
     )
+    # Multi-stack depth variable instructions: when multiple block stacks are present, override
+    # the single TT_PERF_LAYERS instruction with per-stack variables so the LLM wires each
+    # stack's depth cap separately.
+    if stacks and len(stacks) > 1:
+        _stack_lines = "\n".join(f"  PERF_STACK{i}_LAYERS -> {s.path} ({s.count} layers)" for i, s in enumerate(stacks))
+        _stack_var_examples = "\n".join(
+            f'_pl{i} = (os.environ.get("TT_PERF_STACK{i}_LAYERS") or "").strip()\n'
+            f"PERF_STACK{i}_LAYERS = int(_pl{i}) if (_pl{i}.isdigit() and int(_pl{i}) > 0) else None"
+            f"  # {s.path}: {s.count} total"
+            for i, s in enumerate(stacks)
+        )
+        prompt += (
+            f"\n\nMULTI-STACK DEPTH OVERRIDE: this model has {len(stacks)} repeating block stacks. "
+            "REPLACE the single `_pl` / `PERF_LAYERS` lines from the skeleton with these per-stack "
+            "variables (one env var per stack, same None-means-all-layers contract):\n"
+            f"{_stack_var_examples}\n"
+            f"Pass each depth cap to the builder:\n{_stack_lines}\n"
+            "None means all layers for that stack. Do NOT emit `PERF_LAYERS` for a multi-stack model.\n"
+        )
     inproc_ctx = _inline_inprocess_sources(demo_src, root)
     if inproc_ctx:
         prompt += (
