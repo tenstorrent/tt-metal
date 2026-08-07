@@ -65,10 +65,14 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup - one compute_kernel_hw_startup at the start, then full inits.
+    // LLK setup. The IS_ROW_MAJOR path re-inits for the transposed CB, so it issues a
+    // second compute_kernel_hw_startup; each preserves the pre-cleanup binary_op_init_common
+    // re-init (compute_kernel_hw_startup is documented call-once, but the pre-existing
+    // mid-kernel re-init pattern is preserved as-is by the init-cleanup rename).
 #ifdef IS_ROW_MAJOR
     compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
-    binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
 #else
     compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor);
 #endif
@@ -335,7 +339,8 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, number_of_tiles_per_core);
 
             // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(number_of_tiles_per_core);
             rm_value_output_dfb.reserve_back(TILE_H);
@@ -348,7 +353,8 @@ void kernel_main() {
             pack_untilize_uninit(dfb::rm_value_output);
 
             // Untilize indices: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::rm_post_sort_index, dfb::rm_index_output);
             rm_post_sort_index_dfb.wait_front(number_of_tiles_per_core);
             rm_index_output_dfb.reserve_back(TILE_H);

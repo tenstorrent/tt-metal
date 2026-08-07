@@ -136,7 +136,7 @@ void kernel_main() {
             // to the row-major output in the packer, avoiding a separate output-tile L1 round-trip. In
             // 32-bit DEST (fp32_dest_acc), the half-sync pack-untilize block cap is 4 tiles = one block.
             reconfig_data_format(cb_in_tile_id, cb_scale_mul_id);
-            mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_mul_id);
+            mul_bcast_cols_init(cb_in_tile_id, cb_scale_mul_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_id);
             cb_in_tile.wait_front(tiles_per_block);
             if constexpr (narrow_scales_to_bf16) {

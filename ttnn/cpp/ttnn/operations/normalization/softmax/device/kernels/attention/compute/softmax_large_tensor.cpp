@@ -79,7 +79,7 @@ void apply_fused_scale_mask(
     DataflowBuffer dfb_out_obj(dfb_out);
     reconfig_data_format(dfb_in, dfb_fused_scale_mask);
     pack_reconfig_data_format(dfb_out);
-    mul_tiles_bcast_scalar_init_short(dfb_in, dfb_fused_scale_mask);
+    mul_bcast_scalar_init(dfb_in, dfb_fused_scale_mask);
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         if(dfb_length_t -cur_blk < blk){
             blk = dfb_length_t- cur_blk;
@@ -113,9 +113,9 @@ void apply_fused_attn_mask(
     reconfig_data_format(dfb_in, dfb_fused_attn_mask);
     pack_reconfig_data_format(dfb_out);
 #ifdef CAUSAL_MASK
-    add_tiles_init(dfb_in, dfb_fused_attn_mask);
+    add_init(dfb_in, dfb_fused_attn_mask);
 #else
-    add_bcast_rows_init_short(dfb_in, dfb_fused_attn_mask);
+    add_bcast_rows_init(dfb_in, dfb_fused_attn_mask);
 #endif
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         tile_regs_acquire();
@@ -141,9 +141,9 @@ void apply_fused_attn_mask(
         if (do_mask && cur_blk == dfb_length_t - blk) {
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(dfb_mask_padded);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_mask_padded);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_mask_padded);
             dfb_mask_padded_obj.wait_front(1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_mask_padded, 0 /*in_tile_index*/, blk - 1);
         }
         tile_regs_commit();
@@ -175,7 +175,7 @@ void pad_input(uint32_t dfb_in, uint32_t dfb_out, uint32_t dfb_length_t, uint32_
         }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == dfb_length_t - blk) {
-                add_tiles_init(dfb_in, dfb_mask_padded);
+                add_init(dfb_in, dfb_mask_padded);
                 dfb_mask_padded_obj.wait_front(1);
                 add_tiles(dfb_in, dfb_mask_padded, cur_dst, 0, cur_dst);
             } else {
@@ -207,7 +207,7 @@ void exp_cb(uint32_t dfb_in, uint32_t dfb_out, uint32_t dfb_max, const uint32_t 
     pack_reconfig_data_format(dfb_out);
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(dfb_max);
-    sub_bcast_cols_init_short(dfb_in, dfb_max);
+    sub_bcast_cols_init(dfb_in, dfb_max);
 #else
     copy_tile_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
@@ -292,7 +292,7 @@ void apply_recip(uint32_t dfb_in, uint32_t dfb_recip, uint32_t dfb_out, uint32_t
     reconfig_data_format(dfb_in, dfb_recip);
     pack_reconfig_data_format(dfb_out);
     dfb_recip_obj.wait_front(1);
-    mul_bcast_cols_init_short(dfb_in, dfb_recip);
+    mul_bcast_cols_init(dfb_in, dfb_recip);
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         dfb_in_obj.wait_front(blk);
         tile_regs_acquire();
@@ -347,7 +347,7 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
     DataflowBuffer dfb_recip_obj(dfb_recip);
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(dfb_mask_padded, dfb_mask_padded);
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader

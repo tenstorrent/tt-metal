@@ -305,7 +305,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
-      enabled-skus: "wh_llmbox"
+      enabled-skus: "wh_llmbox_civ2"
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}

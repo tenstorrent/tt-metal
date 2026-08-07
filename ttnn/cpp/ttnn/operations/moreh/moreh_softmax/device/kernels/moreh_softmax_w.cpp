@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr auto cb_tmp = tt::CBIndex::c_28;
     DataflowBuffer dfb_tmp_obj(cb_tmp);
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -80,7 +80,7 @@ void kernel_main() {
 
         for (uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(dfb_in0_obj, dfb_max_obj);
+            sub_bcast_cols_init_with_dt(dfb_in0_obj, dfb_max_obj);
             sub_tiles_bcast<BroadcastType::COL>(cb_in0, cb_max, w, 0, dst0);
             tile_regs_commit();
 
@@ -170,7 +170,7 @@ void kernel_main() {
 #ifdef LOG
             // x - max - log(sum)
             tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(dfb_x_m_max_obj, dfb_recipsumexps_obj);
+            sub_bcast_cols_init_with_dt(dfb_x_m_max_obj, dfb_recipsumexps_obj);
             sub_tiles_bcast<BroadcastType::COL>(cb_x_m_max, cb_recipsumexps, w, 0, dst0);
             tile_regs_commit();
 
@@ -180,7 +180,7 @@ void kernel_main() {
 #else
             // exp(x - max) / psum
             tile_regs_acquire();
-            mul_bcast_cols_init_short_with_dt(dfb_exps_obj, dfb_recipsumexps_obj);
+            mul_bcast_cols_init_with_dt(dfb_exps_obj, dfb_recipsumexps_obj);
             mul_tiles_bcast_cols(cb_exps, cb_recipsumexps, w, 0, dst0);
             tile_regs_commit();
 
