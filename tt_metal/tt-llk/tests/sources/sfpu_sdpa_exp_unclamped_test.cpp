@@ -18,12 +18,13 @@
 // Scope of the sweep: every point the python side feeds is inside the domain where
 // this kernel is bit-identical to `_sfpu_exp_21f_bf16_`, so what is verified is that
 // removing the upper clamp changed nothing observable. INPUT_RANGES tops out at 4.0
-// (xlog2 = 4*1.4427 + 127 = 132.8, well under the removed upper bound of 255), and
-// the surviving *lower* clamp needs val <= -88.03 while the swept minimum is -88.0
-// (xlog2 = +0.043), so neither clamp is actually entered.
+// (xlog2 = 4*1.4427 + 127 = 132.8, well under the removed upper bound of 255), and it
+// bottoms out at -400, which does engage the surviving *lower* clamp (it needs
+// val <= -88.03) deeply enough for a missing clamp to be visible -- around
+// val ~= -176 an unclamped xlog2 recombines to ~1.0 against a golden of 0.
 //
-// Neither clamp's domain is swept on purpose: past the upper clamp point it is the
-// unclamped variant that stops tracking exp(val) -- the float-to-int step in
+// The removed clamp's own domain is not swept, on purpose: past the upper clamp point
+// it is the unclamped variant that stops tracking exp(val) -- the float-to-int step in
 // `_float_to_int32_for_exp_21f_` wraps there -- and exp() overflows bf16 above
 // val ~= 88.7 regardless, so there is no reference to compare against. See the
 // python docstring, which is the authority on the swept domain.
@@ -117,16 +118,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // The upper-unclamped exp shares the accurate exp's SFPU setup.
+    // No op-specific init: `_ckernel_sfpu_exp_accurate_upper_unclamped_` is a pure sfpi
+    // leaf -- it materialises every constant as an SFPLOADI immediate and walks DEST with
+    // `sfpi::dst_reg++` -- so all it needs is the invariant SFPU config + ADDR_MOD_7 from
+    // the LLK init. Calling `exp_init` here would only program the TTI exp path's state
+    // (ADDR_MOD_6, LREG12 = 1/ln2, LREG13 = c2), which nothing on this path reads.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::exp_init<false /* APPROXIMATION_MODE */, 0x3F800000 /* base scale = 1.0f */, true /* CLAMP_NEGATIVE */, is_fp32_dest_acc_en>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
 
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            0 /* dst_tile_index */, formats.math, formats.math);
+            0 /* dst_index */, formats.math, formats.math);
 
         _llk_math_eltwise_unary_sfpu_params_(calculate_sdpa_exp_unclamped<SFPU_SCALE_EN>, 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
 
@@ -153,7 +157,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
 }

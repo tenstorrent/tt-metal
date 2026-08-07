@@ -4780,13 +4780,26 @@ class SoftmaxKGolden:
     code from |even-column value| before subtracting the max and only re-enables all
     lanes after the exponential, so those lanes stay 0 and are then multiplied by the
     reciprocal. Rows outside the processed band come back untouched.
+
+    The kernel round-trips through Dest three times -- x - max, exp(), and the
+    normalized result -- so the golden quantizes at each of those stores to the width
+    dest_acc selects. Plain SFPSTORE truncates; only the exp kernels round, via the
+    SFP_STOCH_RND(RND_EVEN, FP32_TO_FP16B) they do before their own store.
     """
 
-    def __call__(self, input_tile, logits, k, rows=4, face_dim=16):
+    def __call__(self, input_tile, logits, k, dest_acc, rows=4, face_dim=16):
         golden = input_tile.to(torch.float32).clone()
+
+        def stored(values):
+            """A plain SFPSTORE: truncating on a 16-bit Dest, exact on a 32-bit one."""
+            if dest_acc == DestAccumulation.Yes:
+                return values.to(torch.float32)
+            return truncate_to_bfloat16(values)
+
         for row in range(rows):
-            exponentials = torch.exp(logits[row] - logits[row].max())
-            golden[row, :k] = exponentials / exponentials.sum()
+            shifted = stored(logits[row] - logits[row].max())
+            exponentials = round_to_dest_width(torch.exp(shifted), dest_acc)
+            golden[row, :k] = stored(exponentials / exponentials.sum())
             golden[row, k:face_dim] = 0.0
         return golden
 
@@ -4856,6 +4869,12 @@ class SdpaExpUnclampedGolden:
     the domain its caller uses -- val <= 0, and anywhere well below the clamp point
     at val ~= 88.7 -- it is just exp(val * scale). The scale arrives as a *bfloat16*
     bit pattern, which is what sfpi::sFloat16b() consumes, not an fp32 one.
+
+    The kernel static_asserts !is_fp32_dest_acc_en and then does
+    `convert<vFloat16b>(y, NearestEven)` unconditionally before the store, so the value
+    that reaches Dest is always bf16 regardless of the pack format -- hence the
+    round_to_dest_width(DestAccumulation.No) below. The pack format only decides
+    whether that value is converted a second time (a no-op) on the way to L1.
     """
 
     def __call__(self, operand, scale_bits: int, data_format: DataFormat):
@@ -4865,7 +4884,9 @@ class SdpaExpUnclampedGolden:
             .item()
         )
         result = torch.exp(operand.flatten().to(torch.float32) * scale)
-        return result.to(format_dict[data_format])
+        return round_to_dest_width(result, DestAccumulation.No).to(
+            format_dict[data_format]
+        )
 
 
 @register_golden

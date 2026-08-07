@@ -720,11 +720,17 @@ class SAMPLING_LEGACY_COMPAT(TemplateParameter):
 class MOE_GATE_TOPK(TemplateParameter):
     """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
 
-    Mirrors the template parameter list of
+    Mirrors the first five template parameters of
     ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
-    num_total_experts, zero_tail, full_sort>``, including its defaults -- so a
-    partial-kwargs caller gets the same variant the C++ default arguments would
-    give it (see api/compute/experimental/generic_moe_gate.h).
+    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
+    dataclass defaults are the compute-API wrapper's
+    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
+    template parameter carrying a C++ default is the sixth, ``generate_indices``.
+
+    ``generate_indices`` is deliberately not modelled: the driver instantiates with
+    five arguments, so it is pinned to true and the kernel always numbers the experts
+    itself. The caller-supplied index-mapping path (generate_indices = false) is
+    therefore untested.
     """
 
     num_selected_experts: int = 8

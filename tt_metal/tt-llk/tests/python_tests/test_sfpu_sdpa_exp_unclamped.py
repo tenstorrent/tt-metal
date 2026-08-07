@@ -14,11 +14,21 @@ SFPLOADI + clamp per element.
 
 The contract this test pins down is therefore "identical to exp() over the
 domain the caller actually uses":
-  * val in [-20, 0]  -- the SDPA domain (exponent of a negative score delta),
-  * val in [-88, 0]  -- down to the surviving lower clamp,
-  * val in [-4, 4]   -- straddling zero, still far below the removed upper clamp.
+  * val in [-20, 0]    -- the SDPA domain (exponent of a negative score delta),
+  * val in [-88, 0]    -- down to the surviving lower clamp,
+  * val in [-4, 4]     -- straddling zero, still far below the removed upper clamp,
+  * val in [-400, 0]   -- deep enough to actually engage the lower clamp.
 
-Above val ~= 88.7 the removed clamp would have mattered, but exp() overflows
+That last range is the one that tests the surviving clamp rather than assuming it.
+The clamp only engages at val <= -88.03, and simply going a little past it is not
+observable: at val = -100 the unclamped path still yields ~2^-110, which is under
+atol. It first becomes visible around val ~= -176, where the float-to-int step in
+`_float_to_int32_for_exp_21f_` recombines to exponent field 127 and returns ~1.0
+against a golden of 0. -400 clears that for both scale arms -- the BF16_HALF arm
+halves the effective input, so it needs ~2x the depth to reach the same window --
+and the golden there is well defined: exp() underflows the bf16 DEST to 0.
+
+Above val ~= 88.7 the *removed* clamp would have mattered, but exp() overflows
 bfloat16 there (exp(88.7) ~= 3.3e38 vs bf16 max 3.39e38), so that domain is
 deliberately not swept -- there is no well-defined expected value to compare
 against, and the header explicitly scopes itself to val <= 0.
@@ -27,10 +37,13 @@ against, and the header explicitly scopes itself to val <= 0.
 ("upper-unclamped exp variant implemented for bf16 dest only"), so the DEST is
 always 16-bit: dest_acc=Yes does not compile, and a Float32 input has nowhere to go
 because it would need the 32-bit DEST that assert forbids. Only the output side is
-free, and fp32 output is the tighter of the two since the packer does not round the
-result down on the way to L1.
+free, and neither arm is the tighter one: the kernel does
+`convert<vFloat16b>(y, NearestEven)` before the store unconditionally, so the device
+value is already bf16-exact and the golden models that. The Float32 output arm only
+skips a second, no-op conversion in the packer.
 """
 
+import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -62,27 +75,31 @@ FORMATS = [
 BF16_ONE = 0x3F80
 BF16_HALF = 0x3F00
 
-# Exercised as (low, high) input ranges. Every range stays inside the surviving
-# lower clamp (val >= -88) and far below the removed upper clamp (val << 88.7).
-INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0)]
+# Exercised as (low, high) input ranges. All stay far below the removed upper clamp
+# (val << 88.7); the last one reaches past the surviving lower clamp -- see docstring.
+INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0), (-400.0, 0.0)]
 
 
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
     input_range=INPUT_RANGES,
+    scale_en=[False, True],
     scale=[BF16_ONE, BF16_HALF],
     num_tiles=[1, 2],
 )
-def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale, num_tiles):
+def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tiles):
+    if not scale_en and scale != BF16_ONE:
+        # The template drops the multiply entirely, so the scale value is dead.
+        pytest.skip("scale is not read when SCALE_EN is false")
+
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.input_format]
 
-    # SCALE_EN is only worth compiling when the scale is not the identity; with
-    # scale == 1.0 both paths must agree, which is the cheap regression on the
-    # multiply itself.
-    scale_en = scale != BF16_ONE
+    # scale_en=True with scale == 1.0 is the cheap regression on the multiply itself:
+    # the identity scale must leave the result bit-identical to the scale_en=False arm.
+    effective_scale = scale if scale_en else BF16_ONE
 
     low, high = input_range
     stimuli_size = (num_tiles * ELEMENTS_PER_TILE,)
@@ -90,7 +107,7 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale, num_tiles):
     src_B = torch.zeros_like(src_A)
 
     golden_generator = get_golden_generator(SdpaExpUnclampedGolden)
-    golden_tensor = golden_generator(src_A, scale, formats.output_format)
+    golden_tensor = golden_generator(src_A, effective_scale, formats.output_format)
 
     configuration = TestConfig(
         "sources/sfpu_sdpa_exp_unclamped_test.cpp",

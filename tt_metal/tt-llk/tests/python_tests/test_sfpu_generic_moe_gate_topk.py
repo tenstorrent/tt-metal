@@ -55,9 +55,9 @@ that matters). Callers consume the winners as a set. So the checks are:
      pins the even/odd reading of the SFPU DEST address.
 
 Stimuli are built so the top-8 boundary is never ambiguous: the biased scores are a
-permutation of the 256 exactly-representable bfloat16 values in [1.0, 2.0), so all 256
-sort keys are distinct in the format the hardware compares in, and there is no tie to
-break.
+permutation of 256 consecutive bfloat16 encodings (1.0 .. 3.984375), so all 256 sort
+keys are distinct in the format the hardware compares in -- and stay distinct in the
+golden, which sorts the same values -- so there is no tie to break.
 
 Scope: the SFPU kernel only. In the compute API the score and biased tiles are staged
 by the FPU kernel `_llk_math_deepseek_moe_gate_eltwise_binary_`; here they are staged
@@ -138,13 +138,18 @@ _XFAIL_TOP16 = (
 
 
 def _distinct_bf16_keys() -> torch.Tensor:
-    """The 256 exactly-representable bfloat16 values in [1.0, 2.0), shuffled.
+    """256 consecutive bfloat16 encodings starting at 1.0, shuffled.
 
-    bfloat16 has an 8-bit mantissa, so [1, 2) contains exactly 256 values spaced
-    1/256 apart. Using a permutation of them makes every sort key distinct in the
-    comparison format, so the top-8 boundary cannot be a tie.
+    bfloat16 has 7 fraction bits, so [1, 2) holds only 128 distinct values, spaced
+    1/128 apart -- keys spaced 1/256 would collapse in pairs the moment _face0_tile
+    casts them to the format the hardware compares in, reintroducing exactly the ties
+    this is meant to avoid (while the golden still sorted the un-collapsed fp32
+    values). Walking consecutive bf16 bit patterns instead -- 0x3F80..0x407F, i.e.
+    1.0 up to 3.984375, spacing 1/128 in [1, 2) and 1/64 in [2, 4) -- keeps all 256
+    distinct with no rounding at all, so the top-8 boundary cannot be a tie.
     """
-    keys = 1.0 + torch.arange(NUM_TOTAL_EXPERTS, dtype=torch.float32) / 256.0
+    bits = (0x3F80 + torch.arange(NUM_TOTAL_EXPERTS, dtype=torch.int32)) << 16
+    keys = bits.contiguous().view(torch.float32)
     return keys[torch.randperm(NUM_TOTAL_EXPERTS)]
 
 
