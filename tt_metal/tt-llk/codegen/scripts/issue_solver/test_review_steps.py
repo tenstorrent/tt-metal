@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the review-round step helpers in orchestrator_steps.sh.
+"""Tests for review and verification helpers in orchestrator_steps.sh.
 
 Covers the two helpers a review round cannot be correct without:
 
@@ -11,6 +11,8 @@ Covers the two helpers a review round cannot be correct without:
   verifying the wrong thing on the wrong hardware.
 * ``execute_step_record_review_dispositions`` — the gate that stops a reply the
   addresser never actually thought about from reaching a reviewer.
+* ``execute_step_combine_verification_results`` — the deterministic backstop
+  that prevents zero or malformed test counts from becoming success.
 """
 
 import json
@@ -256,6 +258,150 @@ def test_setup_review_run_requires_the_analysis_artifact(
     r = _bash("execute_step_setup_review_run", llk)
     assert r.returncode != 0
     assert "missing issue_36142_analysis.md" in r.stdout + r.stderr
+
+
+# ── execute_step_combine_verification_results ────────────────────────────────
+def _combine_case(tmp_path, worktree, suite_results, route="llk"):
+    log_dir = tmp_path / "combine-log"
+    log_dir.mkdir()
+    state = {
+        "LOG_DIR": str(log_dir),
+        "VERIFY_ROUTE": route,
+        "TARGET_ARCHES_JSON": ["blackhole"],
+    }
+    (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps({"LOG_DIR": str(log_dir)}), encoding="utf-8"
+    )
+    (log_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "arch_results": {"blackhole": {"suite_results": suite_results}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _bash("execute_step_combine_verification_results", llk)
+    return result, json.loads((log_dir / "run.json").read_text())
+
+
+def test_combine_accepts_only_terminal_nonzero_complete_success(tmp_path, worktree):
+    result, run = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 3,
+                "tests_passed": 3,
+                "obstacle": None,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = run["arch_results"]["blackhole"]
+    assert combined["verdict"] == "SUCCESS"
+    assert combined["tests_total"] == 3
+    assert combined["tests_passed"] == 3
+
+
+@pytest.mark.parametrize(
+    ("suite", "reason"),
+    [
+        (
+            {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 0,
+                "tests_passed": 0,
+            },
+            "ZERO_SELECTED",
+        ),
+        (
+            {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": "1",
+                "tests_passed": 1,
+            },
+            "COUNT_INVALID",
+        ),
+        (
+            {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 2,
+            },
+            "COUNT_INVALID",
+        ),
+        (
+            {
+                "status": "running",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            },
+            "RESULT_NOT_TERMINAL",
+        ),
+    ],
+)
+def test_combine_rejects_false_success_contracts(tmp_path, worktree, suite, reason):
+    result, run = _combine_case(tmp_path, worktree, {"llk": suite})
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = run["arch_results"]["blackhole"]
+    assert combined["verdict"] == "ENV_ERROR"
+    assert reason in combined["obstacle"]
+
+
+def test_combine_requires_every_suite_to_succeed(tmp_path, worktree):
+    result, run = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 2,
+                "tests_passed": 2,
+            },
+            "metal": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 0,
+                "tests_passed": 0,
+            },
+        },
+        route="both",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = run["arch_results"]["blackhole"]
+    assert combined["verdict"] == "ENV_ERROR"
+    assert "metal: ZERO_SELECTED" in combined["obstacle"]
+
+
+def test_combine_preserves_valid_candidate_failure(tmp_path, worktree):
+    result, run = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "TESTS_FAILED",
+                "tests_total": 1,
+                "tests_passed": 0,
+                "obstacle": "assertion failed",
+            }
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = run["arch_results"]["blackhole"]
+    assert combined["verdict"] == "TESTS_FAILED"
+    assert combined["tests_total"] == 1
+    assert combined["tests_passed"] == 0
 
 
 # ── execute_step_record_review_dispositions ───────────────────────────────────
