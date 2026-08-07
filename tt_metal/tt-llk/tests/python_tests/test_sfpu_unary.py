@@ -715,17 +715,12 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    # Default to the op's own (signed) domain rather than generate_stimuli's positive-only
-    # format default, which would leave the x<0 branch, the piecewise knees and the
-    # saturation tails unreached. Every op reaching this driver is registered in
-    # _OP_DOMAIN_REGISTRY, so a KeyError here means a new op was added without a domain:
+    # The op's own signed domain, not generate_stimuli's positive-only format default,
+    # which would leave the x<0 branch, the piecewise knees and the saturation tails
+    # unreached. A KeyError means a new op arrived with no _OP_DOMAIN_REGISTRY entry:
     # register it rather than falling back to the positive-only default.
-    #
-    # The domain has to satisfy the whole input->output pipeline, not just one end of it:
-    # this sweep pairs every input format with every output format, so Float32->Float16
-    # has to stay inside Float16's range while Bfp8_b->Float16 keeps the tighter interval
-    # Bfp8_b's block precision demands. for_op_pipeline resolves both and takes the
-    # tighter — see its docstring.
+    # The domain has to hold for the whole pipeline, so for_op_pipeline resolves against
+    # both formats and keeps the tighter — see its docstring for why both matter.
     if spec_A is None:
         spec_A = exclude_undefined(
             mathop,
