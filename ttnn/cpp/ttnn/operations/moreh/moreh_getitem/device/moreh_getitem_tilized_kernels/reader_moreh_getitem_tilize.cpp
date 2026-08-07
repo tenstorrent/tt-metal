@@ -77,9 +77,6 @@ void kernel_main() {
 #ifdef HAS_INDEX3
     const auto index3 = TensorAccessor(tensor::index3);
 #endif
-#ifdef HAS_INDEX4
-    const auto index4 = TensorAccessor(tensor::index4);
-#endif
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,

@@ -149,10 +149,8 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
 
     // The index tensors are optional: only the dimensions the caller supplied exist in a given
     // instantiation. An absent index has no tensor to bind, so its binding is omitted entirely and the
-    // matching HAS_INDEX<dim> define — emitted only when the slot is defined — gates the kernel's
-    // references to the accessor and the DFB. (Legacy instead passed a nullptr Buffer* for an absent
-    // slot, which the descriptor API lowered to a literal 0u address the kernel never dereferenced.)
-    for (uint32_t dim = 0; dim < 5; dim++) {
+    // matching HAS_INDEX<dim> define gates the kernel's references to the accessor and the DFB.
+    for (uint32_t dim = 0; dim < INDEX_DFB.size(); dim++) {
         if (!index_info[dim].is_defined) {
             continue;
         }
@@ -162,10 +160,6 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
         reader_tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = INDEX[dim], .accessor_name = INDEX_ACCESSOR[dim]});
         reader_defines.emplace(INDEX_DEFINE[dim], "1");
-
-        if (dim >= INDEX_DFB.size()) {
-            continue;
-        }
 
         auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -340,7 +334,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
 
     run_args.tensor_args.emplace(INPUT, TensorArgument{input.mesh_tensor()});
     run_args.tensor_args.emplace(OUTPUT, TensorArgument{output.mesh_tensor()});
-    for (uint32_t dim = 0; dim < 5; dim++) {
+    for (uint32_t dim = 0; dim < INDEX_DFB.size(); dim++) {
         if (index_info[dim].is_defined) {
             run_args.tensor_args.emplace(INDEX[dim], TensorArgument{index_info[dim].tensor->mesh_tensor()});
         }
