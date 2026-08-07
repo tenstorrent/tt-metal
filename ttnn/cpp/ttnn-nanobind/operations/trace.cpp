@@ -10,6 +10,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -68,6 +71,64 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
         nb::call_guard<nb::gil_scoped_release>());
+
+    mod.def(
+        "mark_allocations_safe",
+        [](MeshDevice* device) { ttnn::operations::trace::mark_allocations_safe(device); },
+        nb::arg("mesh_device"));
+
+    mod.def(
+        "mark_allocations_unsafe",
+        [](MeshDevice* device, MeshTraceId trace_id) {
+            ttnn::operations::trace::mark_allocations_unsafe(device, trace_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"));
+
+    mod.def(
+        "allocations_unsafe",
+        [](MeshDevice* device) { return ttnn::operations::trace::allocations_unsafe(device); },
+        nb::arg("mesh_device"));
+
+    // Unsafe allocation tracking
+    mod.def(
+        "get_unsafe_tracked_ids",
+        [](MeshDevice* device, MeshTraceId trace_id) {
+            return ttnn::operations::trace::get_unsafe_tracked_ids(device, trace_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"));
+    mod.def(
+        "remove_unsafe_tracked_id",
+        [](MeshDevice* device, size_t buffer_unique_id) {
+            ttnn::operations::trace::remove_unsafe_tracked_id(device, buffer_unique_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("buffer_unique_id"));
+    mod.def(
+        "clear_unsafe_tracked_ids",
+        [](MeshDevice* device, MeshTraceId trace_id) {
+            ttnn::operations::trace::clear_unsafe_tracked_ids(device, trace_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"));
+    mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
+    mod.def("drain_retired_traceback_ids", []() { return ttnn::operations::trace::drain_retired_traceback_ids(); });
+    mod.def(
+        "push_corruptible_allocation_scope",
+        [](MeshDevice* device) { ttnn::operations::trace::push_corruptible_allocation_scope(device); },
+        nb::arg("mesh_device"));
+    mod.def(
+        "pop_corruptible_allocation_scope",
+        [](MeshDevice* device) { ttnn::operations::trace::pop_corruptible_allocation_scope(device); },
+        nb::arg("mesh_device"));
+
+    // Allocation context stack
+    mod.def(
+        "push_allocation_context",
+        [](const std::string& ctx) { ttnn::operations::trace::push_allocation_context(ctx); },
+        nb::arg("context"));
+    mod.def("pop_allocation_context", []() { ttnn::operations::trace::pop_allocation_context(); });
 }
 
-} // namespace ttnn::operations::trace
+}  // namespace ttnn::operations::trace

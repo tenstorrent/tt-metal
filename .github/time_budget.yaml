@@ -87,7 +87,7 @@ ttnn:
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox: 25
-    sim_wormhole_b0: 680
+    sim_wormhole_b0: 695  # +15 for trace allocation tracker simulator coverage
     sim_blackhole: 680
   unit:
     wh_llmbox: 50
