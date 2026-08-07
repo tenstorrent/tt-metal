@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,6 @@
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dataflow_api.h"
-
-// Metal 2.0 form of generate_bcast_scalar.hpp: the same three scalar fills, taking a
-// DataflowBuffer instead of a CircularBuffer. Kernels on the Metal 2.0 host API hold a
-// DataflowBuffer built from a dfb:: binding token and have no CircularBuffer to hand over, so
-// they bind against this header; the legacy copy beside it serves the kernels still on the old
-// API. The buffer is taken by reference so a caller passes the one wrapper it already holds for
-// that FIFO, rather than a second wrapper object aliasing the same buffer.
 
 // W-bcast scalar
 // Tile is assumed to have 16-bit elements
