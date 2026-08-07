@@ -171,6 +171,8 @@ execute_step_validate_input() {
     expected_base="$(python "$S/state.py" --worktree-dir "$wt" get EXPECTED_BASE_COMMIT)"
     setup_base="$(python "$S/state.py" --worktree-dir "$wt" get SETUP_BASE_COMMIT)"
     base_was_pinned="$(python "$S/state.py" --worktree-dir "$wt" get BASE_COMMIT_WAS_PINNED)"
+    local queue_launch
+    queue_launch="$(python "$S/state.py" --worktree-dir "$wt" get QUEUE_LAUNCH)"
     actual_base="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
     env_base="${CODEGEN_BASE_COMMIT:-}"
     resumed_from_run="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_RUN_ID)"
@@ -200,7 +202,13 @@ execute_step_validate_input() {
         || { echo "REJECT: setup base mismatch: expected $expected_base, setup recorded ${setup_base:-missing}"; ok=0; }
     [ "$actual_base" = "$expected_base" ] \
         || { echo "REJECT: base drift before agent execution: expected $expected_base, worktree HEAD is ${actual_base:-unknown}"; ok=0; }
-    if [ "$base_was_pinned" = "true" ] && [ -z "$env_base" ]; then
+    if [ "$queue_launch" = "true" ] && [ "$base_was_pinned" != "true" ]; then
+        echo "REJECT: queued launch was not created from an exact pinned base"
+        ok=0
+    elif [ "$queue_launch" = "true" ] && [ -z "$env_base" ]; then
+        echo "REJECT: queued launch lost CODEGEN_BASE_COMMIT after setup"
+        ok=0
+    elif [ "$base_was_pinned" = "true" ] && [ -z "$env_base" ]; then
         echo "REJECT: CODEGEN_BASE_COMMIT was unset after pinned worktree setup"
         ok=0
     elif [ -n "$env_base" ] && [ "$env_base" != "$expected_base" ]; then

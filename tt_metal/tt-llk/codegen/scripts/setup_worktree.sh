@@ -70,6 +70,11 @@ codegen_worktree_dirs() {
 resolve_worktree_base() {
   local requested="${CODEGEN_BASE_COMMIT:-}"
   if [[ -z "$requested" ]]; then
+    if [[ -n "${CODEGEN_ATTEMPT_ID+x}" || -n "${CODEGEN_CAMPAIGN_ID+x}" \
+        || -n "${CODEGEN_RUNNER_POOL+x}" ]]; then
+      echo "[worktree] queued launch requires an exact CODEGEN_BASE_COMMIT" >&2
+      return 1
+    fi
     git -C "$REPO_ROOT" rev-parse --verify "origin/main^{commit}" 2>/dev/null || {
       echo "[worktree] origin/main is not available locally for admission pinning" >&2
       return 1
@@ -100,6 +105,11 @@ resolve_worktree_base() {
 setup_worktree() {
   local -; set -euo pipefail
   local task_id="$1"
+  local queue_launch=false
+  if [[ -n "${CODEGEN_ATTEMPT_ID+x}" || -n "${CODEGEN_CAMPAIGN_ID+x}" \
+      || -n "${CODEGEN_RUNNER_POOL+x}" ]]; then
+    queue_launch=true
+  fi
 
   mkdir -p "$CODEGEN_WORKTREE_ROOT"
   cd "$REPO_ROOT"
@@ -315,6 +325,7 @@ codegen/
 CLAUDE.md
 .mcp.json
 .codegen_run_state.json
+.codegen_run_state.json.lock
 # Shared test venv: **/.venv/** ignores its contents but not the symlink itself
 tests/.venv
 # Per-worktree SFPI toolchain installed by setup_testing_env.sh
@@ -335,12 +346,22 @@ GITIGNORE
   # Keep the admission identity in the existing worktree state store so a later
   # shell cannot change or unset CODEGEN_BASE_COMMIT and silently select a new
   # base. Input validation compares these independent setup records to HEAD.
-  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
-    set EXPECTED_BASE_COMMIT "$base_ref"
-  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
-    set SETUP_BASE_COMMIT "$actual_base"
-  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
-    set BASE_COMMIT_WAS_PINNED "$base_was_pinned" --json
+  python - "$base_ref" "$actual_base" "$base_was_pinned" "$queue_launch" \
+      "${CODEGEN_ATTEMPT_ID:-}" <<'PY' \
+    | python "${LLK_ROOT}/codegen/scripts/state.py" \
+        --worktree-dir "$WORKTREE_DIR" set-many
+import json
+import sys
+
+expected, actual, pinned, queued, attempt = sys.argv[1:]
+print(json.dumps({
+    "EXPECTED_BASE_COMMIT": expected,
+    "SETUP_BASE_COMMIT": actual,
+    "BASE_COMMIT_WAS_PINNED": pinned == "true",
+    "QUEUE_LAUNCH": queued == "true",
+    "QUEUE_ATTEMPT_ID": attempt,
+}))
+PY
 
   if [[ "$resume_requested" == "true" ]]; then
     local resume_patch="${CODEGEN_RESUME_RUN_DIR}/generated.patch"

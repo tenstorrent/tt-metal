@@ -72,6 +72,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -104,23 +105,34 @@ def _load(log_dir: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+@contextmanager
+def _run_json_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.parent / ".run.json.lock"
+    with lock_path.open("a+") as lock:
+        try:
+            os.chmod(lock_path, 0o664)
+        except OSError:
+            pass
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        yield
+
+
 def _atomic_write(
-    log_dir: Path, doc: dict[str, Any], *, destination: Path | None = None
+    log_dir: Path,
+    doc: dict[str, Any],
+    *,
+    destination: Path | None = None,
+    lock_held: bool = False,
 ) -> None:
     path = destination or _run_json_path(log_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock = None
+    if path.name == "run.json" and not lock_held:
+        with _run_json_lock(path):
+            _atomic_write(log_dir, doc, destination=destination, lock_held=True)
+        return
     try:
         if path.name == "run.json":
-            lock_path = path.parent / ".run.json.lock"
-            lock = lock_path.open("a+")
-            try:
-                os.chmod(lock_path, 0o664)
-            except OSError:
-                # Another shared-service user may own an already group-writable
-                # lock inode; inability to chmod it does not make locking unsafe.
-                pass
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             current_sequence = 0
             try:
                 current = json.loads(path.read_text()) if path.exists() else {}
@@ -160,10 +172,16 @@ def _atomic_write(
         if "tmp" in locals() and os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    finally:
-        if lock is not None:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-            lock.close()
+
+
+@contextmanager
+def _run_json_transaction(log_dir: Path):
+    """Hold the run lock across the complete read/modify/write transaction."""
+    path = _run_json_path(log_dir)
+    with _run_json_lock(path):
+        doc = _load(log_dir)
+        yield doc
+        _atomic_write(log_dir, doc, lock_held=True)
 
 
 def _json_arg(value: str | None, default: Any) -> Any:
@@ -350,44 +368,41 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_advance(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
     now = args.now or _utcnow()
+    with _run_json_transaction(log_dir) as doc:
+        history = doc.setdefault("step_history", [])
+        if history and history[-1].get("result") == "in_progress":
+            last = history[-1]
+            last["ended"] = now
+            last["duration_seconds"] = _duration_seconds(last["started"], now)
+            last["result"] = args.prev_result
+            if args.prev_message:
+                last["message"] = args.prev_message
 
-    history = doc.setdefault("step_history", [])
-    if history and history[-1].get("result") == "in_progress":
-        last = history[-1]
-        last["ended"] = now
-        last["duration_seconds"] = _duration_seconds(last["started"], now)
-        last["result"] = args.prev_result
-        if args.prev_message:
-            last["message"] = args.prev_message
+            prev_step_id = last["step"]
+            completed = doc.setdefault("steps_completed", [])
+            if prev_step_id not in completed:
+                completed.append(prev_step_id)
 
-        prev_step_id = last["step"]
-        completed = doc.setdefault("steps_completed", [])
-        if prev_step_id not in completed:
-            completed.append(prev_step_id)
+        history.append(
+            {
+                "step": args.new_step,
+                "started": now,
+                "ended": None,
+                "duration_seconds": None,
+                "result": "in_progress",
+                "message": args.new_message,
+            }
+        )
 
-    history.append(
-        {
-            "step": args.new_step,
-            "started": now,
-            "ended": None,
-            "duration_seconds": None,
-            "result": "in_progress",
-            "message": args.new_message,
-        }
-    )
+        doc["current_step"] = args.new_step
+        doc["current_step_started"] = now
+        doc["current_step_message"] = args.new_message
 
-    doc["current_step"] = args.new_step
-    doc["current_step_started"] = now
-    doc["current_step_message"] = args.new_message
-
-    if args.agent:
-        agents = doc.setdefault("agents", [])
-        if args.agent not in agents:
-            agents.append(args.agent)
-
-    _atomic_write(log_dir, doc)
+        if args.agent:
+            agents = doc.setdefault("agents", [])
+            if args.agent not in agents:
+                agents.append(args.agent)
     print(f"advance: {args.new_step} ({args.prev_result} closed prior)")
 
 
@@ -398,14 +413,12 @@ def cmd_advance(args: argparse.Namespace) -> None:
 
 def cmd_message(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
-    doc["current_step_message"] = args.message
+    with _run_json_transaction(log_dir) as doc:
+        doc["current_step_message"] = args.message
 
-    history = doc.get("step_history") or []
-    if history and history[-1].get("result") == "in_progress":
-        history[-1]["message"] = args.message
-
-    _atomic_write(log_dir, doc)
+        history = doc.get("step_history") or []
+        if history and history[-1].get("result") == "in_progress":
+            history[-1]["message"] = args.message
     print(f"message: {args.message[:60]}")
 
 
@@ -438,54 +451,50 @@ def _phase_entry(doc: dict[str, Any], phase_num: int) -> dict[str, Any]:
 
 def cmd_phase_start(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
     now = args.now or _utcnow()
-    entry = _phase_entry(doc, args.phase)
-    if args.name:
-        entry["name"] = args.name
-    entry["start_time"] = now
-    entry["test_result"] = "pending"
-    entry["end_time"] = None
-    entry["duration_seconds"] = None
-    _atomic_write(log_dir, doc)
+    with _run_json_transaction(log_dir) as doc:
+        entry = _phase_entry(doc, args.phase)
+        if args.name:
+            entry["name"] = args.name
+        entry["start_time"] = now
+        entry["test_result"] = "pending"
+        entry["end_time"] = None
+        entry["duration_seconds"] = None
     print(f"phase-start: phase {args.phase} ({args.name or entry.get('name')})")
 
 
 def cmd_phase_test(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
-    entry = _phase_entry(doc, args.phase)
-    entry["test_result"] = args.state  # "running" | "fixing"
-    if args.details is not None:
-        entry["test_details"] = args.details
-    _atomic_write(log_dir, doc)
+    with _run_json_transaction(log_dir) as doc:
+        entry = _phase_entry(doc, args.phase)
+        entry["test_result"] = args.state  # "running" | "fixing"
+        if args.details is not None:
+            entry["test_details"] = args.details
     print(f"phase-test: phase {args.phase} -> {args.state}")
 
 
 def cmd_phase_end(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
     now = args.now or _utcnow()
-    entry = _phase_entry(doc, args.phase)
-    entry["end_time"] = now
-    if entry.get("start_time"):
-        entry["duration_seconds"] = _duration_seconds(entry["start_time"], now)
-    entry["test_result"] = args.test_result  # passed | failed | skipped
+    with _run_json_transaction(log_dir) as doc:
+        entry = _phase_entry(doc, args.phase)
+        entry["end_time"] = now
+        if entry.get("start_time"):
+            entry["duration_seconds"] = _duration_seconds(entry["start_time"], now)
+        entry["test_result"] = args.test_result  # passed | failed | skipped
 
-    if args.compilation_attempts is not None:
-        entry["compilation_attempts"] = args.compilation_attempts
-    if args.debug_cycles is not None:
-        entry["debug_cycles"] = args.debug_cycles
-    if args.test_details is not None:
-        entry["test_details"] = args.test_details
-    compile_errors = _json_arg(args.compile_errors_json, None)
-    if compile_errors is not None:
-        entry["compile_errors"] = compile_errors
+        if args.compilation_attempts is not None:
+            entry["compilation_attempts"] = args.compilation_attempts
+        if args.debug_cycles is not None:
+            entry["debug_cycles"] = args.debug_cycles
+        if args.test_details is not None:
+            entry["test_details"] = args.test_details
+        compile_errors = _json_arg(args.compile_errors_json, None)
+        if compile_errors is not None:
+            entry["compile_errors"] = compile_errors
 
-    if args.test_result == "passed":
-        doc["phases_completed"] = (doc.get("phases_completed") or 0) + 1
-
-    _atomic_write(log_dir, doc)
+        if args.test_result == "passed":
+            doc["phases_completed"] = (doc.get("phases_completed") or 0) + 1
     print(f"phase-end: phase {args.phase} -> {args.test_result}")
 
 
@@ -496,27 +505,25 @@ def cmd_phase_end(args: argparse.Namespace) -> None:
 
 def cmd_failure(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
-    failures = doc.setdefault("failures", [])
-    failures.append(
-        {
-            "step": args.step,
-            "agent": args.agent,
-            "type": args.type,
-            "message": args.message,
-            "resolved": args.resolved.lower() == "true",
-        }
-    )
-    _atomic_write(log_dir, doc)
+    with _run_json_transaction(log_dir) as doc:
+        failures = doc.setdefault("failures", [])
+        failures.append(
+            {
+                "step": args.step,
+                "agent": args.agent,
+                "type": args.type,
+                "message": args.message,
+                "resolved": args.resolved.lower() == "true",
+            }
+        )
     print(f"failure: {args.type} @ {args.step}")
 
 
 def cmd_metric(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
     patch = _json_arg(args.patch_json, {})
-    _merge_patch(doc, patch)
-    _atomic_write(log_dir, doc)
+    with _run_json_transaction(log_dir) as doc:
+        _merge_patch(doc, patch)
     print(f"metric: patched {sorted(patch)}")
 
 
@@ -525,116 +532,100 @@ def cmd_metric(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 
-def cmd_finalize(args: argparse.Namespace) -> None:
-    log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
-    now = args.end_time or _utcnow()
-
+def _validate_audit_success(
+    log_dir: Path, doc: dict[str, Any], args: argparse.Namespace
+) -> None:
     # Audit runs are the initial fail-closed lane. A caller cannot promote an
     # audit attempt merely by patching run.json: success must be authorized by
     # the current sealed manifest, reduction, and exact packaged candidate.
-    if args.status == "success" and doc.get("runner_pool") == "audit":
-        manifest_path = log_dir / "required_verification_manifest.json"
-        reduction_path = log_dir / "verification_reduction.json"
-        if not manifest_path.is_file():
-            raise ValueError("audit success requires a required-verification manifest")
-        if not reduction_path.is_file():
-            raise ValueError("audit success requires a verification reduction")
-        manifest = _load_required_manifest(manifest_path)
-        reduction = _load_verification_reduction(reduction_path)
-        if doc.get("run_id") != manifest["run_id"]:
-            raise ValueError("audit success manifest does not belong to this run")
-        for field in ("run_id", "attempt_id", "manifest_id", "expected_base_sha"):
-            if reduction[field] != manifest[field]:
-                raise ValueError(f"audit success reduction {field} mismatch")
-        if (
-            reduction["scope"] != "all"
-            or reduction["classification"] != "success"
-            or reduction["reason_codes"]
-            or len(reduction["leaves"]) != len(manifest["requirements"])
-            or any(
-                leaf["classification"] != "success" or leaf["result_id"] is None
-                for leaf in reduction["leaves"]
-            )
-            or reduction["patch_sha256"] is None
-            or reduction["success_token"] is None
-        ):
-            raise ValueError("audit success reduction is not complete and successful")
-        expected_token = _canonical_digest(
-            {
-                "schema": "tt.issue-solver.verification-success-token",
-                "version": 1,
-                "reduction_id": reduction["reduction_id"],
-                "manifest_id": manifest["manifest_id"],
-                "run_id": manifest["run_id"],
-                "attempt_id": manifest["attempt_id"],
-                "patch_sha256": reduction["patch_sha256"],
-            }
+    if args.status != "success" or doc.get("runner_pool") != "audit":
+        return
+    manifest_path = log_dir / "required_verification_manifest.json"
+    reduction_path = log_dir / "verification_reduction.json"
+    if not manifest_path.is_file():
+        raise ValueError("audit success requires a required-verification manifest")
+    if not reduction_path.is_file():
+        raise ValueError("audit success requires a verification reduction")
+    manifest = _load_required_manifest(manifest_path)
+    reduction = _load_verification_reduction(reduction_path)
+    if doc.get("run_id") != manifest["run_id"]:
+        raise ValueError("audit success manifest does not belong to this run")
+    for field in ("run_id", "attempt_id", "manifest_id", "expected_base_sha"):
+        if reduction[field] != manifest[field]:
+            raise ValueError(f"audit success reduction {field} mismatch")
+    if (
+        reduction["scope"] != "all"
+        or reduction["classification"] != "success"
+        or reduction["reason_codes"]
+        or len(reduction["leaves"]) != len(manifest["requirements"])
+        or any(
+            leaf["classification"] != "success" or leaf["result_id"] is None
+            for leaf in reduction["leaves"]
         )
-        if reduction["success_token"] != expected_token:
-            raise ValueError("audit success token is invalid")
-        if not args.worktree:
-            raise ValueError("audit success requires the packaged worktree")
-        worktree = Path(args.worktree).resolve()
-        head = subprocess.run(
-            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
-        if not _SHA40_RE.fullmatch(head):
-            raise ValueError("audit success worktree HEAD is invalid")
-        candidate = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(worktree),
-                "diff",
-                manifest["expected_base_sha"],
-                head,
-                "--",
-            ],
-            check=True,
-            capture_output=True,
-            timeout=120,
-        ).stdout
-        if hashlib.sha256(candidate).hexdigest() != reduction["patch_sha256"]:
-            raise ValueError(
-                "audit success candidate patch differs from verified patch"
-            )
-
-    history = doc.setdefault("step_history", [])
-    if history and history[-1].get("result") == "in_progress":
-        last = history[-1]
-        last["ended"] = now
-        last["duration_seconds"] = _duration_seconds(last["started"], now)
-        last["result"] = args.final_result
-        if args.final_message:
-            last["message"] = args.final_message
-        completed = doc.setdefault("steps_completed", [])
-        if last["step"] not in completed:
-            completed.append(last["step"])
-
-    doc["end_time"] = now
-    if doc.get("start_time"):
-        doc["duration_seconds"] = _duration_seconds(doc["start_time"], now)
-    doc["status"] = args.status  # success | compiled | failed | skipped
-    doc["final_result"] = args.final_result
-    doc["final_message"] = args.final_message or None
-    doc["current_step_message"] = (
-        args.final_message or doc.get("current_step_message") or ""
+        or reduction["patch_sha256"] is None
+        or reduction["success_token"] is None
+    ):
+        raise ValueError("audit success reduction is not complete and successful")
+    expected_token = _canonical_digest(
+        {
+            "schema": "tt.issue-solver.verification-success-token",
+            "version": 1,
+            "reduction_id": reduction["reduction_id"],
+            "manifest_id": manifest["manifest_id"],
+            "run_id": manifest["run_id"],
+            "attempt_id": manifest["attempt_id"],
+            "patch_sha256": reduction["patch_sha256"],
+        }
     )
+    if reduction["success_token"] != expected_token:
+        raise ValueError("audit success token is invalid")
+    if not args.worktree:
+        raise ValueError("audit success requires the packaged worktree")
+    worktree = Path(args.worktree).resolve()
+    if (
+        _candidate_patch_digest(worktree, manifest["expected_base_sha"])
+        != reduction["patch_sha256"]
+    ):
+        raise ValueError("audit success candidate patch differs from verified patch")
 
+
+def cmd_finalize(args: argparse.Namespace) -> None:
+    log_dir = Path(args.log_dir)
+    now = args.end_time or _utcnow()
     patch = _json_arg(args.patch_json, {})
-    _merge_patch(doc, patch)
 
-    # Apply typed --solver-state last so it cannot be silently overridden by
-    # --patch-json (argparse choices are otherwise bypassed via that escape hatch).
-    if args.solver_state is not None:
-        doc["solver_state"] = args.solver_state
+    with _run_json_transaction(log_dir) as doc:
+        _validate_audit_success(log_dir, doc, args)
 
-    _atomic_write(log_dir, doc)
+        history = doc.setdefault("step_history", [])
+        if history and history[-1].get("result") == "in_progress":
+            last = history[-1]
+            last["ended"] = now
+            last["duration_seconds"] = _duration_seconds(last["started"], now)
+            last["result"] = args.final_result
+            if args.final_message:
+                last["message"] = args.final_message
+            completed = doc.setdefault("steps_completed", [])
+            if last["step"] not in completed:
+                completed.append(last["step"])
+
+        doc["end_time"] = now
+        if doc.get("start_time"):
+            doc["duration_seconds"] = _duration_seconds(doc["start_time"], now)
+        doc["status"] = args.status  # success | compiled | failed | skipped
+        doc["final_result"] = args.final_result
+        doc["final_message"] = args.final_message or None
+        doc["current_step_message"] = (
+            args.final_message or doc.get("current_step_message") or ""
+        )
+
+        _merge_patch(doc, patch)
+
+        # Apply typed --solver-state last so it cannot be silently overridden by
+        # --patch-json (argparse choices otherwise bypass it via that escape hatch).
+        if args.solver_state is not None:
+            doc["solver_state"] = args.solver_state
+
     print(f"finalize: status={args.status}")
 
 
@@ -645,17 +636,13 @@ def cmd_finalize(args: argparse.Namespace) -> None:
 
 def cmd_link_siblings(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
-    doc = _load(log_dir)
-
     siblings = _json_arg(args.siblings, [])
     if not isinstance(siblings, list):
         raise SystemExit("--siblings must be a JSON array")
-
-    doc["sibling_runs"] = siblings
-    if args.issue_run_id is not None:
-        doc["issue_run_id"] = args.issue_run_id
-
-    _atomic_write(log_dir, doc)
+    with _run_json_transaction(log_dir) as doc:
+        doc["sibling_runs"] = siblings
+        if args.issue_run_id is not None:
+            doc["issue_run_id"] = args.issue_run_id
     print(f"link-siblings: {len(siblings)} sibling(s) linked")
 
 
@@ -693,12 +680,19 @@ def _canonical_digest(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
+def _candidate_patch_digest(worktree: Path, base: str) -> str:
     """Hash all candidate content while preserving setup-owned index exclusions."""
-    worktree = Path(args.worktree)
-    base = args.expected_base_sha
     if not worktree.is_dir() or not _SHA40_RE.fullmatch(base):
         raise ValueError("candidate patch requires a worktree and exact base SHA")
+    worktree = Path(
+        subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+    ).resolve()
     resolved = subprocess.run(
         ["git", "-C", str(worktree), "rev-parse", "--verify", f"{base}^{{commit}}"],
         check=True,
@@ -753,7 +747,11 @@ def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
     finally:
         if temporary_index:
             Path(temporary_index).unlink(missing_ok=True)
-    print(hashlib.sha256(patch).hexdigest())
+    return hashlib.sha256(patch).hexdigest()
+
+
+def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
+    print(_candidate_patch_digest(Path(args.worktree), args.expected_base_sha))
 
 
 _VERIFICATION_ARCHES = {"blackhole", "wormhole", "quasar"}
@@ -2367,9 +2365,16 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
             value = leaf[field]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"verification reduction leaf {field} is invalid")
+        outcome_count_incomplete = (
+            leaf["classification"] == "coverage_error"
+            and "execution_outcome_count_incomplete" in leaf["reason_codes"]
+        )
+        selection_count_incomplete = (
+            leaf["selected"] != leaf["executed"] + leaf["skipped"] + leaf["xfailed"]
+        )
         if (
             leaf["executed"] != leaf["passed"] + leaf["failed"] + leaf["xpassed"]
-            or leaf["selected"] != leaf["executed"] + leaf["skipped"] + leaf["xfailed"]
+            or selection_count_incomplete != outcome_count_incomplete
         ):
             raise ValueError("verification reduction leaf counts are inconsistent")
         if leaf["result_classification"] is not None and (
@@ -2840,7 +2845,6 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
         _atomic_write(retained.parent, reduction, destination=retained)
     _atomic_write(output.parent, reduction, destination=output)
     if _run_json_path(log_dir).is_file():
-        run = _load(log_dir)
         patch = {
             "arch_results": architecture_results,
             "tests_total": reduction["tests_total"],
@@ -2854,8 +2858,8 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                 "success_token": reduction["success_token"],
             },
         }
-        _deep_merge(run, patch)
-        _atomic_write(log_dir, run)
+        with _run_json_transaction(log_dir) as run:
+            _deep_merge(run, patch)
     print(
         f"verification-reduction: {args.scope} {classification} "
         f"({len(leaves)} leaves) -> {output}"
