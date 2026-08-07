@@ -202,7 +202,16 @@ steps:
   - name: Prepare the Python environment
     timeout-minutes: 15
     run: |
-      docker exec portdev python3 -m pip install --quiet graphviz pyyaml
+      # The image's /opt/venv has no pip -- tt-metal provisions with uv, so install with uv and
+      # only fall back to pip if this image ever changes.
+      docker exec portdev bash -c '
+        set -e
+        if command -v uv >/dev/null; then
+          uv pip install --python "$(command -v python3)" graphviz pyyaml
+        else
+          python3 -m pip install --quiet graphviz pyyaml
+        fi
+      '
       docker exec portdev python3 -c 'import ttnn, torch, yaml, graphviz; print("harness imports OK")'
 
   # Informational, and deliberately non-fatal: the ported leg is still an empty stub here, so this
