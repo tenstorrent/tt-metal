@@ -522,45 +522,57 @@ op rejects while a legal sibling was already discarded.
 
 - **File:** `lib/Dialect/TTNN/Analysis/LegalTensorLayoutAnalysis.cpp:128-225`.
 
-### D6. The op model accepts shard shapes the runtime refuses ⭐⭐ — a validation gap, not a bad score
+### D6. ~~The op model accepts shard shapes the runtime refuses~~ — **WITHDRAWN, my error**
 
-This is the one place where the advisor is not merely mis-*ranking* — it is emitting a plan that **cannot be
-executed at all**, and its own validation says the plan is fine.
+I proposed this as a tt-mlir legality fix plus a tt-metal recommendation. **There is no defect.** The advisor
+specified shard **(32,64)** — tile-aligned — on **32** cores (`final_ir.mlir`, `#ttnn_layout24`). My probe used
+**(32,48)**, which the advisor never specified. An isolated single-op test of the advisor's exact config passes
+on every op, and the plan implemented verbatim is **−10.43 % at PCC 1.0**, against the **−4.88 %** the cell
+shipped.
 
-For phi's RoPE body the advisor advised `l1/height_sharded/32x1` on `neg` / `concat` / `multiply`. The heads are
-96 wide and split at 48, so the shards are `(32, 96)` and `(32, 48)`. From its own decision trace:
+Nothing to change in tt-mlir or tt-metal from this. What replaces it is C5f (below) and F4.
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §4–§5.
 
-| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
-|---|---|---|---|
-| `ttnn.neg` op10 | 296 | **296 — all valid** | **yes**, one of 112 valid height-sharded candidates |
-| `ttnn.concat` op11 | 512 | 256 | **yes** |
+### C5f. Derive `advised_cores` from the grid string, not the `cores=` bounding box ⭐⭐ one line
 
-Implemented faithfully on device, both widths fail:
+`reconcile.py:194` parses `cores=(0,0)-(10,1)` → 22. The chosen layout's `CoreRangeSet` in `final_ir.mlir` has
+**two** ranges, 22 + 10 = **32**. The `AxB` grid string printed immediately before it is already correct.
 
-- `TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`
-- `TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first or use an interleaved output memory config.`
+**Validated** against three decision traces (`beam[0].score.coreCount`, the value `LayoutScore` compares):
+grid-string product correct **22/22, 10/10, 17/17**; bounding box correct 2/22, 1/10, 2/17.
+**Corpus-wide: 476 of 816 advised ops — 58.3 % — carry an understated core count.**
 
-Both reproduced twice; the shipped `l1/interleaved` control runs at 0.768758 / 0.768047 ms.
+**This is not cosmetic.** Two phi cells recorded themselves as overriding the advisor while agreeing with it,
+and the deviation that followed cost one of them 1.43 ms/model (F4). Fix: use the grid product. One line, no
+build. Optionally also stop `report.json` flattening the range set — but the consumer fix removes the
+consequence, and `final_ir.mlir` already carries the truth.
 
-**Where the gap is.** `op_constraint_validation::validateOperation` runs against the op model on a mock device
-built from `SYSTEM_DESC_PATH`. **That path does not enforce the runtime's tile-sized-shard rule**
-(`shard_spec_validation.cpp`), so a 48-wide height shard passes validation and dies at launch.
+### F4. Require the advisor's plan to be candidate #1, implemented from `final_ir.mlir` ⭐⭐⭐
 
-**Why it matters beyond phi.** Every consumer of `report.json` is entitled to assume the advice is at least
-runnable. A challenger that spends device time implementing advice, hits a `TT_FATAL`, and records a
-`hard_error` has burned a measurement to discover something the advisor could have known statically.
+The corpus's clearest single result. Cells that tried the exact advice first (6 of 15) all ended cleanly — they
+shipped it or recorded a measured regression. **4 cells never tried it and recorded no reason**, all deviating
+the same way: keep the advisor's L1 placement, drop its sharding.
 
-**Fix, in the cheap-to-expensive order:**
-1. **(our approach, no build)** treat a `TT_FATAL` on advised geometry as an *advisor* defect in the report,
-   not just a rejected knob — it is currently indistinguishable from "this candidate was slower".
-2. **(tt-mlir, a build)** add the tile-alignment predicate to the shard-shape legality check so the layouts are
-   never enumerated. Note this composes with **D3**: the shape dedup runs *before* the per-op rulebooks, so an
-   illegal representative can survive while a legal sibling is discarded.
-3. **(tt-metal, out of scope — documented only)** the deeper fix is for the op model and the runtime to share
-   one shard-legality implementation instead of two. Not requested, not expected to ship.
+Measured on the one cell with the artefacts to settle it (phi FN, its own harness, fresh process per form,
+all PCC 1.0):
 
-- **Evidence:** [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) code `U`,
-  [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E24.
+| form | median ms | Δ |
+|---|---|---|
+| frozen incumbent | 0.807535 | — |
+| **what the cell shipped** — L1 interleaved | 0.768104 | −4.88 % |
+| sharded multiply/add (phi B's form) | 0.751277 | −6.97 % |
+| **the advisor's IR verbatim** | **0.723320** | **−10.43 %** |
+
+Strict non-overlap throughout. **The unproven deviation cost 5.55 pp ≈ 1.43 ms/model** in a cell that reported
+`improved` and passed its gate.
+
+**Actions, cheapest first:**
+1. **The stage must build its first candidate from `final_ir.mlir`, not from the `report.json` summary** — the
+   IR carries the shard shape and the full `CoreRangeSet`; the summary carries neither correctly (C5f).
+2. **Make "the exact advised layout" a required, named candidate** with its own row and verdict, so
+   "not tried" is distinguishable from "tried and lost". Today they are not.
+3. **A `TT_FATAL` while implementing advice must be recorded against the reconstruction, not the advisor** —
+   with the single-op test that isolates it. Mine looked like an advisor defect for a week.
 
 ### D4. Emit the advisable ladder in `report.json`
 

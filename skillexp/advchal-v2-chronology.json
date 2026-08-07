@@ -1,0 +1,2322 @@
+{
+ "gemma-4-12B exp11": {
+  "order": [
+   {
+    "file": "incumbent_sliding_profile.json",
+    "label": "incumbent_profile",
+    "at": "2026-07-31T16:35:37+00:00",
+    "ms": 1.2684199027717113,
+    "floor": 0.005743540823459625,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_profile.json",
+    "label": "incumbent_full_profile",
+    "at": "2026-07-31T16:41:18+00:00",
+    "ms": 1.3895360194146633,
+    "floor": 0.007338020950555801,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_sliding_trace_profile.json",
+    "label": "incumbent_sliding_trace_profile",
+    "at": "2026-07-31T16:42:02+00:00",
+    "ms": 1.2514686398208141,
+    "floor": 0.0038214772939682007,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_trace_profile.json",
+    "label": "incumbent_full_trace_profile",
+    "at": "2026-07-31T16:42:25+00:00",
+    "ms": 1.379298884421587,
+    "floor": 0.0011147372424602509,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_sliding_op_profile.json",
+    "label": "incumbent_sliding_op_profile",
+    "at": "2026-07-31T16:43:25+00:00",
+    "ms": 1.2677957490086555,
+    "floor": 0.006129276007413864,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_op_profile.json",
+    "label": "incumbent_full_op_profile",
+    "at": "2026-07-31T16:43:50+00:00",
+    "ms": 1.389755792915821,
+    "floor": 0.005736928433179855,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_b17_cos_rope_row_major.json",
+    "label": "sliding_b17_cos_rope_row_major",
+    "at": "2026-07-31T16:45:51+00:00",
+    "ms": 1.2488430179655552,
+    "floor": 0.00462142750620842,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_b19_sin_rope_row_major.json",
+    "label": "sliding_b19_sin_rope_row_major",
+    "at": "2026-07-31T16:46:14+00:00",
+    "ms": 1.2474166601896286,
+    "floor": 0.0007884763181209564,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_b17_b19_rope_row_major.json",
+    "label": "sliding_b17_b19_rope_row_major",
+    "at": "2026-07-31T16:46:32+00:00",
+    "ms": 1.2413020059466362,
+    "floor": 0.0028422288596630096,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_b17_cos_rope_row_major.json",
+    "label": "full_b17_cos_rope_row_major",
+    "at": "2026-07-31T16:46:54+00:00",
+    "ms": 1.3662158697843552,
+    "floor": 0.0011243484914302826,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_b19_sin_rope_row_major.json",
+    "label": "full_b19_sin_rope_row_major",
+    "at": "2026-07-31T16:47:11+00:00",
+    "ms": 1.3655846752226353,
+    "floor": 0.00028695911169052124,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_b17_b19_rope_row_major.json",
+    "label": "full_b17_b19_rope_row_major",
+    "at": "2026-07-31T16:47:30+00:00",
+    "ms": 1.3557921908795834,
+    "floor": 0.0011565908789634705,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_b7_keep_k_l1.json",
+    "label": "sliding_b7_keep_k_l1",
+    "at": "2026-07-31T16:48:28+00:00",
+    "ms": 1.2472481466829777,
+    "floor": 0.0061026401817798615,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-07-31T16:49:41+00:00",
+    "ms": 1.241522990167141,
+    "floor": 0.0007123686373233795,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_attention.json",
+    "label": "incumbent_full_attention",
+    "at": "2026-07-31T16:49:58+00:00",
+    "ms": 1.3558743335306644,
+    "floor": 0.0033814646303653717,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "final_incumbent_sliding_profile.json",
+    "label": "final_incumbent_sliding_profile",
+    "at": "2026-07-31T16:51:45+00:00",
+    "ms": 1.2535160966217518,
+    "floor": 0.005725305527448654,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "final_incumbent_full_profile.json",
+    "label": "final_incumbent_full_profile",
+    "at": "2026-07-31T16:52:10+00:00",
+    "ms": 1.3676217198371887,
+    "floor": 0.005848165601491928,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "final_sliding_keep_k_l1.json",
+    "label": "sliding_keep_k_l1_chain",
+    "at": "2026-07-31T16:52:56+00:00",
+    "ms": 1.230847556143999,
+    "floor": 0.0008015334606170654,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "final_full_keep_k_l1.json",
+    "label": "full_keep_k_l1_chain",
+    "at": "2026-07-31T16:53:19+00:00",
+    "ms": 1.3358567468822002,
+    "floor": 0.0020529143512248993,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_shipped_sliding.json",
+    "label": "confirm_shipped_sliding",
+    "at": "2026-07-31T16:57:40+00:00",
+    "ms": 1.2304692156612873,
+    "floor": 0.005254819989204407,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_shipped_full.json",
+    "label": "confirm_shipped_full",
+    "at": "2026-07-31T16:57:56+00:00",
+    "ms": 1.3351004756987095,
+    "floor": 0.004176758229732513,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "shipped_l1_interleaved_sliding.json",
+    "label": "shipped_l1_interleaved_sliding",
+    "at": "2026-07-31T17:03:19+00:00",
+    "ms": 1.2288464047014713,
+    "floor": 0.0005438178777694702,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "shipped_l1_interleaved_full.json",
+    "label": "shipped_l1_interleaved_full",
+    "at": "2026-07-31T17:03:33+00:00",
+    "ms": 1.3359054364264011,
+    "floor": 0.005252845585346222,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_l1_interleaved_sliding.json",
+    "label": "confirm_l1_interleaved_sliding",
+    "at": "2026-07-31T17:04:04+00:00",
+    "ms": 1.2290936149656773,
+    "floor": 0.0017325207591056824,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_l1_interleaved_full.json",
+    "label": "confirm_l1_interleaved_full",
+    "at": "2026-07-31T17:04:14+00:00",
+    "ms": 1.3356858119368553,
+    "floor": 0.0007991306483745575,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_keep_v_l1.json",
+    "label": "sliding_keep_v_l1",
+    "at": "2026-07-31T17:08:59+00:00",
+    "ms": 1.232240591198206,
+    "floor": 0.000651087611913681,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_mlp_direct_down.json",
+    "label": "sliding_mlp_direct_down",
+    "at": "2026-07-31T17:09:15+00:00",
+    "ms": 1.2351603619754314,
+    "floor": 0.005614124238491058,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_k_v_mlp.json",
+    "label": "sliding_k_v_mlp",
+    "at": "2026-07-31T17:09:38+00:00",
+    "ms": 1.2237614020705223,
+    "floor": 0.0050480663776397705,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_k_v_mlp.json",
+    "label": "full_k_v_mlp",
+    "at": "2026-07-31T17:09:55+00:00",
+    "ms": 1.319762971252203,
+    "floor": 0.0007933191955089569,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_final_sliding.json",
+    "label": "profile_final_sliding",
+    "at": "2026-07-31T17:11:48+00:00",
+    "ms": 1.2383094802498817,
+    "floor": 0.005869995802640915,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_final_full.json",
+    "label": "profile_final_full",
+    "at": "2026-07-31T17:12:22+00:00",
+    "ms": 1.3326175883412361,
+    "floor": 0.007322374731302261,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_final_sliding.json",
+    "label": "confirm_final_sliding",
+    "at": "2026-07-31T17:13:18+00:00",
+    "ms": 1.2232637591660023,
+    "floor": 0.000497717410326004,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_final_full.json",
+    "label": "confirm_final_full",
+    "at": "2026-07-31T17:13:35+00:00",
+    "ms": 1.3202213123440742,
+    "floor": 0.0013365596532821655,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_q_l1_extended_sdpa.json",
+    "label": "sliding_q_l1_extended_sdpa",
+    "at": "2026-07-31T17:14:07+00:00",
+    "ms": 1.2342312559485435,
+    "floor": 0.0009486265480518341,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_q_l1_extended_sdpa.json",
+    "label": "full_q_l1_extended_sdpa",
+    "at": "2026-07-31T17:14:24+00:00",
+    "ms": 1.3427749462425709,
+    "floor": 0.001177620142698288,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_q_k_v_mlp.json",
+    "label": "sliding_q_k_v_mlp",
+    "at": "2026-07-31T17:14:47+00:00",
+    "ms": 1.2187889963388443,
+    "floor": 0.001765172928571701,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_q_k_v_mlp.json",
+    "label": "full_q_k_v_mlp",
+    "at": "2026-07-31T17:15:02+00:00",
+    "ms": 1.307985968887806,
+    "floor": 0.0029622577130794525,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "sliding_grouped_o_l1.json",
+    "label": "sliding_grouped_o_l1",
+    "at": "2026-07-31T17:15:57+00:00",
+    "ms": 1.2412668578326702,
+    "floor": 0.0007782876491546631,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_grouped_o_l1.json",
+    "label": "full_grouped_o_l1",
+    "at": "2026-07-31T17:16:12+00:00",
+    "ms": 1.3541091233491898,
+    "floor": 0.000486522912979126,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "full_q_k_v_mlp_o.json",
+    "label": "full_q_k_v_mlp_o",
+    "at": "2026-07-31T17:16:34+00:00",
+    "ms": 1.306016780436039,
+    "floor": 0.0013718195259571075,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_shipped_final_sliding.json",
+    "label": "confirm_shipped_final_sliding",
+    "at": "2026-07-31T17:19:57+00:00",
+    "ms": 1.2177056632936,
+    "floor": 0.0004464574158191681,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "confirm_shipped_final_full.json",
+    "label": "confirm_shipped_final_full",
+    "at": "2026-07-31T17:20:12+00:00",
+    "ms": 1.3072953559458256,
+    "floor": 0.006567332893610001,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_shipped_final_sliding.json",
+    "label": "profile_shipped_final_sliding",
+    "at": "2026-07-31T17:20:36+00:00",
+    "ms": 1.232309527695179,
+    "floor": 0.0063993968069553375,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_shipped_final_full.json",
+    "label": "profile_shipped_final_full",
+    "at": "2026-07-31T17:21:04+00:00",
+    "ms": 1.3178791664540768,
+    "floor": 0.019527655094861984,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_k_sliding.json",
+    "label": "profile_candidate_k_sliding",
+    "at": "2026-07-31T17:25:15+00:00",
+    "ms": 1.2445374019443989,
+    "floor": 0.007595885545015335,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_k_full.json",
+    "label": "profile_candidate_k_full",
+    "at": "2026-07-31T17:25:32+00:00",
+    "ms": 1.3485566712915897,
+    "floor": 0.00623408704996109,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_q_sliding.json",
+    "label": "profile_candidate_q_sliding",
+    "at": "2026-07-31T17:25:49+00:00",
+    "ms": 1.2498262897133827,
+    "floor": 0.005627758800983429,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_q_full.json",
+    "label": "profile_candidate_q_full",
+    "at": "2026-07-31T17:26:07+00:00",
+    "ms": 1.354207620024681,
+    "floor": 0.006548892706632614,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_v_sliding.json",
+    "label": "profile_candidate_v_sliding",
+    "at": "2026-07-31T17:26:24+00:00",
+    "ms": 1.247055809944868,
+    "floor": 0.005796067416667938,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_mlp_sliding.json",
+    "label": "profile_candidate_mlp_sliding",
+    "at": "2026-07-31T17:26:41+00:00",
+    "ms": 1.2463971599936485,
+    "floor": 0.00603068619966507,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_k_v_mlp_full.json",
+    "label": "profile_candidate_k_v_mlp_full",
+    "at": "2026-07-31T17:26:58+00:00",
+    "ms": 1.3327814266085625,
+    "floor": 0.007711108773946762,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "profile_candidate_o_full.json",
+    "label": "profile_candidate_o_full",
+    "at": "2026-07-31T17:27:15+00:00",
+    "ms": 1.367049179971218,
+    "floor": 0.006153155118227005,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "keep_q_l1_extended_to_sharded_sdpa": true,
+   "keep_k_l1_across_per_head_norm": true,
+   "keep_v_l1_across_per_head_norm": true,
+   "mlp_direct_down_input_layout": true,
+   "o_chain_l1": {
+    "sliding_attention": false,
+    "full_attention": true
+   }
+  },
+  "rejected_knobs": {
+   "GEMMA4_12B_ADVISOR_O_L1_on_sliding_attention": "default off; five-repeat distribution overlaps the frozen incumbent",
+   "rope_cache_relayout": "default off; the actual full-model control already executes row-major 2D caches",
+   "GEMMA4_12B_ADVISOR_CAPTURE": "default off; capture-only static graph declarations"
+  },
+  "outcome": "improved",
+  "inc": 1.241522990167141,
+  "fin": 1.2187889963388443,
+  "combination": {
+   "best_set": [
+    "Q L1 extension",
+    "K L1",
+    "V L1",
+    "MLP direct-down",
+    "full-only O L1"
+   ],
+   "measured_sets": [
+    {
+     "set": [
+      "sliding Q+K+V+MLP"
+     ],
+     "measured_ms": 1.2187889963388443,
+     "repeats_ms": [
+      1.2187889963388443,
+      1.219478901475668,
+      1.2177802622318268,
+      1.2177137285470963,
+      1.2193819135427475
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "full Q+K+V+MLP+O"
+     ],
+     "measured_ms": 1.306016780436039,
+     "repeats_ms": [
+      1.306089535355568,
+      1.305853258818388,
+      1.3050954043865204,
+      1.306016780436039,
+      1.3064672239124775
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "llama-3.1-8B exp17": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-07-31T18:00:18+00:00",
+    "ms": 0.665045864880085,
+    "floor": 0.0006973184645175934,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "dense_2.json",
+    "label": "dense_2_skip_attn_output_reshard",
+    "at": "2026-07-31T18:07:57+00:00",
+    "ms": 0.667581669986248,
+    "floor": 0.00037649646401405334,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "dense_3.json",
+    "label": "dense_3_skip_mlp_output_reshard",
+    "at": "2026-07-31T18:08:14+00:00",
+    "ms": 0.6676804274320602,
+    "floor": 0.0003737211227416992,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "dense_geometry_64.json",
+    "label": "dense_geometry_64",
+    "at": "2026-07-31T18:09:10+00:00",
+    "ms": 0.6931227818131447,
+    "floor": 0.0006077997386455536,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": "frozen incumbent; no advisor candidate passed non-overlap",
+  "rejected_knobs": [
+   "LLAMA31_ADVISOR_SKIP_SDPA_RESHARD (default off)",
+   "LLAMA31_ADVISOR_SKIP_ATTN_OUTPUT_RESHARD (default off)",
+   "LLAMA31_ADVISOR_SKIP_MLP_OUTPUT_RESHARD (default off)",
+   "LLAMA31_ADVISOR_RESIDUAL_CORES (unset by default)"
+  ],
+  "outcome": "contribution_zero",
+  "inc": 0.665045864880085,
+  "fin": 0.665045864880085,
+  "combination": null
+ },
+ "llama-3.2-1B exp17": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-07-31T18:22:53+00:00",
+    "ms": 0.37307990714907646,
+    "floor": 0.00014627352356910706,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile.json",
+    "label": "incumbent_profile",
+    "at": "2026-07-31T18:23:40+00:00",
+    "ms": 0.384724922478199,
+    "floor": 0.005254019051790237,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "dense_2_residual_chain_64.json",
+    "label": "dense_2_residual_chain_64",
+    "at": "2026-07-31T18:32:52+00:00",
+    "ms": 0.42034145444631577,
+    "floor": 0.0006051547825336456,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "concat_output_dram.json",
+    "label": "concat_output_dram",
+    "at": "2026-07-31T18:33:57+00:00",
+    "ms": 0.3732367791235447,
+    "floor": 0.00650063157081604,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": "incumbent",
+  "rejected_knobs": [
+   "MD_LLAMA32_ADVISOR_CHAIN=sdpa_concat",
+   "MD_LLAMA32_ADVISOR_CHAIN=residual_chain_64",
+   "MD_LLAMA32_ADVISOR_CHAIN=rotary_k_dram",
+   "MD_LLAMA32_ADVISOR_CHAIN=concat_output_dram"
+  ],
+  "outcome": "no_change",
+  "inc": 0.37307990714907646,
+  "fin": 0.37307990714907646,
+  "combination": null
+ },
+ "phi-3.5 exp17": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-07-31T17:43:05+00:00",
+    "ms": 1.1009389162063599,
+    "floor": 0.001091882586479187,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_tail.json",
+    "label": "rope_l1_tail",
+    "at": "2026-07-31T17:47:26+00:00",
+    "ms": 1.100682895630598,
+    "floor": 0.0016415305435657501,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_full_l1.json",
+    "label": "rope_full_l1",
+    "at": "2026-07-31T17:48:06+00:00",
+    "ms": 1.1013950780034065,
+    "floor": 0.0011778436601161957,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "advisor_changes": [],
+   "decode_batch": 32,
+   "policy": "frozen incumbent"
+  },
+  "rejected_knobs": [
+   "PHI35_ADVISOR_ROPE_L1_TAIL (default off; repeat distributions overlap)",
+   "PHI35_ADVISOR_ROPE_FULL_L1 (default off; slower)",
+   "PHI35_ADVISOR_SDPA_L1 (default off; TT_FATAL sharded output unsupported)"
+  ],
+  "outcome": "no_change",
+  "inc": 1.1009389162063599,
+  "fin": 1.1009389162063599,
+  "combination": {
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 1.1009389162063599,
+     "repeats_ms": [
+      1.1009389162063599,
+      1.1012198403477669,
+      1.1004950664937496,
+      1.1010455340147018,
+      1.1001279577612877
+     ],
+     "oracle_passed": true,
+     "oracle_weights": "real"
+    }
+   ],
+   "best_set": [
+    "incumbent"
+   ]
+  }
+ },
+ "north-mini FN": {
+  "order": [
+   {
+    "file": "incumbent_dense.json",
+    "label": "incumbent",
+    "at": "2026-08-03T10:49:46+00:00",
+    "ms": 0.172676220536232,
+    "floor": 0.0008488073945045471,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_sliding_moe.json",
+    "label": "incumbent",
+    "at": "2026-08-03T10:50:05+00:00",
+    "ms": 0.5780758522450924,
+    "floor": 0.0016381405293941498,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T10:50:21+00:00",
+    "ms": 27.63493036851287,
+    "floor": 0.0707595981657505,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_full_moe.json",
+    "label": "incumbent",
+    "at": "2026-08-03T10:50:21+00:00",
+    "ms": 0.553658977150917,
+    "floor": 0.0012062862515449524,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_moe_norm_22.json",
+    "label": "advisor_moe_norm_22",
+    "at": "2026-08-03T11:25:20+00:00",
+    "ms": 0.543176680803299,
+    "floor": 0.0016080774366855621,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_moe_norm_32.json",
+    "label": "advisor_moe_norm_32",
+    "at": "2026-08-03T11:25:27+00:00",
+    "ms": 0.5183856189250946,
+    "floor": 0.0010301917791366577,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_moe_norm_64.json",
+    "label": "advisor_moe_norm_64",
+    "at": "2026-08-03T11:25:33+00:00",
+    "ms": 0.5733060650527477,
+    "floor": 0.00045847147703170776,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "full_moe_norm_22.json",
+    "label": "advisor_moe_norm_22",
+    "at": "2026-08-03T11:25:40+00:00",
+    "ms": 0.5443592555820942,
+    "floor": 0.0009514018893241882,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "full_moe_norm_32.json",
+    "label": "advisor_moe_norm_32",
+    "at": "2026-08-03T11:25:47+00:00",
+    "ms": 0.5201236717402935,
+    "floor": 0.0007983297109603882,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "full_moe_norm_64.json",
+    "label": "advisor_moe_norm_64",
+    "at": "2026-08-03T11:25:54+00:00",
+    "ms": 0.5749411135911942,
+    "floor": 0.0013064965605735779,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "confirm_sliding_moe_norm_32.json",
+    "label": "confirm_advisor_moe_norm_32",
+    "at": "2026-08-03T11:26:01+00:00",
+    "ms": 0.5184403993189335,
+    "floor": 0.01071469858288765,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "confirm_full_moe_norm_32.json",
+    "label": "confirm_advisor_moe_norm_32",
+    "at": "2026-08-03T11:26:07+00:00",
+    "ms": 0.5197178199887276,
+    "floor": 0.0002234242856502533,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": "32-core L1-width-sharded RMSNorm for both sparse-MoE layer kinds",
+  "rejected_knobs": [
+   "dense concat-heads-to-O reshard removal: default-off/not implemented; reconcile soft-paired across an uncapturable cache/SDPA gap and final_ir.mlir contains no such advised edge",
+   "advisor_moe_norm_22: default-off; slower than the 32-core winner for both MoE kinds",
+   "advisor_moe_norm_64: default-off; regressed and overlaps/exceeds the incumbent",
+   "NORTH_MINI_ADVISOR_CAPTURE: default-off capture compatibility switch only; never a shipping candidate"
+  ],
+  "outcome": "improved",
+  "inc": 27.63493036851287,
+  "fin": 25.075705721974373,
+  "combination": {
+   "best_set": [
+    "sliding_attention_moe:advisor_moe_norm_32",
+    "full_attention_moe:advisor_moe_norm_32"
+   ],
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 27.63493036851287,
+     "repeats_ms": [
+      27.607470974326134,
+      27.64036998152733,
+      27.63493036851287,
+      27.62380177155137,
+      27.678230572491884
+     ],
+     "oracle_passed": true
+    },
+    {
+     "chains": [
+      "sliding_attention_moe:norm32",
+      "full_attention_moe:norm32"
+     ],
+     "measured_ms": 25.075705721974373,
+     "derived_sum_of_per_kind_medians_ms": 25.07604256272316,
+     "repeats_ms": [
+      25.075705721974373,
+      25.05958378314972,
+      25.08015712723136,
+      25.097400937229395,
+      25.053397808223963
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "gemma-4-26B FN": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T15:10:35+00:00",
+    "ms": 1.3411529175937176,
+    "floor": 0.002804342657327652,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_full_attention.json",
+    "label": "incumbent",
+    "at": "2026-08-03T15:11:00+00:00",
+    "ms": 1.5393735840916634,
+    "floor": 0.002156924456357956,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_sliding.json",
+    "label": "advisor_norm88_sliding",
+    "at": "2026-08-03T15:14:18+00:00",
+    "ms": 1.3469416834414005,
+    "floor": 0.001476425677537918,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_full.json",
+    "label": "advisor_norm88_full",
+    "at": "2026-08-03T15:14:36+00:00",
+    "ms": 1.5499427169561386,
+    "floor": 0.003405064344406128,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_concat_projection_sliding.json",
+    "label": "advisor_concat_projection_sliding",
+    "at": "2026-08-03T15:20:20+00:00",
+    "ms": 1.3184487260878086,
+    "floor": 0.0012169033288955688,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_concat_projection_full.json",
+    "label": "advisor_concat_projection_full",
+    "at": "2026-08-03T15:20:39+00:00",
+    "ms": 1.4945481903851032,
+    "floor": 0.0007730722427368164,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_concat_projection_sliding_confirm.json",
+    "label": "advisor_concat_projection_sliding_confirm",
+    "at": "2026-08-03T15:21:05+00:00",
+    "ms": 1.318220105022192,
+    "floor": 0.0008644349873065948,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_concat_projection_full_confirm.json",
+    "label": "advisor_concat_projection_full_confirm",
+    "at": "2026-08-03T15:21:17+00:00",
+    "ms": 1.4945766143500805,
+    "floor": 0.000664684921503067,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "shipped_profile_sliding.json",
+    "label": "shipped_profile_sliding",
+    "at": "2026-08-03T15:28:08+00:00",
+    "ms": 1.3517588749527931,
+    "floor": 0.0076580047607421875,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "shipped_profile_full.json",
+    "label": "shipped_profile_full",
+    "at": "2026-08-03T15:28:37+00:00",
+    "ms": 1.52825141325593,
+    "floor": 0.0031429901719093323,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "shipped_default_sliding.json",
+    "label": "shipped_default_sliding",
+    "at": "2026-08-03T15:31:54+00:00",
+    "ms": 1.319062877446413,
+    "floor": 0.0005730614066123962,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "shipped_default_full.json",
+    "label": "shipped_default_full",
+    "at": "2026-08-03T15:32:07+00:00",
+    "ms": 1.4947064220905304,
+    "floor": 0.0009915418922901154,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": "keep nlp_concat_heads_decode output sharded into output projection; retain SDPA DRAM boundary",
+  "rejected_knobs": {
+   "GEMMA4_ADVISOR_NORM_CORES=88": "default-off; measured 1.346942 ms sliding and 1.549943 ms full versus 1.341153/1.539374 ms controls",
+   "GEMMA4_ADVISOR_NORM_CORES=110": "default-off; illegal because 2816 is not tile-divisible across 110 cores",
+   "sharded_sdpa_output_extension": "default-off; hard error: Sharded output not supported for GQA"
+  },
+  "outcome": "improved",
+  "inc": 1.3411529175937176,
+  "fin": 1.3184487260878086,
+  "combination": {
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent",
+      "sliding_attention"
+     ],
+     "measured_ms": 1.3411529175937176,
+     "repeats_ms": [
+      1.3410769775509834,
+      1.3413378782570362,
+      1.339827999472618,
+      1.3411529175937176,
+      1.3426323421299458
+     ],
+     "oracle_passed": true
+    },
+    {
+     "chains": [
+      "sliding_attention:b21"
+     ],
+     "measured_ms": 1.3184487260878086,
+     "repeats_ms": [
+      1.3181746192276478,
+      1.3184487260878086,
+      1.3184901885688305,
+      1.3174626603722572,
+      1.3186795637011528
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "incumbent",
+      "full_attention"
+     ],
+     "measured_ms": 1.5393735840916634,
+     "repeats_ms": [
+      1.5384297631680965,
+      1.5388245321810246,
+      1.5405866876244545,
+      1.5395426750183105,
+      1.5393735840916634
+     ],
+     "oracle_passed": true
+    },
+    {
+     "chains": [
+      "full_attention:b23"
+     ],
+     "measured_ms": 1.4945481903851032,
+     "repeats_ms": [
+      1.4943255670368671,
+      1.4946621842682362,
+      1.4945481903851032,
+      1.4938891120254993,
+      1.494626346975565
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "phi-3.5 FN": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T06:47:30+00:00",
+    "ms": 0.8071521855890751,
+    "floor": 0.0010642223060131073,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile.json",
+    "label": "incumbent_profile",
+    "at": "2026-08-03T06:51:07+00:00",
+    "ms": 0.8154480159282684,
+    "floor": 0.0012710504233837128,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile_large.json",
+    "label": "incumbent_profile",
+    "at": "2026-08-03T06:52:15+00:00",
+    "ms": 0.8195584639906883,
+    "floor": 0.0015315227210521698,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_query.json",
+    "label": "rope_l1_query",
+    "at": "2026-08-03T06:55:34+00:00",
+    "ms": 0.7934500835835934,
+    "floor": 0.0016803666949272156,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_key.json",
+    "label": "rope_l1_key",
+    "at": "2026-08-03T06:55:41+00:00",
+    "ms": 0.7926305383443832,
+    "floor": 0.001012757420539856,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_query_key.json",
+    "label": "rope_l1_query_key",
+    "at": "2026-08-03T06:55:47+00:00",
+    "ms": 0.7680646516382694,
+    "floor": 0.0011046230792999268,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_query_key_confirm.json",
+    "label": "rope_l1_query_key_confirm",
+    "at": "2026-08-03T06:56:35+00:00",
+    "ms": 0.7675417512655258,
+    "floor": 0.0011977925896644592,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "norm_11c.json",
+    "label": "norm_11c",
+    "at": "2026-08-03T06:59:04+00:00",
+    "ms": 0.7459059171378613,
+    "floor": 0.001527443528175354,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "norm_12c.json",
+    "label": "norm_12c",
+    "at": "2026-08-03T06:59:11+00:00",
+    "ms": 0.7490095123648643,
+    "floor": 0.002810005098581314,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "norm_24c.json",
+    "label": "norm_24c",
+    "at": "2026-08-03T06:59:18+00:00",
+    "ms": 0.7485129125416279,
+    "floor": 0.005679670721292496,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_query_key_norm_11c.json",
+    "label": "rope_l1_query_key_norm_11c",
+    "at": "2026-08-03T06:59:38+00:00",
+    "ms": 0.700267031788826,
+    "floor": 0.0008300319314002991,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_query_key_profile.json",
+    "label": "rope_l1_query_key_profile",
+    "at": "2026-08-03T07:00:39+00:00",
+    "ms": 0.7710272446274757,
+    "floor": 0.001665465533733368,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "advisor_rope_l1": "query_key",
+   "advisor_norm_cores": 0,
+   "advisor_sdpa_concat_l1": false
+  },
+  "rejected_knobs": {
+   "advisor_norm_cores": {
+    "default": 0,
+    "screened": {
+     "11": 0.745906,
+     "12": 0.74901,
+     "24": 0.748513
+    },
+    "reason": "real-weight differential PCC moved to 0.9999910666979231; placement change rejected"
+   },
+   "advisor_sdpa_concat_l1": {
+    "default": false,
+    "reason": "TT_FATAL: Sharded output not supported for GQA"
+   }
+  },
+  "outcome": "improved",
+  "inc": 0.8071521855890751,
+  "fin": 0.7675417512655258,
+  "combination": {
+   "best_set": [
+    "rope_query_l1",
+    "rope_key_l1"
+   ],
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 0.8071521855890751,
+     "repeats_ms": [
+      0.8078553341329098,
+      0.8070055209100246,
+      0.8067911118268967,
+      0.8074920624494553,
+      0.8071521855890751
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "rope_query_l1",
+      "rope_key_l1"
+     ],
+     "chains": [
+      "dense:b14",
+      "dense:3",
+      "dense:2",
+      "dense:1",
+      "dense:4",
+      "dense:5",
+      "dense:b29",
+      "dense:8",
+      "dense:7",
+      "dense:6",
+      "dense:9",
+      "dense:10"
+     ],
+     "measured_ms": 0.7675417512655258,
+     "repeats_ms": [
+      0.7675417512655258,
+      0.7673536241054535,
+      0.7679606229066849,
+      0.76710419729352,
+      0.7683019898831844
+     ],
+     "oracle_passed": true,
+     "oracle_pcc": 1.0,
+     "oracle_weights": "real"
+    }
+   ]
+  }
+ },
+ "qwen3-27B FN": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T08:17:35+00:00",
+    "ms": 19.14024442434311,
+    "floor": 0.01234905794262886,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_attention.json",
+    "label": "incumbent_full_attention",
+    "at": "2026-08-03T08:17:50+00:00",
+    "ms": 1.2082573398947716,
+    "floor": 0.0016092322766780853,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "packed_qkv_l1_chain.json",
+    "label": "packed_qkv_l1_chain",
+    "at": "2026-08-03T08:25:32+00:00",
+    "ms": 1.1804015934467316,
+    "floor": 0.0011546723544597626,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "packed_qkv_l1_profile.json",
+    "label": "packed_qkv_l1_profile",
+    "at": "2026-08-03T08:26:46+00:00",
+    "ms": 1.1926129087805748,
+    "floor": 0.0030605681240558624,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "packed_qkv_l1_confirm.json",
+    "label": "packed_qkv_l1_confirm",
+    "at": "2026-08-03T08:27:56+00:00",
+    "ms": 1.181347668170929,
+    "floor": 0.0009109638631343842,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_full_profile_current.json",
+    "label": "incumbent_full_profile_current",
+    "at": "2026-08-03T08:33:12+00:00",
+    "ms": 1.2174233607947826,
+    "floor": 0.0014818459749221802,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_query_c32.json",
+    "label": "rope_query_c32",
+    "at": "2026-08-03T08:36:07+00:00",
+    "ms": 1.2224629148840904,
+    "floor": 0.0008858926594257355,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_query_c48.json",
+    "label": "rope_query_c48",
+    "at": "2026-08-03T08:36:55+00:00",
+    "ms": 1.2336543574929237,
+    "floor": 0.0013201311230659485,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_query_c64.json",
+    "label": "rope_query_c64",
+    "at": "2026-08-03T08:37:03+00:00",
+    "ms": 1.2328782305121422,
+    "floor": 0.0006123818457126617,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_key_c32.json",
+    "label": "rope_key_c32",
+    "at": "2026-08-03T08:37:23+00:00",
+    "ms": 1.22265188023448,
+    "floor": 0.0009704567492008209,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_key_c48.json",
+    "label": "rope_key_c48",
+    "at": "2026-08-03T08:37:29+00:00",
+    "ms": 1.232567634433508,
+    "floor": 0.0007177703082561493,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_key_c64.json",
+    "label": "rope_key_c64",
+    "at": "2026-08-03T08:37:36+00:00",
+    "ms": 1.2327619083225727,
+    "floor": 0.0027075596153736115,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_both_c32.json",
+    "label": "rope_both_c32",
+    "at": "2026-08-03T08:40:38+00:00",
+    "ms": 1.2332245148718357,
+    "floor": 0.003956761211156845,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "packed_qkv_l1_shipped_confirm.json",
+    "label": "packed_qkv_l1_shipped_confirm",
+    "at": "2026-08-03T08:41:23+00:00",
+    "ms": 1.1811316758394241,
+    "floor": 0.0017074495553970337,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "full_attention_packed_qkv_output": "one L1-interleaved conversion before four slices",
+   "linear_attention": "unchanged"
+  },
+  "rejected_knobs": [
+   "query RoPE repeats height-sharded on 32/48/64 cores (default-off)",
+   "key RoPE repeats height-sharded on 32/48/64 cores (default-off)",
+   "combined query+key RoPE repeats on 32 cores (default-off)"
+  ],
+  "outcome": "improved",
+  "inc": 1.2082573398947716,
+  "fin": 1.1811316758394241,
+  "combination": {
+   "best_set": [
+    "packed_qkv_l1_chain"
+   ],
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 1.2082573398947716,
+     "repeats_ms": [
+      1.2093397788703442,
+      1.208399422466755,
+      1.2082573398947716,
+      1.2079169042408466,
+      1.207730546593666
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "packed_qkv_l1_chain"
+     ],
+     "measured_ms": 1.1811316758394241,
+     "repeats_ms": [
+      1.1805596016347408,
+      1.1821225844323635,
+      1.1811316758394241,
+      1.1822670511901379,
+      1.1810030415654182
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "north-mini onA": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T13:44:54+00:00",
+    "ms": 0.2918485179543495,
+    "floor": 0.0018413364887237549,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_sliding_attention_sparse_moe.json",
+    "label": "incumbent_sliding_attention_sparse_moe",
+    "at": "2026-08-03T13:45:39+00:00",
+    "ms": 0.8465472422540188,
+    "floor": 0.01452649012207985,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_full_attention_sparse_moe.json",
+    "label": "incumbent_full_attention_sparse_moe",
+    "at": "2026-08-03T13:46:09+00:00",
+    "ms": 0.8444534800946712,
+    "floor": 0.0008466094732284546,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": "frozen incumbent candidate=default; no advisor candidate was measurable",
+  "rejected_knobs": [
+   "dense_full_attention:b10 (default-off; 0.599 us/layer attributable, below 1.841 us floor)",
+   "dense_full_attention:b3 (default-off; 0.555 us/layer attributable, below 1.841 us floor)",
+   "dense_full_attention:b4 (default-off; 0.555 us/layer attributable, below 1.841 us floor)",
+   "sliding_attention_sparse_moe:b3 (default-off; 0.584 us/layer attributable, below 14.526 us floor)",
+   "sliding_attention_sparse_moe:b4 (default-off; 0.568 us/layer attributable, below 14.526 us floor)",
+   "sliding_attention_sparse_moe:b10 (default-off; 0.554 us/layer attributable, below 14.526 us floor)",
+   "full_attention_sparse_moe:b6 (default-off; 0.562 us/layer attributable, below 0.847 us floor)"
+  ],
+  "outcome": "no_change",
+  "inc": 0.2918485179543495,
+  "fin": 0.2918485179543495,
+  "combination": null
+ },
+ "gemma-4-26B onA": {
+  "order": [
+   {
+    "file": "incumbent_full_attention.json",
+    "label": "incumbent",
+    "at": "2026-08-03T13:17:12+00:00",
+    "ms": 2.013928834348917,
+    "floor": 0.003542723134160042,
+    "warmup": 10,
+    "iters": 200,
+    "batch": 1
+   },
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T13:21:21+00:00",
+    "ms": 1.8240209855139256,
+    "floor": 0.0005869194865226746,
+    "warmup": 30,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_sliding.json",
+    "label": "advisor_norm88_sliding",
+    "at": "2026-08-03T13:26:33+00:00",
+    "ms": 1.587259229272604,
+    "floor": 0.0017655640840530396,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_full.json",
+    "label": "advisor_norm88_full",
+    "at": "2026-08-03T13:26:51+00:00",
+    "ms": 1.7766602151095867,
+    "floor": 0.001987796276807785,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_sliding_confirm.json",
+    "label": "advisor_norm88_sliding_confirm",
+    "at": "2026-08-03T13:28:29+00:00",
+    "ms": 1.5873697213828564,
+    "floor": 0.003466624766588211,
+    "warmup": 30,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_full_confirm.json",
+    "label": "advisor_norm88_full_confirm",
+    "at": "2026-08-03T13:28:43+00:00",
+    "ms": 1.7777485959231853,
+    "floor": 0.0013701990246772766,
+    "warmup": 30,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_sliding_profile.json",
+    "label": "advisor_norm88_sliding_profile",
+    "at": "2026-08-03T13:32:41+00:00",
+    "ms": 1.6356906667351723,
+    "floor": 0.02542588859796524,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_full_profile.json",
+    "label": "advisor_norm88_full_profile",
+    "at": "2026-08-03T13:34:03+00:00",
+    "ms": 1.822835449129343,
+    "floor": 0.026299133896827698,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_sliding_shipped_default.json",
+    "label": "advisor_norm88_sliding_shipped_default",
+    "at": "2026-08-03T13:37:07+00:00",
+    "ms": 1.5986796095967293,
+    "floor": 0.013300962746143341,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_norm88_full_shipped_default.json",
+    "label": "advisor_norm88_full_shipped_default",
+    "at": "2026-08-03T13:37:18+00:00",
+    "ms": 1.7765301279723644,
+    "floor": 0.0014004483819007874,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": "88-core width-sharded hidden-width RMSNorm in decode; result converted back to the incumbent DRAM interface",
+  "rejected_knobs": {
+   "GEMMA4_ADVISOR_ROTARY_DRAM": "default-off; hard error: rotary decode input must be sharded",
+   "GEMMA4_ADVISOR_NORM_CORES=110": "rejected as an illegal non-integral hidden-width shard; this above-advisor attempt prevents treating 88 as a core-count recommendation",
+   "dram_sharded_dense_candidate_subclasses": "remain non-default; reconciliation attributes zero removable boundary time to them"
+  },
+  "outcome": "improved",
+  "inc": 1.8240209855139256,
+  "fin": 1.587259229272604,
+  "combination": {
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent",
+      "sliding_attention"
+     ],
+     "measured_ms": 1.8240209855139256,
+     "repeats_ms": [
+      1.824091114103794,
+      1.8241103366017342,
+      1.8236223980784416,
+      1.8240209855139256,
+      1.8235234171152115
+     ]
+    },
+    {
+     "set": [
+      "advisor_norm88",
+      "sliding_attention"
+     ],
+     "measured_ms": 1.587259229272604,
+     "repeats_ms": [
+      1.5874848514795303,
+      1.588189397007227,
+      1.586423832923174,
+      1.587259229272604,
+      1.5865570865571499
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "incumbent",
+      "full_attention"
+     ],
+     "measured_ms": 2.013928834348917,
+     "repeats_ms": [
+      2.013928834348917,
+      2.014058823697269,
+      2.0156196132302284,
+      2.0125189889222383,
+      2.0120768900960684
+     ]
+    },
+    {
+     "set": [
+      "advisor_norm88",
+      "full_attention"
+     ],
+     "measured_ms": 1.7766602151095867,
+     "repeats_ms": [
+      1.7772365175187588,
+      1.7766602151095867,
+      1.7776897922158241,
+      1.7757019959390163,
+      1.7757204174995422
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "phi-3.5 onA": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T08:00:26+00:00",
+    "ms": 0.6569885648787022,
+    "floor": 0.00043002888560295105,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile.json",
+    "label": "incumbent_profile",
+    "at": "2026-08-03T08:03:27+00:00",
+    "ms": 0.6650072894990444,
+    "floor": 0.0013880617916584015,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_rect32.json",
+    "label": "rope_l1_rect32",
+    "at": "2026-08-03T08:06:45+00:00",
+    "ms": 0.6071719527244568,
+    "floor": 0.0018599443137645721,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_rect32_confirm.json",
+    "label": "rope_l1_rect32_confirm",
+    "at": "2026-08-03T08:08:11+00:00",
+    "ms": 0.6079018674790859,
+    "floor": 0.0005179829895496368,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "use_advisor_decode_rope_l1": true,
+   "rope_storage": "L1 interleaved",
+   "restore_geometry": "32-core exact rectangular height shard"
+  },
+  "rejected_knobs": {
+   "generic_height_shard_restore": {
+    "default": "off",
+    "result": "hard_error",
+    "error": "bad optional access",
+    "replacement": "explicit exact rectangular 32-core height shard"
+   },
+   "remove_sdpa_to_concat_conversion": {
+    "default": "off",
+    "result": "hard_requirement",
+    "error": "nlp_concat_heads_decode input must be sharded"
+   }
+  },
+  "outcome": "shipped",
+  "inc": 0.6569885648787022,
+  "fin": 0.6071719527244568,
+  "combination": {
+   "best_set": "dense_rope_l1_chain",
+   "measured_sets": [
+    {
+     "set": [
+      "dense_rope_l1_chain"
+     ],
+     "chains": [
+      "dense:b30",
+      "dense:b15",
+      "dense:4",
+      "dense:9",
+      "dense:3",
+      "dense:8",
+      "dense:2",
+      "dense:10",
+      "dense:11",
+      "dense:7",
+      "dense:5",
+      "dense:6",
+      "dense:b39",
+      "dense:b40",
+      "dense:1"
+     ],
+     "measured_ms": 0.6071719527244568,
+     "repeats_ms": [
+      0.6083243153989315,
+      0.6086928211152554,
+      0.6070602871477604,
+      0.6068328768014908,
+      0.6071719527244568
+     ],
+     "oracle_passed": true,
+     "oracle_pcc": 0.9999987789923074
+    }
+   ]
+  }
+ },
+ "north-mini B": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T12:31:04+00:00",
+    "ms": 0.6138479523360729,
+    "floor": 0.0009363889694213867,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_dense_full_forced_rope.json",
+    "label": "incumbent_dense_full_forced_rope",
+    "at": "2026-08-03T12:31:31+00:00",
+    "ms": 0.2033127285540104,
+    "floor": 0.00016769394278526306,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_full_no_rope_moe.json",
+    "label": "incumbent_full_no_rope_moe",
+    "at": "2026-08-03T12:31:54+00:00",
+    "ms": 0.6122036278247833,
+    "floor": 0.0012626126408576965,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "dense_advised_down_ds.json",
+    "label": "dense_advised_down_ds",
+    "at": "2026-08-03T12:40:00+00:00",
+    "ms": 0.20742183551192284,
+    "floor": 0.0014892220497131348,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_advice_aggregate_noop.json",
+    "label": "sliding_advice_aggregate_noop",
+    "at": "2026-08-03T12:40:31+00:00",
+    "ms": 0.6137924082577229,
+    "floor": 0.0005809217691421509,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_dense_chain_exact.json",
+    "label": "advisor_dense_chain_exact",
+    "at": "2026-08-03T12:46:54+00:00",
+    "ms": 0.23408519104123116,
+    "floor": 0.00041617080569267273,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "advisor_dense_chain_g110.json",
+    "label": "advisor_dense_chain_g110",
+    "at": "2026-08-03T12:47:23+00:00",
+    "ms": 0.2922026067972183,
+    "floor": 0.001194290816783905,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "postreset_default_verification.json",
+    "label": "postreset_default_verification",
+    "at": "2026-08-03T13:04:41+00:00",
+    "ms": 0.2030019834637642,
+    "floor": 0.0014575943350791931,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": {
+   "candidate": "default"
+  },
+  "rejected_knobs": [
+   "dense_down_dram_sharded (existing policy remains default-off for batch 1)",
+   "advisor_dense_chain_exact",
+   "advisor_dense_chain_g110",
+   "advisor_dense_chain_ds_exact",
+   "advisor_dense_chain_ds_down32",
+   "advisor_drop_attention_reshards",
+   "advisor_drop_concat_reshard",
+   "full sparse boundary set (not measurable)"
+  ],
+  "outcome": "no_change",
+  "inc": 0.6138479523360729,
+  "fin": 0.6138479523360729,
+  "combination": null
+ },
+ "gemma-4-26B B": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T08:56:34+00:00",
+    "ms": 1.259868647903204,
+    "floor": 0.0012910738587379456,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "incumbent_full_attention.json",
+    "label": "incumbent_full_attention",
+    "at": "2026-08-03T08:57:03+00:00",
+    "ms": 1.2616609595716,
+    "floor": 0.0008522346615791321,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_sliding.json",
+    "label": "profile_sliding",
+    "at": "2026-08-03T09:02:01+00:00",
+    "ms": 1.2939380668103695,
+    "floor": 0.004648193717002869,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_full.json",
+    "label": "profile_full",
+    "at": "2026-08-03T09:02:43+00:00",
+    "ms": 1.2965277209877968,
+    "floor": 0.001983232796192169,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_sliding_trace.json",
+    "label": "profile_sliding_trace",
+    "at": "2026-08-03T09:03:53+00:00",
+    "ms": 1.266635525971651,
+    "floor": 0.01315852627158165,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_sliding_bounded.json",
+    "label": "profile_sliding_bounded",
+    "at": "2026-08-03T09:05:10+00:00",
+    "ms": 1.2965774908661842,
+    "floor": 0.005309805274009705,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_full_bounded.json",
+    "label": "profile_full_bounded",
+    "at": "2026-08-03T09:05:49+00:00",
+    "ms": 1.297142319381237,
+    "floor": 0.005734823644161224,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_attention_o_chain.json",
+    "label": "sliding_attention_o_chain",
+    "at": "2026-08-03T09:08:08+00:00",
+    "ms": 1.253953818231821,
+    "floor": 0.0012642145156860352,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "full_attention_qkv_chain.json",
+    "label": "full_attention_qkv_chain",
+    "at": "2026-08-03T09:08:40+00:00",
+    "ms": 1.2906363047659397,
+    "floor": 0.0013866648077964783,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "sliding_attention_o_chain_confirm.json",
+    "label": "sliding_attention_o_chain_confirm",
+    "at": "2026-08-03T09:09:17+00:00",
+    "ms": 1.25359321013093,
+    "floor": 0.0006017647683620453,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   },
+   {
+    "file": "profile_candidate_sliding_o.json",
+    "label": "profile_candidate_sliding_o",
+    "at": "2026-08-03T09:11:26+00:00",
+    "ms": 1.290949061512947,
+    "floor": 0.0032461807131767273,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 1
+   }
+  ],
+  "winning_config": {
+   "layer_kind": "sliding_attention",
+   "dram_sharded_roles": [
+    "o_proj",
+    "packed_mlp_gate_up",
+    "mlp_down"
+   ],
+   "o_proj_in0_block_w": 1
+  },
+  "rejected_knobs": {
+   "GEMMA4_OPT_DRAM_SHARDED_ROLES_qkv_full_attention": "default-off; measured 1.2906363047659397 ms versus 1.2616609595716 ms incumbent",
+   "GEMMA4_OPT_RESIDUAL_SHARD_CORES": "default-off; advisor norm/grid direction was not booked into the shipped attention-boundary win",
+   "GEMMA4_OPT_DRAM_SHARDED_ROLES_other": "default-off; only the measured sliding O addition ships"
+  },
+  "outcome": "SHIPPED",
+  "inc": 1.259868647903204,
+  "fin": 1.253953818231821,
+  "combination": {
+   "best_set": [
+    "sliding_attention_o_projection"
+   ],
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 1.259868647903204,
+     "repeats_ms": [
+      1.2600866705179214,
+      1.2601570039987564,
+      1.2588659301400185,
+      1.2593739107251167,
+      1.259868647903204
+     ],
+     "oracle_passed": true
+    },
+    {
+     "set": [
+      "sliding_attention_o_projection"
+     ],
+     "measured_ms": 1.253953818231821,
+     "repeats_ms": [
+      1.253683939576149,
+      1.2539859302341938,
+      1.2544870749115944,
+      1.2532228603959084,
+      1.253953818231821
+     ],
+     "oracle_passed": true
+    }
+   ]
+  }
+ },
+ "phi-3.5 B": {
+  "order": [
+   {
+    "file": "incumbent_profile_measurement.json",
+    "label": "incumbent_profile",
+    "at": "2026-08-03T07:40:27+00:00",
+    "ms": 0.7986744306981564,
+    "floor": 0.003173239529132843,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_chain.json",
+    "label": "rope_l1_chain",
+    "at": "2026-08-03T07:45:40+00:00",
+    "ms": 0.7487090304493904,
+    "floor": 0.0001957826316356659,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "rope_l1_chain_confirm.json",
+    "label": "rope_l1_chain_confirm",
+    "at": "2026-08-03T07:46:34+00:00",
+    "ms": 0.7484575919806957,
+    "floor": 0.0005239993333816528,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T07:49:33+00:00",
+    "ms": 0.7886101678013802,
+    "floor": 0.0007131975144147873,
+    "warmup": 50,
+    "iters": 100,
+    "batch": 32
+   }
+  ],
+  "winning_config": {
+   "advisor_rope_l1_chain": true,
+   "decode_core_grid": [
+    8,
+    1
+   ],
+   "down_in0_block_w": 16
+  },
+  "rejected_knobs": [
+   "down_in0_block_w=32 (direct optimize sweep, not advisor-attributable; remains non-default)",
+   "fused_rope=true (topology/semantic candidate, not this advisor placement chain; remains default-off)",
+   "partial fused-cache/SDPA edge placements (invalid soft pairs because paged_fused_update_cache is tracer-terminal)",
+   "advisor core counts 11/22 alone (not recommendations; shipped chain uses exact batch-dividing 32-core height shards)"
+  ],
+  "outcome": "improved",
+  "inc": 0.7886101678013802,
+  "fin": 0.7484575919806957,
+  "combination": {
+   "measured_sets": [
+    {
+     "set": [
+      "incumbent"
+     ],
+     "measured_ms": 0.7886101678013802,
+     "repeats_ms": [
+      0.7891278807073832,
+      0.7885578740388155,
+      0.789108844473958,
+      0.7886101678013802,
+      0.7884146831929684
+     ],
+     "oracle_passed": true
+    },
+    {
+     "chains": [
+      "rope_l1_chain"
+     ],
+     "measured_ms": 0.7487090304493904,
+     "repeats_ms": [
+      0.7486138120293617,
+      0.7487090304493904,
+      0.7485705427825451,
+      0.7487242296338081,
+      0.7487663254141808
+     ],
+     "oracle_passed": true
+    },
+    {
+     "chains": [
+      "rope_l1_chain_confirm"
+     ],
+     "measured_ms": 0.7484575919806957,
+     "repeats_ms": [
+      0.7484575919806957,
+      0.7485391572117805,
+      0.7483784481883049,
+      0.7485844381153584,
+      0.7480604387819767
+     ],
+     "oracle_passed": true
+    }
+   ],
+   "best_set": [
+    "rope_l1_chain"
+   ]
+  }
+ },
+ "qwen3-27B B": {
+  "order": [
+   {
+    "file": "incumbent.json",
+    "label": "incumbent",
+    "at": "2026-08-03T10:05:16+00:00",
+    "ms": 1.449416484683752,
+    "floor": 0.0007494166493415833,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile.json",
+    "label": "incumbent_profile",
+    "at": "2026-08-03T10:11:20+00:00",
+    "ms": 1.4579016342759132,
+    "floor": 0.0025123916566371918,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_profile_trace.json",
+    "label": "incumbent_profile_trace",
+    "at": "2026-08-03T10:12:45+00:00",
+    "ms": 1.4523287117481232,
+    "floor": 0.00037573277950286865,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "advisor_rope_q_l1.json",
+    "label": "advisor_rope_q_l1",
+    "at": "2026-08-03T10:24:55+00:00",
+    "ms": 1.4544179663062096,
+    "floor": 0.002872683107852936,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "advisor_rope_k_l1.json",
+    "label": "advisor_rope_k_l1",
+    "at": "2026-08-03T10:25:10+00:00",
+    "ms": 1.453618612140417,
+    "floor": 0.0038569606840610504,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "advisor_qkv_direct.json",
+    "label": "advisor_qkv_direct",
+    "at": "2026-08-03T10:25:41+00:00",
+    "ms": 1.4501315727829933,
+    "floor": 0.000745430588722229,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "advisor_rope_dram.json",
+    "label": "advisor_rope_dram",
+    "at": "2026-08-03T10:26:09+00:00",
+    "ms": 1.4516145549714565,
+    "floor": 0.0031025148928165436,
+    "warmup": 10,
+    "iters": 50,
+    "batch": 32
+   },
+   {
+    "file": "incumbent_linear_attention.json",
+    "label": "incumbent_linear_attention",
+    "at": "2026-08-03T10:32:58+00:00",
+    "ms": 15.85262518376112,
+    "floor": 0.005795229226350784,
+    "warmup": 30,
+    "iters": 50,
+    "batch": 32
+   }
+  ],
+  "winning_config": null,
+  "rejected_knobs": [
+   "advisor_rope_k_l1",
+   "advisor_rope_q_l1",
+   "advisor_qkv_direct",
+   "advisor_rope_dram",
+   "advisor_head_norm_l1",
+   "advisor_sdpa_direct",
+   "advisor_grid10",
+   "advisor_grid11",
+   "advisor_grid16"
+  ],
+  "outcome": "no_change",
+  "inc": 1.449416484683752,
+  "fin": 1.449416484683752,
+  "combination": null
+ }
+}

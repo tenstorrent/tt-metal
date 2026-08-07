@@ -45,6 +45,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-ADVISOR-VALUE.md`](ADVCHAL-V2-ADVISOR-VALUE.md) | **was the advisor necessary?** — detection, grid choice, hit rate, and what 7.4 h bought |
 | [`ADVCHAL-V2-PERF-REPORT-AUDIT.md`](ADVCHAL-V2-PERF-REPORT-AUDIT.md) | **the perf report the stage runs and throws away** — compute-vs-movement scorecard per cell |
+| [`ADVCHAL-V2-ADVICE-FAITHFULNESS.md`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) | **was the exact advice tried, and first?** — the chronology per cell, E25, and the retraction |
 | [`ADVCHAL-V2-ADVICE-FOLLOWED.md`](ADVCHAL-V2-ADVICE-FOLLOWED.md) | **how much of the advice was followed, all 15 cells** — per chain verdict, and buffer type vs geometry |
 | [`ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) | **one shipped win, op by op** — original / advised / shipped, with shapes and the stage's own labels |
 | [`ADVCHAL-V2-PHI-OP-BY-OP.md`](ADVCHAL-V2-PHI-OP-BY-OP.md) | the same win as a before/after delta, plus the sharding view |
@@ -110,7 +111,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty-five findings that matter
+## 3. The twenty-seven findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -634,7 +635,7 @@ files). A win from a *shard* advisor is a change of buffer type — consistent w
 **first** (§3.3).
 
 **Does the shipped result follow the advice?** Of the 27 ops the stage bucketed as `chain`: **4 follow it, 6 took
-the buffer type only** (L1 but not the advised sharding), **9 do not**, 1 matches the layout family but not the
+the buffer type only** (L1 but not the advised sharding — which runs, and is 2.1× better, E25), **9 do not**, 1 matches the layout family but not the
 grid, and **7 are undecidable** because the op↔advice pairing is positional. And of the 2 ops the stage labels
 `agrees_with_shipped` — its term for *"we already do what the advice says, nothing to screen"* — **one does not
 actually agree**: `typecast`, advised `l1/height_sharded/1x1`, shipped 1 core DRAM-interleaved.
@@ -644,39 +645,69 @@ are one rejected oracle call.
 
 → [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md)
 
-### 3.23 The advisor validates plans the runtime refuses to run
+### 3.23 ~~The advisor validates plans the runtime refuses to run~~ — **RETRACTED. The advice was legal, and the fastest thing measured**
 
-Those 6 "buffer only" rows look like a shortcut. They are not. I implemented the advised placement faithfully —
-slices `l1/interleaved`, then `neg`/`concat`/`multiply`/`add` on `l1/height_sharded` over 32 cores — and it
-**cannot run**:
+**This finding was wrong and the error was mine.** I reported that the advised `l1/height_sharded/32x1` for
+phi's RoPE body could not run, on two `TT_FATAL`s, and escalated it to a tt-mlir ↔ tt-metal validation gap.
+Withdrawn in full.
 
-| variant | result |
-|---|---|
-| shard only the 96-wide ops (`(32,96)` = 3 tiles, tile-aligned) | `TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first…` |
-| also shard the 48-wide `neg`, as the advice requires | `TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!` |
-| *(control)* shipped `l1/interleaved` | **runs — 0.768758 / 0.768047 ms** |
+**What the advisor actually specified**, from `final_ir.mlir` (the authoritative artefact, which I had not read):
 
-Both reproduced twice, and they **chain**: a sharded `concat` output requires sharded inputs; the inputs are the
-48-wide halves; a 48-wide shard is not tile-aligned. Phi's own `_apply_rope` comment explains the width —
-*"`rotary_embedding` requires a width divisible by 64, whereas Phi-3.5's 96-wide heads split at 48"*. So
-`l1/interleaved` is the **only legal placement**.
+```
+#ttnn_layout24 = <32x1>, memref<1x2x!ttcore.tile<32x32, bf16>, #l1>, <height_sharded>,
+  core_ranges = <[core_range<(0,0),(10,1)>, core_range<(0,2),(9,2)>]>
+```
 
-**But the advisor validated what it advised.** From its own decision trace:
+Shard shape **(32, 64)** — two full tiles, padded and tile-aligned — on **32** cores (two ranges, 22 + 10).
+My probe used shard **(32, 48)**, the logical width, which the advisor never specified; and I sharded the
+`concat` output while leaving its inputs interleaved, where the IR shards the inputs first.
 
-| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
+**Isolated single-op test, the advisor's exact config, one op at a time on device:**
+
+| op | config | result |
+|---|---|---|
+| `ttnn.neg` (1,32,32,48) | shard (32,64), 32 cores | **OK** |
+| `ttnn.concat` 2×(…,48)→(…,96) | shard (32,96), 32 cores | **OK** — the case I claimed impossible |
+| `ttnn.multiply`, `ttnn.add` (…,96) | shard (32,96), 32 cores | **OK** |
+| `ttnn.slice` → (…,48) | shard (32,64), 32 cores | **OK** |
+| *control:* `ttnn.neg` shard **(32,48)** — my old probe | | **FAIL** `tensor_layout.cpp:162` |
+
+**And implemented verbatim it is the best form measured** (E25, the cell's own harness, fresh process each):
+
+| form | median ms | Δ | differential PCC |
 |---|---|---|---|
-| `ttnn.neg` op10 | 296 | **296 — all of them** | **yes**, one of 112 valid height-sharded candidates |
-| `ttnn.concat` op11 | 512 | 256 | **yes** |
+| frozen incumbent | 0.807535 | — | — |
+| **what phi FN shipped** (L1 interleaved) | 0.768104 | −4.88 % | 1.0 |
+| what phi B shipped (sharded multiply/add) | 0.751277 | −6.97 % | 1.0 |
+| **the advisor's IR, verbatim** | **0.723320** | **−10.43 %** | **1.0** |
 
-**The op model accepts a `(32,48)` height shard; the runtime rejects it.** The advisor checks via
-`op_constraint_validation::validateOperation` against the op model on a mock device, and that check does not
-enforce the runtime's tile-sized-shard rule.
+Strict non-overlap between all three; all bit-identical to the incumbent. **The stage's unproven deviation cost
+5.55 pp ≈ 1.43 ms/model.** There is no validation gap, no illegal advice, and no tt-metal bug.
 
-That **tt-mlir ↔ tt-metal consistency gap** is a better explanation of the corpus's recurring pattern than
-anything else found here: the advisor's coarse direction is usually right and its exact geometry usually
-unreachable, because it is validated against a model more permissive than the machine.
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §4–§5
 
-→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E24
+---
+
+### 3.23b The advised core count was misreported to every cell — by the stage, from a lossy field
+
+`report.json` prints `l1/height_sharded/32x1 cores=(0,0)-(10,1)`; `reconcile.py:194` parses the `cores=` range
+and reports **22**. The IR's `CoreRangeSet` has **two** ranges — 22 + 10 = **32**. The grid string `32x1` was
+right all along; `cores=` is a lossy single-range rendering.
+
+Validated against three decision traces (`beam[0].score.coreCount`, the value `LayoutScore` compares):
+grid-string product correct **22/22, 10/10, 17/17**; bounding box correct 2/22, 1/10, 2/17. Applied to all 15
+cells: **476 of 816 advised ops (58.3 %) carry an understated core count** — 22→32 (76 ops), 88→90 (230),
+77→80 (50), 88→96 (42), 1→32 (8).
+
+**Consequence:** two phi cells recorded themselves as *overriding* the advisor while agreeing with it. phi B's
+own `rejected_knobs` reads *"advisor core counts 11/22 alone (not recommendations; shipped chain uses exact
+batch-dividing 32-core height shards)"* — **32 is exactly what the advisor advised.**
+
+**Fault: the stage's, and it is a one-line fix** (use the grid product, not the bounding box) → C5f. The
+`report.json` flattening is worth fixing too, but nothing is lost by the optimizer — `final_ir.mlir` carries the
+full range set.
+
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1
 
 ---
 
@@ -689,7 +720,7 @@ I put a sourced reason against all 56 ops of phi FN's window. The distribution:
 | — no advice exists (`boundary` + `untraced`) | 25 | conversions live in `reshards[]`, not `ops[]` |
 | **no** | 12 | **the oracle veto (9 of 12)** |
 | **undecidable** | 7 | the op↔advice pairing is a positional guess |
-| **buffer only** | 6 | the advised sharding does not run (§3.23) |
+| **buffer only** | 6 | the advised sharding was never tried — it runs, and is faster (§3.23, E25) |
 | **yes** | 4 | `l1/interleaved`, which specifies no grid |
 | **family only** | 2 | right space and layout family, wrong grid |
 
@@ -765,6 +796,31 @@ claimed saving — 57× the floor means a **1.7 % saving on those ops would alre
 57× win exists.)*
 
 → [`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md) for the per-cell tables and the full dismissed-chain list.
+
+---
+
+### 3.26 Was the exact advice tried, and tried first? In 7 of 15 cells
+
+The principle: the advisor's advice implemented verbatim should be candidate #1, and every deviation needs a
+measured reason. From each cell's own `measured_at` chronology:
+
+| | cells |
+|---|---|
+| tried the exact advice, **first**, and either shipped it or measured a regression against it | **6** — gemma-4-26B onA, gemma-4-26B FN, north-mini FN, north-mini B, qwen3-27B B, phi-3.5 onA |
+| tried it, but **after** the candidate it shipped | 1 — qwen3-27B FN |
+| tried it **partly** | 3 — llama-3.1-8B, llama-3.2-1B, phi-3.5 B |
+| **never tried it**, no reason recorded | **4** — phi-3.5 FN, phi-3.5 exp17, gemma-4-12B exp11, gemma-4-26B B |
+| tried nothing at all | 1 — north-mini onA (`not_measurable`) |
+
+**Where the protocol was followed it worked cleanly** — all 7 either shipped the advice or have a measured
+regression on file. north-mini FN is the model case: it measured the advised 22 (0.5432), then its own 32
+(0.5184), then 64 (0.5733), and shipped 32 with the comparison recorded.
+
+**The 4 unproven deviations are all the same deviation:** take the advisor's L1 placement, drop its sharding.
+**gemma-4-12B ran 52 measurements without ever trying an advised grid.** And in the one cell where I could
+measure it, the deviation cost 5.55 pp (§3.23, E25).
+
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §2
 
 ---
 
@@ -914,4 +970,6 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | Seven rows read as "does not follow the advice" / "op removed" | **Downgraded to *undecidable*.** All seven are `pair_confidence: position` — the tool's own documented guess. I had been reading positional pairings as findings (§3.24) |
 | Implicit: that "improved" means the advice was followed | **It does not.** Two of the three largest wins were booked by cells that recorded **0 kept chains** and whose feasibility said `not_measurable` (§3.25) |
 | `advchal-v2-data.json` covers the corpus | **It has 14 rows, not 15** — gemma-4-26B FN is missing. Counts taken from that file alone are one cell short ([`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md)) |
+| **"The advisor gave an unrunnable layout / there is a tt-mlir↔tt-metal validation gap"** | **RETRACTED IN FULL — my error.** The advised shard is **(32,64)**, tile-aligned, on **32** cores; I probed **(32,48)**, a shape the advisor never specified. Every op in its real plan runs (isolated single-op test), and the plan verbatim is **−10.43 % at PCC 1.0** vs the −4.88 % shipped (§3.23, E25) |
+| The advisor advised 22 cores for phi's rope (and 11/22 generally) | **It advised 32.** `cores=` in `report.json` is a lossy single-range rendering of a two-range `CoreRangeSet`; `reconcile.py` parses it. **58.3 % of advised core counts corpus-wide are understated** (§3.23b) |
 | Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |

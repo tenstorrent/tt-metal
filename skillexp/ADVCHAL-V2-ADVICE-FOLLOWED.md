@@ -4,6 +4,13 @@ The per-op follows-advice work in [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BE
 covered **one** cell. This does the corpus. The unit is the *chain* — the group of ops the stage actually
 measures and ships (see §3.24 of [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) for what `chain` means).
 
+> ⚠ **Corrected after this file was first written.** The `advised_cores` field every row below was compared
+> against is **wrong on 58.3 % of advised ops** — `reconcile.py` parses `cores=` out of `report.json`, which
+> prints only the first range of a multi-range `CoreRangeSet`. The corrected counts (grid-string product,
+> validated against three decision traces) move the geometry verdict from *"once in fifteen cells"* to
+> **3 of the 9 cells that changed anything**, and two of those had recorded themselves as *overriding* the
+> advisor. See [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §1, and the corrected table below.
+
 ## The headline
 
 **58 of 248 chains were kept, carrying 589 µs of 5547 µs of disagreed-on op cost — 10.6 %.**
@@ -64,11 +71,11 @@ left the advised sharding unimplemented — because it does not run (§3.23).
 
 | cell | Δ /layer | what shipped | the advised **geometry**? |
 |---|---|---|---|
-| **gemma-4-26B onA** | -12.98 % | `88-core width-sharded hidden-width RMSNorm`. The advisor advised `l1/width_sharded/1x88`, `cores=(0,0)-(10,7)` = 88 cores, on seven 44 µs `rms_norm` rows. **Same grid.** | yes — **verbatim** |
-| **north-mini FN** | -9.26 % | `32-core L1-width-sharded RMSNorm` on both MoE kinds. The advisor advised **22** (`l1/width_sharded/1x22`). The cell screened the advisor's 22 as `advisor_moe_norm_22` and recorded it *"slower than the 32-core winner for both MoE kinds"*. | no — **cell's grid beat it, measured** |
-| **phi-3.5 onA** | -7.58 % | `rope_storage: "L1 interleaved"`, `restore_geometry: "32-core exact rectangular height shard"`. Advisor advised 22. | no — cell overrode it |
-| **phi-3.5 B** | -5.09 % | `advisor_rope_l1_chain: true`, `decode_core_grid: [8, 1]`. Its own `rejected_knobs` says it: *"advisor core counts 11/22 alone (not recommendations; shipped chain uses exact batch-dividing 32-core height shards)"*. | no — cell overrode it |
-| **phi-3.5 FN** | -4.91 % | `advisor_rope_l1: "query_key"`. The advised `height_sharded/32x1` half **does not run** (§3.23). | no — buffer type only |
+| **gemma-4-26B onA** | -12.98 % | `88-core width-sharded hidden-width RMSNorm`. The advisor advised `l1/width_sharded/1x88` = 88 cores on seven 44 µs `rms_norm` rows. **Same grid.** | yes — **verbatim** |
+| **north-mini FN** | -9.26 % | `32-core L1-width-sharded RMSNorm` on both MoE kinds. The advisor advised **22** — and here 22 is correct, the bounding box and the grid product agree. The cell measured `advisor_moe_norm_22` (0.5432) against its own 32 (0.5184) and 64 (0.5733). | strategy yes, grid no — **and the deviation is proved** |
+| **phi-3.5 onA** | -7.58 % | `rope_storage: "L1 interleaved"`, `restore_geometry: "32-core exact rectangular height shard"`. **The advisor advised 32** — the 22 in its reconciliation is the truncated bounding box. | **yes** — it matched the advice and filed it as an override |
+| **phi-3.5 B** | -5.09 % | Its rope chain runs `multiply`/`add` in the query's own memory config = the advised 32-core height shard; `neg`/`concat` stay interleaved. (`decode_core_grid: [8,1]` is the pre-existing residual-stream grid, not part of the change.) | **partly yes** — 32 is what the advisor advised, despite its `rejected_knobs` calling 11/22 "not recommendations" |
+| **phi-3.5 FN** | -4.91 % | `advisor_rope_l1: "query_key"` — L1 interleaved throughout. The advised `height_sharded/32x1` **runs, is bit-identical, and is −10.43 %**; it was never tried. | no — buffer type only, **unproven** |
 | **gemma-4-12B exp11** | -1.83 % | `keep_q_l1…`, `keep_k_l1…`, `keep_v_l1…`, `mlp_direct_down_input_layout`, `o_chain_l1` — all L1 **residency**. No grid. | no — buffer type |
 | **qwen3-27B FN** | -2.25 % | "one L1-interleaved conversion before four slices". | no — buffer type |
 | **gemma-4-26B FN** | -1.69 % | "keep `nlp_concat_heads_decode` output sharded into output projection; retain SDPA DRAM boundary". **The 88-core norm was tried in this arm and regressed.** | no — boundary decision |
@@ -81,14 +88,20 @@ advisor's worse. The remaining five shipped buffer-type or boundary changes with
 
 | what shipped | cells |
 |---|---|
-| the advised geometry, verbatim | **1** — gemma-4-26B onA |
-| a self-chosen grid on the advisor-identified op | **3** — north-mini FN, phi onA, phi B |
-| buffer type / boundary only, no grid | **5** — gemma-4-12B, gemma-4-26B FN, gemma-4-26B B, phi FN, qwen FN |
+| **the advised sharding strategy *and* core count** | **3** — gemma-4-26B onA (`width_sharded` 88), phi-3.5 onA (`height_sharded` 32), phi-3.5 B (32, on the 96-wide ops) |
+| the advised strategy, a **self-chosen grid, proved better** | **1** — north-mini FN (32 vs advised 22, measured: 0.5184 vs 0.5432) |
+| buffer type / boundary only, **no grid** | **5** — gemma-4-12B, gemma-4-26B FN, gemma-4-26B B, phi-3.5 FN, qwen3-27B FN |
 
-So the honest one-line answer to *"how much was the advice followed?"*: **the advisor's L1-vs-DRAM call
-was followed widely; its grid was followed once in fifteen cells.** That is consistent with `LayoutScore`
-ranking `isL1` first and `coreCount` sixth of seven (§3.3) — the part of the objective that is well-ordered
-is the part that gets used.
+**Corrected from the first version of this file, which said "one".** phi onA and phi B both shipped 32-core
+height shards; the advisor advised **32** (`32x1`, `core_ranges` 22 + 10), not the 22 their reconciliations
+reported. Both filed it as their own choice — phi B's `rejected_knobs` literally says *"advisor core counts
+11/22 alone (not recommendations)"*.
+
+So the honest one-line answer to *"how much was the advice followed?"*: **the advisor's L1-vs-DRAM call was
+followed widely; its sharding in 3 of the 9 cells that changed anything, and its exact grid in those same 3.**
+Of the 5 that dropped the sharding entirely, **4 never tried it** — and in the one cell I could measure, the
+advised form is **−10.43 % against the −4.88 % that shipped**, bit-identical, so the deviation cost
+≈1.43 ms/model ([`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §4).
 
 ## Two of the three biggest wins came from cells told not to bother
 

@@ -14,8 +14,8 @@ Every op in one table, from the raw artefacts: the **original** placement, what 
 | `in/out shape` | the executed ttnn trace (`phi_AFTER_rope_on.txt`) |
 
 `intlv` = interleaved, `shrd` = sharded, `L1_H` = L1 height-sharded, `L1_W` = L1 width-sharded.
-`· 22c` after an advised layout is the reconciliation's `advised_cores` field — **note it often disagrees with
-the number in the layout string** (`1x96 · 88c`, `32x1 · 22c`); that mismatch is the grid-vs-DS-family parsing
+`· 32c` after an advised layout is the reconciliation's `advised_cores` field — **note it often disagrees with
+the number in the layout string** (`1x96 · 96c`, `32x1 · 32c`); that mismatch is the grid-vs-DS-family parsing
 quirk recorded as action C5.
 
 ## The answer to "does it follow the advice?"
@@ -44,47 +44,55 @@ call, not by anything about the advice.** See code `O` in the legend and §3.4/E
 `l1/interleaved`. So the shipped win took the **buffer type** (DRAM→L1, the advisor's first-ranked criterion)
 and left the **sharding** half unimplemented. **Measured below: that half cannot be implemented at all** — so
 this is not a shortcut the cell took, it is the only legal placement.
+### Measured: what happens if you *do* implement the advised sharding — it is the fastest form
 
-### Measured: what happens if you *do* implement the advised sharding
+⚠ **An earlier version of this section claimed the advised sharding could not run. That was wrong, and the
+error was mine** — I used shard `(32,48)`; the advisor specified `(32,64)`. Corrected below.
 
-I implemented the advice faithfully — slices `l1/interleaved`, then `neg`/`concat`/`multiply`/`add` on
-`l1/height_sharded` over 32 cores, shard `(32, width)`, matching the incoming
-`l1/height_sharded, shard=(32,96), cores=32` the trace shows. Two variants, because the ops have two widths:
+The advised layout, from `final_ir.mlir` — the authoritative artefact, because `report.json` prints no shard
+shape at all and truncates the core range:
 
-| variant | what it shards | result |
+| | shard shape | cores |
 |---|---|---|
-| `partial` | only the **96-wide** ops (`concat` output, `multiply` ×2, `add`) — shard `(32,96)` = 3 tiles, tile-aligned | **`TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first or use an interleaved output memory config.`** |
-| `full` | also the **48-wide** `neg`, which the advice requires — shard `(32,48)` | **`TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`** |
-| *(control)* `shipped` — `l1/interleaved` | — | **runs: 0.768758 / 0.768047 ms** |
+| 48-wide `neg` and the halves — `#ttnn_layout24` | `memref<1x2x tile<32x32,bf16>>` = **(32, 64)**, tile-aligned | **32** — `[(0,0)-(10,1), (0,2)-(9,2)]` = 22 + 10 |
+| 96-wide `concat` out, `multiply`, `add` — `#ttnn_layout16` | `memref<1x3x tile<32x32,bf16>>` = **(32, 96)** | **32**, same set |
 
-Both failures reproduced twice. They **chain**: to give `concat` a sharded output you must shard its inputs;
-its inputs are the 48-wide halves; a 48-wide shard is not tile-aligned. So **there is no way to reach the
-advised placement for this rope body**, and the shipped `l1/interleaved` form is not a shortcut — it is the only
-legal option. **The time cannot be measured because the configuration does not run.**
+**Isolated single-op test of that exact config, one op at a time on device:**
 
-Phi's own source says why the widths are awkward, in `_apply_rope`:
+| op | config | result |
+|---|---|---|
+| `ttnn.neg` (1,32,32,48) | shard (32,64), 32 cores | **OK** |
+| `ttnn.concat` 2×(…,48) → (…,96) | shard (32,96), 32 cores | **OK** — the case I claimed was impossible |
+| `ttnn.multiply` (…,96) | shard (32,96), 32 cores | **OK** |
+| `ttnn.add` (…,96) | shard (32,96), 32 cores | **OK** |
+| `ttnn.slice` → (…,48) | shard (32,64), 32 cores | **OK** |
+| *control:* `ttnn.neg` shard **(32,48)** — my old probe | | **FAIL** `TT_FATAL tensor_layout.cpp:162` |
+
+**And the whole chain implemented verbatim**, with the cell's own unmodified `harness.py`, one fresh process per
+form, WARMUP 10 / REPEATS 5 / ITERS 50:
+
+| form | median ms | Δ vs incumbent | differential PCC | repeats span |
+|---|---|---|---|---|
+| frozen incumbent | 0.807535 | — | — | 0.807144 – 0.808512 |
+| **what this cell shipped** — L1 interleaved | 0.768104 | **−4.88 %** | 1.0 | 0.767374 – 0.768156 |
+| what phi B shipped — sharded `multiply`/`add` | 0.751277 | **−6.97 %** | 1.0 | 0.751010 – 0.752433 |
+| **the advisor's IR, verbatim** | **0.723320** | **−10.43 %** | **1.0** | 0.722631 – 0.723988 |
+
+Strict non-overlap between all three candidates; all bit-identical to the incumbent at the cell's own 0.999999
+bar, so the oracle never blocked the sharding — nothing did, it was simply never tried.
+
+**So the 6 "buffer only" rows are not the only legal option. They are an unproven deviation that cost
+5.55 pp ≈ 1.43 ms/model.** The `follows advice?` column below still describes what shipped; what changed is the
+*reason* — not "impossible", but "never tried".
+
+Phi's own `_apply_rope` comment explains why the widths are awkward, and it remains true — it just does not
+prevent the sharding:
 
 > *`ttnn.experimental.rotary_embedding` requires a width divisible by 64, whereas Phi-3.5's 96-wide heads split
 > at 48. The explicit topology is the exact HF operation and has no host fallback.*
 
-### The real finding: the advisor's validation and the runtime disagree
-
-This is worth separating from the outcome. The advisor **validated** the configuration it advised — from its own
-decision trace:
-
-| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
-|---|---|---|---|
-| `ttnn.neg` op10 | 296 | **296 (all valid)** | **yes** — one of 112 valid height-sharded candidates |
-| `ttnn.concat` op11 | 512 | 256 | **yes** |
-
-**So the op model accepts a `(32,48)` height shard and the runtime rejects it.** The advisor validates against
-the op model on a mock device (`op_constraint_validation::validateOperation`), and that check does not enforce
-the runtime's tile-sized-shard rule. That is a genuine consistency gap between tt-mlir's validation and
-tt-metal's runtime, and it is the reason a validated plan is unimplementable.
-
-*(A note on my own trail here: I first called the advice illegal on the basis of a probe that did not implement
-it — that reasoning was wrong and I retracted it. With a faithful implementation the conclusion holds, but the
-substantive result is the validation gap above, not the illegality per se.)*
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §4–§5,
+[`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E25
 
 ## `chain` and the other stage labels — what they mean
 
@@ -129,7 +137,7 @@ Every code below is read off an artefact, not inferred. Where I could not establ
 |---|---|---|
 | **O** | **Oracle veto.** The op is in chain `dense:0` or `dense:11`. Both were screened together as `advisor_norm_cores=11` and **measured faster** — 0.745905 ms against a 0.807152 ms incumbent (−7.6 %), and 0.700267 ms combined with the rope win (−13.3 %). The cell rejected them anyway: the differential real-weight oracle scored **0.9999910667** against a bar of **0.999999**. | `final.json` → `rejected_knobs.advisor_norm_cores` (`"reason": "real-weight differential PCC moved to 0.9999910666979231; placement change rejected"`), `oracle_combined.json` (`oracle_pcc_bar: 0.999999`, `oracle_passed: false`), `measurements/norm_11c.json`, `measurements/rope_l1_query_key_norm_11c.json`, `reconciliation_dense.json` → `chains[].verdict` |
 | **W** | **Shipped win.** Chain `kept`. The advice was `l1/interleaved`, which specifies no grid, so the advice is *fully* met. | `chains[].verdict = kept`, `profiles/dense_winner.csv` |
-| **U** | **Unreachable.** Chain `kept`, but only the L1 half. The advised `l1/height_sharded/32x1` **does not run**: `TT_FATAL: Cannot concat interleaved inputs into a sharded output` at 96-wide, and `TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!` at 48-wide. Both reproduced twice. `l1/interleaved` is the only legal placement, not a shortcut. | my faithful implementation of the advice — `exp-advisor-probe/as_advised_part.log`, `as_advised_full.log`, control `as_shipped.log` |
+| **U** | **Never tried.** Chain `kept`, but only the L1 half — the advised `l1/height_sharded/32x1`, shard (32,64)/(32,96) on 32 cores, was not attempted by the cell. It **runs**, it is **bit-identical**, and it is **−10.43 % against the −4.88 % this cell shipped**. *(This code read "Unreachable" in an earlier revision, on the strength of my own mis-shaped probe. Retracted.)* | `exp-rope-faithful/rope_advisor_full.json`, `oracle_modes.json`, the isolated single-op test, `final_ir.mlir` `#ttnn_layout24`/`#ttnn_layout16` |
 | **G** | **Hard error.** `advisor_sdpa_concat_l1` shipped **default-false** — `TT_FATAL: Sharded output not supported for GQA`. The paired boundary chain `dense:b43` was **rejected** and fell back to the incumbent time exactly (0.807152). | `final.json` → `rejected_knobs.advisor_sdpa_concat_l1`, `chains[dense:b43].hard_error`, `measure_sdpa_concat_l1.log` |
 | **T** | **Below the noise floor.** Chain `dense:12` is 2.461 µs of a 725 µs window, against a harness noise floor of **1.064 µs**. Not measurable, so never screened. | `chains[dense:12].verdict = below_threshold`, `incumbent.json` → `noise_floor_ms: 0.0010642` |
 | **L** | **Label defect, not a placement decision.** `agrees_with_shipped` is decided by `advised_cores == shipped_cores` — **`reconcile.py` never compares the memory space**. Advised `l1/…/1c`, shipped `1 core DRAM interleaved`: cores match, so it is labelled "agrees" while the buffer type disagrees. | `reconcile.py:446-448`, row 4 `pair_confidence: name` |
@@ -159,8 +167,8 @@ same soft-pairing limitation qwen FN and nm B both caught against the IR.
 | # | op | device op | µs | in shape | out shape | BEFORE cores·mem | ADVISOR ADVISED | AFTER cores·mem | stage label | follows advice? | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | `rms_norm` | `LayerNorm` | 44.3 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 3072) interleaved | 1·DRAM·intlv | `l1/block_sharded/1x11 · 11c` | 1·DRAM·intlv | `chain` | no | O |
-| 2 | `linear` | `Matmul` | 72.6 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 9216) interleaved | 96·DRAM·intlv | `l1/width_sharded/1x96 · 88c` | 96·DRAM·intlv | `chain` | no | O |
-| 3 | `nlp_create_qkv_heads_decode` | `NLPCreateQKVHeadsDecode` | 56.6 | — | — | 32·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 32·DRAM·intlv | `chain` | no | O |
+| 2 | `linear` | `Matmul` | 72.6 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 9216) interleaved | 96·DRAM·intlv | `l1/width_sharded/1x96 · 96c` | 96·DRAM·intlv | `chain` | no | O |
+| 3 | `nlp_create_qkv_heads_decode` | `NLPCreateQKVHeadsDecode` | 56.6 | — | — | 32·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 32·DRAM·intlv | `chain` | no | O |
 | 4 | `typecast` | `Typecast` | 0.9 | (32,) interleaved | — | 1·DRAM·intlv | `l1/height_sharded/1x1 · 1c` | 1·DRAM·intlv | `agrees_with_shipped` | no | L |
 | 5 | `embedding` | `Embeddings` | 2.5 | (32,) interleaved | (32, 96) interleaved | 1·DRAM·intlv | `l1/interleaved/10x11` | 1·DRAM·intlv | `chain` | no | O |
 | 6 | `embedding` | `Embeddings` | 2.5 | (32,) interleaved | (32, 96) interleaved | 1·DRAM·intlv | `l1/interleaved/10x11` | 1·DRAM·intlv | `chain` | no | O |
@@ -170,31 +178,31 @@ same soft-pairing limitation qwen FN and nm B both caught against the IR.
 | 10 | `*(conversion)*` | `Untilize` | 4.4 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 11 | `slice_static` | `Slice` | 6.8 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/interleaved/10x11` | 110·L1·intlv | `chain` | **yes** | W |
 | 12 | `*(conversion)*` | `TilizeWithValPadding` | 4.3 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
-| 13 | `neg` | `Unary` | 2.1 | (1, 32, 32, 48) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
+| 13 | `neg` | `Unary` | 2.1 | (1, 32, 32, 48) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
 | 14 | `*(conversion)*` | `UntilizeWithUnpadding` | 10.2 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 15 | `*(conversion)*` | `UntilizeWithUnpadding` | 10.1 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 16 | `*(conversion)*` | `Permute` | 5.8 | — | — | 64·DRAM·intlv | `—` | **gone**·— | `untraced` | — | — |
 | 17 | `*(conversion)*` | `Permute` | 5.9 | — | — | 64·DRAM·intlv | `—` | **gone**·— | `untraced` | — | — |
-| 18 | `concat` | `Concat` | 12.2 | — | (1, 32, 32, 96) interleaved | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U |
-| 19 | `multiply` | `Permute` | 7.9 | — | — | 96·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | **gone**·— | `chain` | undecidable | P |
+| 18 | `concat` | `Concat` | 12.2 | — | (1, 32, 32, 96) interleaved | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U |
+| 19 | `multiply` | `Permute` | 7.9 | — | — | 96·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | **gone**·— | `chain` | undecidable | P |
 | 20 | `*(conversion)*` | `TilizeWithValPadding` | 3.6 | — | — | 32·DRAM·intlv | `—` | 32·DRAM·intlv | `boundary` | — | — |
-| 21 | `multiply` | `BinaryNg` | 3.4 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
-| 22 | `add` | `BinaryNg` | 3.4 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·DRAM·intlv | `chain` | undecidable | P |
+| 21 | `multiply` | `BinaryNg` | 3.4 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
+| 22 | `add` | `BinaryNg` | 3.4 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·DRAM·intlv | `chain` | undecidable | P |
 | 23 | `*(conversion)*` | `BinaryNg` | 2.1 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `—` | 110·L1·intlv | `untraced` | — | — |
 | 24 | `slice_static` | `Slice` | 1.3 | (1, 32, 32, 96) interleaved | — | 64·DRAM·intlv | `l1/interleaved/10x11` | 64·L1·intlv | `chain` | **yes** | W |
 | 25 | `*(conversion)*` | `Untilize` | 3.6 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 26 | `slice_static` | `Slice` | 6.6 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/interleaved/10x11` | 110·L1·intlv | `chain` | **yes** | W |
 | 27 | `*(conversion)*` | `TilizeWithValPadding` | 3.9 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
-| 28 | `neg` | `Unary` | 1.5 | (1, 32, 32, 48) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
+| 28 | `neg` | `Unary` | 1.5 | (1, 32, 32, 48) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
 | 29 | `*(conversion)*` | `UntilizeWithUnpadding` | 10.1 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 30 | `*(conversion)*` | `UntilizeWithUnpadding` | 10.1 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 31 | `*(conversion)*` | `Permute` | 5.8 | — | — | 64·DRAM·intlv | `—` | **gone**·— | `untraced` | — | — |
 | 32 | `*(conversion)*` | `Permute` | 6.1 | — | — | 64·DRAM·intlv | `—` | **gone**·— | `untraced` | — | — |
-| 33 | `concat` | `Concat` | 12.3 | — | (1, 32, 32, 96) interleaved | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U |
-| 34 | `multiply` | `Permute` | 7.6 | — | — | 96·DRAM·intlv | `l1/height_sharded/32x1 · 1c` | **gone**·— | `chain` | undecidable | P |
+| 33 | `concat` | `Concat` | 12.3 | — | (1, 32, 32, 96) interleaved | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U |
+| 34 | `multiply` | `Permute` | 7.6 | — | — | 96·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | **gone**·— | `chain` | undecidable | P |
 | 35 | `*(conversion)*` | `TilizeWithValPadding` | 3.5 | — | — | 32·DRAM·intlv | `—` | 32·DRAM·intlv | `boundary` | — | — |
-| 36 | `multiply` | `BinaryNg` | 3.7 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 22c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
-| 37 | `add` | `BinaryNg` | 3.3 | (1, 1, 32, 8192) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 1c` | 110·DRAM·intlv | `chain` | undecidable | P |
+| 36 | `multiply` | `BinaryNg` | 3.7 | (1, 32, 32, 96) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·L1·intlv | `chain` | **buffer only** | U·P |
+| 37 | `add` | `BinaryNg` | 3.3 | (1, 1, 32, 8192) interleaved | — | 110·DRAM·intlv | `l1/height_sharded/32x1 · 32c` | 110·DRAM·intlv | `chain` | undecidable | P |
 | 38 | `*(conversion)*` | `BinaryNg` | 2.3 | — | — | 110·DRAM·intlv | `—` | 110·L1·intlv | `untraced` | — | — |
 | 39 | `*(conversion)*` | `InterleavedToSharded` | 1.0 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
 | 40 | `*(conversion)*` | `InterleavedToSharded` | 1.0 | — | — | 32·DRAM·intlv | `—` | 32·L1·intlv | `boundary` | — | — |
@@ -203,17 +211,17 @@ same soft-pairing limitation qwen FN and nm B both caught against the IR.
 | 43 | `paged_scaled_dot_product_attention_decode` | `SdpaDecode` | 50.4 | — | — | 110·L1_H·shrd | `dram/interleaved/1x1` | 110·L1_H·shrd | `dram_resident` | no | G |
 | 44 | `*(conversion)*` | `InterleavedToSharded` | 1.6 | — | — | 32·DRAM·intlv | `—` | 32·DRAM·intlv | `boundary` | — | G·b |
 | 45 | `nlp_concat_heads_decode` | `NLPConcatHeadsDecode` | 4.7 | — | — | 32·L1_H·shrd | `dram/interleaved/1x1` | 32·L1_H·shrd | `dram_resident` | no | G |
-| 46 | `linear` | `Matmul` | 30.4 | (1, 1, 32, 3072) shard(32, 96)/32c | (1, 1, 32, 3072) interleaved | 32·L1_W·shrd | `l1/width_sharded/1x96 · 88c` | 32·L1_W·shrd | `chain` | **family only** | O |
-| 47 | `add` | `BinaryNg` | 2.4 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x96 · 88c` | 110·DRAM·intlv | `chain` | undecidable | O·P |
+| 46 | `linear` | `Matmul` | 30.4 | (1, 1, 32, 3072) shard(32, 96)/32c | (1, 1, 32, 3072) interleaved | 32·L1_W·shrd | `l1/width_sharded/1x96 · 96c` | 32·L1_W·shrd | `chain` | **family only** | O |
+| 47 | `add` | `BinaryNg` | 2.4 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x96 · 96c` | 110·DRAM·intlv | `chain` | undecidable | O·P |
 | 48 | `rms_norm` | `LayerNorm` | 44.5 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 3072) interleaved | 1·DRAM·intlv | `l1/block_sharded/1x11 · 11c` | 1·DRAM·intlv | `chain` | no | O |
-| 49 | `linear` | `Matmul` | 103.9 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 16384) interleaved | 103·DRAM·intlv | `l1/width_sharded/1x103 · 99c` | 103·DRAM·intlv | `chain` | no | O |
+| 49 | `linear` | `Matmul` | 103.9 | (1, 1, 32, 3072) interleaved | (1, 1, 32, 16384) interleaved | 103·DRAM·intlv | `l1/width_sharded/1x103 · 103c` | 103·DRAM·intlv | `chain` | no | O |
 | 50 | `slice_static` | `Slice` | 3.1 | (1, 1, 32, 16384) interleaved | — | 110·DRAM·intlv | `l1/interleaved/10x11` | 110·DRAM·intlv | `chain` | no | O |
 | 51 | `slice_static` | `Slice` | 3.3 | (1, 1, 32, 16384) interleaved | — | 110·DRAM·intlv | `l1/interleaved/10x11` | 110·DRAM·intlv | `chain` | no | O |
-| 52 | `multiply` | `BinaryNg` | 8.5 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x86 · 77c` | 110·DRAM·intlv | `chain` | undecidable | O·P |
+| 52 | `multiply` | `BinaryNg` | 8.5 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x86 · 86c` | 110·DRAM·intlv | `chain` | undecidable | O·P |
 | 53 | `*(conversion)*` | `InterleavedToSharded` | 2.0 | — | — | 16·DRAM·intlv | `—` | 16·DRAM·intlv | `boundary` | — | — |
-| 54 | `linear` | `Matmul` | 48.0 | (1, 1, 32, 8192) shard(32, 512)/16c | (1, 1, 32, 3072) shard(32, 192)/16c | 12·L1_W·shrd | `l1/width_sharded/1x96 · 88c` | 12·L1_W·shrd | `agrees_with_shipped` | **family only** | D |
+| 54 | `linear` | `Matmul` | 48.0 | (1, 1, 32, 8192) shard(32, 512)/16c | (1, 1, 32, 3072) shard(32, 192)/16c | 12·L1_W·shrd | `l1/width_sharded/1x96 · 96c` | 12·L1_W·shrd | `agrees_with_shipped` | **family only** | D |
 | 55 | `*(conversion)*` | `ShardedToInterleaved` | 1.5 | — | — | 16·L1_W·shrd | `—` | 16·L1_W·shrd | `boundary` | — | — |
-| 56 | `add` | `BinaryNg` | 2.5 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x96 · 88c` | 110·DRAM·intlv | `chain` | undecidable | T·P |
+| 56 | `add` | `BinaryNg` | 2.5 | — | — | 110·DRAM·intlv | `l1/width_sharded/1x96 · 96c` | 110·DRAM·intlv | `chain` | undecidable | T·P |
 
 | stage `bucket` | follows advice? | rows | why |
 |---|---|---|---|
@@ -230,6 +238,13 @@ same soft-pairing limitation qwen FN and nm B both caught against the IR.
 
 
 ## Corrections made in this revision
+
+| was | now | why |
+|---|---|---|
+| every advised core count — `· 22c`, `· 88c`, `· 99c`, `· 77c` | **`· 32c`, `· 96c`, `· 103c`, `· 86c`** | The reconciliation parses `cores=` from `report.json`, which prints only the first range of a multi-range `CoreRangeSet`. The grid-string product is correct — validated 22/22 against the decision trace. |
+| "the advised sharding is unreachable; `l1/interleaved` is the only legal placement" | **it runs, and it is −10.43 % at PCC 1.0** | My probe used shard (32,48); the advisor specified (32,64). The isolated single-op test passes on every op, including the `concat` I claimed was impossible. |
+
+### Corrections from the previous revision
 
 Adding the `why` column forced three of my own earlier labels to change. Recorded rather than quietly fixed:
 

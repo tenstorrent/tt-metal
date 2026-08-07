@@ -138,40 +138,26 @@ they measure.
 
 ---
 
-## 4a. The validation the candidate set is filtered against is not the runtime's
+## 4a. ~~The validation is not the runtime's~~ — **RETRACTED**, and what to read instead
 
-Every enumerated layout is checked by `op_constraint_validation::validateOperation` against the **op model**,
-on a **mock device** built from `SYSTEM_DESC_PATH`. Nothing here executes (§1), so "valid" means "the op model
-accepts this", not "this runs".
+I claimed the op model accepts shard shapes the runtime rejects, on phi's RoPE body. **Wrong, and my error.**
+The advisor specified shard **(32,64)** (`memref<1x2x tile<32x32,bf16>>`) on **32** cores
+(`core_ranges = [(0,0)-(10,1), (0,2)-(9,2)]`). I tested **(32,48)**. Every op in the advisor's real config runs;
+the plan verbatim is the fastest form measured, at PCC 1.0.
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §5.
 
-**Those two are not the same set.** phi's RoPE body, from the decision trace:
+**What is true, and matters for reading any advice:** *`report.json` is not the advice.* It renders a
+multi-range `CoreRangeSet` as its first range only, and it prints no shard shape at all. So:
 
-| op | evaluations | valid | `height_sharded/32x1` valid? | runs on device? |
-|---|---|---|---|---|
-| `ttnn.neg` op10 | 296 | **296** | yes (1 of 112 valid HS candidates) | **no** |
-| `ttnn.concat` op11 | 512 | 256 | yes | **no** |
+| field | trustworthy? |
+|---|---|
+| `layout` space + strategy (`l1/height_sharded`) | yes |
+| the `AxB` grid string | **yes** — its product is the true `coreCount`, 49/49 against three traces |
+| `cores=(x0,y0)-(x1,y1)` | **no** — first range only; understates 58.3 % of the time corpus-wide |
+| shard shape | **absent** — only `final_ir.mlir` has it |
 
-The heads are 96 wide and split at 48, so the shards are `(32, 96)` and `(32, 48)`. On device:
-
-```
-TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!
-TT_FATAL: Cannot concat interleaved inputs into a sharded output.
-          Either shard the inputs first or use an interleaved output memory config.
-```
-
-**The op model does not enforce the runtime's tile-sized-shard rule.** A 48-wide height shard is therefore
-enumerated, validated, scored, ranked first, and emitted as advice — and then cannot be run.
-
-Two consequences for reading any `report.json`:
-
-1. **`valid` in the decision trace is a weaker claim than it looks.** 296/296 valid does not mean 296 runnable.
-2. It interacts with the pruning in §4: `generateAllPossibleLayouts` dedups by shard shape keeping the smallest
-   grid **before** per-op rulebooks run, so the surviving representative of a shard shape can be exactly the
-   unrunnable one.
-
-This is a genuine consistency gap between tt-mlir's validation and tt-metal's runtime, and it is separate from
-the scoring problems in §2 — here the ranking is doing its job on a candidate that should never have been in
-the set. → [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §D6.
+**Read `final_ir.mlir` for anything you intend to implement.** It carries the exact `memref` tile shape and the
+complete range set, and it is what the advisor actually decided.
 
 ## 5. What the decision traces actually show
 
