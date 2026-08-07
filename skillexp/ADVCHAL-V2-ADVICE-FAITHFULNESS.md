@@ -215,3 +215,144 @@ Nothing above weakens these, and §1 and §4 sharpen them:
 
 Generated from the cells' own artefacts. Measurements in `~/skillexp-logs/exp-rope-faithful/`,
 chronology in `advchal-v2-chronology.json`, corrected advice in `advchal-v2-corrected-advice.json`.
+
+---
+
+## 7. E26 — apply the advised plan *together* instead of building chains up: −17.84 %
+
+§4 implemented one advised block (the RoPE body) and got −10.43 %. The obvious next question: what if the cell
+had applied **everything the advisor said**, rather than assembling chains one at a time?
+
+phi FN's advised plan is 35 ops. Two blocks carry almost all of the cost the advisor disagreed about: the RoPE
+body, and the two 44 µs `rms_norm`s it wants on `l1/block_sharded/1x11`. Both are implementable — the cell
+already has a `advisor_norm_cores` knob. Measured with the cell's own harness, fresh process per configuration:
+
+| configuration | median ms | Δ vs incumbent | differential PCC |
+|---|---|---|---|
+| incumbent — advisor ignored | 0.807535 | — | — |
+| **what the cell shipped** — rope L1 interleaved | 0.768104 | **−4.88 %** | **1.0** |
+| norm 11 only (the advised grid) | 0.747428 | −7.44 % | 0.99999107 |
+| **rope advised only** | 0.723320 | **−10.43 %** | **1.0** |
+| rope interleaved + norm 11 — the cell's own best, discarded | 0.700120 | −13.30 % | 0.99999107 |
+| **rope advised + norm 11 — both advised blocks together** | **0.663507** | **−17.84 %** | 0.99999107 |
+
+Strict non-overlap at every step: max(`ropefull+norm11`) 0.664564 < min(`ropeintl+norm11`) 0.699557, and
+max(`rope advised`) 0.723988 < min(`shipped`) 0.767374.
+
+**Applying the advisor's placement on both blocks is 3.7× what the cell shipped.**
+
+### The oracle result matters here, and it is clean
+
+| configuration | differential PCC vs frozen incumbent |
+|---|---|
+| rope interleaved, norm off | **1.0** |
+| rope **advised**, norm off | **1.0** |
+| norm 11, rope off | 0.9999910666979231 |
+| norm 11 + rope interleaved | 0.9999910666979231 |
+| norm 11 + rope advised | 0.9999910666979231 |
+
+Two things fall out. **The advised RoPE sharding is bit-identical** — the entire −10.43 % is free, with no
+correctness question of any kind. And **the PCC movement is exactly the same number whatever else changes**, so
+it is attributable wholly to the norm re-grid and behaves like a deterministic reduction-order difference, not
+like a shard-spec bug (a bug would interact with the other change).
+
+**So even taking the skill's strict rule at face value — reject anything that moves PCC at all — phi FN should
+have shipped −10.43 %, not −4.88 %.** The oracle is not what cost it the 5.55 pp; not trying the advice is.
+
+---
+
+## 8. Should "apply everything, then subtract" be the starting point?
+
+**What the skill instructs today** (`SKILL.md` §4, verbatim):
+
+> ### 4. Screen, in the order the reconciliation gives
+> Each chain as one unit, one variable per measurement, against the frozen incumbent.
+
+That is a **build-up** procedure: start from the incumbent, add one chain at a time. Nowhere does the skill ask
+for the advised plan as a whole to be measured, and `final_ir.mlir` — the only artefact carrying the complete
+plan with its shard shapes — is never mentioned.
+
+**What the corpus shows.** Ranking the 9 cells that changed anything by outcome, against whether their *first*
+candidate was the advisor's placement:
+
+| cell | first candidate | Δ shipped |
+|---|---|---|
+| **gemma-4-26B onA** | **the advised plan** — `advisor_norm88`, its one dominant advised item | **−12.98 %** |
+| **north-mini FN** | **the advised plan** — `advisor_moe_norm_22` | **−9.26 %** |
+| **phi-3.5 onA** | **the advised geometry** — `rope_l1_rect32` | **−7.58 %** |
+| phi-3.5 B | partly — the rope chain, sharded `multiply`/`add` | −5.09 % |
+| phi-3.5 FN | no — rope L1 interleaved | −4.88 % *(−17.84 % was available)* |
+| qwen3-27B FN | no — its own `packed_qkv_l1_chain`; the advised 32 was tried 4 candidates later | −2.25 % |
+| gemma-4-12B exp11 | no — 52 measurements, not one an advised grid | −1.83 % |
+| gemma-4-26B FN | the advised plan, and it **correctly rejected it** (its incumbent already had 8 cores, so this was 8→88, not 1→88) | −1.69 % |
+| gemma-4-26B B | no — DS matmul roles; its own notes say the advisor's grid direction "was not booked" | −0.47 % |
+
+**The top three outcomes in the corpus are the three cells whose first candidate was the advisor's placement.
+The bottom four are cells that never applied it.**
+
+⚠ **This is a correlation and I am not claiming it is wholly causal** — the cells also differ in how much
+placement defect there was to find (gemma-4-26B onA had a 1-core norm; gemma-4-12B did not). What raises it
+above correlation is that **for one cell the counterfactual is measured**: same cell, same frozen incumbent,
+same harness — apply-all gives 3.7× what building up gave.
+
+### Why build-up loses, mechanically
+
+1. **A chain below the noise floor is never tested at all.** 60 % of the disagreed-on cost corpus-wide sits in
+   `below_threshold` chains ([`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md)). Individually unmeasurable;
+   together, plainly measurable. phi FN's own norm chains were 178 µs and 196 µs and it took the whole-window
+   combination to see them.
+2. **The skill already knows this and only half-applies it.** Its `aggregate_only` feasibility verdict says
+   *"apply the top chains together as one candidate first"* — but only as a fallback when no single chain clears
+   the floor. The corpus says it is the better *default*.
+3. **Build-up hides interactions.** rope + norm together (−17.84 %) beats the sum of the parts measured
+   separately (−10.43 % and −7.44 % → −17.87 % predicted; here they happen to be additive, but nothing in the
+   build-up procedure checks that, and the cell never got to a configuration where it could).
+4. **"Not tried" and "tried and lost" become indistinguishable.** Four cells' unproven deviations all look
+   identical in the artefacts to a measured rejection.
+
+### The instruction change
+
+**Make the advisor's complete plan, implemented from `final_ir.mlir`, candidate #1 — then ablate downwards.**
+
+```
+1. apply_all      = every advised placement at once, from final_ir.mlir (shard shapes + full CoreRangeSet)
+2. if it does not run, remove ONLY the item that fails, with a single-op test naming it, and record that
+3. measure. if apply_all wins, that is the floor, not the ceiling
+4. ablate: remove one advised item at a time. an item whose removal makes it FASTER is a real finding
+   about the advisor and should be reported as one
+5. build up from the incumbent only for what apply_all could not reach
+```
+
+This inverts the failure mode. Today a cell that does nothing lands at "no_change" and passes its gate; under
+apply-all-first, a cell that does nothing has to *explain a measured regression*. And step 4 is the part that
+produces advisor feedback the current procedure structurally cannot: today an item that is never applied
+generates no evidence about the advisor at all.
+
+**Cost:** roughly the same device time. phi FN spent 12 measurements building up; apply-all + the ablations
+that matter is the same order. It is a reordering, not more work.
+
+→ [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §F5.
+
+---
+
+## 9. What "apply everything" would have meant, per cell
+
+Not measured except for phi FN — this is the advised plan each cell would have started from, from its own
+corrected `report.json`, with what it actually did instead. **Analysis, not measurement.**
+
+| cell | the advised plan's main items (corrected cores) | what it applied |
+|---|---|---|
+| **phi-3.5 FN** | `rms_norm`×2 → block_sharded **11**; rope body → height_sharded **32**; qkv `linear` → width_sharded **96**; `create_qkv_heads` → height_sharded **32**; SDPA + `concat_heads` → **DRAM**; MLP `linear` → **103**, `multiply` → **86**, down → **96** | rope, as L1 interleaved. **Measured: applying just the first two items = −17.84 %** |
+| **gemma-4-12B exp11** | `rms_norm` → **11**, **64**, **8** by site; `rotary_embedding` → height_sharded **32** and **16**; `linear` → **96**, **60**, **86**; `multiply` → **96** | 52 measurements of L1-residency variants; **no advised grid ever applied** |
+| **gemma-4-26B B** | `rms_norm` → width_sharded **88** and **8**; `linear` → **107**, **88**, **66**; `rotary_embedding` → height_sharded **16** | DS matmul roles. Its own notes: the advisor's norm/grid direction "was not booked" |
+| **gemma-4-26B FN** | same plan as B | applied `advisor_norm88` first, measured a regression — **correct** |
+| **gemma-4-26B onA** | same plan as B | applied `advisor_norm88` first → **shipped it, −12.98 %** |
+| **north-mini FN** | MoE `rms_norm` → width_sharded **22**; `linear` → **80**, **96**, **64** | applied 22 first, then its own 32, shipped 32 with the comparison recorded — **correct** |
+| **qwen3-27B FN** | rope `neg`/`multiply` → height_sharded **32**; `multiply` → **90**, **96**, **109**; `concat`/`rotary` → **DRAM** | its own packed-qkv candidate first; the advised 32 tried 4 candidates later and regressed |
+| **llama-3.1-8B exp17** | `rms_norm` → block_sharded **11** *and* width_sharded **22**; `linear`/`add` → **64**, **90**, **96** | the advised **64** chain; the advised norm grids never tried (`below_threshold`) |
+| llama-3.2-1B exp17 | `rms_norm` → **10**; `add` → **80**, **90** | a 64-core residual chain and a DRAM concat output |
+| north-mini B / onA, phi exp17 | — | zeros; north-mini onA tried nothing at all |
+
+**The pattern in one line: every cell whose advised plan was dominated by a starved reduction and which applied
+it first, won big. Every cell that assembled its own chains instead is in the bottom half — and the one case
+where the counterfactual is measured, it lost 3.7×.**

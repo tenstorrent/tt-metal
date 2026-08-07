@@ -19,6 +19,11 @@ layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned o
 **Total left on the table from placement: ≈ 8.0 ms/model across four cells**, all identifiable by a **one-line
 static check that needs no device time** (§3.8).
 
+4. **The screening order itself is the biggest single defect.** The skill screens chain-by-chain, building up
+   from the incumbent. On the one cell where the counterfactual is measured, **applying the advisor's placement
+   instead gives −17.84 % against the −4.88 % that shipped — 3.7×** — and **−10.43 % of it is bit-identical to
+   the incumbent** (PCC exactly 1.0), so no correctness rule blocked it. It was never tried (§3.27).
+
 **And placement is not where the money is.** The corpus's single largest cost is **191 ms/model — 24.4 % of
 qwen B's decode time — in tile ↔ row-major conversions** on one graph edge, 14× every shipped win combined. It is
 a **shape choice in the decoder** (a 4-element conv window sitting on the 32-wide tile axis; the conversions run
@@ -111,7 +116,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty-seven findings that matter
+## 3. The twenty-eight findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -821,6 +826,62 @@ regression on file. north-mini FN is the model case: it measured the advised 22 
 measure it, the deviation cost 5.55 pp (§3.23, E25).
 
 → [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §2
+
+---
+
+### 3.27 The screening order is the biggest single defect: build-up cost phi FN 3.7×
+
+The skill instructs build-up (`SKILL.md` §4, verbatim): *"Screen, in the order the reconciliation gives. Each
+chain as one unit, one variable per measurement, against the frozen incumbent."* It never asks for the advised
+plan to be applied as a whole, and never mentions `final_ir.mlir` — the only artefact carrying the complete plan
+with its shard shapes.
+
+**Measured on phi FN — its own harness, fresh process per configuration, strict non-overlap throughout:**
+
+| configuration | median ms | Δ | differential PCC |
+|---|---|---|---|
+| incumbent | 0.807535 | — | — |
+| **what the cell shipped** | 0.768104 | **−4.88 %** | **1.0** |
+| norm 11 only (advised grid) | 0.747428 | −7.44 % | 0.99999107 |
+| **rope as advised** | 0.723320 | **−10.43 %** | **1.0** |
+| the cell's own best, discarded on the oracle | 0.700120 | −13.30 % | 0.99999107 |
+| **rope as advised + advised 11-core norm** | **0.663507** | **−17.84 %** | 0.99999107 |
+
+**Applying the advisor's placement is 3.7× what the cell shipped.** And note the PCC column: the advised RoPE
+sharding is **bit-identical**, so **−10.43 % was available with no correctness question at all**. The oracle
+(§3.1) did not cost this cell the 5.55 pp — not trying the advice did. The 0.9999911 comes wholly from the norm
+re-grid: the same number with rope off, interleaved, or advised, which is reduction-order behaviour, not a
+shard-spec bug.
+
+**Corpus-wide the ordering shows up in the results.** The three best outcomes are the three cells whose *first*
+candidate was the advisor's placement:
+
+| cell | first candidate | Δ |
+|---|---|---|
+| gemma-4-26B onA | **the advised plan** | **−12.98 %** |
+| north-mini FN | **the advised plan** | **−9.26 %** |
+| phi-3.5 onA | **the advised geometry** | **−7.58 %** |
+| … | | |
+| phi-3.5 FN | no | −4.88 % *(−17.84 % available)* |
+| qwen3-27B FN | no | −2.25 % |
+| gemma-4-12B exp11 | no — 52 measurements, no advised grid | −1.83 % |
+| gemma-4-26B B | no | −0.47 % |
+
+*(Correlation — cells also differ in how much defect there was to find. What lifts it above correlation is that
+phi FN's counterfactual is measured: same cell, same incumbent, same harness.)*
+
+**Why build-up loses mechanically:** 60 % of the disagreed-on cost sits in `below_threshold` chains that are
+individually unmeasurable and collectively obvious — phi FN's own norm chains were 178 µs and 196 µs. The skill
+already knows this: its `aggregate_only` verdict says *"apply the top chains together as one candidate first"* —
+but only as a fallback when no single chain clears the floor. **The corpus says it should be the default.**
+
+**The change (F5):** make the advisor's complete plan, built from `final_ir.mlir`, candidate #1; if it will not
+run, remove only the failing item with a single-op test naming it; then **ablate downwards** — an advised item
+whose removal is *faster* is a real finding about the advisor, and today that signal cannot be generated at all
+because such items are never applied. Same device time; it is a reordering.
+
+→ [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7–§9,
+[`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §F5
 
 ---
 

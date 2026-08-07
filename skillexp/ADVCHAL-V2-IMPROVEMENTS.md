@@ -723,6 +723,56 @@ conv/recurrent composites; sharded output for GQA SDPA (gates two cells' top can
 
 ## F. Experiment design (for the next corpus)
 
+### F5. Invert the screening order: apply the advisor's whole plan first, then ablate ⭐⭐⭐ the single biggest change in this document
+
+**What the skill says today** (`SKILL.md` §4): *"Screen, in the order the reconciliation gives. Each chain as one
+unit, one variable per measurement, against the frozen incumbent."* That is build-up from the incumbent, and
+`final_ir.mlir` — the only artefact with the complete plan and its shard shapes — is never mentioned.
+
+**Measured, on phi FN, its own harness, fresh process per configuration:**
+
+| configuration | median ms | Δ | differential PCC |
+|---|---|---|---|
+| incumbent | 0.807535 | — | — |
+| **what the cell shipped** | 0.768104 | **−4.88 %** | **1.0** |
+| rope as advised | 0.723320 | **−10.43 %** | **1.0** |
+| the cell's own best, discarded | 0.700120 | −13.30 % | 0.99999107 |
+| **rope as advised + the advised 11-core norm** | **0.663507** | **−17.84 %** | 0.99999107 |
+
+**3.7× what it shipped**, strict non-overlap throughout. And the −10.43 % is at **PCC exactly 1.0** — so the
+oracle is not what cost this cell the difference; not trying the advice is.
+
+**Corpus support:** the three best outcomes in the corpus (gemma-4-26B onA −12.98 %, north-mini FN −9.26 %,
+phi onA −7.58 %) are the three cells whose *first* candidate was the advisor's placement. The four worst are
+cells that never applied it. Correlation, not proof — cells differ in how much defect there was to find — but
+phi FN is the measured counterfactual.
+
+**The change:**
+
+```
+1. apply_all = every advised placement at once, built from final_ir.mlir
+   (it carries the shard shape and the full CoreRangeSet; report.json carries neither -- C5f)
+2. if it will not run, remove ONLY the failing item, with an isolated single-op test naming it
+3. measure. apply_all is the floor, not the ceiling
+4. ablate one advised item at a time. an item whose REMOVAL is faster is a finding about the advisor
+   and gets reported as one
+5. build up from the incumbent only for what apply_all could not reach
+```
+
+**Why it is strictly better, not just different:**
+
+- **It tests the sub-floor chains.** 60 % of the disagreed-on cost corpus-wide is in `below_threshold` chains
+  that are individually unmeasurable and collectively obvious. The skill's `aggregate_only` verdict already
+  says *"apply the top chains together as one candidate first"* — but only as a fallback. Make it the default.
+- **It inverts the burden of proof.** Today a cell that applies nothing reports `no_change` and passes its
+  gate. Under apply-all-first it has to produce a measured regression to justify that.
+- **It is the only order that generates advisor feedback.** An advised item that is never applied yields no
+  evidence about the advisor. Step 4's ablation is exactly the signal this whole effort wants.
+- **It costs the same.** phi FN used 12 measurements building up. apply_all plus the ablations that matter is
+  the same order of magnitude.
+
+- **Evidence:** [`ADVICE-FAITHFULNESS`](ADVCHAL-V2-ADVICE-FAITHFULNESS.md) §7–§9.
+
 ### F1. Hold the incumbent constant when comparing arms
 
 Two nominally identical arms of gemma-4-26B differ by **45 %** in control speed — larger than any advisor
