@@ -1,0 +1,129 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+
+// Fused scatter phase for neighbor_pad_halo padded-output mode. Runs on cores DISJOINT from the fabric
+// exchange (columns x>=1), concurrently with the exchange. Writes the padded output [outer, Hp, Wp, C]:
+//   INTERIOR (t,h,w) -> padded[t, h+pH, w+pW]   from interior_src (input); NO dependency on the exchange
+//     -> processed first, overlapping the fabric exchange.
+//   BORDER  -> from the compact halo buffer [H-top|H-bot|W-left|W-right]; depends on the exchange, so
+//     before its first border stick a core waits exchange_done >= num_readers (all fabric halo landed).
+// Same stick mapping as halo_scatter_writer (interior + 4 border sections, t-major). border_only: interior
+// already present in padded_output, work starts at the border (interior skipped, no overlap).
+void kernel_main() {
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);        // interior source (input)
+    const uint32_t compact_addr = get_arg_val<uint32_t>(1);  // border source (compact halo buffer)
+    const uint32_t dst_addr = get_arg_val<uint32_t>(2);      // padded output
+    const uint32_t stick_start = get_arg_val<uint32_t>(3);
+    const uint32_t stick_count = get_arg_val<uint32_t>(4);
+    const uint32_t exchange_done_addr = get_arg_val<uint32_t>(5);  // GlobalSemaphore L1 address
+    const uint32_t num_readers = get_arg_val<uint32_t>(6);         // exchange_done target count
+
+    constexpr uint32_t page_size = get_compile_time_arg_val(0);
+    constexpr uint32_t outer = get_compile_time_arg_val(1);
+    constexpr uint32_t Hp = get_compile_time_arg_val(2);
+    constexpr uint32_t Wp = get_compile_time_arg_val(3);
+    constexpr uint32_t Hd = get_compile_time_arg_val(4);
+    constexpr uint32_t Wd = get_compile_time_arg_val(5);
+    constexpr uint32_t pH = get_compile_time_arg_val(6);
+    constexpr uint32_t pW = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_id = get_compile_time_arg_val(8);
+    constexpr uint32_t batch = get_compile_time_arg_val(9);
+    constexpr uint32_t border_only = get_compile_time_arg_val(10);
+
+    constexpr auto x_args = TensorAccessorArgs<11>();
+    constexpr auto compact_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto dst_args = TensorAccessorArgs<compact_args.next_compile_time_args_offset()>();
+    const auto x_src = TensorAccessor(x_args, x_addr, page_size);
+    const auto compact = TensorAccessor(compact_args, compact_addr, page_size);
+    const auto dst = TensorAccessor(dst_args, dst_addr, page_size);
+
+    constexpr uint32_t frame_stride = Hp * Wp;
+    constexpr uint32_t n_int = outer * Hd * Wd;
+    constexpr uint32_t h_sec = outer * pH * Wd;
+    constexpr uint32_t w_sec = outer * Hp * pW;
+    constexpr uint32_t bb1 = n_int + h_sec;
+    constexpr uint32_t bb2 = bb1 + h_sec;
+    constexpr uint32_t bb3 = bb2 + w_sec;
+
+    const uint32_t l1_base = get_write_ptr(cb_id);
+    const uint32_t end = stick_start + stick_count;
+
+    auto src_noc = [&](uint32_t gi) -> uint64_t {
+        if (gi < n_int) {
+            return get_noc_addr(gi, x_src);
+        } else if (gi < bb1) {
+            return get_noc_addr(gi - n_int, compact);
+        } else if (gi < bb2) {
+            return get_noc_addr(h_sec + (gi - bb1), compact);
+        } else if (gi < bb3) {
+            return get_noc_addr(2 * h_sec + (gi - bb2), compact);
+        } else {
+            return get_noc_addr(2 * h_sec + w_sec + (gi - bb3), compact);
+        }
+    };
+    auto dst_page = [&](uint32_t gi) -> uint32_t {
+        if (gi < n_int) {
+            const uint32_t t = gi / (Hd * Wd);
+            const uint32_t rem = gi - t * (Hd * Wd);
+            const uint32_t h = rem / Wd;
+            const uint32_t w = rem - h * Wd;
+            return t * frame_stride + (h + pH) * Wp + (pW + w);
+        } else if (gi < bb1) {
+            const uint32_t j = gi - n_int;
+            const uint32_t t = j / (pH * Wd);
+            const uint32_t rem = j - t * (pH * Wd);
+            const uint32_t pr = rem / Wd;
+            const uint32_t w = rem - pr * Wd;
+            return t * frame_stride + pr * Wp + (pW + w);
+        } else if (gi < bb2) {
+            const uint32_t j = gi - bb1;
+            const uint32_t t = j / (pH * Wd);
+            const uint32_t rem = j - t * (pH * Wd);
+            const uint32_t pr = rem / Wd;
+            const uint32_t w = rem - pr * Wd;
+            return t * frame_stride + (pH + Hd + pr) * Wp + (pW + w);
+        } else if (gi < bb3) {
+            const uint32_t j = gi - bb2;
+            const uint32_t t = j / (Hp * pW);
+            const uint32_t rem = j - t * (Hp * pW);
+            const uint32_t hp = rem / pW;
+            const uint32_t wc = rem - hp * pW;
+            return t * frame_stride + hp * Wp + wc;
+        } else {
+            const uint32_t j = gi - bb3;
+            const uint32_t t = j / (Hp * pW);
+            const uint32_t rem = j - t * (Hp * pW);
+            const uint32_t hp = rem / pW;
+            const uint32_t wc = rem - hp * pW;
+            return t * frame_stride + hp * Wp + (pW + Wd + wc);
+        }
+    };
+
+    // Border sticks (gi >= n_int) depend on the fabric exchange. Wait exactly once, before the first
+    // border stick this core touches; interior sticks (gi < n_int) run first with no wait (overlap).
+    volatile tt_l1_ptr uint32_t* exch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exchange_done_addr);
+    bool waited = false;
+    if (border_only) {
+        noc_semaphore_wait_min(exch, num_readers);
+        waited = true;
+    }
+
+    for (uint32_t gi = stick_start; gi < end; gi += batch) {
+        const uint32_t n = (end - gi < batch) ? (end - gi) : batch;
+        if (!waited && (gi + n) > n_int) {
+            noc_semaphore_wait_min(exch, num_readers);
+            waited = true;
+        }
+        for (uint32_t k = 0; k < n; k++) {
+            noc_async_read(src_noc(gi + k), l1_base + k * page_size, page_size);
+        }
+        noc_async_read_barrier();
+        for (uint32_t k = 0; k < n; k++) {
+            noc_async_write(l1_base + k * page_size, get_noc_addr(dst_page(gi + k), dst), page_size);
+        }
+        noc_async_write_barrier();
+    }
+}
