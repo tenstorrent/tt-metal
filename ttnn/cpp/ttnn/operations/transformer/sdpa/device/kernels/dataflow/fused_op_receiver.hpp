@@ -24,9 +24,8 @@ struct RingSDPAOpReceiver {
         uint32_t forward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t backward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
 
-        // The host (RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args) ALWAYS appends both
-        // AllGather semaphore ids, regardless of whether this receiver waits on them. Consume both
-        // unconditionally so the runtime-arg stream stays aligned for any args that follow the fused-op block.
+        // Read both semaphore ids: the host always pushes both.
+        // First semaphore is AllGather's BWD semaphore (direction 1); second is FWD (direction 0).
         signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
         signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
 

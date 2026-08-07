@@ -2828,14 +2828,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
-        // Append the 32 uint32 packed sparse_frame_mask words.
-        // Gated at compile time on `sparse_frames_enabled` (so zeros are harmless when disabled).
-        // Same bit layout the compute kernel already uses — sender and receiver make identical skip decisions.
-        constexpr uint32_t kReaderSparseFramesPackedWords = 32;
-        for (uint32_t w = 0; w < kReaderSparseFramesPackedWords; ++w) {
-            const uint32_t word =
-                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
-            reader_args.push_back(word);
+        // Append the 32 packed sparse_frame_mask words only when sparse computation is enabled.
+        if (sparse_frames_enabled) {
+            for (uint32_t w = 0; w < 32; ++w) {
+                reader_args.push_back(w < args.sparse_frame_mask.size() ? args.sparse_frame_mask[w] : 0u);
+            }
         }
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
@@ -2858,14 +2855,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
 
-        // Sparse computation: append the same 32 uint32 packed sparse_frame_mask words that
-        // reader/compute already receive. The writer does not read them (it uses the precomputed
-        // q_work_bitmap below), but must advance past them to reach the bitmap at the right offset.
-        constexpr uint32_t kWriterSparseFramesPackedWords = 32;
-        for (uint32_t w = 0; w < kWriterSparseFramesPackedWords; ++w) {
-            const uint32_t word =
-                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
-            writer_args.push_back(word);
+        // Append the 32 packed sparse_frame_mask words only when sparse computation is enabled.
+        if (sparse_frames_enabled) {
+            for (uint32_t w = 0; w < 32; ++w) {
+                writer_args.push_back(w < args.sparse_frame_mask.size() ? args.sparse_frame_mask[w] : 0u);
+            }
         }
         // Per-q_chunk work bitmap (num_q_chunks uint32s). Bit `iter` set iff (q_chunk has any
         // attended k_chunk in ring_iter) AND (iter is active in mask). Writer uses this to gate
@@ -2904,12 +2898,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Sparse computation: append the 32 uint32 packed sparse_frame_mask words.
-        constexpr uint32_t kSparseFramesPackedWords = 32;
-        for (uint32_t w = 0; w < kSparseFramesPackedWords; ++w) {
-            const uint32_t word =
-                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
-            compute_args.push_back(word);
+        // Append the 32 packed sparse_frame_mask words only when sparse computation is enabled.
+        if (sparse_frames_enabled) {
+            for (uint32_t w = 0; w < 32; ++w) {
+                compute_args.push_back(w < args.sparse_frame_mask.size() ? args.sparse_frame_mask[w] : 0u);
+            }
         }
         // Per-q_chunk work bitmap (num_q_chunks uint32s) used by sparse computation.
         for (uint32_t q = 0; q < num_q_chunks; ++q) {

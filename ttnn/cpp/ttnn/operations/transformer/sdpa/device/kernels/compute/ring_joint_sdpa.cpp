@@ -147,13 +147,15 @@ void kernel_main() {
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
-    // Packed sparse_frame_mask bitmap (32 uint32 words). Runtime-arg slots so the same
-    // kernel binary handles any windowed pattern that fits (nf_padded <= 32 -> at most 32 * 32
-    // = 1024 bits). Only read when sparse_frames_enabled; when disabled the host passes zeros.
-    uint32_t sparse_frame_mask_words[32];
+    // Packed sparse_frame_mask bitmap (32 uint32 words: nf_padded <= 32 -> at most 32 * 32 = 1024
+    // bits). Present in the runtime-arg stream only when sparse_frames_enabled — the host omits them
+    // otherwise, so gate the read on the same compile-time flag to keep q_work_bitmap aligned.
+    [[maybe_unused]] uint32_t sparse_frame_mask_words[32];
+    if constexpr (sparse_frames_enabled) {
 #pragma GCC unroll 32
-    for (uint32_t w = 0; w < 32; ++w) {
-        sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
+        for (uint32_t w = 0; w < 32; ++w) {
+            sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
+        }
     }
     // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
     // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the

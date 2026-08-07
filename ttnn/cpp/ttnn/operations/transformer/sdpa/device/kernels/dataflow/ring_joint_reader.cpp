@@ -388,14 +388,6 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // Packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words, so the read is
-    // unconditional here. Later use is gated on the sparse_frames_enabled compile-time flag.
-    // Must match exactly so sender and receiver make identical skip decisions in the chain.
-    uint32_t sparse_frame_mask_words[32];
-    for (uint32_t w = 0; w < 32; ++w) {
-        sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
-    }
-
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -522,6 +514,15 @@ void kernel_main() {
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 7);
+
+    // Packed sparse_frame_mask bitmap (32 uint32 words) present only
+    // when sparse_frames_enabled (the host omits them otherwise).
+    [[maybe_unused]] uint32_t sparse_frame_mask_words[32];
+    if constexpr (sparse_frames_enabled) {
+        for (uint32_t w = 0; w < 32; ++w) {
+            sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

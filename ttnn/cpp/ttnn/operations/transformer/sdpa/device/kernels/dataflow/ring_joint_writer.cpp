@@ -472,6 +472,12 @@ void kernel_main() {
     constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 38;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
 
+    constexpr uint32_t cb_arg_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 24);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 25);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 26);
+
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
@@ -485,12 +491,10 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // The host always pushes the 32 packed sparse_frame_mask words
-    // regardless of whether sparse is enabled. The writer does not consult
-    // sparse_frame_mask directly (it uses the precomputed q_work_bitmap below), so skip past the 32 words
-    // rather than reading them into an unused array — but the index must still advance so
-    // q_work_bitmap lands at the right offset.
-    argidx += 32;  // packed sparse_frame_mask words (unused by the writer)
+    // The host pushes the 32 packed sparse_frame_mask words only when sparse computation is enabled.
+    if constexpr (sparse_frames_enabled) {
+        argidx += 32;
+    }
 
     // Per-q_chunk work bitmap. bit iter set iff (q_chunk has attended k in ring_iter) AND (iter
     // is mask-active). Host-precomputed to match compute. Writer uses this to gate restore push,
@@ -501,8 +505,6 @@ void kernel_main() {
     }
 
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
-    constexpr uint32_t cb_arg_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -516,14 +518,6 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
     constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
     constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
-
-    // The writer needs its own sparse-awareness to skip its per-iter save/restore
-    // protocol on ring iters where a given Q chunk has zero attended K chunks — otherwise compute's zero-work
-    // fast path (which skips consuming cb_prev_out and skips pushing cb_out) leaves the writer stuck on
-    // cb_reserve_back (restore-side) or cb_wait_front (save-side).
-    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 24);
-    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 25);
-    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 26);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
