@@ -32,8 +32,6 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
-    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
-    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();

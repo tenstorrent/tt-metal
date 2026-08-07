@@ -8,9 +8,12 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
+#include <map>
 #include <numeric>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -44,7 +47,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         ------------------------------------------------------------------------------------
         | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    32*3  |      196608     |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
-        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
+        | cb_c2w_rdy     | CBIndex::c_2  | Float16_b  | true  |    1     |      2048       |
         | cb_w2c_in2     | CBIndex::c_3  | Float32    | true  |    1     |      2048       |
         | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    1     |      2048       |
         | cb_w2c_in3     | CBIndex::c_5  | Float16_b  | true  |    1     |      2048       |
@@ -58,7 +61,11 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
-        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
+        // compute.cpp packs a whole tile into cb_c2w_rdy (the group scores) and dm1.cpp reads two
+        // 32B rows of that bfloat16 tile out of it, so it must be a full Float16_b tile, not a
+        // single datum. The pack data format is fixed to Float16_b for the whole compute kernel
+        // (pack_reconfig_data_format(cb_s2c_out_id)), hence Float16_b here.
+        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 1},
         {"cb_w2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float32, true, 1},
         {"cb_w2c_in3", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 1},
         {"cb_w2c_in4", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 1},
@@ -145,15 +152,47 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     }
 
     const auto& collector_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
-    const auto& first_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[0]]);
+
+    // Physical coordinates of the cores the collector broadcasts the group masks to: every core that
+    // participates in the reduction (ring position not a multiple of 3) except the collector itself
+    // (the last ring position).
+    //
+    // NOTE: do NOT turn this into a multicast bounding box. `all_cores` is the set of DRAM-adjacent
+    // workers (`CoreRangeSet(dram_bank2core_coords)`), which on Wormhole is two scattered columns of
+    // cores and is not a contiguous rectangle. A bounding box around them also covers worker cores
+    // that are not part of this program; a multicast into it would write this program's semaphore
+    // address (which lives in the kernel-config ring buffer) on those bystander cores, where that
+    // offset means something completely different. The collector therefore unicasts to each
+    // destination. For the same reason the ring's "first" core is deliberately not exported to the
+    // kernels: the ring sort orders by (descending y, descending x), which does not guarantee any
+    // relative x ordering between the first and the last ring position, so the pair could not be
+    // used as a well-formed (start <= end) multicast rectangle either.
+    std::vector<uint32_t> group_mask_dst_physical_coords;
+    group_mask_dst_physical_coords.reserve(2 * num_cores);
+    for (uint32_t ring_pos = 0; ring_pos < num_cores; ++ring_pos) {
+        if (((ring_pos % 3) == 0) || (ring_pos == num_cores - 1)) {
+            continue;  // sender cores forward partials only; the last ring position is the collector
+        }
+        const auto& core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[ring_pos]]);
+        group_mask_dst_physical_coords.push_back(core.x);
+        group_mask_dst_physical_coords.push_back(core.y);
+    }
+    constexpr uint32_t num_group_mask_dsts = 7;
+    TT_FATAL(
+        group_mask_dst_physical_coords.size() == 2 * num_group_mask_dsts,
+        "moe_gate_mm expects exactly {} group-mask destinations; got {}",
+        num_group_mask_dsts,
+        group_mask_dst_physical_coords.size() / 2);
+
+    const std::map<std::string, std::string> kernel_defines = {
+        {"GROUP_MASK_DST_COORDS", ttnn::operations::ccl::common::stringify(group_mask_dst_physical_coords)}};
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
         {"collector_physical_x", collector_core.x},
         {"collector_physical_y", collector_core.y},
-        {"first_physical_x", first_core.x},
-        {"first_physical_y", first_core.y},
+        {"num_group_mask_dsts", num_group_mask_dsts},
         {"column_id", operation_attributes.column_id},
     };
 
@@ -176,6 +215,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
