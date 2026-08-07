@@ -29,9 +29,11 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
+    edge_spec,
     exclude_undefined,
     for_op_pipeline,
     sfpu_unary_ops,
+    specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -422,6 +424,170 @@ def test_eltwise_unary_sfpu(
         mathop,
         fast_mode,
         input_dimensions,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deliberate edge values (Phase 4)
+#
+# The sweep above widens the *random* domain, so it lands near knees and poles but never
+# on them. This lands on them, using the shared metadata in sfpu_domains: domain
+# singularities straddled by a format-relative epsilon (cat A), op knees and exact
+# rounding ties (cat D), and IEEE specials where the pipeline can carry them (cat B).
+#
+# There is no new driver and no new C++ source — the whole thing is one spec_A. Because
+# edge_spec() is keyed off the op, adding an op to the registry auto-enrols it here.
+#
+# The format axis is the standard profile rather than the broad one: an edge probe is a
+# fixed value, so the block-float and approximation-mode axes vary nothing about it. What
+# *does* vary is whether specials can be injected, which specials_safe() decides per
+# (input, output, dest_acc) from the measured matrix — so the cat-A/cat-D probes run on
+# all 8 combinations and the cat-B ones only where they mean something.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EDGE_SWEEP_OPS = sorted(
+    sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
+)
+
+# Cat B (IEEE specials) is OFF, and this is a measured decision rather than caution.
+# Injecting them on the triples specials_safe() allows gives **272 failures out of 564
+# variants** — 48% — and the failures are not the (format, dest_acc) matrix (that part is
+# gated correctly) but goldens that do not model non-finite *inputs*. The plan's §6b rule
+# of thumb was "default to injecting the edge; xfail the handful the golden cannot yet
+# express"; the measurement says the handful is half the op list, which turns cat B from a
+# stimulus change into golden work — Phase 5, not Phase 4.
+#
+# Enabling it now would mean either a red suite or ~270 xfails, and 270 xfails is not
+# coverage, it is a monument. The switch stays here so the number can be reproduced:
+#   _EDGE_SWEEP_SPECIALS = True  ->  272F/286P/6S over the same 752 cases.
+_EDGE_SWEEP_SPECIALS = False
+
+# What the cat-A/cat-D probes found on Wormhole, first time these points have been driven.
+# Recorded as xfails rather than tolerated or probed-around, following Phase 0's precedent
+# for approximate exp: the case still *executes* and reports XPASS if the behaviour
+# changes. Listed exhaustively per (input, output, dest_acc) rather than by predicate so a
+# combination drifting in or out shows up as a diff here.
+#
+# Two root causes, both genuine and neither previously measured:
+#
+#   -0.0 is treated as strictly negative by the SFPU, and as equal to +0.0 by the
+#   torch-backed goldens. One cause, three ops: signbit(-0.0) returns 0 where the kernel's
+#   own docstring promises 1 ("logical-shift the fp32 bit pattern right by 31 ... incl.
+#   -0.0"); sign(-0.0) returns -1 where torch gives 0; heaviside(-0.0) returns 0 where
+#   -0.0 == 0 makes it the dispatch value 0.5. IEEE-1985 makes the golden right in all
+#   three. Note -0.0 is *delivered* correctly — verified host-side that the stimulus
+#   pipeline preserves it into both Float32 and Float16_b — so this is the device path,
+#   not the test.
+#
+#   rsqrt at 0 saturates instead of returning inf. RsqrtCompat returns 1.7014118e38
+#   (0x7F000000) where the golden gives inf, on all 8 combinations. Worth a kernel-side
+#   look because plain Rsqrt, driven over the same probe, does *not* diverge — so two
+#   implementations of the same function disagree at their shared pole.
+#
+# Erfinv at ±1 is the third, smaller item: golden ∓inf/±inf against a saturated result,
+# and only on the two fp32-dest combinations, so it is tolerance-shaped rather than
+# semantic.
+_EDGE_KNOWN_DIVERGENCES = {
+    MathOperation.Signbit: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.No),
+    ),
+    MathOperation.Sign: (
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+    MathOperation.Heaviside: (
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+    MathOperation.RsqrtCompat: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+    MathOperation.Erfinv: (
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+}
+
+_EDGE_DIVERGENCE_REASON = {
+    MathOperation.Signbit: "signbit(-0.0) returns 0; the kernel docstring and IEEE both "
+    "say 1. The SFPU treats -0.0 as strictly negative.",
+    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0.",
+    MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5.",
+    MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 instead of inf. "
+    "Plain Rsqrt does not diverge at the same pole.",
+    MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
+}
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=_EDGE_SWEEP_OPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_edges(
+    request,
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    if (formats.input_format, formats.output_format, dest_acc) in (
+        _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
+    ):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
+        )
+
+    if mathop == MathOperation.ReluMin:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
+
+    specials = _EDGE_SWEEP_SPECIALS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc == DestAccumulation.Yes
+    )
+    spec_A = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        specials=specials,
+    )
+    if spec_A is None:
+        # Smooth everywhere: no singularity, no knee, and specials not carryable here.
+        # 47 of the 97 unary ops are in this class, and for them the random sweep above
+        # already covers everything an edge probe could add.
+        pytest.skip(
+            reason=f"{mathop.name} has no edge values for this pipeline "
+            f"(no domain boundary, no op knee, specials not preserved)"
+        )
+
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=spec_A,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
     )
