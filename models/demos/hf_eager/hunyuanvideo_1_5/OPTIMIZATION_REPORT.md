@@ -389,11 +389,12 @@ section is measured unless explicitly marked otherwise.
   `HY_DIT_SDPA_K_CHUNK` knobs were swept at 480p/121f/25 steps.
 - k=512 is confirmed best: k=256 is slower and k=1024 fails outright. For q,
   a first pass suggested q=192 beat the shipped q=128 by 3-9%.
-- **Both halves of that result fail on inspection.** A clean q=128 reference
-  measured 1.67 s/step where an identical earlier run measured 1.76 -- 5.4%
-  run-to-run variance on the same configuration, larger than the ~4% effect
-  being claimed. Single-run 25-step timings cannot resolve sub-10% differences;
-  repeats are required.
+- The timing advantage is probably real *within a batch*: in one back-to-back
+  batch q=160/192/224 measured 1.76 / 1.60 / 1.76 s/step. But a q=128 reference
+  measured 1.67 in one batch and 1.76 in another, so **comparisons across
+  batches drift by about 5% while back-to-back repeats inside one batch are
+  reproducible to the hundredth of a second** (a 2x2 repeat of the heads-major
+  A/B returned 2.46/2.46 and 1.67/1.67). Always A/B inside a single batch.
 - Worse, q=192 changes the generated sample: frame PCC **0.835** against q=128
   with max absolute pixel difference 255. The frames are not garbage (per-frame
   mean/std match to within a fraction of a percent) -- the video has diverged
@@ -403,10 +404,11 @@ section is measured unless explicitly marked otherwise.
   comparable to the bit-identical layout change.
 - Conclusion: keep the measured default `(q=128, k=512)`. Larger q is also
   bounded above by L1 -- q=288 aborts with a circular-buffer clash.
-- Methodological note for future A/Bs on this pipeline: the noise floor of a
-  single 121f/25-step generation is about +/-5%. The heads-major result
-  (-32.2%) is far outside it; anything in single digits needs repeated runs
-  before it can be believed.
+- Methodological note for future A/Bs on this pipeline: back-to-back runs in
+  one batch are highly reproducible, but the same configuration measured in a
+  different batch drifts by roughly 5%. Compare arms inside one batch, never
+  against a number from an earlier session. The heads-major result reproduced
+  exactly on a 2x2 repeat (-32.1%).
 
 ### Elementwise fusion (measured, low yield -- deprioritised)
 
