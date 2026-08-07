@@ -52,6 +52,20 @@ TOL = {
 }
 
 
+# Every metric a tier MUST produce. Checked by presence, not just for None -- a regex that
+# matches nothing leaves the key ABSENT, which an "is None" test sails straight past. That is how
+# wer_longform went missing from a report that otherwise looked complete.
+EXPECTED = {
+    "fast": ["pytest_passed", "pytest_failed", "flow_velocity_pcc", "flow_semantic_exact",
+             "flow_codes_74", "codes_real_pct", "codes_real_n", "codes_synth_n"],
+    "full": ["wiring_pcc", "prefill_pcc_last", "prefill_n_cases", "codec_pcc_t24",
+             "decode_mean_pp", "decode_p90_pp", "decode_min_pcc"],
+    "audio": ["audio_runs", "wer_longform", "wer_longform_words", "n_utterances", "clicks_total",
+              "clipped_max_pct", "terminated", "ms_per_frame", "rtf"],
+}
+MOS_KEYS = ["mos_mean", "mos_longform", "mos_min"]
+
+
 def sh(cmd, timeout=3600, python=None):
     env = dict(os.environ)
     env.setdefault("TT_METAL_HOME", REPO)
@@ -131,7 +145,11 @@ def run_audio(res, log, tag, seeds):
 
     log("WER (scipy scorer)")
     o = sh([os.path.join(HERE, "scripts", "score_quality_set_scipy.py")] + jsons, timeout=3600)
-    lf = re.findall(r"^\s+\S+\s+(\d+)\s+(\d+)\s", o, re.M)
+    # Anchored on the distinctive "c<n>=" column rather than on leading whitespace: the tag is
+    # right-aligned in a 10-char field, so a tag of 11+ chars starts at column 0 and an "^\s+"
+    # pattern silently matches nothing. That is exactly how this metric went missing without the
+    # report noticing -- see the EXPECTED check below, which is the real fix.
+    lf = re.findall(r"^\s*\S+\s+(\d+)\s+(\d+)\s+c\d+=", o, re.M)
     if lf:
         res["wer_longform"] = sum(int(a) for a, _ in lf)
         res["wer_longform_words"] = sum(int(b) for _, b in lf)
@@ -143,9 +161,13 @@ def run_audio(res, log, tag, seeds):
     res["clicks_total"] = sum(r["click_count"] for r in rows)
     res["clipped_max_pct"] = max(r["clipped_%"] for r in rows)
     res["terminated"] = sum(1 for r in rows if r["terminated"])
-    lfr = [r for r in rows if len(r["text"].split()) >= 20 and r["case"] != 0]  # 6.52: drop warmup
+    # 6.52: case 0 is the FIRST utterance of each process and pays one-time program-cache
+    # compilation -- 3.3 s over 5.4 s of audio, RTF 1.346. Including it inflated a reported RTF
+    # from 0.507 to 0.694 and stopped it reconciling with anything.
+    lfr = [r for r in rows if len(r["text"].split()) >= 20 and r["case"] != 0]
     if lfr:
-        res["ms_per_frame"] = round(statistics.mean(r["gen_ms_per_frame"] for r in lfr), 3)
+        msf = [r["gen_ms_per_frame"] for r in lfr if "gen_ms_per_frame" in r]
+        res["ms_per_frame"] = round(statistics.mean(msf), 3) if msf else None
         res["rtf"] = round(statistics.mean(r["rtf"] for r in lfr), 4)
 
     # ---- MOS, isolated venv ----
@@ -219,10 +241,23 @@ def main():
     if a.tier in ("full", "audio"):
         run_full(res, log)
     if a.tier == "audio":
-        run_audio(res, log, a.tag, [int(s) for s in a.seeds.split(",")])
+        # Never lose the gate results to a crash in the audio stage -- the JSON is written either
+        # way, with the failure recorded in it.
+        try:
+            run_audio(res, log, a.tag, [int(s) for s in a.seeds.split(",")])
+        except Exception as e:
+            res["_audio_error"] = f"{type(e).__name__}: {e}"
+            log(f"AUDIO STAGE FAILED: {res['_audio_error']}")
 
     res["_seconds"] = round(time.time() - t0, 1)
-    missing = [k for k, v in res.items() if v is None and not k.startswith("_")]
+    want = list(EXPECTED["fast"])
+    if a.tier in ("full", "audio"):
+        want += EXPECTED["full"]
+    if a.tier == "audio":
+        want += EXPECTED["audio"]
+        if os.path.exists(MOSVENV):
+            want += MOS_KEYS
+    missing = [k for k in want if res.get(k) is None]
     os.makedirs(GEN, exist_ok=True)
     dst = os.path.join(GEN, f"quality_{a.tag}.json")
     json.dump(res, open(dst, "w"), indent=2, sort_keys=True)

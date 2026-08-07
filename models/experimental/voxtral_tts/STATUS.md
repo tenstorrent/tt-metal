@@ -3834,6 +3834,54 @@ voicing agreement, against **0.687 / 74.6%** device-vs-reference. **The device t
 reference's prosody far more closely than the model tracks its own seeds.** (Case 6 inverts —
 0.856 seed-to-seed vs 0.667 — but it is 2.4 s with few voiced frames; treat it as underpowered.)
 
+### 6.60 — every check behind one command, with paired comparison
+
+The checks had accumulated as a dozen scratch probes, so "did this change hurt quality" depended on
+remembering which to run and what its numbers used to be. `scripts/quality_report.py` runs all of
+them and writes `generated/quality_<tag>.json`:
+
+| tier | wall clock | what it adds |
+|---|---|---|
+| `fast` | **3.5 min** | pytest, `--gate flow`, `--gate codes` |
+| `full` | **10 min** | + wiring, prefill26, codec, decode |
+| `audio` | **16 min** (2 seeds) | + generation, WER, artifacts, MOS |
+
+**It takes TWO TAGS on purpose.** `--compare before after` diffs two runs and exits 1 on any
+regression. Nothing here is judged against a number recorded in another session — §6.15 and §6.52
+are both cases where that manufactured a regression that did not exist, and the codes gate's
+"10/288 vs 86/288" cost a session's worth of doubt for the same reason. Tolerances are the
+branch's own measured noise floors.
+
+**Reference `audio` run on `7b480a43e5`** (`quality_baseline.json`, 2 seeds, 30 utterances):
+
+| | | | |
+|---|---|---|---|
+| pytest 129 / 0 failed | wiring PCC 0.99995965 | prefill PCC last 0.999855 | codec PCC 0.99992 |
+| decode mean 0.91% / p90 1.31% | min PCC 0.99939 | flow 2 of 74 codes | codes real 3.9% |
+| **WER 1 of 596** | **MOS long-form 4.6298** | MOS mean 4.0153 / min 2.6836 | 30/30 terminated |
+| **37.47 ms/frame, RTF 0.490** | 0.00% clipped | 61 clicks (all case 6 seed 1) | |
+
+**THREE BUGS THE HARNESS FOUND IN ITS OWN FIRST RUNS**, each of which had been silently degrading
+work all session:
+
+1. **`generate_quality_set.py` had no `--seed`.** Every "3-seed" run through the canonical
+   generator would have been the *same* generation three times — a WER number resting on one draw
+   while looking like three. Added and threaded through.
+2. **It also never recorded `gen_ms_per_frame`**, which is this branch's primary perf number, so
+   every perf claim had to come from a scratch harness rather than the canonical script.
+3. **`wer_longform` went missing from a report that otherwise looked complete.** The regex used
+   `^\s+` for the tag column, but a tag of 11+ characters overflows the 10-char right-aligned
+   field and starts at column 0, so it matched nothing. **And the report did not notice**, because
+   its completeness check tested for `None` — a key that is never *set* sails straight past that.
+   Fixed with a per-tier `EXPECTED` list checked by presence. **A harness that can silently drop a
+   metric is worse than no harness**, because it converts an absent measurement into an apparent
+   pass.
+
+Also committed `scripts/score_quality_set_scipy.py` — the WER scorer had been living in `/tmp` all
+session, the same failure §2 records for the `upstream_compare` venv. Its docstring states plainly
+that it is a PORT and therefore a liability: a systematic bug in it passes every utterance
+silently, and committing it so it can be diffed against the original is the only defence available.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

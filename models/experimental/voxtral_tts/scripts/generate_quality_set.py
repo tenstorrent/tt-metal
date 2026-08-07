@@ -139,6 +139,11 @@ def main():
             results.append({"case": ci, "voice": case["voice"], "text": case["text"],
                             "frames": int(frames.shape[0]), "audio_s": audio_s,
                             "terminated": terminated, "rtf": total / audio_s,
+                            # ms/frame is the branch's primary perf number (STATUS.md 6.52) and
+                            # this file did not record it, so every perf claim had to come from a
+                            # scratch harness instead of the canonical generator.
+                            "gen_ms_per_frame": t_gen / max(frames.shape[0], 1) * 1e3,
+                            "prefill_s": t_pre,
                             "wav": path, **a})
             json.dump(results, open(os.path.join(args.out, f"results{args.tag}.json"), "w"),
                       indent=2)
