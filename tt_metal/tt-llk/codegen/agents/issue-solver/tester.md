@@ -73,6 +73,13 @@ Read:
 2. the analysis artifact's `arch_scope`, `verification_required`, and
    `llk_coverage`
 3. the fix plan's `## Test Strategy`
+4. `REQUIRED_VERIFICATION_MANIFEST` from run state
+
+The manifest must exist and its `attempt_id` must equal
+`REQUIRED_VERIFICATION_ATTEMPT_ID`. Select only its `suite=llk` leaves. The
+runner reads the same manifest from `${LOG_DIR}/state.json`, rejects an
+unsealed selector before compilation, and binds each structured result to the
+leaf's run, attempt, and requirement IDs. Do not substitute a broader test.
 
 Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs; otherwise use
 `TARGET_ARCH`. Run only architectures marked `in_scope`. Preserve the
@@ -88,7 +95,7 @@ Normalize selectors relative to the pytest directory:
 
 ## Test Selection
 
-Use the plan's test strategy:
+Use the manifest-normalized form of the plan's test strategy:
 
 | Plan item | Action |
 |---|---|

@@ -316,11 +316,69 @@ _patch_sha256() {
 # therefore cannot clear a compiled entry while collection initializes pytest.
 _prepare_artifact_identity() {
   local purpose="${1:-build}"
-  local compiler owner_scope selector
+  local compiler owner_scope selector required_manifest required_output
+  local manifest_base manifest_run manifest_attempt manifest_requirement
   compiler="${WORKTREE}/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
   SOURCE_TREE_SHA256="$(_source_tree_sha256)" || return $?
+  required_manifest="${CODEGEN_REQUIRED_VERIFICATION_MANIFEST:-}"
+  if [[ -z "$required_manifest" && -n "$LOG_DIR" && -f "$LOG_DIR/state.json" ]]; then
+    required_manifest="$(python3 - "$LOG_DIR/state.json" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("REQUIRED_VERIFICATION_MANIFEST") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)"
+  fi
+  if [[ -n "$required_manifest" ]]; then
+    [[ -f "$required_manifest" ]] || {
+      echo "ERROR: required-verification manifest is missing: ${required_manifest}" >&2
+      return 3
+    }
+    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" <<'PY'
+import hashlib, json, sys
+path, arch, test, test_id, k = sys.argv[1:6]
+d = json.load(open(path))
+payload = json.dumps({key: value for key, value in d.items() if key != "manifest_id"},
+                     sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                     allow_nan=False).encode()
+if (d.get("schema") != "tt.issue-solver.required-verification" or
+    d.get("version") != 1 or
+    d.get("manifest_id") != hashlib.sha256(payload).hexdigest() or
+    d.get("waivers") != []):
+    raise SystemExit("invalid required-verification manifest")
+selector = {"test": test, "test_id": test_id or None, "k": k or None}
+matches = [r for r in d.get("requirements", [])
+           if r.get("architecture") == arch and r.get("suite") == "llk"
+           and r.get("selector") == selector]
+if len(matches) != 1:
+    raise SystemExit(
+        f"selector must match exactly one sealed LLK requirement (matched {len(matches)})"
+    )
+print(d["expected_base_sha"], d["run_id"], d["attempt_id"],
+      matches[0]["requirement_id"], sep="\t")
+PY
+)" || {
+      echo "ERROR: verification selector is not authorized by ${required_manifest}" >&2
+      return 3
+    }
+    IFS=$'\t' read -r manifest_base manifest_run manifest_attempt manifest_requirement <<<"$required_output"
+    [[ -z "${CODEGEN_RUN_ID:-}" || "$CODEGEN_RUN_ID" == "$manifest_run" ]] || {
+      echo "ERROR: CODEGEN_RUN_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+    [[ -z "${CODEGEN_ATTEMPT_ID:-}" || "$CODEGEN_ATTEMPT_ID" == "$manifest_attempt" ]] || {
+      echo "ERROR: CODEGEN_ATTEMPT_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+    [[ -z "${CODEGEN_REQUIREMENT_ID:-}" || "$CODEGEN_REQUIREMENT_ID" == "$manifest_requirement" ]] || {
+      echo "ERROR: CODEGEN_REQUIREMENT_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+  fi
   ACTUAL_BASE_SHA="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || return 3
-  EXPECTED_BASE_SHA="${CODEGEN_BASE_COMMIT:-$ACTUAL_BASE_SHA}"
+  EXPECTED_BASE_SHA="${CODEGEN_BASE_COMMIT:-${manifest_base:-$ACTUAL_BASE_SHA}}"
   [[ "$ACTUAL_BASE_SHA" =~ ^[0-9a-f]{40}$ && "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
     echo "ERROR: local verification requires exact base SHAs" >&2
     return 3
@@ -351,7 +409,10 @@ _prepare_artifact_identity() {
     printf '%s\0' "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$NO_SPLIT"
   } | sha256sum | cut -d' ' -f1)"
 
-  owner_scope="${CODEGEN_RUN_ID:-${RUN_ID:-manual}}|${CODEGEN_ATTEMPT_ID:-manual}|${LOG_DIR:-no-log}|$(realpath -m "$WORKTREE")"
+  RUN_IDENTITY="${manifest_run:-${CODEGEN_RUN_ID:-${RUN_ID:-manual}}}"
+  ATTEMPT_IDENTITY="${manifest_attempt:-${CODEGEN_ATTEMPT_ID:-manual}}"
+  REQUIREMENT_IDENTITY="${manifest_requirement:-${CODEGEN_REQUIREMENT_ID:-${ARCH}:llk:1}}"
+  owner_scope="${RUN_IDENTITY}|${ATTEMPT_IDENTITY}|${LOG_DIR:-no-log}|$(realpath -m "$WORKTREE")"
   ARTIFACT_OWNER="$(printf '%s' "$owner_scope" | sha256sum | cut -d' ' -f1)"
   MANAGED_ARTIFACT_ROOT="$(realpath -m "${TT_LLK_LOCAL_ARTIFACT_ROOT:-/tmp/tt-llk-build-v2}")"
   local worktree_root
@@ -387,10 +448,8 @@ _prepare_artifact_identity() {
       RESULT_JSON_OUT="${EVIDENCE_DIR}/verification-result.json"
     fi
   fi
-  RUN_IDENTITY="${CODEGEN_RUN_ID:-${RUN_ID:-manual-${ARTIFACT_OWNER:0:16}}}"
-  ATTEMPT_IDENTITY="${CODEGEN_ATTEMPT_ID:-manual}"
+  [[ "$RUN_IDENTITY" != "manual" ]] || RUN_IDENTITY="manual-${ARTIFACT_OWNER:0:16}"
   JOB_IDENTITY="${CODEGEN_JOB_ID:-local-${ARTIFACT_OWNER:0:12}-$$}"
-  REQUIREMENT_IDENTITY="${CODEGEN_REQUIREMENT_ID:-${ARCH}:llk:1}"
   RUN_JSON_WRITER="${WORKTREE}/codegen/scripts/run_json_writer.py"
   [[ -f "$RUN_JSON_WRITER" ]] || {
     echo "ERROR: result writer is missing: ${RUN_JSON_WRITER}" >&2

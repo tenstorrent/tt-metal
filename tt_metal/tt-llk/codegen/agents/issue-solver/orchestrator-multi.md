@@ -62,7 +62,8 @@ Call `execute_step_advance_writer`, then spawn `issue-worker.md` once with
 only genuine architecture differences.
 
 Handle `FIX_APPLIED`, `BLOCKED`, and `HYPOTHESIS_REFUTED` exactly as in
-`orchestrator.md`. After every successful worker invocation:
+`orchestrator.md`, including sealing explicit performance requirements before
+ending a refuted run. After every successful worker invocation:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh

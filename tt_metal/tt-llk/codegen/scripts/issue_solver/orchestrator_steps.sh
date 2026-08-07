@@ -713,16 +713,20 @@ execute_step_refine_perf_goal() {
 }
 
 # ===========================================================================
-# Step 1.5 — route verification by fix layer and required coverage. Parses the
-# analysis artifact and sets VERIFY_ROUTE (llk|metal|both|missing|none) plus the
-# coverage states and metal target/filter/dispatch. Required coverage must be
-# existing or added after the worker returns; a missing test fails closed.
+# Step 1.5 — normalize and seal required verification, then route from that
+# immutable contract. The Markdown parser lives in run_json_writer.py; this
+# shell step retains only the compatibility state consumed by existing agents.
+# Required coverage, paths and selectors fail closed before a tester can start.
 # ===========================================================================
 execute_step_route_verification() {
     local _L; _L="$(_LOG)"
-    local num A; num="$(sg ISSUE_NUMBER)"; A="codegen/artifacts/issue_${num}_analysis.md"
+    local route_mode="${1:-normal}"
+    local num A P M; num="$(sg ISSUE_NUMBER)"
+    A="codegen/artifacts/issue_${num}_analysis.md"
+    P="codegen/artifacts/issue_${num}_fix_plan.md"
+    M="$_L/required_verification_manifest.json"
     local FIX_LAYER VERIFY_REQUIRED VERIFIABLE LLK_COVERAGE
-    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE
+    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE out
     gval() {
         grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$A" 2>/dev/null |
             head -1 | sed -E "s/.*:[[:space:]]*//" || true
@@ -744,46 +748,77 @@ execute_step_route_verification() {
             head -1 | sed -E "s/^[[:space:]]*gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true
     )"
     METAL_DISPATCH="$(mval 'dispatch')"
-    if [ "$VERIFY_REQUIRED" = no ]; then
-        ROUTE=none
-    else
-        case "$VERIFIABLE" in
-            yes)     ROUTE=llk ;;
-            partial) ROUTE=both ;;
-            no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then ROUTE=none; else ROUTE=metal; fi ;;
-            *)       ROUTE=missing ;;
-        esac
-    fi
-
-    case "$ROUTE" in
-        llk)
-            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            ;;
-        metal)
-            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
-            ;;
-        both)
-            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
-            ;;
-        none)
-            [ "$VERIFY_REQUIRED" = no ] || ROUTE=missing
-            ;;
-    esac
 
     ss FIX_LAYER      "$FIX_LAYER"
-    ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
     ss VERIFIABLE_IN_LLK "$VERIFIABLE"
     ss LLK_COVERAGE   "$LLK_COVERAGE"
     ss METAL_TARGET   "$METAL_TARGET"
     ss METAL_COVERAGE "$METAL_COVERAGE"
     ss METAL_FILTER   "$METAL_FILTER"
     ss METAL_DISPATCH "$METAL_DISPATCH"
+
+    local -a manifest_args=(
+        required-verification
+        --output "$M"
+        --analysis "$A"
+        --plan "$P"
+        --worktree "$(_wt)"
+        --run-id "$(sg RUN_ID)"
+        --expected-base-sha "$(sg GIT_COMMIT)"
+        --architectures-json "$(sg TARGET_ARCHES_JSON)"
+        --backend "$(sg TEST_BACKEND)"
+    )
+    if [ "$route_mode" = "hypothesis_refuted" ]; then
+        manifest_args+=(--performance-only)
+    elif [ "$route_mode" != "normal" ]; then
+        echo "unsupported route verification mode: $route_mode" >&2
+        return 1
+    fi
+    if [ -f "$M" ]; then
+        manifest_args+=(--supersedes-reason \
+            "verification plan resealed after retry; debug=$(sg DEBUG_CYCLES), review=$(sg REVIEW_RETRIES), perf=$(sg PERF_RETRIES)")
+    fi
+    if ! out="$(rj "${manifest_args[@]}")"; then
+        ROUTE=missing
+        [ -n "$VERIFY_REQUIRED" ] || VERIFY_REQUIRED=yes
+        ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
+        ss VERIFY_ROUTE "$ROUTE"
+        ss REQUIRED_VERIFICATION_MANIFEST ""
+        ss REQUIRED_VERIFICATION_MANIFEST_ID ""
+        ss REQUIRED_VERIFICATION_ATTEMPT_ID ""
+        rj message --message "Verify route rejected before execution: ${out:-required-verification manifest invalid}"
+        printf '%s\n' "$out" >&2
+        echo "VERIFY_ROUTE=missing REQUIRED_VERIFICATION=invalid"
+        return 0
+    fi
+
+    local normalized
+    normalized="$(python - "$M" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+suites = {r["suite"] for r in d["requirements"]}
+functional = suites & {"llk", "metal"}
+route = "both" if functional == {"llk", "metal"} else next(iter(functional), "none")
+print(route, d["attempt_id"], d["manifest_id"], len(d["requirements"]))
+PY
+)"
+    read -r ROUTE manifest_attempt manifest_id manifest_count <<<"$normalized"
+    [ -n "$VERIFY_REQUIRED" ] || {
+        if [ "$ROUTE" = none ]; then VERIFY_REQUIRED=no; else VERIFY_REQUIRED=yes; fi
+    }
+    if [ -z "$LLK_COVERAGE" ] && { [ "$ROUTE" = llk ] || [ "$ROUTE" = both ]; }; then
+        LLK_COVERAGE=existing
+        ss LLK_COVERAGE "$LLK_COVERAGE"
+    fi
+    ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
     ss VERIFY_ROUTE   "$ROUTE"
-    rj message --message "Verify route: ${ROUTE} (fix_layer=${FIX_LAYER:-?}; llk_coverage=${LLK_COVERAGE:-missing}; metal_coverage=${METAL_COVERAGE:-missing})"
-    echo "VERIFY_ROUTE=$ROUTE FIX_LAYER=${FIX_LAYER:-?} LLK_COVERAGE=${LLK_COVERAGE:-missing} METAL_TARGET=${METAL_TARGET:-none} METAL_COVERAGE=${METAL_COVERAGE:-missing}"
+    ss REQUIRED_VERIFICATION_MANIFEST "$M"
+    ss REQUIRED_VERIFICATION_MANIFEST_ID "$manifest_id"
+    ss REQUIRED_VERIFICATION_ATTEMPT_ID "$manifest_attempt"
+    rj metric --patch-json "{\"required_verification\":{\"manifest_id\":\"${manifest_id}\",\"attempt_id\":\"${manifest_attempt}\",\"requirements\":${manifest_count}}}"
+    rj message --message "Verify route: ${ROUTE}; sealed ${manifest_count} requirement(s) as ${manifest_id}"
+    echo "$out"
+    echo "VERIFY_ROUTE=$ROUTE MANIFEST_ID=$manifest_id ATTEMPT_ID=$manifest_attempt REQUIREMENTS=$manifest_count"
 }
 
 # ===========================================================================

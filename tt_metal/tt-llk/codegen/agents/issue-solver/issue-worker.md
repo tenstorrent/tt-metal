@@ -237,11 +237,17 @@ compile_checks:
 compile_check_reason: ...  # required when compile_checks is none
 reproduction_tests:
 - arch: blackhole|wormhole|quasar|all
-  test: test file / filter / pytest id
+  test: <exact existing test.py, test.py::node-id, or test.py -k "expression">
+  minimum_selected: 1
+  minimum_executed: 1
+  required_measurements: []
 regression_tests:
 - arch: blackhole|wormhole|quasar|all
-  test: test file / filter / pytest id
+  test: <exact existing test.py, test.py::node-id, or test.py -k "expression">
   coverage: existing|added
+  minimum_selected: 1
+  minimum_executed: 1  # use the real repeat count for statistical/perf checks
+  required_measurements: []|["cycle_comparison"]|["cycle_comparison", "repeatability"]
 compile_only_ok: true|false  # true only when verification_required is no
 why_compile_only_ok: ...
 
@@ -254,6 +260,12 @@ why_compile_only_ok: ...
 Return `FIX_APPLIED` for an initial fix or `FIX_UPDATED` for a retry only after
 all required coverage is `existing` or `added`. Include the production and test
 files, checks, and plan path.
+
+The Test Strategy is executable input, not explanatory prose. Keep explanations
+in surrounding fields; each `test` value must be one exact selector accepted by
+`run_test.sh`. List a performance module as its own regression entry whenever
+the issue explicitly requires measurement, even if later evidence refutes the
+primary hypothesis. Do not add waivers to the plan after observing a failure.
 
 ```text
 HYPOTHESIS_REFUTED - issue #<number>

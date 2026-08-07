@@ -46,6 +46,17 @@ a single `TARGET_ARCH`. Read `TEST_BACKEND`, `PERF_GOAL`, `ISSUE_NUMBER`,
 `GIT_COMMIT`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`. `GIT_COMMIT` is the
 branch base captured before the worker changed the tree.
 
+Read `REQUIRED_VERIFICATION_MANIFEST` and
+`REQUIRED_VERIFICATION_ATTEMPT_ID` as well. When it contains a `suite=perf`
+leaf for `TARGET_ARCH`, require exactly one and take `PERF_TEST`, its optional
+`-k` filter, minimum execution count, and required measurements from that leaf.
+Export its run, attempt, and requirement IDs as `CODEGEN_RUN_ID`,
+`CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for every local or queued
+invocation. With no perf leaf, retain the existing applicability check and do
+not invent a measurement requirement. Never drop a leaf because a hypothesis
+was refuted; a refuted run remains failed until the orchestrator reducer handles
+the unexecuted requirement.
+
 Optional environment:
 
 - `HW_TEST_DISPATCH_CMD`: submit silicon runs to the shared queue. The command

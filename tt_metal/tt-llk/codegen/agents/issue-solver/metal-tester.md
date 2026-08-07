@@ -75,6 +75,12 @@ mkdir -p "$LOG_DIR"
    missing, return `TESTS_FAILED` with
    `MISSING_TEST_COVERAGE: <specific evidence>`. `METAL_TARGET=none` is valid
    only when verification is not required and must not reach this agent.
+   Also require the checksummed `REQUIRED_VERIFICATION_MANIFEST` from run state
+   to contain exactly one `suite=metal` leaf for each in-scope architecture,
+   with `selector.test` exactly equal to `METAL_FILTER`. Export its `run_id`,
+   `attempt_id`, and leaf `requirement_id` as `CODEGEN_RUN_ID`,
+   `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for local or queued
+   execution. A missing or ambiguous leaf is an environment error; do not run.
 2. Normalize the ordered architecture list from `TARGET_ARCHES_JSON` or
    `TARGET_ARCH`.
 3. Build locally. A failed build returns `COMPILE_FAILED` without submitting
