@@ -1,14 +1,14 @@
 # advchal-v2 — read this one file
 
-Can `$shard-advise` contribute meaningfully to decode performance, and how much? Stage 02b
-(`$advisor-challenger`) ran on **15 decoder cells** to find out. Each one was a decoder already optimised
-*without* the advisor, so anything it adds is a real gain rather than a re-derivation of work already done.
+Stage 02b (`$advisor-challenger`) ran `$shard-advise` on **15 decoder cells** to measure how much it can
+contribute to decode performance. Each cell started from a decoder already optimised without the advisor, so
+anything the advisor adds is a real gain and not a re-derivation of work already done.
 
-The measurement is deliberately strict: freeze the incoming decoder as the control, never re-tune it, and count
-only what the advisor's directions add on top. **That undercounts**, in three ways that are themselves measured —
-it prices in-chain re-grids at zero (§3.6), records the one direction the advisor reliably gets right as
-`kept: 0` (§3.14), and never applies the advised plan as written (§3.27). So §2 carries two numbers per cell
-wherever both exist: what the stage credited, and what was reachable.
+The accounting is strict: the incoming decoder is frozen as the control, never re-tuned, and only what the
+advisor's directions add on top is counted. **It undercounts in three measured ways** — it prices in-chain
+re-grids at zero (§3.6), records the one direction the advisor reliably gets right as `kept: 0` (§3.14), and
+never applies the advised plan as written (§3.27). So §2 gives two numbers per cell where both exist: what the
+stage credited, and what was reachable.
 
 Everything below comes from the cells' own artefacts or from re-measurements on the same hardware. This is the
 short version — the evidence is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md), where a decimal reference like `§3.11`
@@ -35,8 +35,8 @@ answers come out differently.
 
 ### 1b. Is `ttnn-advise` a promising thing to build a stage on?
 
-**Cautiously yes — as a detector and a starting configuration, not yet as a grid chooser.** The evidence, both
-directions:
+**Cautiously yes — as a detector and a starting configuration, not yet as a grid chooser.** The evidence on
+each side:
 
 **What supports it**
 
@@ -53,7 +53,7 @@ directions:
 
 - **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three
   ladders that were swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %**.
-  That is the sharpest number against it. *(§3.3, §3.14)*
+  This is the strongest evidence against it. *(§3.3, §3.14)*
 - **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value. *(§4)*
 - A detection rule using only the shipped profile, **no advisor**, catches all 4 win cells. It buys precision,
   **not recall**. *(§3.14)*
@@ -65,10 +65,10 @@ directions:
   *(§3.18–3.19)*
 
 What limited the advisor in v2 was not the advisor. It was the stage's use of it — ten cheap defects — plus
-tracer coverage, and both are more tractable than a cost model. The 82 %-vs-99.4 % gap is the part to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
+tracer coverage, and both are more tractable than a cost model. The 82 %-vs-99.4 % gap is what to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
 direction* to move, and treat its specific core count as one rung on a ladder to sweep.**
 
-In one line: a **defect detector with a broken cost model** — no latency term anywhere in its objective — used by
+Summarised: a **defect detector with a broken cost model** — no latency term anywhere in its objective — used by
 a stage that never tested half of what it found.
 
 ---
