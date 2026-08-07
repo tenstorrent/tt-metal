@@ -670,3 +670,47 @@ to prove the harness and card work before the agent starts, so that a later fail
 unambiguously the agent's code. It reported success here only because it too was `continue-on-error`
 and swallowed the error from an unbuilt tree. V2 should make the baseline assert that the native
 leg produced real timings, rather than merely not crashing.
+
+### 12.8 Shakedown runs 2-4 — what each one taught
+
+Each run surfaced exactly one real integration defect. Recording them because they are the
+difference between "the design is sound" and "the workflow runs".
+
+**Run 31203909328 — the build was falsely green.** Fixed as described in 12.7. This run did prove
+the whole deterministic half: cross-repo checkout via `CODEGEN_REPO_TOKEN`, a container with the
+card visible, `scaffold.py` against both checkouts, a real build, and `gate.py` executing on the
+card and returning a structured verdict. The baseline came back `blocked` with a precise cause,
+which is the harness behaving correctly — it refused to report numbers it could not stand behind.
+
+**Checking out into a subdirectory breaks gh-aw.** The first design used `path: docker-job` to
+follow `bisect-dispatch.yaml`, but gh-aw's own later steps assume the workspace root *is* the
+repository, and `Configure Git credentials` failed. tt-metal now checks out at the root and
+tt-dm-codegen goes to `.codegen`, which is appended to `.git/info/exclude` — otherwise the entire
+generator tree reads as untracked and the write-path guard, which counts untracked files, would
+refuse every `verify` call.
+
+**`fetch-depth: 0` with recursive submodules hung a card runner for 55 minutes.** The write-path
+guard only ever diffs against HEAD, so the deep clone bought nothing. `fetch-depth: 1`.
+
+**`create_venv.sh` will not run in the dev image**, because it refuses to overwrite the image's
+existing `/opt/venv`. It is also unnecessary: ttnn and torch already import there. The only real
+gap is `graphviz`, which `ttnn.graph` imports unconditionally during `import ttnn`. The step now
+installs that one dependency and asserts every import the harness needs, so a missing dependency
+fails at a named step instead of surfacing as a `blocked` verdict three steps later.
+
+### 12.9 The ccache miss is an image mismatch, not a network problem
+
+Both instrumented builds reported **0 hits on 1395 remote lookups**, and adding `--network host`
+changed nothing. The remote is being reached — ccache records 1395 remote *misses*, not errors —
+so the cache simply holds no entries matching these compilations.
+
+The cause is the image. `build-artifact.yaml`, which populates the shared cache and compiled in
+**2.6 minutes**, builds in `ubuntu-22.04-ci-build-amd64`. This workflow builds in
+`ubuntu-22.04-dev-amd64`, chosen because it also carries the runtime needed to execute on the card.
+Different toolchain binaries and paths hash to different ccache keys, so the two never share
+entries and every build here is cold at roughly 70 minutes.
+
+**The v2 fix is two containers over one workspace**: build in the cache-compatible `ci-build`
+image, measure in the `dev` image, both mounting the same checkout. That should recover the
+2.6-minute build while keeping a working runtime, and it costs only a second `docker run`. Worth
+doing before this is used in anger — a 70-minute pre-step dominates the run and burns card time.
