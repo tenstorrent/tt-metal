@@ -84,7 +84,7 @@ class MultichipDecoder(OptimizedDecoder):
         replicated residual layout. Traceable (verified).
 
         The all_reduce payload dtype is ``policy.ccl`` (default BF16 == the replicated
-        residual, so the path is byte-identical to the stage-06 baseline). A lower CCL
+        residual, so the path is byte-identical to the BF16 baseline). A lower CCL
         dtype casts the partial before the collective and casts the reduced result back to
         BF16 for the residual add — swept as a yes/no switch in the datatype sweep."""
         ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
@@ -257,7 +257,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
             cfg.intermediate = local_II  # local for _glu_mlp
 
-        # item 2.4: build the (cos,sin) RoPE tables once PER ATTENTION KIND, not once per layer then
+        # build the (cos,sin) RoPE tables once PER ATTENTION KIND, not once per layer then
         # dedup. LagunaModel.from_pretrained threads a shared ``rope_tables`` dict; the first layer of
         # each kind builds+caches, later layers of that kind reuse the SAME device tensors. This removes
         # the ~4.7 GB transient peak (all 40 pairs alive before _dedup_rope) and cuts the per-layer
@@ -561,7 +561,7 @@ class MultichipDecoder(OptimizedDecoder):
         ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
         attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
         o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)  # row-parallel partial
@@ -620,7 +620,7 @@ class MultichipDecoder(OptimizedDecoder):
                     sliding_window_size=win,
                     compute_kernel_config=self._sdpa_compute,
                 )
-            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
             attn = self._gate(attn, ln)
             o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
@@ -643,7 +643,7 @@ class MultichipDecoder(OptimizedDecoder):
         q, k, v = self._split_qkv(qkv, B)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
-        # item 2.3: share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
+        # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
         # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
         if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
             cos = self._rope_decode(rope_idx, B)

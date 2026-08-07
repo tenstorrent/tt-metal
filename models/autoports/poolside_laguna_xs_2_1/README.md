@@ -67,7 +67,7 @@ python -m models.common.readiness_check.run_vllm_server \
 Supported concurrency target is **8** (`--max-num-seqs 8`); conc 32 collapses (TTFT into hundreds of
 seconds).
 
-> **Warmup / prefill note (item 1.1):** every prefill program shape is compiled *before* the decode
+> **Warmup / prefill note:** every prefill program shape is compiled *before* the decode
 > trace is captured. `warmup_model_prefill` warms the full power-of-two bucket ladder up to the servable
 > context, so a long prompt never first-compiles a pipelined-reassembly program under the resident
 > decode trace. `TT_LAGUNA_PREFILL_WARM_CAP` can lower the warmed ceiling for fast dev iteration, but

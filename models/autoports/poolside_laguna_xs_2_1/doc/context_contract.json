@@ -2,8 +2,8 @@
   "hf_model": "poolside/Laguna-XS-2.1",
   "hf_advertised_context": 262144,
   "current_supported_context": 131072,
-  "capability_reduction": "advertised serving context lowered 262144 -> 131072 (plan item 1.2): advertised MUST equal servable, and end-to-end serving on the P150x4 config OOMs at 262144.",
-  "limiting_reason": "The 2026-07-31 P150x4 vLLM serving sweep OOMs at ISL 262144 (both OSL 128 and 1024) while ISL 131072 serves (12.1 t/s/u). tt/generator_vllm.py:ADVERTISED_MAX_CONTEXT is now 131072 so the model never accepts a context it cannot serve. See serving_verified. NOTE: the per-stage analytic sections below estimate a ~12 GB/device single-user footprint at 262144 (which would fit); the empirical OOM comes from the serving path's additional pressure (prefill activation peak, vLLM block-pool sizing at max_num_seqs=32, fabric/trace buffers, the [1,seq,H] pipelined-prefill reassembly output at seq=262144) not captured by the single-user analytic. Restoring 262144 is Tier-2 work: hybrid-KV per-device KV 5.4->1.5 GB (already flag-enabled but not re-verified for the full 262144 serve) + shared-RoPE frees ~4.7 GB transient (item 2.4).",
+  "capability_reduction": "advertised serving context lowered 262144 -> 131072: advertised MUST equal servable, and end-to-end serving on the P150x4 config OOMs at 262144.",
+  "limiting_reason": "The 2026-07-31 P150x4 vLLM serving sweep OOMs at ISL 262144 (both OSL 128 and 1024) while ISL 131072 serves (12.1 t/s/u). tt/generator_vllm.py:ADVERTISED_MAX_CONTEXT is now 131072 so the model never accepts a context it cannot serve. See serving_verified. NOTE: the per-stage analytic sections below estimate a ~12 GB/device single-user footprint at 262144 (which would fit); the empirical OOM comes from the serving path's additional pressure (prefill activation peak, vLLM block-pool sizing at max_num_seqs=32, fabric/trace buffers, the [1,seq,H] pipelined-prefill reassembly output at seq=262144) not captured by the single-user analytic. Restoring 262144 is future work: hybrid-KV per-device KV 5.4->1.5 GB (already flag-enabled but not re-verified for the full 262144 serve) + shared-RoPE frees ~4.7 GB transient.",
   "serving_verified": {
     "mesh": "Blackhole P150x4 (1x4), FABRIC_1D_RING, TP=4/EP=4",
     "date": "2026-07-31",
@@ -111,7 +111,7 @@
     "supported_context": 262144,
     "capability_reduction": "none",
     "limiting_reason": "none",
-    "delta_vs_full_model": "The ONLY change vs the full_model stage is the column-sharded LM-head weight dtype: BF16 -> BFP8 (LagunaModel.from_pretrained lm_head_dtype default now ttnn.bfloat8_b; pass ttnn.bfloat16 for the stage-05 baseline). The LM head is the largest DRAM-bound terminal matmul (32x2048x25088, 73.8% DRAM util, 98 cores); halving its weight bytes is the one material full-model-only decode lever. Everything else on the terminal + orchestration path was measured already-optimal (logits-only decode at the decoder-layer-stack floor; sampler <1%).",
+    "delta_vs_full_model": "The ONLY change vs the full_model stage is the column-sharded LM-head weight dtype: BF16 -> BFP8 (LagunaModel.from_pretrained lm_head_dtype default now ttnn.bfloat8_b; pass ttnn.bfloat16 for the BF16 baseline). The LM head is the largest DRAM-bound terminal matmul (32x2048x25088, 73.8% DRAM util, 98 cores); halving its weight bytes is the one material full-model-only decode lever. Everything else on the terminal + orchestration path was measured already-optimal (logits-only decode at the decoder-layer-stack floor; sampler <1%).",
     "lm_head_dram_bytes_per_device": {
       "before_bf16": 100000000,
       "after_bfp8": 50000000,

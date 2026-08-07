@@ -69,7 +69,7 @@ class PrecisionPolicy:
     ``lm_head`` from here. Activations/residual stay BF16 (this model never materialises
     the residual stream in a lower dtype — recorded as an assumption, not a knob).
 
-    Defaults are the optimized-full-model policy (stage 06): BF16 activations/norms; BFP8
+    Defaults are the optimized policy: BF16 activations/norms; BFP8
     attention (packed-QKV / O / gate) + dense-MLP + shared-expert weights; BFP4 routed-MoE
     expert gate/up/down; BF16 router; BFP8 paged KV cache; BFP8 column-sharded LM head.
     Compute fidelity: LoFi for projections, HiFi2 for the router + attention gate, HiFi4
@@ -612,7 +612,7 @@ class OptimizedDecoder(LightweightModule):
         )
         # fidelity assignment per matmul group — READ FROM THE POLICY so the selected
         # compute-fidelity config is actually consumed by the measured runtime path
-        # (defaults preserve the stage-06 policy: LoFi projections, HiFi2 gate/router).
+        # (defaults preserve the optimized policy: LoFi projections, HiFi2 gate/router).
         self._ck_by_fid = {"LoFi": self._ck_lofi, "HiFi2": self._ck_hifi2, "HiFi4": self._ck_hifi4}
         self._ck_qkv = self._ck_by_fid[policy.fid_attn_qkv]
         self._ck_o = self._ck_by_fid[policy.fid_attn_o]
@@ -710,7 +710,7 @@ class OptimizedDecoder(LightweightModule):
             store("mlp_up", g("mlp.up_proj.weight").t().contiguous(), H, II, policy.dense_ff13)
             store("mlp_down", g("mlp.down_proj.weight").t().contiguous(), II, H, policy.dense_ff2)
 
-        # item 2.4: shared per-attention-kind RoPE tables (build once, reuse) — see MultichipDecoder.
+        # shared per-attention-kind RoPE tables (build once, reuse) — see MultichipDecoder.
         rope_tables = kwargs.get("rope_tables")
         kind = cfg.attention_type
         if rope_tables is not None and kind in rope_tables:
@@ -736,11 +736,11 @@ class OptimizedDecoder(LightweightModule):
         blocks_per_user = int(math.ceil(max_seq_len / block_size))
         max_num_blocks = blocks_per_user * max_users
         shape = (max_num_blocks, self.cfg.num_kv_heads, block_size, self.cfg.head_dim)
-        # item 2.6 REVERTED: an on-device zeros alloc (ttnn.zeros bf16 -> typecast BFP8) breaks paged
+        # REVERTED: an on-device zeros alloc (ttnn.zeros bf16 -> typecast BFP8) breaks paged
         # DECODE reads of the persistent cache (test_decode_pcc PCC 0.5/-0.05 vs 0.995; prefill unaffected
         # because it writes+reads within one call). ttnn.zeros has no BFP8 support, and a typecast-origin
         # BFP8 tensor is not a valid in-place paged-cache buffer. Kept as host torch.zeros + from_torch
-        # (the canonical BFP8 cache format) until a native device BFP8-zeros path exists. See work_log.
+        # (the canonical BFP8 cache format) until a native device BFP8-zeros path exists.
         k = ttnn.from_torch(
             torch.zeros(shape),
             dtype=dtype,
@@ -936,7 +936,7 @@ class OptimizedDecoder(LightweightModule):
         cfg = self.cfg
         qkv = ttnn.linear(ln, self.w["wqkv"], compute_kernel_config=self._ck_qkv)  # [1,seq,qkv_w] (seq in dim1)
         qkv = ttnn.reshape(qkv, (1, 1, seq, self.meta["qkv_w"]))
-        # item 2.5: fused prefill head-split — one op replaces 3x slice + 3x reshape + 3x permute.
+        # fused prefill head-split — one op replaces 3x slice + 3x reshape + 3x permute.
         # Packed wqkv is [all-Q | all-K | all-V] exactly as this op expects; emits q[1,nh,seq,hd],
         # k/v[1,nkv,seq,hd] — same layout as the old slice+reshape+permute, so per-head RMSNorm (over
         # head_dim) and _apply_rope downstream are unchanged. Validated: multichip layer PCC 65/65.
@@ -952,7 +952,7 @@ class OptimizedDecoder(LightweightModule):
         if rope is None:  # local fallback (pipelined per-chunk positions, layer PCC tests, direct callers)
             cos = self._rope_prefill(start_pos, seq)
             sin = self._rope_prefill(start_pos, seq, sin=True)
-        else:  # item 2.3: model-hoisted shared per-kind context
+        else:  # model-hoisted shared per-kind context
             cos, sin = rope
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
@@ -980,7 +980,7 @@ class OptimizedDecoder(LightweightModule):
         ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), page_table, batch_idx=user_id)
         attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
         o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
@@ -1048,7 +1048,7 @@ class OptimizedDecoder(LightweightModule):
                 tail = min(win - 1, ch)
                 k_tail = ttnn.slice(k, [0, 0, ch - tail, 0], [1, cfg.num_kv_heads, ch, cfg.head_dim])
                 v_tail = ttnn.slice(v, [0, 0, ch - tail, 0], [1, cfg.num_kv_heads, ch, cfg.head_dim])
-            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
             attn = self._gate(attn, ln)
             o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
@@ -1151,7 +1151,7 @@ class OptimizedDecoder(LightweightModule):
             q, k, v = self._split_qkv(qkv, B)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
-        # item 2.3: share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
+        # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
         # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
         if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
             cos = self._rope_decode(rope_idx, B)

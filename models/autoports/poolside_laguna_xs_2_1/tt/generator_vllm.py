@@ -49,7 +49,7 @@ try:
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
 
-# Advertised context MUST equal servable context (plan item 1.2). The HF config declares 262144, and
+# Advertised context MUST equal servable context. The HF config declares 262144, and
 # the decoder addresses pos 262143 in isolation, but the 2026-07-31 P150x4 serving sweep OOMs at ISL
 # 262144 (both OSL 128 and 1024) while ISL 131072 serves — so end-to-end servable on this config is
 # 131072. We advertise only what we can serve; a request for a context we cannot serve would fail an
@@ -84,7 +84,7 @@ class LagunaForCausalLM:
     # execution paths (suffix-chunk read vs cold pipelined / local-bf16 prefill), the non-bit-exactness
     # inherent to prefix caching on quantized HW (the GPU norm), not a context error. This is ACCEPTED
     # non-determinism (partial-hit runs are not bit-reproducible) — see the determinism contract in
-    # README.md (item 1.3). Set TT_LAGUNA_PREFIX_CACHE=0 to force the cold path (bit-reproducible, no reuse).
+    # README.md. Set TT_LAGUNA_PREFIX_CACHE=0 to force the cold path (bit-reproducible, no reuse).
     _PREFIX_CACHE_ENABLED = os.environ.get("TT_LAGUNA_PREFIX_CACHE", "1") == "1"
     model_capabilities = {
         "supports_prefix_caching": _PREFIX_CACHE_ENABLED,
@@ -543,7 +543,7 @@ class LagunaForCausalLM:
     #       cache slots (plen..L-1) are future positions, overwritten before any decode step reads
     #       them.
     #   (2) The last-real-token hidden is selected without baking plen into a new program per distinct
-    #       length, and WITHOUT a host round-trip (item 2.2, DONE). `_last_token_shards` builds a tiny
+    #       length, and WITHOUT a host round-trip. `_last_token_shards` builds a tiny
     #       [1,1,1,L] one-hot on host (1.0 at column plen-1 — the index is DATA, not program shape),
     #       copies it into a persistent per-bucket-L selector buffer, and runs the fixed-shape matmul
     #       sel[1,1,1,L] @ h[1,1,L,H] -> [1,1,1,H] to pick row plen-1 on device. In bf16 the one-hot ·
@@ -559,7 +559,7 @@ class LagunaForCausalLM:
         request rounds UP to one of these via ``_bucket_len``, and ``warmup_model_prefill`` compiles
         EVERY one of them before the decode trace is captured.
 
-        item 1.1 — the ceiling is the servable context ``min(max_model_len, ADVERTISED_MAX_CONTEXT)``,
+        The ceiling is the servable context ``min(max_model_len, ADVERTISED_MAX_CONTEXT)``,
         NOT a fixed 8192 cap. The sequence-pipelined prefill tail (``_prefill_pipelined``) reassembles
         per-chunk outputs with a program whose shape depends on the CHUNK COUNT (``ttnn.concat(outs)``
         + the per-chunk input ``ttnn.slice``s), so a prompt needing more chunks than any warmed bucket
@@ -569,7 +569,7 @@ class LagunaForCausalLM:
         power-of-two ladder makes every servable prompt run only pre-compiled programs, and keeps
         ``_bucket_len`` returning a value that is ALWAYS in the warmed set.
 
-        item 2.1 — the ladder floor is 32 (one tile), not 128, so the small cached-suffix prefills that
+        The ladder floor is 32 (one tile), not 128, so the small cached-suffix prefills that
         dominate agentic serving (prefix caching hits ~95% of turns; the fresh suffix is typically 8–74
         tokens) round up to 32/64/128 instead of always 128. That cuts up to ~16× of wasted prefill work
         on the common turn (plen=8 → bucket 32 = 4× vs 16×; plen=40 → 64; plen=74 → 128). Right-padding
@@ -591,11 +591,11 @@ class LagunaForCausalLM:
                 print(
                     f"[laguna] WARNING: TT_LAGUNA_PREFILL_WARM_CAP={cap} < servable context {servable}; "
                     f"prompts longer than {cap} tokens will compile prefill programs under the resident "
-                    f"decode trace (very slow + trace-unsafe, item 1.1). Dev-only knob — unset for serving.",
+                    f"decode trace (very slow + trace-unsafe). Dev-only knob — unset for serving.",
                     flush=True,
                 )
                 type(self)._warned_warm_cap = True
-        buckets, b = [], 32  # item 2.1: floor 32 (one tile) to match small cached-suffix prefills
+        buckets, b = [], 32  # floor 32 (one tile) to match small cached-suffix prefills
         while b < cap:
             buckets.append(b)
             b *= 2
@@ -634,7 +634,7 @@ class LagunaForCausalLM:
                 torch.zeros([1, 1, 1, self.hidden], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             ),
         )
-        # item 2.2 — persistent per-bucket-L on-device last-token SELECTOR buffers. Each is a
+        # persistent per-bucket-L on-device last-token SELECTOR buffers. Each is a
         # [1,1,1,L] bf16 (TILE, replicated) one-hot INPUT; the fixed-shape matmul
         # ``sel[1,1,1,L] @ h[1,1,L,H] -> [1,1,1,H]`` picks the last REAL row (the row index is DATA,
         # written per prompt via copy_host_to_device_tensor), replacing the ~32 MB host readback of
@@ -656,7 +656,7 @@ class LagunaForCausalLM:
         """Select the last REAL token's logit shards with a fixed-shape ON-DEVICE one-hot selector.
 
         ``h`` is the bucketed prefill output ``[1, L, H]`` (L fixed per bucket) held on device and
-        REPLICATED across the mesh. item 2.2: instead of reading the whole ``[1,L,H]`` hidden back to
+        REPLICATED across the mesh. Instead of reading the whole ``[1,L,H]`` hidden back to
         host (~32 MB every prefill) to slice row ``plen-1``, build a tiny ``[1,1,1,L]`` one-hot on host
         (1.0 at column ``plen-1`` — the index is DATA, not program shape), copy it into the persistent
         per-L selector buffer (a COPY, no allocation), and run the fixed-shape matmul
@@ -669,7 +669,7 @@ class LagunaForCausalLM:
         is somehow missing (shouldn't happen post-warmup) so serving can never crash."""
         st = self._prefill_state()
         sel = st["sel"].get(L)
-        # item 2.2 selector gated OFF by default: as first implemented it calls ttnn.from_torch(onehot)
+        # selector gated OFF by default: as first implemented it calls ttnn.from_torch(onehot)
         # per prefill, which ALLOCATES a device buffer under the resident decode trace ("Allocating device
         # buffers is unsafe", allocator.cpp:123) — trace-unsafe + slow. Needs a trace-safe rewrite (build the
         # one-hot as a ttnn HOST tensor + copy_host_to_device into the persistent sel; matmul into a
@@ -785,7 +785,7 @@ class LagunaForCausalLM:
 
     def _row_logits(self, h, row, L, st):
         """LM-head over a single row of the ON-DEVICE prefill hidden ``h`` ([1,L,H], replicated),
-        selected by the same fixed-shape one-hot matmul as ``_last_token_shards`` (item 2.2): a
+        selected by the same fixed-shape one-hot matmul as ``_last_token_shards``: a
         ``[1,1,1,L]`` one-hot with 1.0 at ``row`` picks that row bit-exactly. Reuses the persistent
         per-L selector buffer ``st["sel"][L]`` (same L bucket, so the matmul program is already warmed
         by ``_last_token_shards``). Avoids the ~32 MB whole-hidden readback the verify path used to do.
@@ -857,7 +857,7 @@ class LagunaForCausalLM:
         tok_tt = self.gen._tokens_to_device(padded)
         x = self.model.embed_prefill(tok_tt)
         h = self.model.prefill_layers(x, kv_cache, pt, user_id=0, start_pos=int(start_pos))
-        # item 2.2: select each requested row ON DEVICE (one-hot matmul over the still-resident hidden)
+        # select each requested row ON DEVICE (one-hot matmul over the still-resident hidden)
         # instead of reading the whole [1,L,H] hidden back to host first.
         rows = list(range(S)) if logit_rows is None else [int(r) for r in logit_rows]
         logits = torch.stack([self._row_logits(h, r, L, st) for r in rows], dim=0)  # [len(rows), vocab]
@@ -1200,10 +1200,10 @@ class LagunaForCausalLM:
         pt_host = pt_row.repeat(K1, 1) if K1 > 1 else pt_row
         st = self._verify_dec.get(K1)
         if st is None:
-            # item 3.2: verify-decode trace for this K1 not pre-captured -> compile+capture in-request.
+            # verify-decode trace for this K1 not pre-captured -> compile+capture in-request.
             print(
                 f"[laguna] WARNING: lazy spec-decode VERIFY-trace capture for K1={K1} (not pre-warmed) — "
-                f"this step includes compile+capture, not a warm replay. (item 3.2)",
+                f"this step includes compile+capture, not a warm replay.",
                 flush=True,
             )
             st = self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)  # lazy fallback
@@ -1468,14 +1468,14 @@ class LagunaForCausalLM:
         hybrid = page_tables_per_layer is not None
         st = self._decode.get(B)
         if st is None:
-            # item 3.2: the decode trace for this batch B was NOT pre-captured by warmup, so we compile +
+            # the decode trace for this batch B was NOT pre-captured by warmup, so we compile +
             # capture it now — INSIDE a live request. This is orders of magnitude slower than a warm
             # replay and is invisible in the served latency unless flagged. Warn so a lazy capture is not
             # silently mistaken for warm serving (drive warmup_model_decode for every served B to avoid).
             print(
                 f"[laguna] WARNING: lazy decode-trace capture for batch B={B} inside decode_forward "
                 f"(warmup did not pre-capture this B) — first-token latency for this B includes "
-                f"compile+capture, not a warm replay. (item 3.2)",
+                f"compile+capture, not a warm replay.",
                 flush=True,
             )
             if hybrid:
@@ -1600,7 +1600,7 @@ class LagunaForCausalLM:
             return None
         self.already_warmed_up_prefill = True
         self._in_prefill_warmup = True  # suppress the _prefill_pt diagnostic for intentional warmup allocs
-        # Allocate persistent sampling buffers AND the per-bucket-L one-hot selector buffers (item 2.2),
+        # Allocate persistent sampling buffers AND the per-bucket-L one-hot selector buffers,
         # all pre-trace. The selector MATMUL program (sel[1,1,1,L] @ h[1,1,L,H]) + the [1,L,H]->[1,1,L,H]
         # reshape are compiled for every bucket L by the per-L ``prefill_forward`` calls below, which run
         # ``_last_token_shards`` (and thus the selector matmul) for each L — so no selector program

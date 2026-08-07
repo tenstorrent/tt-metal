@@ -192,7 +192,7 @@ class LagunaModel:
             n = num_layers or total
             layer_indices = list(range(n))
 
-        # item 2.4: build the two (cos,sin) RoPE tables ONCE, keyed by attention kind, threaded into
+        # build the two (cos,sin) RoPE tables ONCE, keyed by attention kind, threaded into
         # every layer via this shared dict. The first full-attention layer and the first sliding layer
         # build+cache their table; all later layers of that kind reuse the SAME device tensors. This
         # replaces the old "each of 40 layers builds its own, then _dedup_rope frees 38" pattern —
@@ -294,14 +294,14 @@ class LagunaModel:
 
     # ---- forward: layer stack ---------------------------------------------- #
     def _build_decode_rope(self, rope_idx, B):
-        """item 2.3: compute the two distinct decode RoPE gathers (one per attention kind) ONCE per
+        """Compute the two distinct decode RoPE gathers (one per attention kind) ONCE per
         step, instead of every one of the 40 layers redundantly re-gathering them. Returns
         {attention_type: (cos, sin)} — the DRAM ``_rope_decode`` output ([1,B,1,rotary_dim] TILE).
 
         Only the DRAM cos/sin are shared. The L1 HEIGHT-SHARDED form (``_shard_cossin``) is NOT hoisted:
         L1 is scratch and a shared cos_sh gets clobbered by later layers' activations (measured: teacher
         top1 0.95->0.58). Each layer shards its own cos_sh from the shared cos in ``decode_forward``.
-        Sharing cos/sin is bit-identical: DRAM-persistent, and item 2.4 shares the source table per kind
+        Sharing cos/sin is bit-identical: DRAM-persistent, and the source table is shared per kind
         so a representative layer's gather reproduces every layer's local result exactly."""
         ctx = {}
         for dec in self.layers:
@@ -314,7 +314,7 @@ class LagunaModel:
         return ctx
 
     def _build_prefill_rope(self, start_pos, seq):
-        """item 2.3: compute the two distinct single-shot prefill RoPE contexts (one per attention
+        """Compute the two distinct single-shot prefill RoPE contexts (one per attention
         kind) ONCE. Returns {attention_type: (cos, sin)} ([1,1,seq,rotary_dim] TILE)."""
         ctx = {}
         for dec in self.layers:
@@ -331,7 +331,7 @@ class LagunaModel:
         # vs sliding groups have distinct block tables) — index per layer when a list is given.
         per_layer = isinstance(page_table, (list, tuple))
         seq = hidden_1SH.shape[-2]
-        # item 2.3: shared per-kind RoPE for the single-shot prefill (one chunk == whole seq). The
+        # shared per-kind RoPE for the single-shot prefill (one chunk == whole seq). The
         # pipelined path (seq > PIPE_CHUNK) chunks internally with per-chunk positions the model can't
         # precompute, so it keeps computing RoPE locally (rope_mats=None). TT_LAGUNA_NO_ROPE_HOIST=1
         # forces the per-layer local compute (A/B diagnostic).
@@ -350,7 +350,7 @@ class LagunaModel:
         # off for normal serving (disjoint per-user blocks — no race).
         per_layer = isinstance(page_table, (list, tuple))
         B = hidden_1BH.shape[-2]
-        # item 2.3: two distinct decode RoPE gathers (full vs sliding) computed ONCE, threaded per layer.
+        # two distinct decode RoPE gathers (full vs sliding) computed ONCE, threaded per layer.
         # TT_LAGUNA_NO_ROPE_HOIST=1 forces per-layer local compute (A/B diagnostic).
         rope_ctx = None if os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1" else self._build_decode_rope(rope_idx, B)
         h = hidden_1BH

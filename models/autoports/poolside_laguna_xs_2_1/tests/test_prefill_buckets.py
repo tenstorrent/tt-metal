@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Device-free invariants for the prefill bucketing / warm-set contract (plan items 1.1 + 1.2).
+"""Device-free invariants for the prefill bucketing / warm-set contract.
 
 The bug (1.1): the sequence-pipelined prefill tail reassembles per-chunk outputs with a program whose
 shape depends on the chunk COUNT, so a prompt needing more chunks than any warmed bucket first-compiles
@@ -51,15 +51,15 @@ def test_ladder_tops_at_servable(mml):
     stub = _Stub(mml)
     lens = stub._prefill_bucket_lens()
     servable = min(mml, gv.ADVERTISED_MAX_CONTEXT)
-    assert lens[0] == 32  # item 2.1: floor is one tile, not 128
-    assert 64 in lens and 128 in lens  # item 2.1: small-suffix buckets present
+    assert lens[0] == 32  # floor is one tile, not 128
+    assert 64 in lens and 128 in lens  # small-suffix buckets present
     assert lens[-1] == servable, f"ladder top {lens[-1]} != servable {servable}"
     assert lens == sorted(set(lens))  # strictly ascending, deduped
 
 
 @pytest.mark.parametrize("plen,expect", [(8, 32), (32, 32), (33, 64), (64, 64), (74, 128), (120, 128), (129, 256)])
 def test_small_suffix_buckets_2_1(plen, expect):
-    """item 2.1: the dominant agentic prefill (8–74-token cached suffix) rounds to 32/64/128, not 128."""
+    """The dominant agentic prefill (8–74-token cached suffix) rounds to 32/64/128, not 128."""
     stub = _Stub(131072)
     assert stub._bucket_len(plen) == expect
 
