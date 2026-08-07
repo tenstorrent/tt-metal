@@ -539,8 +539,14 @@ def _receiver_core(device, worker_grid) -> ttnn.CoreCoord:
     """A compute core that is not a DRAM-bank worker, for the gather receiver."""
     taken = {(c.x, c.y) for c in ttnn.corerange_to_cores(worker_grid, row_wise=True)}
     grid = device.compute_with_storage_grid_size()
-    for y in range(grid.y):
-        for x in range(grid.x):
+    # Scan from the FAR CORNER, not the origin. `taken` only excludes DRAM-bank workers, so a
+    # forward scan returns a low core like (0,0) -- which the compute grid is also using. Triage of
+    # the Q-stage deadlock found (0,0) parked in DRAMStreamingMatmul's cb_wait_front while it was
+    # also meant to be the mcast sender: a core cannot send the tiles it is itself blocked waiting
+    # for, so every consumer starves. bench_e_fused_stage picks (11,9), the far corner, and does not
+    # hang. Reverse iteration reproduces that choice.
+    for y in range(grid.y - 1, -1, -1):
+        for x in range(grid.x - 1, -1, -1):
             if (x, y) not in taken:
                 return ttnn.CoreCoord(x, y)
     raise ValueError("no spare core for the GatherRowToDRAM receiver")

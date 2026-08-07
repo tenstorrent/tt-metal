@@ -1405,3 +1405,24 @@ to N=5.
    program was built against, the program reads the wrong memory.
 4. **Interleaving with ttnn ops** (SDPA, KV cache, MoE) between stage dispatches — the only
    difference the bench structurally cannot reproduce.
+
+### Receiver-core choice: ALSO WRONG (5th). Change kept anyway.
+
+`_receiver_core` scanned from the origin and returned a low core like `(0,0)`, while the bench that
+works picks `(11,9)`. Triage had found `(0,0)` parked in `DRAMStreamingMatmul`'s `cb_wait_front`
+while also being the mcast sender — a core cannot send tiles it is itself blocked waiting for.
+Reversed the scan to pick the far corner. **Still hangs.**
+
+The reversed scan is kept: it is strictly more correct (the far corner is genuinely less likely to
+collide with compute) and costs nothing. But it is not the bug.
+
+**Five hypotheses, five disproved.** Shared semaphores; Mcast under trace; Mcast on a mesh;
+multiple programs (N=2..5); receiver-core collision. Everything reproducible outside the model
+passes, including the full Mcast chain on 32 chips at PCC 0.9998.
+
+**Stop guessing.** The next person should get the *model's* actual configuration out rather than
+theorise: log, inside `_build_q_stage_program` during a model run, the bank-worker core list, the
+chosen receiver/sender, the CB ids and their core ranges — then diff that against what
+`bench_e_fused_stage_mesh.py` prints for the same stage. The bench and the model build the same op
+chain and only one hangs, so the difference is in that configuration and a diff will show it in
+one run instead of five.
