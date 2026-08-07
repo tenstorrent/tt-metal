@@ -311,8 +311,18 @@ the kernel views this memory:
 | what the before-code does | `T` |
 |---|---|
 | `CoreLocalMem<uint32_t> m(dfb.get_write_ptr())` | `uint32_t` |
-| `reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr())` | `uint32_t` |
+| `CoreLocalMem<volatile uint32_t> m(dfb.get_write_ptr())` | `volatile uint32_t` |
+| `reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr())` | `volatile uint32_t` |
 | hands the address to a NOC call, never accesses elements | `uint8_t` — the index is then a byte offset, and `entry_elems == entry_size` |
+
+**Carry `volatile` across if the before-code had it** — it is part of `T`, not decoration. The
+qualifier is the caller's to choose (`core_local_mem.h` documents both forms), and dropping it lets
+the compiler hoist or elide a load that the old code forced. Do not assume the NOC read barrier
+protects you: `invalidate_l1_cache()` is `asm("fence")` on Blackhole with **no memory clobber**, and
+on Wormhole its body is empty — it is not a compiler barrier. Nothing else in the converted kernel
+writes that region as far as the compiler can see, so a non-`volatile` `T` is free to be optimized
+across the transfer. This is invisible to your sentinels: both forms pass today, and the one that
+breaks does so on some later compiler or optimization level.
 
 If the kernel's element type depends on a dtype branch — `uint16_t` on one path, `float` on another —
 construct the scratchpad on each branch with that branch's `T`. The binding token carries no type, so
