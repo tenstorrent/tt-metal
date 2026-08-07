@@ -298,13 +298,18 @@ boundary 30.9 %, disagreements 2.7 %, agreement 2.9 %. So the advisor saw about 
 qwen B's model decode time sat in ops the tracer could not capture at the pin**. **This is a
 `$shard-advise`/`ttnn-jit` coverage problem, not a placement problem.**
 
-**Since resolved at the tracer, and the failure moved.** Four gaps, not three: `ttnn.copy` (identity alias — no
+**Since resolved at the tracer.** Five gaps, not the three the cell named: `ttnn.copy` (identity alias — no
 dialect op exists or is needed), `ttnn.softplus` (no standalone dialect op, so `log(exp(x)+1)`),
-**`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :key_width]` killed the trace) and
-`ttnn.repeat_interleave`. With all four the full **71-op** mixer traces. What blocks qwen now is a native abort
-inside `mlir::PassManager::run`, which is **not** a coverage gap and is not yet attributed — the traced module
-verifies and `ttmlir-opt --ttnn-to-ttnn-l1-advisor` accepts it. So read the ≈62 % as *reachable, pending one
-pipeline crash*, not as unreachable. [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5.
+**`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :key_width]` killed the trace),
+`ttnn.repeat_interleave`, and a bug in the `copy` handler itself that orphaned a weight placeholder and aborted
+the pipeline with `LLVM ERROR: ... op ttir.empty`. **The whole layer now captures — 69 ops advised,
+`uncapturable: none`** ([tt-mlir branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps)).
+
+**The gain is unquantified, and that is a measurement gap, not an analysis gap.** The cell kept no profile of its
+own (STG-10) and no committed CSV reproduces its 15,833 µs window, so there is no sound before/after accounting;
+reconciling against a different window produces figures that are visibly wrong. **A fresh profile of this layer is
+the highest-value single measurement left in the corpus.**
+[`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5.
 
 **And one of them was a single missing handler.** `ttnn.sparse_matmul` was the only op on north-mini's sparse-MoE
 decode path that the direct-TTNN tracer could not emit — router (`topk`, `scatter`, `zeros_like`, `sigmoid`),

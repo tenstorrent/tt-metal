@@ -169,6 +169,7 @@ the file a fix would edit — that alone sorts optimizer from tooling from usage
 
 | the problem | what it looked like |
 |---|---|
+| **Grepping a log instead of reading it** | qwen aborted with no diagnostic and I reported it as an unattributed crash in `mlir::PassManager::run`. The cause was printed: `LLVM ERROR: Backend constraints are not implemented for op ttir.empty`. I was grepping for `Traceback`, `error:` and `TypeError` — an `LLVM ERROR` line matches none — and it sat under 83,000 lines of routine `TT_FATAL` rejections. It was my own five-line bug. **Read the tail unfiltered before calling a failure unattributed** |
 | **A claim about my own document that I never checked** | I wrote that in the cells table "each kind is on its own line, in the same order across every column" — in the same commit as the table. Only the `control` column is per-kind; elsewhere a second line is a second *scope*. Describing your own output is as easy to get wrong as describing someone else's |
 | I quoted one quantity at **three different values** across sections without saying they were different runs or scopes | phi FN shipped as −4.88 / −4.90 / −4.91 % (three runs); north-mini FN as −9.26 / −10.23 / −10.37 % (three **scopes** — a multi-layer harness, the cell's model estimate, and per-layer). Reads as sloppiness or error; is neither |
 | I did not re-derive dependent totals when a component improved | "≈8.0 ms/model on the table" → **9.2**; "20,225 µs reachable / 67 % credited" → **21,368 / 64 %**. Three files carried the stale pair |

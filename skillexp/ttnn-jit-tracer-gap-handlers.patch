@@ -48,7 +48,7 @@ index 62c6a199a9..509fcb391d 100644
      def __class__(self):
          # Spoof isinstance(proxy, ttnn.Tensor) so real model code that gates on
 diff --git a/tools/ttnn-jit/_src/ttnn_emit_tracer.py b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
-index abaada1806..fabfe57cdd 100644
+index abaada1806..af62fc1ace 100644
 --- a/tools/ttnn-jit/_src/ttnn_emit_tracer.py
 +++ b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
 @@ -17,12 +17,16 @@ Coverage is the full transformer-decoder vocabulary: dense compute
@@ -74,7 +74,23 @@ index abaada1806..fabfe57cdd 100644
  """
  
  from contextlib import contextmanager
-@@ -245,6 +249,113 @@ def _linear_handler(
+@@ -164,6 +168,15 @@ def _weight_value(tensor, jit_ctx):
+     from ttnn_jit.ttmlir.dialects import ttir
+ 
+     key = id(tensor)
++    # In-place ops that carry no dialect op (ttnn.copy) rebind their destination
++    # here. Checked BEFORE weight_cache so the placeholder stays in weight_cache
++    # for _finalize_signature to lift and erase, while reads see the update.
++    # Clobbering weight_cache instead orphans the placeholder, and a surviving
++    # ttir.empty aborts the pipeline with "Backend constraints are not
++    # implemented for op ttir.empty".
++    alias = getattr(jit_ctx, "cache_alias", None)
++    if alias is not None and key in alias:
++        return alias[key]
+     cache = jit_ctx.weight_cache
+     if key in cache:
+         return cache[key]
+@@ -245,6 +258,113 @@ def _linear_handler(
          )
  
  
@@ -188,7 +204,7 @@ index abaada1806..fabfe57cdd 100644
  def _binary(op_fn):
      def handler(jit_ctx, x, y, **kwargs):
          # Either operand may be a python scalar -- `ttnn.multiply(gate, 1.703125)`
-@@ -891,6 +1002,31 @@ def _paged_update_cache_handler(
+@@ -891,6 +1011,31 @@ def _paged_update_cache_handler(
          )
  
  
@@ -220,7 +236,7 @@ index abaada1806..fabfe57cdd 100644
  def _paged_fill_cache_handler(jit_ctx, cache, input, page_table, **kwargs):
      with InsertionPoint(jit_ctx.func_bb), Location.unknown(jit_ctx.ctx):
          ttnn.paged_fill_cache(
-@@ -966,6 +1102,12 @@ def _repeat_handler(jit_ctx, x, repeat_dims=None, **kwargs):
+@@ -966,6 +1111,12 @@ def _repeat_handler(jit_ctx, x, repeat_dims=None, **kwargs):
  _VALUE_HANDLERS = {
      "matmul": _matmul_handler,
      "linear": _linear_handler,
@@ -233,7 +249,7 @@ index abaada1806..fabfe57cdd 100644
      "reshape": _reshape_handler,
      "typecast": _typecast_handler,
      "softmax": _softmax_handler,
-@@ -1060,6 +1202,7 @@ _EXPERIMENTAL_MULTI = {
+@@ -1060,6 +1211,7 @@ _EXPERIMENTAL_MULTI = {
  _EXPERIMENTAL_INPLACE = {
      "paged_update_cache": (_paged_update_cache_handler, 0),
      "paged_fill_cache": (_paged_fill_cache_handler, 0),
@@ -241,7 +257,7 @@ index abaada1806..fabfe57cdd 100644
  }
  
  # ttnn.transformer.<op> handlers.
-@@ -1080,6 +1223,34 @@ _PASSTHROUGH_IDENTITY = {
+@@ -1080,6 +1232,41 @@ _PASSTHROUGH_IDENTITY = {
  }
  _PASSTHROUGH_NONE = {"deallocate"}
  
@@ -259,16 +275,23 @@ index abaada1806..fabfe57cdd 100644
 +    what was written instead of a fresh unrelated placeholder. Requires the raw
 +    `dst` object, hence _RAW: after _capture, `id(dst)` is a proxy's id.
 +
++    Recorded in cache_alias rather than weight_cache: the destination usually
++    already HAS a placeholder from an earlier read, and overwriting its
++    weight_cache entry orphans that placeholder so _finalize_signature never
++    lifts or erases it. A surviving ttir.empty then aborts the pipeline.
++
 +    The device write itself is real cost that no op records, so it stays in the
 +    untraced remainder. That is the honest outcome: the advisor places the ops
 +    around the state update, not the update.
 +    """
 +
 +    def op(src, dst, *args, **kwargs):
++        if jit_ctx.cache_alias is None:
++            jit_ctx.cache_alias = {}
 +        if hasattr(src, "mlir_value"):
-+            jit_ctx.weight_cache[id(dst)] = src.mlir_value
++            jit_ctx.cache_alias[id(dst)] = src.mlir_value
 +        elif hasattr(src, "shape") and hasattr(src, "dtype"):
-+            jit_ctx.weight_cache[id(dst)] = _weight_value(src, jit_ctx)
++            jit_ctx.cache_alias[id(dst)] = _weight_value(src, jit_ctx)
 +        return None
 +
 +    return op
@@ -276,7 +299,7 @@ index abaada1806..fabfe57cdd 100644
  
  def _identity_passthrough(*args, **kwargs):
      for a in args:
-@@ -1127,6 +1298,9 @@ def patch_ttnn(jit_ctx):
+@@ -1127,6 +1314,9 @@ def patch_ttnn(jit_ctx):
          for name in _PASSTHROUGH_NONE:
              originals[name] = getattr(_ttnn_rt, name, _MISSING)
              setattr(_ttnn_rt, name, _none_passthrough)

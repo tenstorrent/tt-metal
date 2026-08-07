@@ -5,12 +5,12 @@ already hand-optimised *without* it. So anything the compiler adds is a real gai
 
 **Eight cells shipped a gain, seven returned zero** — which reads as a modest result until you look at why. On the
 one cell where the compiler's whole plan could be implemented and measured, that plan was worth **twice what the
-cell shipped**, at bit-identical output, and nobody tried it. On **eight cell/kinds the compiler was never shown
-the layer at all**, because the capture tracer stopped early. And the metric that decides what gets measured
+cell shipped**, at bit-identical output, and nobody tried it. On **nine cell/kinds the compiler was never shown the
+layer at all**, because the capture tracer stopped early. And the metric that decides what gets measured
 prices the compiler's most reliable recommendation at `0.000 µs`, so it usually goes unmeasured.
 
 None of those are placement defects. They are the tooling and the method around a deterministic solver that mostly
-did its job — and they are cheap, which this analysis tested by fixing the tracer side: **218 lines of Python, no
+did its job — and they are cheap, which this analysis tested by fixing the tracer side: **~230 lines of Python, no
 rebuild, and 17 candidates appeared that the corpus had never counted.**
 
 The compiler does have one real defect, and it is not small. Its objective has no latency term, so the specific
@@ -68,12 +68,12 @@ ordering holds on its own incumbent — untested — it has headroom too.
 | phi-3.5 `exp17` | everything overlapped its floor or hard-failed; the advised rope was never tried here | no — screening order (**F5**) |
 | north-mini `nofuse-noadvise` | it screened honestly — on a layer three quarters of which was untraced | **unblocked**: 2 handlers → 11 candidates, **632 µs/model** |
 | north-mini `nofuse-noadvise-onA` | sparse MoE untraceable | **unblocked**: 1 handler → `untraced` 77 % → 14 %, 2 candidates |
-| qwen3.6-27B `nofuse-noadvise` | geometry hard-failed; 63.5 % of its dominant layer untraced | tracer unblocked, the 71-op mixer traces — **a pipeline abort blocks it now**, unattributed |
+| qwen3.6-27B `nofuse-noadvise` | geometry hard-failed; 63.5 % of its dominant layer untraced | **unblocked** — the whole layer captures, 69 ops advised. Gain unquantified: the cell kept no profile (STG-10) |
 | qwen3.6-27B `fuse-noadvise` | its win is inside its own band, as the cell said | probably unblocked by the same handlers — **untested** |
 
-**Three were never blocked; of the four that were, two are unblocked and re-measured, one is expected to be, and
-one moved.** The two north-mini rows are the ones to learn from: both cells reasoned correctly from what they
-could see, and nothing in the stage's own output distinguished that from a real zero.
+**Three were never blocked. All four that were are now unblocked** — two re-measured, one unquantified for want
+of a profile, one untested on its own arm. The two north-mini rows are the ones to learn from: both cells reasoned
+correctly from what they could see, and nothing in the stage's own output distinguished that from a real zero.
 Detail: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). Per-cell narratives:
 [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
 
@@ -118,7 +118,8 @@ bit-identical output. It was never tried.
 **What else holds up.** Its *direction* on the dominant defect class — widen a starved reduction — was right in
 **4 of 4** cells where anyone measured it. It **declares what it cannot place**, naming the op and the exact
 runtime error, an output the stage discards *(§3.28)*. And once the tracer stopped truncating it had considerably
-more to say: eight cell/kinds went from 58–77 % of the window untraced to 4–21 %, surfacing 17 candidates.
+more to say: eight cell/kinds went from 58–77 % of the window untraced to 4–21 %, surfacing 17 candidates — and a ninth,
+qwen's, the biggest of them, now captures at all.
 
 **The real defect is grid choice.** `LayoutScore` has no latency term at any level, and `getOpRuntime` exists in
 `TTNNOpModel.cpp` unconsulted. Measured consequence: across the three ladders that were swept its grid reached
@@ -157,7 +158,7 @@ The optimizer's answers are fine; what reaches or leaves it is not. This is wher
 
 | id | defect | consequence | status |
 |---|---|---|---|
-| TOOL-1 | **The tracer lacked five op handlers** and truncated the capture before the optimizer saw the layer | **Largest single limiter in the corpus** — 8 cell/kinds discarded 58–77 % of their window | **fixed** — [branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps) |
+| TOOL-1 | **The tracer lacked five op handlers** and truncated the capture before the optimizer saw the layer | **Largest single limiter in the corpus** — 9 cell/kinds discarded 58–77 % of their window | **fixed** — [branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps), 2 commits |
 | TOOL-2 | **`report.json` renders a multi-range `CoreRangeSet` as its first range only**, and no shard shape | Understates the optimizer's *own* advice — 58.3 % of counts. `final_ir.mlir` is intact | **C5f** |
 | TOOL-3 | **No legal core-count ladder emitted**, though the set is computable in the pass | Challengers guess, and burn device time on illegal grids | **D4** |
 | TOOL-4 | **`--help` offers `--tracer interception` as the fallback** — it cannot trace any HF-RoPE decoder | Wrong advice at the moment of failure; cannot be fixed by porting, so narrow the claim | doc |
@@ -207,8 +208,10 @@ Bigger, and correctly outside a layout advisor's reach: **`retilize` at 191 ms/m
 time, 14× every shipped win combined — a graph-shape choice in the decoder; and the **sharded GQA SDPA output**
 kernel, which blocks two cells' top candidate and a 2.6 ms/model wrong-op fix. Both tt-metal or decoder work.
 
-Still open on qwen: its tracer gap is closed and the 71-op mixer traces, but a native abort in
-`mlir::PassManager::run` blocks it, unattributed — see [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5.
+Still open on qwen: its layer now captures in full (69 ops advised), but nothing measures the gain, because the
+cell kept no profile of its own. **A fresh profile of that layer is the highest-value single
+measurement left in the corpus** — the kind is 97 % of its model decode time.
+See [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5.
 
 Itemised: [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §8. What to change:
 [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).

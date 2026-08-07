@@ -193,18 +193,39 @@ because the trace **aborted upstream** of them.
 from the softplus decomposition, `slice_static` ×8 from the subscripts, and the mixer's `matmul`, `permute`,
 `sum`, `silu`, `sigmoid` and `rms_norm`. Verified by tracing directly and printing the module.
 
-**The failure that remains is not a coverage gap.** `ttnn-advise capture` now aborts natively inside
-`mlir::PassManager::run` while placing this graph, with no diagnostic. What is established:
+**And the failure after that was mine, not the optimizer's.** `ttnn-advise` aborted inside
+`mlir::PassManager::run` with no MLIR diagnostic — which looks like an optimizer crash. Captured unfiltered, the
+message is:
+
+```
+LLVM ERROR: Backend constraints are not implemented for op ttir.empty
+```
+
+Exactly **two** `ttir.empty` ops survived into the TTNN module, of shapes `1x32x10240x4` and `32x48x128x128` —
+qwen's two state caches, which are the two `ttnn.copy` destinations. My `copy` handler recorded its rebinding in
+`jit_ctx.weight_cache`, and a destination usually already **has** a placeholder there from an earlier read (the
+mixer reads the previous state before writing the new one). Overwriting the entry orphaned that placeholder, so
+`_finalize_signature` — which lifts and erases placeholders by walking `weight_cache` — never saw it.
+
+The fix records the rebinding in `jit_ctx.cache_alias` and has `_weight_value` consult `cache_alias` before
+`weight_cache`, which is what `interception_tracer._weight_value` already did. **With that, the layer captures:
+69 ops advised, `uncapturable: none`**, with no regression on the captures that already worked.
+
+**Capture unblocked; the gain is not quantified.** With the fifth handler in, qwen's whole layer captures — **69 ops advised, `uncapturable: none`**. But the cell never kept its own profile (STG-10), and no committed CSV reproduces its 15,833 µs window, so there is no sound before/after accounting. Reconciling against a different window produces figures that are visibly wrong — an unchanged `boundary` bucket, `untraced` barely moving despite 3.4× the ops, and a "resolvable" total larger than the model — which is the positional-pairing hazard (STG-7) doing exactly what it is documented to do. **The reachable value here needs a fresh profile, not more analysis.**
+
+What had been established before the fix, and is worth keeping as method:
 
 - each new handler passes a one-op trace in isolation (§6), so none of them emits invalid IR on its own;
 - the traced module verifies and parses — `ttmlir-opt --ttnn-to-ttnn-l1-advisor` accepts it and exits 0;
-- the crash is inside the pass pipeline, in-process, where the op-model constraint queries run.
+- the crash was inside the pass pipeline, in-process.
 
-**That is where the evidence stops.** The stack carries only `OpToOpPassAdaptor` frames, so attributing it to a
-specific pass needs a debug build. It is *not* established that this is an optimizer defect — a tracer that emits
-verifiable-but-unusual IR (a 6-D tensor, a 1536-wide batch, the three-op softplus) could equally be provoking it.
-The one thing that is now certain is that **`ttnn-jit` coverage is no longer what blocks qwen**, so the ≈62 %
-figure should be read as "reachable, pending one pipeline crash" rather than "unreachable".
+All true, and none of it located the bug. What did was **removing the log filter**: the abort message had been in
+the output all along, buried under 83,000 lines of routine `TT_FATAL` constraint-query rejections, and I was
+grepping for `Traceback` and `error:` — which an `LLVM ERROR` line matches neither of. **The cheapest diagnostic
+step was the one I skipped: read the tail of the log unfiltered.**
+
+It does matter that I wrote *"not established that this is an optimizer defect"* rather than blaming the optimizer.
+That was the right call: it was a five-line bug in code I had added an hour earlier.
 
 ---
 

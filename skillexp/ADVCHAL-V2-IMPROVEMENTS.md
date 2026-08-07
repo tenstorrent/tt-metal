@@ -683,7 +683,9 @@ cheap, fixed. Also [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The po
 **Done and traced:** `ttnn.copy` (identity alias — no dialect op exists or is needed), `ttnn.softplus`
 (decomposed to `log(exp(x)+1)`; the dialect has no standalone op, only a `UnaryOpType` enum case for matmul fused
 activations), **`TracedTensor.__getitem__`** (not an op at all — `mixed[..., :n]` killed qwen's trace with
-`'TracedTensor' object is not subscriptable`), and `ttnn.repeat_interleave`.
+`'TracedTensor' object is not subscriptable`), and `ttnn.repeat_interleave`. **qwen's whole layer now captures —
+69 ops advised** — which took one further fix: the `copy` handler must record its rebinding in `cache_alias`, not
+`weight_cache`, or it orphans the destination's placeholder and a surviving `ttir.empty` aborts the pipeline.
 
 **Also done since:** `paged_fused_update_cache` → two `ttnn.paged_update_cache` ops (verified in the IR; the fused
 signature is literally `(cache1, in1, cache2, in2, …)`), `ones_like` → `ttnn.ones` at the input shape, and
