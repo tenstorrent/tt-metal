@@ -52,6 +52,7 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from test_eltwise_unary_sfpu_quasar import (
     SFPU_UNARY_FORMATS,
+    prepare_inputs_for_operation,
 )
 
 # (exp_dims, input_A_dims, input_B_dims)
@@ -140,10 +141,6 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         output_format=formats.output_format,
     )
 
-    # DEBUG: varied input in [0, 1] -> expected output in [1, e]. Discriminates the fp16a
-    # failure mode: structured garbage = SFPU load misdecodes SrcS rows (data flows);
-    # still exact zeros = the folded macro store never lands / pack reads an unwritten slice.
-    # Skips prepare_inputs_for_operation, which would rescale to [-10, 10].
     exp_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_exp, tile_cnt_exp, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -153,6 +150,10 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         spec_A=exp_spec,
         spec_B=exp_spec,
         output_format=formats.output_format,
+    )
+
+    src_exp = prepare_inputs_for_operation(
+        src_exp, MathOperation.Exp, formats.input_format, formats.output_format
     )
 
     tilized_A = tilize_block(
