@@ -28,11 +28,17 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `prefill_f32_act.py` | does fp32 prefill (typecast at the cache boundary) help past frame 0? | **no** — gain is gone by step 1; also shows decode is O(1) in position (§6.56) |
 | `fp32_cache_handrolled.py` | can an fp32 KV cache be had by hand-rolling around `sdpa_decode`? | **no** — 44.7× slower; the op-count model fails on ops that materialise tensors (§6.57) |
 | `bf16_decode.py` | what do bf16 weights through decode cost and buy? | **+29% for nothing** — worst-sample error is non-monotonic (§6.57) |
+| `run_mos.py` / `mos_percase.py` | automated MOS (DistillMOS) — is the device perceptually worse than fp32? | **no** — delta −0.017/−0.027; long-form mean **4.63** (§6.59). Needs `/tmp/mosvenv`, see `mos_setup.sh` |
+| `perceptual.py` | MCD / F0 / codec transparency vs the fp32 reference | codec SNR 42.9 dB, LSD 0.62 dB; **MCD failed its self-test and is not reported** (§6.59) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 
 **Read `mm_block_ab.py` before trusting any isolated sweep.** It is the counterexample: `w2` and
 `wo` posted 2.4× isolated wins and delivered exactly 0.00 ms in the block, while `w1` posted 1.03×
 and delivered 2.42 ms. A tight loop of identical ops pipelines; a real block does not.
+
+**`run_mos.py` must run from `/tmp/mosvenv`, never the main venv** — DistillMOS pulls `torchaudio`,
+which STATUS §2 records as breaking `transformers` and taking `score_quality_set.py` with it.
+`mos_setup.sh` builds that venv; the main one was verified `torchaudio`-free afterwards.
 
 `trace_probe.py` opens the device with `trace_region_size`, which shifts the allocator enough to
 move a free-running trajectory (`95dc26363f`). It therefore only ever **times**; it never
