@@ -86,6 +86,7 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -150,6 +151,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_PRODUCER_P_GAP", workload.get("p_gap"))
     sd("PREFILL_PRODUCER_P_BURST", workload.get("p_burst"))
     sd("PREFILL_PRODUCER_MID_END_PROB", workload.get("mid_end_prob"))
+    sd("PREFILL_PRODUCER_MULTI_TURN_PROB", workload.get("multi_turn_prob"))
     sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
     sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
     sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
@@ -473,6 +475,9 @@ class ProducerConfig:
     interleave: str = "random"  # slot order: "random" | "round_robin" (fair alternation)
     slot_lengths: dict = None  # per-slot real token count (from per-slot prompts); overrides the random
     # chunk draw + mid_chunk_end when set (each slot pushes exactly its prompt). None => synthetic depth.
+    multi_turn_prob: float = 0.0  # probability a recycled slot CONTINUES its conversation (a new turn
+    # resuming at the 32-aligned prefix already cached) instead of starting a fresh one at position 0.
+    # 0.0 => every recycle is a fresh request, i.e. exactly the pre-multi-turn behaviour.
 
 
 def _config_from_env() -> ProducerConfig:
@@ -501,12 +506,18 @@ def _config_from_env() -> ProducerConfig:
         verify=os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1",
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
+        multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
     )
 
 
 class _Slot:
     """One cache-user slot holding one in-flight request. `next_chunk` advances per push; `actual_isl`
-    is the request's real (non-pad) token count, so the last chunk reports a clamped actual_end."""
+    is the conversation's real (non-pad) token count, so the last chunk reports a clamped actual_end.
+
+    `prefix_len` is the 32-aligned absolute cache offset this TURN resumes writing at: 0 for a fresh
+    conversation, and the aligned-down length of the previous turn when the slot continues one. Every
+    length here is ABSOLUTE (measured from cache position 0), never relative to the turn -- actual_end
+    is a cache position, so making it turn-relative would silently mis-address every consumer."""
 
     def __init__(self, slot_id: int):
         self.slot_id = slot_id
@@ -514,28 +525,63 @@ class _Slot:
         self.target_chunks = 0
         self.next_chunk = 0
         self.actual_isl = 0
+        self.prefix_len = 0  # absolute, 32-aligned; where this turn starts writing
+        self.turn_idx = 0  # 0 = first turn of the conversation resident in this slot
 
     @property
     def done(self) -> bool:
         return self.next_chunk >= self.target_chunks
 
 
-def _new_request(slot: _Slot, req_id: int, cfg: ProducerConfig, rng: random.Random) -> None:
-    """(Re)assign a fresh request to `slot`, starting at chunk 0.
+class _Resident(NamedTuple):
+    """What is physically resident in one slot's KV cache at push time.
+
+    `real_len` is recorded rather than re-derived: it is exactly the last `actual_end` pushed, so it can
+    never disagree with what the runner actually wrote. (Consumers used to recompute
+    ``min(chunks_pushed * CHUNK_SIZE, actual_isl)`` in three places, which silently drops `prefix_len`.)"""
+
+    chunks_pushed: int  # chunks pushed for the resident TURN, not the whole conversation
+    actual_isl: int  # the conversation's absolute non-pad token count
+    real_len: int  # absolute non-pad end: the slot holds real KV over [0, real_len)
+    prefix_len: int = 0  # absolute 32-aligned offset this turn resumed at (0 = fresh conversation)
+    turn_idx: int = 0
+
+
+def _new_request(
+    slot: _Slot, req_id: int, cfg: ProducerConfig, rng: random.Random, *, prefix_len: int = 0, turn_idx: int = 0
+) -> None:
+    """(Re)assign a request to `slot`, starting at chunk 0 of a turn that writes from `prefix_len`.
 
     Per-slot-prompt mode (cfg.slot_lengths set): the slot pushes exactly its assigned prompt — depth is
     ceil(real_len / CHUNK_SIZE) and actual_isl is the prompt's real token count, so validation covers
     [0, real_len). The random chunk draw + mid_chunk_end are bypassed (interleave/gaps/bursts still apply).
-    Otherwise (shared-trace mode): a random chunk count, optionally ending mid-chunk."""
+    Otherwise (shared-trace mode): a random chunk count, optionally ending mid-chunk.
+
+    A resumed turn (`prefix_len > 0`) may only add what still fits under the per-user cache, so the depth
+    draw is clamped to the remaining capacity. At prefix_len == 0 that clamp is the bound
+    `_config_from_env` already applied to chunks_max, so the rng draw sequence is unchanged."""
     slot.req_id = req_id
     slot.next_chunk = 0
+    slot.prefix_len = prefix_len
+    slot.turn_idx = turn_idx
     if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
         real_len = cfg.slot_lengths[slot.slot_id]
+        # `real_len` is this slot's prompt length, i.e. a length RELATIVE to the turn, while actual_isl is
+        # absolute -- so a resumed turn ends at prefix_len + real_len, not real_len. (Getting this wrong
+        # makes the second chunk of a resumed turn report actual_end < actual_start.) If the prompt no
+        # longer fits the per-user cache, restart the conversation, matching the shared-trace fallback
+        # applied at the recycle site -- which can only bound ONE chunk, not a whole fixed prompt.
+        if prefix_len + real_len > MAX_SEQ_LEN:
+            prefix_len = slot.prefix_len = 0
+            slot.turn_idx = 0
         slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
-        slot.actual_isl = real_len
+        slot.actual_isl = prefix_len + real_len
         return
-    slot.target_chunks = rng.randint(cfg.chunks_min, cfg.chunks_max)
-    full_tokens = slot.target_chunks * CHUNK_SIZE
+    remaining_chunks = (MAX_SEQ_LEN - prefix_len) // CHUNK_SIZE
+    chunks_max = min(cfg.chunks_max, remaining_chunks)
+    chunks_min = min(cfg.chunks_min, chunks_max)
+    slot.target_chunks = rng.randint(chunks_min, chunks_max)
+    full_tokens = prefix_len + slot.target_chunks * CHUNK_SIZE
     if cfg.mid_chunk_end_prob > 0 and rng.random() < cfg.mid_chunk_end_prob and slot.target_chunks >= 1:
         slot.actual_isl = full_tokens - rng.randint(1, CHUNK_SIZE - 1)
     else:
@@ -544,7 +590,7 @@ def _new_request(slot: _Slot, req_id: int, cfg: ProducerConfig, rng: random.Rand
 
 @dataclass
 class RunStats:
-    resident: dict  # slot_id -> (chunks_pushed_for_resident_request, actual_isl)
+    resident: dict  # slot_id -> _Resident (what is physically in that slot's KV cache)
     total_pushes: int
     push_ms: list
     completed: int
@@ -556,9 +602,13 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end) -> elapsed_ms` performs and
     times the actual push, and now_fn/sleep_fn/rng are injectable so tests run instantly and
-    deterministically. Records, per slot, the resident request as (chunks_pushed, actual_isl) at push
-    time — i.e. what is physically in that slot's KV cache (a recycled slot overwrites from chunk 0),
-    which the caller PCC-checks. Returns RunStats.
+    deterministically. Records, per slot, the resident request as a `_Resident` at push time — i.e. what
+    is physically in that slot's KV cache, which the caller PCC-checks. Returns RunStats.
+
+    A recycled slot overwrites from chunk 0 UNLESS `cfg.multi_turn_prob` selects a continued
+    conversation, in which case the next turn resumes at the previous turn's aligned-down length and
+    only the rows from there on are rewritten. Either way `_Resident.real_len` is the slot's absolute
+    non-pad extent, so consumers never need to know which case applied.
     """
     rng = rng if rng is not None else random.Random(cfg.seed)
     slots = [_Slot(i) for i in range(cfg.num_users)]
@@ -579,16 +629,38 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     def send_chunk(slot: _Slot) -> None:
         nonlocal total_pushes, completed, next_req_id
         chunk_idx = slot.next_chunk
-        actual_start = chunk_idx * CHUNK_SIZE
+        actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
         actual_end = min(actual_start + CHUNK_SIZE, slot.actual_isl)
         push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end))
         total_pushes += 1
         slot.next_chunk += 1
-        resident[slot.slot_id] = (chunk_idx + 1, slot.actual_isl)  # what's now resident in this slot
+        resident[slot.slot_id] = _Resident(  # what's now resident in this slot
+            chunks_pushed=chunk_idx + 1,
+            actual_isl=slot.actual_isl,
+            real_len=actual_end,
+            prefix_len=slot.prefix_len,
+            turn_idx=slot.turn_idx,
+        )
         if slot.done:
             completed += 1
-            if next_req_id < cfg.max_requests:  # recycle the slot as a fresh request
-                _new_request(slot, next_req_id, cfg, rng)
+            if next_req_id < cfg.max_requests:  # recycle the slot
+                # Multi-turn: keep the conversation and resume at the aligned prefix already cached.
+                # A sub-tile resume offset is rejected outright (update_padded_kv_cache asserts
+                # kv_actual_global % 32 == 0), so round to the same _KV_CHUNK_TOKENS granularity the
+                # migration reads use. Aligning DOWN means the <=31 sub-tile tail tokens are replayed by
+                # this turn's first chunk (PCC-idempotent -- the rope table is keyed on absolute
+                # position); aligning up would leave a permanent unwritten hole mid-sequence. Guarded by
+                # `multi_turn_prob > 0` so the default path draws no extra rng value and the schedule
+                # stays bit-identical.
+                prefix = (slot.actual_isl // _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
+                if (
+                    cfg.multi_turn_prob > 0
+                    and prefix + CHUNK_SIZE <= MAX_SEQ_LEN
+                    and rng.random() < cfg.multi_turn_prob
+                ):
+                    _new_request(slot, next_req_id, cfg, rng, prefix_len=prefix, turn_idx=slot.turn_idx + 1)
+                else:
+                    _new_request(slot, next_req_id, cfg, rng)
                 next_req_id += 1
 
     while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
@@ -966,8 +1038,8 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
     min_pcc_overall = 1.0
     checked = 0
     failures = []
-    for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
-        real_len = min(chunks_pushed * CHUNK_SIZE, actual_isl)
+    for slot_id, res in sorted(stats.resident.items()):
+        real_len = res.real_len
         if real_len <= 0:
             continue
         pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
@@ -1031,7 +1103,11 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
-        return slot_traces, None, {trace: _load_token_pool(trace, cfg.chunks_max * CHUNK_SIZE)}
+        # A resumed turn slices the pool from its prefix onward, so multi-turn needs a pool covering the
+        # whole per-user cache, not just one request's depth (push_chunk's payload-size assert would
+        # otherwise fire on the first short slice).
+        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
     resolved = [resolve_trace_dir(e) for e in entries]
