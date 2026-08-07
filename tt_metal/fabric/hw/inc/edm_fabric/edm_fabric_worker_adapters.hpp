@@ -66,13 +66,31 @@ namespace fabric_detail{
  * permanently 4 slots behind the router and the channel silently transmitted stale slots with
  * credits still balanced. Storing the index removes the constraint for every depth.
  *
- * WHY 24 BITS IS ENOUGH FOR THE COUNTER
- * -------------------------------------
- * The counter's only consumer is `used_slots = write_counter - edm_read_counter` in
- * get_num_free_write_slots(), and the true value of that difference never exceeds num_buffers
- * (<= 255). The reconnecting producer rebuilds a full-width counter from the router's read counter
- * (see open_finish), so 24 bits of the producer's counter is ample and the hot path keeps its plain
- * wrap-safe uint32 subtraction.
+ * WHY TRUNCATING THE COUNTER TO 24 BITS IS LOSSLESS
+ * -------------------------------------------------
+ * 24 bits cannot hold the write counter -- it is monotonic for the life of the fabric and is exactly
+ * the thing that runs past 2^24 and 2^32. But this word does not have to carry P; it only has to
+ * carry enough of P to disambiguate it, because the reader already holds a full-width anchor.
+ *
+ * At open the producer has R (the router's read counter, exact, 32-bit) and counter_field = P mod
+ * 2^24, and it knows 0 <= P - R <= num_buffers. Then
+ *     (counter_field - R) mod 2^24 == (P - R) mod 2^24   [counter_field == P mod 2^24, so the
+ *                                                         congruence survives subtracting R]
+ *                                  == P - R              [0 <= P - R <= 255 < 2^24, so the
+ *                                                         reduction is a no-op -- the ONLY step
+ *                                                         that needs the occupancy bound]
+ * and P = R + that. See open_finish. Truncating to W bits aliases P with P +/- k*2^W; that is
+ * resolvable against an exact R iff every possible P - R is below 2^W. The largest is 255, so the
+ * minimum workable W is 8 -- 24 is simply what is left after the 8-bit slot index.
+ *
+ * The 0 <= P - R <= num_buffers bound is the ring occupancy, enforced by the producer's own
+ * admission control: wait_for_empty_write_slot() spins until used_slots < num_buffers and exactly one
+ * cursor advance follows each admitted packet. Exceeding it would mean overwriting a slot the router
+ * has not drained, so this is a pre-existing invariant, not a new requirement.
+ *
+ * The producer's live counter stays full width while connected and may cross 2^24 freely; only this
+ * snapshot is truncated, and it is re-anchored to R on the next open. The per-packet path is
+ * unaffected -- get_num_free_write_slots() keeps its plain wrap-safe uint32 subtraction, no mask.
  */
 namespace connection_handoff {
 constexpr uint32_t COUNTER_BITS = 24;
