@@ -16,7 +16,6 @@ and drains the device profiler periodically. No PCC / correctness assertions.
 
 from __future__ import annotations
 
-import importlib.util as ilu
 import os
 import time
 
@@ -24,6 +23,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
@@ -43,14 +43,7 @@ if _PERF_TRACE:
 
 
 def _load_reference():
-    # demo loads _reference_loader.py from demo/../tests/pcc/_reference_loader.py;
-    # this test lives in tests/e2e/, so the loader is at ../pcc/_reference_loader.py
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)

@@ -20,13 +20,13 @@ threshold. Run: pytest models/demos/xtts_v2/tests/e2e/test_accuracy_decompositio
 
 from __future__ import annotations
 
-import importlib.util as ilu
 import os
 
 import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
@@ -34,12 +34,7 @@ _N = int(os.environ.get("XTTS_E2E_N", "40"))
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 def _pcc(a, b):

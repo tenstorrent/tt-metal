@@ -17,27 +17,21 @@ invariant to trace/2CQ; the win is host-dispatch overlap)."""
 
 from __future__ import annotations
 
-import importlib.util as ilu
-import os
 import time
 
 import torch
 
 import ttnn
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
-N = 50          # timed replays per stage
+N = 50  # timed replays per stage
 WARMUP = 5
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 def _time_ms(fn, n, sync):
@@ -53,9 +47,7 @@ def _time_ms(fn, n, sync):
 
 def test_trace_2cq_timing():
     torch.manual_seed(0)
-    device = ttnn.open_device(
-        device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2
-    )
+    device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2)
 
     def sync():
         ttnn.synchronize_device(device)
@@ -76,9 +68,7 @@ def test_trace_2cq_timing():
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             out = pipe._trace_step(st)
             ttnn.end_trace_capture(device, tid, cq_id=0)
-            trace_ms = _time_ms(
-                lambda: ttnn.execute_trace(device, tid, cq_id=0, blocking=True), N, sync
-            )
+            trace_ms = _time_ms(lambda: ttnn.execute_trace(device, tid, cq_id=0, blocking=True), N, sync)
 
             # (3) 2CQ: overlap the input copy on cq1 with trace replay on cq0
             def _step_2cq():
@@ -99,11 +89,15 @@ def test_trace_2cq_timing():
         trace_tot = sum(r[2] for r in rows)
         trace2cq_tot = sum(r[3] for r in rows)
         print("=" * 78)
-        print(f"[timing] FULL PIPELINE STEP  eager={eager_tot:.3f} ms  "
-              f"trace={trace_tot:.3f} ms  trace+2cq={trace2cq_tot:.3f} ms")
+        print(
+            f"[timing] FULL PIPELINE STEP  eager={eager_tot:.3f} ms  "
+            f"trace={trace_tot:.3f} ms  trace+2cq={trace2cq_tot:.3f} ms"
+        )
         if trace2cq_tot > 0:
-            print(f"[timing] trace+2cq speedup vs eager = {eager_tot/trace2cq_tot:.2f}x  "
-                  f"({(eager_tot-trace2cq_tot)/eager_tot*100:+.1f}%)")
+            print(
+                f"[timing] trace+2cq speedup vs eager = {eager_tot/trace2cq_tot:.2f}x  "
+                f"({(eager_tot-trace2cq_tot)/eager_tot*100:+.1f}%)"
+            )
         # a real number must have been produced for every stage
         assert all(r[2] > 0 for r in rows)
     finally:

@@ -1480,15 +1480,9 @@ _LN_EPS = 1e-5
 
 
 def _load_reference_model():
-    import importlib.util as _ilu
-    import os as _os
+    from models.demos.xtts_v2 import reference
 
-    here = _os.path.dirname(_os.path.abspath(__file__))
-    rl = _os.path.normpath(_os.path.join(here, "..", "tests", "pcc", "_reference_loader.py"))
-    spec = _ilu.spec_from_file_location("_reference_loader", rl)
-    mod = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model("coqui/XTTS-v2")
+    return reference.load_reference_model("coqui/XTTS-v2")
 
 
 def trace_capture_selftest(device=None):

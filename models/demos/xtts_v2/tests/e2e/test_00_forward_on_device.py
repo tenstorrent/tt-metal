@@ -22,13 +22,13 @@ host-free forward (the reference/PCC test necessarily copies back for comparison
 
 from __future__ import annotations
 
-import importlib.util as ilu
 import os
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
@@ -37,12 +37,7 @@ _N = int(os.environ.get("XTTS_FWD_N", os.environ.get("TT_PERF_MAX_NEW_TOKENS", "
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -59,8 +54,13 @@ def test_forward_on_device(device):
 
     # residency: every pipeline output lives ON DEVICE (checked via metadata only —
     # NO ttnn.to_torch / from_device, so the forward's op stream stays host-free).
-    for name, t in [("waveform", wav), ("codes", codes), ("latents", lat),
-                    ("g", fo["g"]), ("cond_lat", fo["cond_lat"])]:
+    for name, t in [
+        ("waveform", wav),
+        ("codes", codes),
+        ("latents", lat),
+        ("g", fo["g"]),
+        ("cond_lat", fo["cond_lat"]),
+    ]:
         assert isinstance(t, ttnn.Tensor), f"{name} is not a ttnn.Tensor"
         assert t.storage_type() == ttnn.StorageType.DEVICE, f"{name} is not resident on device"
 
@@ -72,8 +72,9 @@ def test_forward_on_device(device):
     assert len(wav.shape) == 3 and int(wav.shape[0]) == 1, f"waveform shape {list(wav.shape)}"
     assert int(wav.shape[1]) > _N, "waveform time axis is degenerate"
 
-    print(f"on-device forward OK: N={_N} codes{list(codes.shape)} "
-          f"latents{list(lat.shape)} waveform{list(wav.shape)}")
+    print(
+        f"on-device forward OK: N={_N} codes{list(codes.shape)} " f"latents{list(lat.shape)} waveform{list(wav.shape)}"
+    )
 
 
 if __name__ == "__main__":

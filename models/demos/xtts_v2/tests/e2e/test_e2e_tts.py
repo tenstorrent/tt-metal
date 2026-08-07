@@ -13,13 +13,13 @@ Runs the SAME `tt/pipeline.py::run_tts` the demo uses.
 
 from __future__ import annotations
 
-import importlib.util as ilu
 import os
 
 import pytest
 import torch
 
 # instrument BEFORE importing the pipeline/composites so child forwards are tracked
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
@@ -28,12 +28,7 @@ _ALL_29 = set(P._STUB_ORDER)
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

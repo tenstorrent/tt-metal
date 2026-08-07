@@ -17,14 +17,13 @@ Run:
 from __future__ import annotations
 
 import argparse
-import importlib.util as ilu
-import os
 import struct
 import wave
 
 import torch
 
 import ttnn
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
@@ -32,12 +31,7 @@ OUTPUT_SR = 24000
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "tests", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 def _write_wav(path, wav, sr):

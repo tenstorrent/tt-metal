@@ -14,38 +14,29 @@ unavoidable host ops are degraded to single-CQ eager with a printed fallback.
 
 from __future__ import annotations
 
-import importlib.util as ilu
-import os
-
 import torch
 
 import ttnn
+from models.demos.xtts_v2 import reference
 from models.demos.xtts_v2.tt import pipeline as P
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
 
 def _load_reference():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rl = os.path.normpath(os.path.join(here, "..", "pcc", "_reference_loader.py"))
-    spec = ilu.spec_from_file_location("_reference_loader", rl)
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.load_reference_model(HF_MODEL_ID)
+    return reference.load_reference_model(HF_MODEL_ID)
 
 
 def test_trace_2cq_selftest():
     torch.manual_seed(0)
-    device = ttnn.open_device(
-        device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2
-    )
+    device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000, num_command_queues=2)
     try:
         model = _load_reference()
         pipe = P.Pipeline(device, model, capacity=64)
         print(f"PIPELINE_STAGES={pipe.PIPELINE_STAGES}")
         # exercise the 2CQ write path on a host-free stage
         pipe.gpt_decode_trace_setup()
-        pipe.gpt_decode_write_inputs()      # stages next input on command-queue 1
+        pipe.gpt_decode_write_inputs()  # stages next input on command-queue 1
         ok = pipe.trace_capture_selftest(device)
         print(f"trace_capture_selftest host-free-all={ok}")
         # gate: the compute-dominant transformer stages must trace host-free + match

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """Reference-model loader for ``coqui/XTTS-v2``.
 
 ``coqui/XTTS-v2`` is **not** a transformers checkpoint: its ``config.json`` has no
