@@ -1807,3 +1807,166 @@ done=0x0 (still resident) | heartbeat 682,627,025 -> 690,790,353 (advancing) | p
 
 Sweeping and reading normally. But the run still burns the full 150 s harness timeout somewhere after the
 writer gives up, so the read-only arm is STILL not measurable for hang statistics. Teardown needs tracing next.
+
+## §N+14 — CAUGHT LIVE: the "PCIe hang" is an ENDPOINT wedge, not a link failure (bh-05, 2026-08-07)
+
+First time the hang was captured with the process still alive and attachable. Prior runs always killed the
+harness at 150 s, which destroyed the evidence. This run used a 600 s per-run timeout.
+
+**How it was caught.** 84-run monitored churn (12 cycles x repeat {1,2,4,6,8,12,16}, DRISC + fast dispatch,
+`--gx 0 --gy 0 --iters 500 --delay 500`, NO_DECODE=1) ran **completely clean** — 0 hangs. The hang then fired
+on the very next invocation, an ordinary health probe with no SHIP_REPEAT (i.e. cumulative run 85). Run 84's
+log shows a clean device close. So the hang is not correlated with the ladder; it is a rare stochastic event.
+
+### The decisive observation: the LINK IS UP
+
+| what | value at hang |
+|---|---|
+| root port `0000:00:01.1` `current_link_speed` / `width` | **32.0 GT/s / 16** — full speed, full width |
+| endpoint `0000:01:00.0` config space, first 64 B | **all `ff`** |
+| endpoint `current_link_speed` / `max_link_speed` | `Unknown` / `64.0 GT/s` (all-ones decode) |
+| endpoint `max_link_width` | `63` (all-ones decode) |
+| endpoint + root port AER (fatal/nonfatal/correctable) | **all zero** |
+| `dmesg` | **nothing after boot** — no link-down, no AER, no timeout |
+
+The endpoint's *static capability* fields (`max_link_speed`, `max_link_width`) read correctly before the run
+and read as all-ones after. Those fields cannot change. So this is not a downtrained or retraining link —
+**config-space reads themselves are not being completed.** Meanwhile the root port immediately upstream is
+still linked at full 32 GT/s x16 and logs no error.
+
+Conclusion: the PCIe *link layer* is healthy. The *endpoint* has stopped responding to TLPs — config and
+MMIO alike. Reads master-abort and the CPU gets all-ones back. Because nothing ever drops the link, nothing
+in the PCIe stack resets the device, and the kernel has no event to report. **That is exactly why `tt-smi -r`
+and warm reboots do not clear this state and only a cold power cycle does** — the wedge is in device logic
+that sits behind a link that never went down.
+
+Caveat, stated because it looks like a smoking gun and is not: the root port's Secondary Status register
+(offset 0x1e) reads `0x2000` = Received Master Abort. RMA is sticky and is routinely set during ordinary
+boot-time bus enumeration (scanning absent devices on bus 01 master-aborts). Without a pre-hang baseline it
+is **not** evidence. Do not cite it.
+
+### Where the host is stuck (gdb, all threads)
+
+Two threads matter; the other 16 are taskflow workers parked in `commit_wait`, Tracy, and PMIx.
+
+```
+Thread 19 (LWP 6456)  state=R  -- SPINNING, not blocked
+  MetalContext::get_cluster()
+  read_cq_host_ptr<true>(SystemMemoryManager const&, int, unsigned char, ...)
+  SystemMemoryManager::completion_queue_wait_front(unsigned char, std::atomic<bool>&) const
+  FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor&)
+  FDMeshCommandQueue::read_completion_queue()
+
+Thread 1 (LWP 6416)   state=S  wchan=futex_wait_queue_me
+  main()
+  FDMeshCommandQueue::finish(...)
+  FDMeshCommandQueue::finish_nolock(...)
+  FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>&)
+  pthread_cond_wait()
+```
+
+The completion-queue reader is **spinning** (state R) in `completion_queue_wait_front`, polling for a
+dispatch completion that will never arrive because the device no longer answers. Main is parked on the
+condvar waiting for that reader. There is no software deadlock and no lock-ordering bug — this is a
+liveness failure imposed from below by dead hardware. The infinite spin with no timeout is why the
+symptom presents as a wall-clock hang rather than an error.
+
+### What this rules in and out
+
+- **Ruled out:** PCIe link training / retrain / downtrain as the mechanism. The link is up.
+- **Ruled out:** a host-side deadlock in the dispatch stack. Both threads are exactly where they should
+  be if the device stopped answering.
+- **Ruled out:** the kernel silently recovering something. It never saw an event at all.
+- **Ruled in:** the DRISC's egress traffic wedges the PCIe *tile / endpoint application layer* on the
+  device. This is consistent with §N+11 (only DRISC+fast dispatch hangs) and with the fact that DRISC
+  and Tensix drainers write to the same PCIe destination — what differs is who is driving it.
+
+### Consequence for the metric
+
+`is_pcie_hung` and "link Unknown/63" were being read as *link* failure in every earlier note. They are
+an artifact of all-ones config reads from an endpoint that stopped completing. Any future note must say
+**endpoint not completing TLPs**, and must check the ROOT PORT's link state to distinguish the two.
+
+### Rate
+
+Hangs so far: cumulative runs 4, 16, 16, 31, and 85. 84 consecutive clean runs immediately preceding the
+85th. Treat the per-run probability as low single-digit percent with wide error bars; do not quote "1 in 21".
+
+## §N+15 — WHY the CQ gets stuck in `finish`: the host spins on a pointer only the dead device can move
+
+Read the code behind the §N+14 backtrace. The hang is fully explained, and it is not a bug in the dispatch
+logic — it is an unbounded wait with no timeout enabled by default.
+
+### The wait
+
+`FDMeshCommandQueue::finish` -> `wait_for_outstanding_reads` blocks on a condvar until the completion-queue
+reader thread drains the outstanding read. That reader sits in
+`SystemMemoryManager::completion_queue_wait_front` (`system_memory_manager.cpp:749`), whose predicate is:
+
+```cpp
+wait_condition = [&]{ return cq_interface.completion_fifo_rd_ptr == write_ptr and
+                             cq_interface.completion_fifo_rd_toggle == write_toggle; };
+```
+
+i.e. **"spin while the completion queue is empty."** It exits when the device's completion *write* pointer
+advances past the host's read pointer.
+
+### Where that write pointer lives — the crux
+
+`write_ptr` comes from `get_cq_completion_wr_ptr` -> `read_cq_host_ptr<true>` (`command_queue_common.cpp:35`).
+The template parameter is documented at line 32:
+
+> *Device-written pointers live at an offset within the hugepage that includes the device channel offset,
+> while host-written pointers do not*
+
+So `<true>` = a **device-written** pointer, and it is fetched with `read_sysmem(...)` — **a read of HOST
+memory**, not device MMIO. The device pushes that pointer into the hugepage over PCIe as it completes work.
+
+That is the whole hang in one sentence: **when the endpoint stops completing TLPs it can no longer write the
+completion pointer into host DRAM, so the host polls a stale host-memory location forever.**
+
+Two consequences that matched the observations exactly:
+
+- **The spinning thread never touches the dead device.** It is a memcpy from host DRAM in a tight loop. That
+  is why it showed as state R (running hot, not blocked in MMIO), why it generates no bus traffic, and why
+  the kernel logged nothing at all. The hang is *silent by construction* — we were looking for host-side
+  evidence of a device access that never happens.
+- The `advance_device_execution` call in the loop body is a TTSim no-op on real hardware.
+
+### Why no timeout fired
+
+`completion_queue_wait_front` does wrap the wait in `loop_and_wait_with_timeout`, but:
+
+```cpp
+if (timeout_duration.count() > 0.0f) { ...timeout path... }
+else { do { ...; func_body(); } while (wait_condition()); }   // unbounded, no yield
+```
+
+and the default is **zero**: `rtoptions.hpp:340` — `timeout_duration_for_operations = duration<float>(0.0f)`.
+So the timeout is **disabled unless you ask for it**, and the `else` branch is a bare infinite spin. Nothing
+about our configuration turned it off; that is stock behaviour.
+
+### The knob we should have been using all along
+
+```
+TT_METAL_OPERATION_TIMEOUT_SECONDS=45          # arms the timeout (default 0.0 = never)
+TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=<script>   # run at hang time
+```
+
+On timeout, `on_timeout` sets `exit_condition`, calls `MetalContext::on_dispatch_timeout_detected()` and
+throws `TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable")`.
+`on_dispatch_timeout_detected` (`metal_context.cpp:781`) logs, optionally serializes Inspector RPC data, and
+**`std::system()`s an arbitrary command** — the hook exists precisely to run `tt-triage`. This is the
+built-in version of the 600 s babysitting harness from §N+14, and it fires in seconds instead of minutes.
+
+Note the timeout is progress-gated: it only fires if the wait condition holds AND `get_cq_dispatch_progress`
+(an L1 read from the dispatcher core, i.e. a real device read) is unchanged. On a dead endpoint that read
+returns all-ones constantly, so it correctly reads as "no progress". There is one spurious reset the first
+time progress is sampled, because `last_progress_value` is initialized to 0 and the first all-ones read
+differs from it — costs one `dispatch_progress_update_ms` interval, nothing more.
+
+### What this does and does not tell us
+
+It explains the *symptom* completely and kills any theory of a host-side dispatch deadlock. It says nothing
+about *why the endpoint dies* — that is still the open question, and the reason for the num_hw_cqs experiment
+in §N+16.
