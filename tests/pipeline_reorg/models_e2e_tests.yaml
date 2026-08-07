@@ -408,6 +408,9 @@
 - name: Gemma-2-2B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
+    # Weights are not yet mirrored into /mnt/MLPerf/huggingface/hub; allow the
+    # first run to fetch and populate the shared cache.
+    export HF_HUB_OFFLINE=0
     pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-2b
   model_family: Gemma
@@ -424,6 +427,9 @@
 - name: Gemma-2-9B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
+    # Weights are not yet mirrored into /mnt/MLPerf/huggingface/hub; allow the
+    # first run to fetch and populate the shared cache.
+    export HF_HUB_OFFLINE=0
     pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-9b
   model_family: Gemma

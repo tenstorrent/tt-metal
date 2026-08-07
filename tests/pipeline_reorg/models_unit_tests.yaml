@@ -282,6 +282,9 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
+    # Weights are not yet mirrored into /mnt/MLPerf/huggingface/hub; allow the
+    # first run to fetch and populate the shared cache.
+    export HF_HUB_OFFLINE=0
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: gemma-2-2b
@@ -300,6 +303,9 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
+    # Weights are not yet mirrored into /mnt/MLPerf/huggingface/hub; allow the
+    # first run to fetch and populate the shared cache.
+    export HF_HUB_OFFLINE=0
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: gemma-2-9b
