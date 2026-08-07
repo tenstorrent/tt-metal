@@ -1,0 +1,88 @@
+name: "[repro] git fetch mechanism proof for #52290"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compare-fetch-mechanisms:
+    name: Compare current vs proposed fetch mechanism
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    steps:
+      - name: Current mechanism — remote add -f (fetches every ref)
+        run: |
+          set -x
+          mkdir -p /tmp/slow && cd /tmp/slow
+          git init --quiet
+          time (
+            git remote add -f origin https://github.com/tenstorrent/tt-metal.git
+            git config core.sparseCheckout true
+            echo ".github" >> .git/info/sparse-checkout
+            git pull origin main --quiet
+          )
+          echo "refs=$(git for-each-ref --format='%(refname)' refs/remotes/origin | wc -l)" >> "$GITHUB_ENV"
+          git count-objects -vH
+
+      - name: Record slow-path stats
+        if: always()
+        run: |
+          cd /tmp/slow
+          {
+            echo "SLOW_REFS=$(git for-each-ref --format='%(refname)' refs/remotes/origin | wc -l)"
+            echo "SLOW_PACK=$(du -sh .git 2>/dev/null | cut -f1)"
+          } >> "$GITHUB_ENV"
+
+      - name: Proposed mechanism — single-ref fetch + blob:none partial clone
+        run: |
+          set -x
+          mkdir -p /tmp/fast && cd /tmp/fast
+          git init --quiet
+          git remote add origin https://github.com/tenstorrent/tt-metal.git
+          git config core.sparseCheckout true
+          echo ".github" >> .git/info/sparse-checkout
+          time git fetch --filter=blob:none --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git checkout -b main origin/main --quiet
+          git count-objects -vH
+
+      - name: Record fast-path stats
+        if: always()
+        run: |
+          cd /tmp/fast
+          {
+            echo "FAST_REFS=$(git for-each-ref --format='%(refname)' refs/remotes/origin | wc -l)"
+            echo "FAST_PACK=$(du -sh .git 2>/dev/null | cut -f1)"
+          } >> "$GITHUB_ENV"
+
+      - name: Correctness — true negative (no .github change vs a known clean fork branch)
+        run: |
+          cd /tmp/fast
+          git remote add fork https://github.com/afuller-TT/tt-metalium.git
+          git fetch --filter=blob:none --no-tags fork repro/ci-52290-fork-clone-timeout
+          if git diff --name-only --exit-code origin/main...fork/repro/ci-52290-fork-clone-timeout -- ".github"; then
+            echo "CORRECT: no .github changes detected (exit 0), as expected"
+          else
+            echo "UNEXPECTED: .github diff reported changes"; exit 1
+          fi
+
+      - name: Correctness — true positive (last real commit that touched .github)
+        run: |
+          cd /tmp/fast
+          COMMIT=$(git log --format=%H -1 -- .github)
+          PARENT=$(git rev-parse "$COMMIT^")
+          echo "commit=$COMMIT parent=$PARENT"
+          if git diff --name-only --exit-code "$PARENT...$COMMIT" -- ".github"; then
+            echo "UNEXPECTED: no .github diff detected"; exit 1
+          else
+            echo "CORRECT: .github change detected (exit 1, file(s) listed above)"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Git fetch mechanism proof — tt-metal#52290"
+            echo ""
+            echo "| Mechanism | Refs fetched | .git size |"
+            echo "|---|---|---|"
+            echo "| Current (\`remote add -f\`) | ${SLOW_REFS:-?} | ${SLOW_PACK:-?} |"
+            echo "| Proposed (single-ref + \`blob:none\`) | ${FAST_REFS:-?} | ${FAST_PACK:-?} |"
+          } >> "$GITHUB_STEP_SUMMARY"
