@@ -2019,8 +2019,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                 {"W_tile_bytes", W_tile_bytes},
                 {"W_index_bytes", W_index_bytes},
             },
+        // The coordinator sits on one fixed core, so every worker addresses the same pair of
+        // coordinates. Broadcasting them as common arguments keeps one copy per program instead
+        // of one per worker node.
         .runtime_arg_schema =
-            {.runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+            {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
@@ -2051,8 +2054,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                 {"W_tile_bytes", W_tile_bytes},
                 {"W_index_bytes", W_index_bytes},
             },
+        // See the reader above: one fixed coordinator core means one value for every worker.
         .runtime_arg_schema =
-            {.runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+            {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     });
 
@@ -2115,22 +2119,12 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
              {"num_multicast_dests", num_multicast_dests}}),
     };
 
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-    for (const auto& cr : core_range.ranges()) {
-        for (const auto& core : cr) {
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values,
-                core,
-                {{"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
-                 {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}});
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
-                 {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}});
-        }
-    }
+    const KernelRunArgs::CommonRuntimeArgValues coordinator_coord_args{
+        {"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
+        {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}};
+
+    KernelRunArgs reader_run_args{.kernel = READER, .common_runtime_arg_values = coordinator_coord_args};
+    KernelRunArgs writer_run_args{.kernel = WRITER, .common_runtime_arg_values = coordinator_coord_args};
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(coordinator_run_args));
