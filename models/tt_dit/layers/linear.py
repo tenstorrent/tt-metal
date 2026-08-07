@@ -285,9 +285,7 @@ class ColParallelLinear(Module):
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
-            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
-            # Restricted (for now) to the plain chunks==1 / no-swiglu case; other shapes fall
-            # through to the current all_gather_minimal_matmul_async path below.
+            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op
             fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
             if fabric_cfg is not None and self.chunks in (None, 1) and not self.fuse_swiglu:
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)

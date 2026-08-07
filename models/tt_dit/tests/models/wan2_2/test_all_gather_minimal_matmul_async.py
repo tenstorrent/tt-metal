@@ -161,8 +161,7 @@ def run_test_linear_impl(
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
 
-        # Variable-width chunks split at the given per-device widths; uniform chunks are the
-        # equal-width case. torch_output is [M_global, N_per_device].
+        # Variable-width chunks split at the given per-device widths
         if chunk_sizes:
             torch_output = torch.split(torch_output, list(chunk_sizes), dim=-1)
         else:
@@ -325,8 +324,7 @@ def run_test_linear_impl(
             for i in range(device.shape[sp_axis]):
                 for j in range(device.shape[tp_axis]):
                     m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
-                    # For chunk c the concatenated tensor is [M_global, width_c * TP], so each
-                    # device's slice is this chunk's own width -- not a shared N // chunks.
+                    # For chunk c the concatenated tensor is [M_global, width_c * TP]
                     chunk_width = chunk_sizes[c] if chunk_sizes else (N // chunks)
                     n_slice = slice(j * chunk_width, (j + 1) * chunk_width)
 
