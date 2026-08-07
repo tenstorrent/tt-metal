@@ -117,16 +117,31 @@ def test_permute_codegen_program_cache_hit(device, shape, kwargs, dtype, layout)
 
 
 _SELECTOR_CASE = ([1, 2, 3, 64, 96], {"dims": [1, 2, 0, 3, 4]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+_SHORTCUT_CASE = ([1, 2, 3, 64, 96], {"dims": [0, 1, 2, 3, 4]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
 
+@pytest.mark.parametrize("case", [_SELECTOR_CASE, _SHORTCUT_CASE], ids=["dispatched", "frontend-shortcut"])
 @pytest.mark.parametrize("selector", ["", "Codegen", "codgen", "default"])
-def test_permute_codegen_rejects_an_unknown_implementation(device, expect_error, selector):
-    shape, kwargs, dtype, layout = _SELECTOR_CASE
+def test_permute_codegen_rejects_an_unknown_implementation(device, expect_error, selector, case):
+    shape, kwargs, dtype, layout = case
     xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    # The selector is parsed on every call, including ones a front-end shortcut would
-    # otherwise answer without dispatching, so an unknown value never passes silently.
+    # The selector is parsed on every call, including ones the front-end shortcut
+    # answers without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "invalid implementation"):
         ttnn.permute(xt, **kwargs, implementation=selector)
+
+
+def test_permute_codegen_forced_dispatches_past_the_frontend_shortcut(device):
+    shape, kwargs, dtype, layout = _SHORTCUT_CASE
+    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    golden = ttnn.to_torch(ttnn.permute(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    assert_equal(golden, ttnn.to_torch(ttnn.permute(xt, **kwargs, implementation=_ROUTED)))
+    msg = "auto dispatched a call the front-end shortcut answers"
+    assert device.num_program_cache_entries() == entries_before, msg
+    assert_equal(golden, ttnn.to_torch(ttnn.permute(xt, **kwargs, implementation=_CODEGEN)))
+    msg = "forced codegen was swallowed by the front-end shortcut instead of dispatching"
+    assert device.num_program_cache_entries() > entries_before, msg
 
 
 def test_permute_codegen_unsupported_output_memory_config_falls_back(device):

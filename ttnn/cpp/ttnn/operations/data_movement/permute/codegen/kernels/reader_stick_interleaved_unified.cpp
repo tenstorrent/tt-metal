@@ -10,14 +10,16 @@
 // Positional CT args: TensorAccessorArgs (index 0)
 //
 // Modes:
-//   MODE_SEQUENCED (0): Batched stick reads with seq_id-dispatched address.
-//     seq_id selects the address sequencer (same IDs as tile reader).
+//   MODE_SEQUENTIAL (0): Legacy coalesced stick reads. (reshape)
 //   MODE_TILEROW (1): TILE_H sticks per tile-row, column chunking. (tilize)
 //   MODE_NONALIGNED (2): page-bounded, alignment-matched scratch reads. (reshape)
 //   MODE_LASTDIM_REPEAT (3): Read stick, replicate N times in L1. (repeat W)
+//   MODE_SEQUENCED (4): Batched stick reads with seq_id-dispatched address.
+//     seq_id selects the address sequencer (same IDs as tile reader).
 //   MODE_TILEROW_PAD (5): Pad-aware tile-row reader. NOC-reads the valid prefix
 //     of each stick, fills column-pad bytes from a packed pad value, and emits
 //     whole pad tile-rows for height/outer padding. (tilize_with_val_padding)
+//   MODE_PARTIAL_READ (6): partial page read at an aligned byte offset. (reshape scatter)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
