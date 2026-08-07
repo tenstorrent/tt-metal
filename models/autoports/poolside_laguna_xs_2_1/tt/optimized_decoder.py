@@ -337,9 +337,14 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
         # `full_attention` branch below). Tolerate both.
         swa = getattr(hf_config, "swa_rope_parameters", None) or rp.get("sliding_attention")
         cfg.rope_parameters = dict(swa)
-        cfg.partial_rotary_factor = cfg.rope_parameters.get("partial_rotary_factor")
+        cfg.partial_rotary_factor = cfg.rope_parameters.get("partial_rotary_factor", 1.0)
     else:
         cfg.rope_parameters = dict(rp["full_attention"])
+        # Must force the top-level partial_rotary_factor too: on stock vLLM 0.24 the loaded config carries a
+        # top-level `partial_rotary_factor` (=1.0) that HF's RotaryEmbedding prefers over the nested
+        # rope_parameters value, so without this the full-attention table is built 128-wide (head_dim) while
+        # LayerConfig.rotary_dim is 64 (head_dim*0.5) -> _rope_decode reshape TT_FATAL new_volume!=old_volume.
+        cfg.partial_rotary_factor = cfg.rope_parameters.get("partial_rotary_factor", 1.0)
     re = RE(config=cfg)
     pos = torch.arange(max_seq_len).unsqueeze(0)
     dummy = torch.zeros(1, max_seq_len, 1)
@@ -1309,4 +1314,16 @@ class OptimizedDecoder(LightweightModule):
         table = self.sin_2d if sin else self.cos_2d
         rd = self.cfg.rotary_dim
         gathered = ttnn.embedding(rope_idx, table, layout=ttnn.TILE_LAYOUT)
+        if os.environ.get("TT_LAGUNA_ROPE_DEBUG") == "1":
+            import sys as _sys
+
+            print(
+                f"[ROPE_DEBUG] attn={self.cfg.attention_type} B={B} rd={rd} "
+                f"rope_idx.shape={list(rope_idx.shape)} table.shape={list(table.shape)} "
+                f"gathered.shape={list(gathered.shape)} target=(1,{B},1,{rd}) "
+                f"gathered_vol={gathered.logical_volume() if hasattr(gathered,'logical_volume') else '?'} "
+                f"target_vol={1*B*1*rd}",
+                file=_sys.stderr,
+                flush=True,
+            )
         return ttnn.reshape(gathered, (1, B, 1, rd))
