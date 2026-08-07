@@ -352,7 +352,6 @@ models:
     wh_llmbox_perf: 78
     wh_n150: 120
     wh_n300: 87
-    wh_galaxy_perf: 6
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
@@ -398,7 +397,7 @@ models:
   demo:
     wh_llmbox_perf: 1285
     wh_galaxy: 345
-    wh_galaxy_perf: 145
+    wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437

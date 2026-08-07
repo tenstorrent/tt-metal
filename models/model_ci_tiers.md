@@ -107,7 +107,7 @@ it is classified differently on different systems.
 | EfficientNet-B0 | WH N150, WH N300 |
 | MobileNetV2 | WH N150, WH N300 |
 | SegFormer | WH N150, WH N300 |
-| SentenceBERT | WH N150, WH N300, WH LLMBox, WH Galaxy |
+| SentenceBERT | WH N150, WH N300, WH LLMBox |
 | Stable Diffusion 1.4 | WH N150 |
 | Swin-S | WH N150, WH N300 |
 | Swin-V2 | WH N150, WH N300 |
