@@ -15,6 +15,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/channel_trimming_io.hpp"
 
 namespace tt::tt_fabric {
@@ -24,23 +25,29 @@ namespace {
 // Returns {expected_sender_channels, expected_receiver_channels} for a router
 // given the fabric topology, VC1 presence, and the router's direction string from the YAML.
 //
-// Channel counts from builder_config:
-//   Z direction (always has VC1):  9 sender, 2 receiver
-//   2D with VC1:                   8 sender, 2 receiver
-//   2D without VC1 (VC0 only):    4 sender, 1 receiver
-//   1D:                            2 sender, 1 receiver
+// Channel counts (family maxima; per-chip narrowing is the trimming this report measures):
+//   Z-facing intermesh boundary router: 9 sender (5 VC0 + 4 VC1), 2 receiver
+//   2D with VC1 (flat max):             9 sender, 2 receiver -- an ordinary chip is 7 (4+3),
+//                                       a boundary-chip mesh router 8 (4+4), and the boundary
+//                                       router 9 (5+4); see the TODO below on telling them apart
+//   2D without VC1 (VC0 only):          4 sender, 1 receiver
+//   1D:                                 2 sender, 1 receiver
 std::pair<uint32_t, uint32_t> get_expected_channels(
     Topology topology, const std::string& direction, bool has_vc1) {
+    // TODO: this infers the boundary family from a direction string. It should read the edge's
+    // capability (or the port's role) instead, once the report input carries it -- a same-mesh
+    // express chord is Z-facing too but is not the boundary family.
     if (direction == "Z") {
-        // Z routers always have both VCs
-        return {builder_config::num_sender_channels_z_router, builder_config::num_receiver_channels_z_router};
+        // Z-facing intermesh boundary routers always have both VCs: boundary VC0 (worker + every
+        // mesh producer) plus boundary VC1 (from-Z fanout) = 9, with one receiver per carrier VC.
+        return {boundary_vc0_sender_count() + boundary_vc1_sender_count(), builder_config::num_receiver_channels_2d};
     }
     if (is_2D_topology(topology)) {
         if (has_vc1) {
             return {builder_config::num_sender_channels_2d, builder_config::num_receiver_channels_2d};
         }
-        // VC0 only: Worker + 3 mesh directions = 4 sender, 1 receiver
-        return {builder_config::num_sender_channels_2d_mesh, builder_config::num_receiver_channels_1d};
+        // VC0 only: the frozen non-express forwarding count = worker + 3 mesh directions = 4, 1 receiver
+        return {non_express_vc0_sender_count(), builder_config::num_receiver_channels_1d};
     }
     // 1D topologies: Linear, Ring, NeighborExchange
     return {builder_config::num_sender_channels_1d, builder_config::num_receiver_channels_1d};

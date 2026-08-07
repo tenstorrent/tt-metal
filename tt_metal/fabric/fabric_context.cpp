@@ -325,96 +325,6 @@ bool FabricContext::has_z_router_on_device(
     return false;
 }
 
-bool FabricContext::has_intra_mesh_z_router(
-    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
-    // Source of truth is the mesh graph's intra-mesh connectivity: sub-torus skip links are folded in
-    // as RoutingDirection::Z edges within the same mesh. A node has intra-mesh Z iff one of its
-    // intra-mesh edges has port_direction == Z.
-    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
-
-    const auto mesh_idx = *fabric_node_id.mesh_id;
-    const auto chip_idx = fabric_node_id.chip_id;
-    if (mesh_idx >= intra_mesh_connectivity.size() || chip_idx >= intra_mesh_connectivity[mesh_idx].size()) {
-        return false;
-    }
-
-    for (const auto& [neighbor_chip_id, router_edge] : intra_mesh_connectivity[mesh_idx][chip_idx]) {
-        if (router_edge.port_direction == RoutingDirection::Z) {
-            log_debug(
-                LogMetal,
-                "Fabric node M{}D{} HAS intra-mesh Z (skip-link neighbor D{})",
-                *fabric_node_id.mesh_id,
-                fabric_node_id.chip_id,
-                neighbor_chip_id);
-            return true;
-        }
-    }
-    return false;
-}
-
-bool FabricContext::has_any_intra_mesh_z_router(const ControlPlane& control_plane) const {
-    // Fabric-wide variant of has_intra_mesh_z_router: returns true if ANY node in ANY mesh has an
-    // intra-mesh Z edge (sub-torus skip link). Used when sizing the fabric-wide max channel counts:
-    // a single intra-mesh Z router widens VC0 from 4 -> 5, so the shared EDM config must reserve the
-    // 5th VC0 sender channel for the whole fabric instance.
-    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
-    for (const auto& mesh_connections : intra_mesh_connectivity) {
-        for (const auto& chip_connections : mesh_connections) {
-            for (const auto& [neighbor_chip_id, router_edge] : chip_connections) {
-                if (router_edge.port_direction == RoutingDirection::Z) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
-bool FabricContext::has_intra_mesh_z_in_mesh(const ControlPlane& control_plane, MeshId mesh_id) const {
-    // Mesh-level variant of has_intra_mesh_z_router, over the same source of truth (declared
-    // skip_links folded into intra-mesh connectivity as RoutingDirection::Z edges).
-    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
-    const auto mesh_idx = *mesh_id;
-    if (mesh_idx >= intra_mesh_connectivity.size()) {
-        return false;
-    }
-    for (const auto& chip_connections : intra_mesh_connectivity[mesh_idx]) {
-        for (const auto& [neighbor_chip_id, router_edge] : chip_connections) {
-            if (router_edge.port_direction == RoutingDirection::Z) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool FabricContext::has_inter_mesh_z_router(
-    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
-    // Source of truth is the mesh graph's inter-mesh connectivity: a galaxy Z router that bridges two
-    // meshes shows up as a RoutingDirection::Z edge to a neighbor mesh. A node has an inter-mesh Z router
-    // iff one of its inter-mesh edges has port_direction == Z.
-    const auto& inter_mesh_connectivity = control_plane.get_mesh_graph().get_inter_mesh_connectivity();
-
-    const auto mesh_idx = *fabric_node_id.mesh_id;
-    const auto chip_idx = fabric_node_id.chip_id;
-    if (mesh_idx >= inter_mesh_connectivity.size() || chip_idx >= inter_mesh_connectivity[mesh_idx].size()) {
-        return false;
-    }
-
-    for (const auto& [neighbor_mesh_id, router_edge] : inter_mesh_connectivity[mesh_idx][chip_idx]) {
-        if (router_edge.port_direction == RoutingDirection::Z) {
-            log_debug(
-                LogMetal,
-                "Fabric node M{}D{} HAS inter-mesh Z router (neighbor mesh M{})",
-                *fabric_node_id.mesh_id,
-                fabric_node_id.chip_id,
-                *neighbor_mesh_id);
-            return true;
-        }
-    }
-    return false;
-}
-
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {
@@ -431,7 +341,22 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
     return *builder_context_;
 }
 
-bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+bool FabricContext::need_deadlock_avoidance_support(
+    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const {
+    // With express routing the topology token no longer answers this. Express chords can close a
+    // protected ring on an axis the descriptor advertises as a line: the two- and three-Galaxy
+    // carve-outs have no cardinal end wrap on Y, yet their retained wraps still form one spanning
+    // ring. Deciding from Topology::Torus would return false there and drop the bubble on a ring that
+    // genuinely needs it, so ask whether the axis actually carries protected rings.
+    //
+    // The question is per axis, not per chip. A per-node answer would elide the guard on leaf chips,
+    // and this flag also selects first-level ACK and the upstream credit path, so that would change
+    // more than flow control. Leaf elision waits on the corresponding VC safety proof.
+    if (control_plane.express_routing_enabled(fabric_node_id.mesh_id)) {
+        return control_plane.mesh_has_protected_ring_in_axis_of(
+            fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
+    }
+
     if (topology_ == Topology::Ring) {
         return true;
     }

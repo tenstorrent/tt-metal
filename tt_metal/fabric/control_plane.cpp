@@ -1698,6 +1698,17 @@ bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ing
     return rings->domain_of[*from_row] == rings->continue_src_domain;
 }
 
+bool ControlPlane::mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const {
+    TT_FATAL(
+        axis_direction != RoutingDirection::C && axis_direction != RoutingDirection::NONE,
+        "mesh_has_protected_ring_in_axis_of: {} is not a port direction",
+        enchantum::to_string(axis_direction));
+    // The axis-level question reduces to ring existence for the axis: ring state is derived per
+    // mesh and a mesh's express rings, where present, span every line, so the per-mesh answer is
+    // the pointer itself -- never elided on leaf rows the way the per-node answer is.
+    return this->ring_for_direction(mesh_id, axis_direction) != nullptr;
+}
+
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
     const auto& forwarding_direction = get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -1959,11 +1970,12 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[0],
         mesh_shape[1]);
 
-    // Skip-link meshes embed the indexed destination-major vectors; all other meshes keep the
+    // Express meshes embed the indexed destination-major vectors; all other meshes keep the
     // legacy compressed 2D table. Both packers share the same call shape and query this
-    // ControlPlane's first-hop relation per destination. The gate matches the kernel-side
-    // FABRIC_SKIP_LINKS_ENABLED emission, so a chip's L1 layout always matches its decode.
-    if (this->get_fabric_context().has_intra_mesh_z_in_mesh(*this, mesh_id)) {
+    // ControlPlane's first-hop relation per destination. The gate is express_routing_enabled --
+    // the same answer route generation keyed on -- so a chip's L1 layout always matches its
+    // decode.
+    if (this->express_routing_enabled(mesh_id)) {
         indexed_route_vectors_t indexed_vectors;
         indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
         std::memcpy(&routing_info.indexed_route_vectors, &indexed_vectors, sizeof(indexed_route_vectors_t));

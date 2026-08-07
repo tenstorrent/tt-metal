@@ -9,14 +9,16 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 
 namespace tt::tt_fabric {
 
 // Forward declarations
 class FabricDatamoverBuilderBase;
+class ControlPlane;
 
 /**
  * ComputeMeshRouterBuilder
@@ -37,6 +39,7 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @param connection_registry Optional registry to record connections for testing
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
@@ -45,19 +48,13 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
+        const ChipRoutingFacts& chip_facts,
         std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
     void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
-
-    /**
-     * Configure local connections between routers on the same device (e.g., mesh↔Z)
-     *
-     * @param local_routers Map of direction → router builder for all routers on this device
-     */
-    void configure_local_connections(const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) override;
 
     void configure_for_dispatch() override;
 
@@ -116,36 +113,18 @@ private:
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping,
-        RouterConnectionMapping connection_mapping,
+        RouterVcShape vc_shape,
+        RouterTurnSet turns_by_vc,
+        bool downstream_is_tensix_builder,
         std::shared_ptr<ConnectionRegistry> connection_registry);
 
     /**
      * Generic helper to establish connections from this router to a downstream router.
-     * Iterates through all VCs and sender channels, applying the provided connection type filter.
+     * Iterates through all VCs and sender channels, establishing every direction-matching target.
      *
      * @param downstream_router The target router to connect to
-     * @param connection_type_filter Function that returns true for connection types to establish
      */
-    void establish_connections_to_router(
-        ComputeMeshRouterBuilder& downstream_router,
-        const std::function<bool(ConnectionType)>& connection_type_filter);
-
-    /**
-     * Compute which sender channels are traffic injection channels for a specific VC.
-     * Injection channels are channels where traffic originates (not forwarded):
-     * - VC0: Worker channel (channel 0) is always an injection channel
-     * - VC1+: No worker channel; channel 0 maps to VC0's channel 1 semantics
-     * - In Torus topology, "turn channels" are injection channels (where traffic changes direction)
-     *
-     * @param topology The fabric topology
-     * @param direction The router's direction
-     * @param vc The virtual channel to compute flags for
-     * @param num_channels Number of channels in this VC
-     * @return Array indicating which sender channels are injection channels for this VC
-     */
-    static std::vector<bool> compute_sender_channel_injection_flags_for_vc(
-        Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
+    void establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router);
 
     /**
      * Map router-level injection flags to a child builder variant's channel space.
@@ -163,17 +142,19 @@ private:
     /**
      * Build a reverse mapping from a builder variant's internal channels to router's external facing channel IDs.
      * For kernel internal channels that aren't externally facing, the mapping will be nullopt.
-     * Iterates through the channel mapping to find which logical channels are handled by the given builder type,
-     * then maps their internal channel IDs to router channel IDs.
+     * Iterates the shape's (vc, channel) pairs, keeps the ones the given builder variant owns
+     * (builder_type_for_vc), and maps their internal channel IDs to router channel IDs.
      *
-     * @param channel_mapping The channel mapping to use (already knows topology and mode)
+     * @param vc_shape The router's per-VC channel shape
+     * @param downstream_is_tensix_builder Whether VC0 channels are tensix-owned (MUX mode)
      * @param builder_type Which builder variant (ERISC or TENSIX)
      * @param variant_num_sender_channels Number of sender channels the variant has
      * @return Vector where index is the variant's internal channel ID, value is optional router channel ID
      *         (nullopt for internal-only channels not exposed to external topology)
      */
     static std::vector<std::optional<size_t>> get_variant_to_router_channel_map(
-        const FabricRouterChannelMapping& channel_mapping,
+        const RouterVcShape& vc_shape,
+        bool downstream_is_tensix_builder,
         BuilderType builder_type,
         size_t variant_num_sender_channels);
 
@@ -188,8 +169,9 @@ private:
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
-    FabricRouterChannelMapping channel_mapping_;
-    RouterConnectionMapping connection_mapping_;
+    RouterVcShape vc_shape_;
+    RouterTurnSet turns_by_vc_;
+    bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
 };

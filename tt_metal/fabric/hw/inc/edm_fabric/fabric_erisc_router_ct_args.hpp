@@ -6,6 +6,7 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
+#include "hostdevcommon/fabric_common.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
@@ -35,9 +36,9 @@ constexpr uint32_t to_sender_0_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_AC
 constexpr uint32_t to_sender_1_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_2_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_3_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_3_PKTS_ACKED_ID");
-// First-level-ack stream for the 5th VC0 sender channel (intra-mesh Z skip-link forwarding). 0 on any
-// router that does not have a 5-wide VC0 (index 4 is then the first VC1 sender, which has no first-level
-// ack). Host aliases it onto an otherwise-idle stream register for intra-mesh-Z MESH routers.
+// A five-wide VC0 needs a fifth first-level-ack stream. The out-of-range sentinel when the
+// configuration has no such sender, or when VC0 carries its credits in L1 counters and needs no
+// ack register at all.
 constexpr uint32_t to_sender_4_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_4_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_0_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_1_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_COMPLETED_ID");
@@ -47,6 +48,7 @@ constexpr uint32_t to_sender_4_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_4_PKT
 constexpr uint32_t to_sender_5_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_5_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_6_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_6_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_7_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_7_PKTS_COMPLETED_ID");
+constexpr uint32_t to_sender_8_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_8_PKTS_COMPLETED_ID");
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_1_stream_id =
     NAMED_CT_ARG("VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID");
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
@@ -73,6 +75,8 @@ constexpr uint32_t sender_channel_5_free_slots_stream_id = NAMED_CT_ARG("SENDER_
 constexpr uint32_t sender_channel_6_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_7_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_8_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID");
+// Reachable once VC0 is five wide: VC2's sender then sits at flat index 9 rather than 8.
+constexpr uint32_t sender_channel_9_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t tensix_relay_local_free_slots_stream_id = NAMED_CT_ARG("TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = NAMED_CT_ARG("MULTI_RISC_TEARDOWN_SYNC_STREAM_ID");
 constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_LINK_SYNC_STREAM_ID");
@@ -91,8 +95,52 @@ constexpr size_t ACTUAL_VC2_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC2_SENDER_CH
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = ACTUAL_VC0_SENDER_CHANNELS;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = ACTUAL_VC1_SENDER_CHANNELS;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC2 = ACTUAL_VC2_SENDER_CHANNELS;
-constexpr size_t VC1_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
-constexpr size_t VC2_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS;
+constexpr size_t VC1_LOCAL_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t VC2_LOCAL_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS;
+
+// The shared sender free-slots table is fabric-flat: a VC's entries sit at the fabric's family
+// maxima's prefix sums, identical on every router in the fabric, because the downstream lookup
+// resolves another router's register through this router's own table. These bases come from the
+// host's assignment (fabric-scoped), not from this router's own counts.
+//
+// The two index spaces are named so a mix-up is unwritable, not merely wrong: positions in the
+// shared table are FABRIC positions (VC*_FABRIC_POSITION_START), while this router's own arrays
+// stay compact (VC*_LOCAL_CHANNEL_START). Positions convert through fabric_position_for_compact_sender.
+constexpr size_t VC1_FABRIC_POSITION_START = NAMED_CT_ARG("VC1_FABRIC_POSITION_START");
+constexpr size_t VC2_FABRIC_POSITION_START = NAMED_CT_ARG("VC2_FABRIC_POSITION_START");
+
+// A channel's fabric position in the shared table, from this router's compact channel index.
+constexpr size_t fabric_position_for_compact_sender(size_t compact_index) {
+    if (compact_index < ACTUAL_VC0_SENDER_CHANNELS) {
+        return compact_index;
+    }
+    if (compact_index < ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS) {
+        return VC1_FABRIC_POSITION_START + (compact_index - ACTUAL_VC0_SENDER_CHANNELS);
+    }
+    return VC2_FABRIC_POSITION_START + (compact_index - ACTUAL_VC0_SENDER_CHANNELS - ACTUAL_VC1_SENDER_CHANNELS);
+}
+
+// The inverse: this router's compact channel index at a fabric position in the shared table.
+constexpr size_t compact_sender_for_fabric_position(size_t position) {
+    if (position < VC1_FABRIC_POSITION_START) {
+        return position;
+    }
+    if (position < VC2_FABRIC_POSITION_START) {
+        return ACTUAL_VC0_SENDER_CHANNELS + (position - VC1_FABRIC_POSITION_START);
+    }
+    return ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + (position - VC2_FABRIC_POSITION_START);
+}
+
+// Does this router service a channel at this fabric position?
+constexpr bool services_fabric_position(size_t position) {
+    if (position < VC1_FABRIC_POSITION_START) {
+        return position < ACTUAL_VC0_SENDER_CHANNELS;
+    }
+    if (position < VC2_FABRIC_POSITION_START) {
+        return position < VC1_FABRIC_POSITION_START + ACTUAL_VC1_SENDER_CHANNELS;
+    }
+    return position < VC2_FABRIC_POSITION_START + ACTUAL_VC2_SENDER_CHANNELS;
+}
 
 // ============================================================================
 // Downstream tensix connections
@@ -273,6 +321,52 @@ constexpr bool enable_interrupts = NAMED_CT_ARG("ENABLE_INTERRUPTS") != 0;
 constexpr size_t sender_txq_id = NAMED_CT_ARG("SENDER_TXQ_ID");
 constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
+
+// Whether a VC's receiver-to-sender ack and completion credits travel through L1 counters instead of
+// stream registers.
+//
+// Multi-TXQ requires the counter form on every VC, but it is no longer the only reason to select it:
+// the counter form consumes no stream registers, and an ethernet core has only 32. Express routing
+// widens VC0 to five senders, which needs one more ack register than exists, so moving VC1's credits
+// to counters frees its completion registers to cover the gap.
+//
+// Selected per VC rather than for the whole router so that VC0's stream assignments hold in every
+// configuration and only VC1's change. Reuse of a register is unavoidable at a full budget; keeping it
+// confined to one VC is what keeps the map readable.
+//
+// Decided on host, since the reasons are host-side facts.
+constexpr bool vc0_uses_counter_credits = NAMED_CT_ARG("VC0_USES_COUNTER_CREDITS") != 0;
+constexpr bool vc1_uses_counter_credits = NAMED_CT_ARG("VC1_USES_COUNTER_CREDITS") != 0;
+constexpr bool any_vc_uses_counter_credits = vc0_uses_counter_credits || vc1_uses_counter_credits;
+
+// Flat sender channels are laid out VC0, then VC1, then VC2, so the existing boundaries answer which
+// VC owns a channel without any new state.
+constexpr size_t vc_of_sender_channel(size_t sender_channel) {
+    if (sender_channel < VC1_LOCAL_CHANNEL_START) {
+        return 0;
+    }
+    if (sender_channel < VC2_LOCAL_CHANNEL_START) {
+        return 1;
+    }
+    return 2;
+}
+
+constexpr bool sender_channel_uses_counter_credits(size_t sender_channel) {
+    switch (vc_of_sender_channel(sender_channel)) {
+        case 0: return vc0_uses_counter_credits;
+        case 1: return vc1_uses_counter_credits;
+        default: return false;  // VC2 keeps stream registers
+    }
+}
+
+// One receiver channel per VC, and credits only ever flow back within the same VC.
+constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
+    switch (receiver_channel) {
+        case 0: return vc0_uses_counter_credits;
+        case 1: return vc1_uses_counter_credits;
+        default: return false;
+    }
+}
 
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
     NAMED_CT_ARG("ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS");
@@ -546,16 +640,16 @@ static_assert(
     "total_number_of_receiver_to_sender_credit_num_bytes must be aligned to ETH_WORD_SIZE_BYTES");
 
 static_assert(
-    !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
+    !any_vc_uses_counter_credits || to_sender_remote_ack_counters_base_address != 0,
     "to_sender_remote_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || to_sender_remote_completion_counters_base_address != 0,
+    !any_vc_uses_counter_credits || to_sender_remote_completion_counters_base_address != 0,
     "to_sender_remote_completion_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_ack_counters_base_address != 0,
+    !any_vc_uses_counter_credits || local_receiver_ack_counters_base_address != 0,
     "local_receiver_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_completion_counters_base_address != 0,
+    !any_vc_uses_counter_credits || local_receiver_completion_counters_base_address != 0,
     "local_receiver_completion_counters_base_address must be valid");
 
 // ============================================================================
@@ -596,7 +690,10 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id, 0});
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{
+            to_receiver_0_pkts_sent_id,
+            to_receiver_1_pkts_sent_id,
+            tt::tt_fabric::k_unused_stream_id});  // no third receiver
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
@@ -606,15 +703,15 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
                                                       to_sender_1_pkts_acked_id,
                                                       to_sender_2_pkts_acked_id,
                                                       to_sender_3_pkts_acked_id,
-                                                      // VC0 5th sender (intra-mesh Z) when 5-wide, else VC1
-                                                      // sender 0 (0 == no first level ack)
+                                                      // VC0 fifth sender when present; otherwise the sentinel.
+                                                      // VC1 never has first level acks.
                                                       to_sender_4_pkts_acked_id,
-                                                      0,
-                                                      0,
-                                                      0,
+                                                      tt::tt_fabric::k_unused_stream_id,
+                                                      tt::tt_fabric::k_unused_stream_id,
+                                                      tt::tt_fabric::k_unused_stream_id,
                                                       // Z-router extra + VC2 (no first level acks)
-                                                      0,
-                                                      0});
+                                                      tt::tt_fabric::k_unused_stream_id,
+                                                      tt::tt_fabric::k_unused_stream_id});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
@@ -628,8 +725,13 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_5_pkts_completed_id,
             to_sender_6_pkts_completed_id,
             to_sender_7_pkts_completed_id,
-            0,  // Z-router extra / VC2 (worker-only, no router completion)
-            0});
+            to_sender_8_pkts_completed_id,
+            // Position 9 is the one exempt slot: it is VC2's sender, which is worker-type and has
+            // no router completion. The exemption attaches to the channel's TYPE, not its position
+            // -- Z is no longer synonymous with intermesh, so a positional "Z-router extra"
+            // exemption cannot hold (the boundary family's fourth VC1 sender is a router-type
+            // channel at flat 8, covered by the ninth name above).
+            tt::tt_fabric::k_unused_stream_id});
 
 // Miscellaneous configuration
 

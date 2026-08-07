@@ -44,6 +44,12 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 5,
 };
 
+// Sentinel stream-register value marking an inactive consumer, shared by host emission (which
+// writes it into the named CT args for any consumer absent in a configuration) and the kernel's
+// init path (which skips initialising any entry reading it). Deliberately out of the 0..31
+// register range: no real register can ever collide with it, so every id in the file is ordinary.
+static constexpr uint32_t k_unused_stream_id = 32;
+
 template <size_t ArraySize>
 struct routing_table_t {
     chan_id_t dest_entry[ArraySize];
