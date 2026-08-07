@@ -67,6 +67,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
@@ -553,6 +554,8 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
+using experimental::per_core_allocation::get_shard_base_address;
+
 void WriteToDeviceSharded(
     Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
@@ -592,8 +595,8 @@ void WriteToDeviceSharded(
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             if (buffer.is_l1()) {
-                auto absolute_address =
-                    buffer.address() + bank_offset + (write_device_page * buffer.aligned_page_size()) + offset;
+                auto absolute_address = get_shard_base_address(buffer, core) + bank_offset +
+                                        (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
                 MetalContext::instance().get_cluster().write_core(
@@ -781,10 +784,11 @@ void read_pages_to_host_helper(
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     if (dev_buffer.is_l1()) {
-        auto core_coordinates =
-            device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+        auto logical_core = dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id);
+        auto core_coordinates = device->worker_core_from_logical_core(logical_core);
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
+        auto absolute_address = get_shard_base_address(dev_buffer, logical_core) + bank_offset +
+                                (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
             MetalContext::instance().get_cluster().read_core(

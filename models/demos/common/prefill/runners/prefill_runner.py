@@ -132,6 +132,10 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
+# LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
+# one-page buffer with generous headroom for in-flight records.
+LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
+
 # End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
 # PrefillMetadata words are all -1 (0xFFFFFFFF on the wire). -1 is out of range for slot_id and both KV
 # positions, so it can't collide with a real chunk. On receipt a rank forwards it to the next rank
@@ -389,15 +393,16 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
 
 
 def _socket_next(h2d_service) -> tuple:
-    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end})
-    decoded from the 12-byte PrefillMetadata. Used only by the unbounded request loop (rank 0 input)."""
+    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
+    tt_metadata). The device metadata tensor is returned (not discarded) so it can be propagated into
+    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
     import torch
 
     tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -454,16 +459,16 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
-    return act, meta
+    return act, meta, metadata_device
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
@@ -539,7 +544,9 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+def _compute_and_send(
+    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
+) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
@@ -557,6 +564,8 @@ def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2
         actual_start=meta["actual_start"],
         actual_end=meta["actual_end"],
         request_id=c,
+        d2h_service=d2h_service,
+        record_dev=record_dev,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -596,8 +605,9 @@ def run_request_loop(
     h2d_service=None,
     d2d_in=None,
     d2d_out=None,
+    d2h_service=None,
     migration_driver=None,
-) -> dict:
+) -> tuple:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
@@ -644,24 +654,31 @@ def run_request_loop(
             break
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
-            # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
-            # unblocks and exits, then fall through to the graceful drain below.
+            # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
+            # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_device)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         slot = meta["slot_id"]
         slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
         chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
+        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
         real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
-        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(
+            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
+        )
         # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
-        # have all acked (single-rank: chunk c's acks are visible the moment _compute_and_send returns).
+        # have all acked. Acks arrive ASYNCHRONOUSLY on the D2H path (the LayerAckService reader thread
+        # injects them; _compute_and_send does not sync), so chunk c's acks may still be in flight here —
+        # pump() is cursor-based and picks them up on a later call, with the tail drain below as backstop.
         if migration_driver is not None:
             migration_driver.record_chunk(c, meta["slot_id"], meta["actual_start"], meta["actual_end"])
             logger.info(
@@ -669,10 +686,6 @@ def run_request_loop(
                 f"pos[{meta['actual_start']},{meta['actual_end']})); pumping migration driver"
             )
             migration_driver.pump(current_prefill_chunk=c)
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
-        s = meta["slot_id"]
-        real_end_per_slot[s] = max(real_end_per_slot.get(s, 0), meta["actual_end"])
         if first is None:
             first = t
         c += 1
@@ -747,7 +760,11 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            # The received metadata tensor is unused here: standalone emits no layer acks. The ack record
+            # is a per-chunk socket metadata tensor, and rank 0 synthesizes its chunks locally (no inbound
+            # socket, so no record) — single-rank standalone IS rank 0, so there is nothing to ack with.
+            # The D2H ack path is wired in _serve_request only; PREFILL_ENABLE_LAYER_ACK is not read here.
+            inp, meta, _ = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
@@ -960,8 +977,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     producer (prefill_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
     and that it runs forever.
-    """
 
+    Migration (KV-chunk-table publish) runs for any rank count: every rank all-gathers its stage into
+    the merged table and rank 0 builds + publishes it. Per-layer completions feed the scheduler channel
+    directly single-rank, or route through a per-host LayerCompletionRouter to the master for
+    num_ranks>1. Shutdown for num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0
+    stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
@@ -1011,6 +1032,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     ack_channel = None
     router = None
+    # Single-rank D2H layer-ack: the per-layer ack is emitted by a device op into this D2H FIFO and a
+    # host reader thread (LayerAckService) bumps `ack_channel`, instead of the model calling back into
+    # host code mid-forward. Set up further down, next to the ack_channel it feeds.
+    d2h_service = None
+    layer_ack_service = None
     producer = None
     # Completion checking (master rank only, test-only): a consumer that stands in for the scheduler
     # on the master's counter channel, to verify aggregated per-(chunk, layer) completions. See
@@ -1099,6 +1125,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         #     path (runtime.build_kv_chunk_table — the model owns the cache layout / address math).
         #   * RANK 0 ONLY publishes that serialized table to the worker and blocks on WORKER_READY.
         from models.demos.common.prefill.runners.migration import (
+            allgather_kv_stage_layout,
             deliver_device_map_and_gather_stage_layout,
             publish_serialized_table_and_wait_ready,
         )
@@ -1110,20 +1137,76 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
-        # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
+        # Only rank 0 writes the merged table, but every rank (and every co-located producer) reads it
+        # back. Multi-host therefore requires shared storage; the per-host default is invisible to the
+        # other hosts. Reject it here — rank-invariant (same env + num_ranks), so all ranks raise
+        # together before the stage-layout all-gather below rather than deadlocking the survivors.
+        if num_ranks > 1:
+            _abs_table = os.path.abspath(table_path)
+            if any(_abs_table == p or _abs_table.startswith(p + "/") for p in ("/tmp", "/dev/shm", "/run", "/var/tmp")):
+                raise ValueError(
+                    f"PREFILL_MIGRATION_TABLE_PATH={_abs_table} is on per-host storage; with num_ranks="
+                    f"{num_ranks} the table rank 0 writes is invisible to the other hosts' readers. Point "
+                    "it at shared/NFS storage (e.g. /data/...)."
+                )
+
+        # Drop a stale table from a prior run before rank 0 rebuilds it, so a reader can never
+        # deserialize last run's table (same rationale as the DONE sentinel above).
+        if is_first_rank and os.path.exists(table_path):
+            logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
+            os.remove(table_path)
+
+        # ALL RANKS join the stage-layout all-gather (collective barrier; rank 0 needs the merged
+        # layout to build the table). Real migration also delivers this rank's local FNID->UMD map to
+        # its co-located worker first; mock has no worker (the producer reads a serialized JSON map),
+        # so it joins the gather directly and never imports the worker client extension.
+        #
         # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
-        # KvCaches struct, whose shape is per-model
+        # KvCaches struct, whose shape is per-model.
         if not hasattr(runtime, "kv_migration_base_address"):
             raise RuntimeError(
                 f"migration enabled but runtime {type(runtime).__name__} implements no "
                 "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
         kv_base_addr = runtime.kv_migration_base_address(kv_caches)
-        stage_layout = deliver_device_map_and_gather_stage_layout(
-            mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
-        )
+        _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
+        if _mock_migration:
+            stage_layout = allgather_kv_stage_layout(
+                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
+            )
+        else:
+            stage_layout = deliver_device_map_and_gather_stage_layout(
+                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
+            )
 
-        if is_first_rank:
+        if _mock_migration:
+            # Mock integration (prefill_producer.py): the SAME merged table the real publish builds, but
+            # serialized to disk for a device-less producer to read back via
+            # ttnn.experimental.disaggregation.import_from_protobuf_file — WITHOUT the migration_endpoint
+            # worker (no MigrationLayerClient, no WORKER_READY). Checked before is_first_rank so rank 0
+            # also takes this path instead of blocking on a worker that isn't running.
+            #
+            # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
+            # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
+            # merged table carries every host's fnids; a producer with just its local map naturally
+            # filters to its own layers). The device-map path is host-local (each rank overwrites the
+            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
+            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            serialize_device_map(mesh_device, device_map_path)
+            if is_first_rank:
+                # RANK 0 builds the merged table spanning every gathered stage — identical to the real
+                # publish call below, minus the worker handshake.
+                table_path = runtime.build_kv_chunk_table(
+                    kv_caches,
+                    table_path,
+                    first_layer_idx=first_layer_idx,
+                    num_my_layers=num_my_layers,
+                    stage_layout=stage_layout,
+                )
+                logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
+            logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
+        elif is_first_rank:
             # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
             # stages), then publish the serialized path + block on WORKER_READY.
             table_path = runtime.build_kv_chunk_table(
@@ -1177,11 +1260,37 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     if single_rank and enable_layer_ack:
-        # Direct path: the runtime owns + inject()s the scheduler counter channel.
+        # Single-rank ack: both transports end at the SAME scheduler counter channel, so the scheduler
+        # sees an identical stream either way. Which one carries it depends on trace:
+        #   untraced -> D2H. The ack is a device op writing one record into a FIFO, and the
+        #     LayerAckService reader thread bumps the channel per record — nothing calls back into host
+        #     code mid-forward, so the forward needs no per-layer device sync.
+        #   traced   -> the host callback (set_layer_ack_channel). The D2H ack cannot be captured: its
+        #     record is the per-chunk socket metadata tensor, whose address changes every chunk, so a
+        #     capture would bake in a stale address (TtPrefillRuntime.prefill_chunk asserts this). The
+        #     controller instead splits the trace at each ack point.
         _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        runtime.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        if runtime.config.use_trace:
+            runtime.set_layer_ack_channel(ack_channel)
+            logger.info(
+                f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer "
+                "(host callback — traced run, D2H is not capturable)"
+            )
+        else:
+            d2h_service = ttnn.D2HStreamService(
+                mesh_device,
+                global_spec=None,
+                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+                worker_cores=SYNC_WORKER_CORES,
+                metadata_size_bytes=METADATA_SIZE_BYTES,
+            )
+            layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
+            layer_ack_service.start()
+            logger.info(
+                f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per "
+                "device record (D2H)"
+            )
     elif single_rank:
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
     else:
@@ -1285,6 +1394,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
+            d2h_service=d2h_service,
             migration_driver=mig_driver,
         )
 
@@ -1370,7 +1480,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
         import gc
 
-        h2d_service = d2d_in = d2d_out = None
+        # Join the D2H reader thread BEFORE its D2H service / ack channel drop, or it reads a freed FIFO.
+        if layer_ack_service is not None:
+            layer_ack_service.stop()
+            layer_ack_service = None
+        h2d_service = d2d_in = d2d_out = d2h_service = None
         gc.collect()
         if producer is not None:
             producer.shutdown()

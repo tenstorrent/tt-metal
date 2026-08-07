@@ -23,6 +23,7 @@
 #include "ttnn-nanobind/counter_channel.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
 #include "ttnn-nanobind/d2h_stream_service.hpp"
+#include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
@@ -258,6 +259,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_d2d_stream_service =
         mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
     auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
+    auto m_layer_ack_service = mod.def_submodule("layer_ack_service", "ttnn per-layer completion ack service");
     auto m_layer_completion =
         mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
@@ -288,6 +290,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module_types(m_d2d_stream_service);
     ttnn::counter_channel::py_module_types(m_counter_channel);
+    ttnn::layer_ack_service::py_module_types(m_layer_ack_service);
     ttnn::layer_completion::bind_layer_completion_api(m_layer_completion);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);

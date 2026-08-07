@@ -199,7 +199,7 @@ def _build_and_serialize_merged_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            kvpe_cache=cache,
+            tt_kvpe_cache=cache,
             chunk_size_bytes=cfg.chunk_size_bytes,
             num_users=num_users,
             config_id=config_id,
