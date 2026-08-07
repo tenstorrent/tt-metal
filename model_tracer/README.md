@@ -78,7 +78,7 @@ These traced configurations provide real-world operation patterns from productio
 
 ## Quick Reference
 
-See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the database, managing the sweep manifest, and reconstructing configs for CI or branch testing.
+See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the database, managing the sweep manifest, and reconstructing configs for CI or branch testing. The data lives in **Snowflake** (`SELF_SERVE.TTNN_OPS_V6`); see [GUIDE.md → Snowflake Reference](GUIDE.md#snowflake-reference-common-commands) for connection/env, creating tables, loading, and granting read/write access.
 
 ### Common Commands
 

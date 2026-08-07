@@ -32,7 +32,7 @@ inline constexpr const char* kDefaultTraceName = "END_TRACE";
 /**
  * @brief End capturing memory usage and store the trace with the given name
  * @param name The name to store the trace under (default: "END_TRACE")
- * @note If capture is not active, this function prints a warning
+ * @note If capture is not active, this function does nothing.
  * @note Not thread safe.
  */
 void end_capture(const std::string& name = kDefaultTraceName);
@@ -55,7 +55,8 @@ void snapshot(const std::string& name);
 /**
  * @brief Get DRAM usage of captured trace by name
  * @param name The name of the trace (default: "END_TRACE")
- * @note This function throws an exception if the named trace doesn't exist
+ * @note This function throws an exception if the named trace doesn't exist, or if more than
+ *       one segment shares the name (ambiguous - use get_dram_usage_all() for duplicates).
  * @return The DRAM usage
  * @note Not thread safe.
  */
@@ -71,7 +72,8 @@ std::vector<std::pair<std::string, DRAMUsage>> get_dram_usage_all();
 /**
  * @brief Get L1 usage of captured trace by name
  * @param name The name of the trace (default: "END_TRACE")
- * @note This function throws an exception if the named trace doesn't exist
+ * @note This function throws an exception if the named trace doesn't exist, or if more than
+ *       one segment shares the name (ambiguous - use get_l1_usage_all() for duplicates).
  * @return The L1 usage
  * @note Not thread safe.
  */
