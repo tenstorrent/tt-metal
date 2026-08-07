@@ -406,23 +406,24 @@ def find_all_stacks(root) -> list:
         etype = _dominant_type(members)
         triples.append((path, members, etype))
 
-    # Remove any triple whose path is a strict prefix of another triple with the
-    # same element type — keep the deeper (more specific) one.
+    # Remove stacks nested inside other stacks. A stack whose path lives under
+    # another stack's element path (e.g. layers.0.self_attn inside layers) is an
+    # internal sub-module, not an independent repeating block. Keep the outer one.
     def _is_prefix_of(a_path: str, b_path: str) -> bool:
-        """True when a_path is a strict prefix component of b_path."""
         if not a_path:
-            return bool(b_path)  # "" is prefix of everything non-empty
+            return bool(b_path)
         return b_path.startswith(a_path + ".")
 
     n = len(triples)
     dominated = [False] * n
     for i in range(n):
         for j in range(n):
-            if i == j:
+            if i == j or dominated[j]:
                 continue
-            path_i, _, etype_i = triples[i]
-            path_j, _, etype_j = triples[j]
-            if etype_i == etype_j and _is_prefix_of(path_i, path_j):
+            path_i, _, _ = triples[i]
+            path_j, _, _ = triples[j]
+            # If i is nested inside j's elements, mark i as dominated (keep j)
+            if _is_prefix_of(path_j, path_i):
                 dominated[i] = True
                 break
 
