@@ -2442,7 +2442,8 @@ class ModelArgs:
                     "P150x4": 32,
                 },
                 "gemma-2-9b": {
-                    "N150": 32,
+                    # No N150 entry: the full 42-layer model exhausts single-chip DRAM
+                    # during weight caching, so gemma-2-9b is not supported on N150.
                     "N300": 32,
                     "T3K": 32,
                     "TG": 32,
