@@ -5,9 +5,14 @@ contribute to decode performance. Each cell started from a decoder already optim
 anything the advisor adds is a real gain and not a re-derivation of work already done.
 
 The accounting is strict: the incoming decoder is frozen as the control, never re-tuned, and only what the
-advisor's directions add on top is counted. **That understates what the advisor contributed**, for three reasons
-set out in §3.6, §3.14 and §3.27. So §2 gives two numbers per cell where both exist: what the stage credited, and
-what was actually reachable.
+advisor's directions add on top is counted. **That understates what the advisor contributed**, in three ways.
+The metric that decides which candidates are worth measuring values the kind of change that produced about half
+the corpus's gains at zero, so those candidates were often never tried (§3.6). The one direction the advisor
+reliably gets right is recorded as a win zero times out of thirty-seven, including in the two cells that shipped
+exactly that change (§3.14). And no cell ever applied the advisor's plan as written — on the one cell where the
+comparison is possible, doing so is worth 3.7× what that cell shipped (§3.27).
+
+So §2 gives two numbers per cell where both exist: what the stage credited, and what was actually reachable.
 
 Everything below comes from the cells' own artefacts or from re-measurements on the same hardware. This is the
 short version; the detailed analysis is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md), where a reference like `§3.11`
