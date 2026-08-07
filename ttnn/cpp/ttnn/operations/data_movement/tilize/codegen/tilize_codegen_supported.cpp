@@ -84,11 +84,12 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
         return false;
     }
 
-    // The block regime (Wt > 32) is outside the measured envelope — no sweep case exceeds Wt == 8
-    // — and the block builder's CB-fit plan is not sufficient evidence for it: a Wt > 100k input
-    // ([160, 5210112]) passes the plan check and then wedges physical cores at run time, where
-    // native's block path handles it. Only the row / column-split regime is claimed.
-    if ((w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH > kBlockThreshold) {
+    // Widest swept Wt is 64 ([1, 1, 512, 2048]); past that the port is unmeasured and the block
+    // builder's CB-fit plan is not sufficient evidence: a Wt == 162816 input ([160, 5210112])
+    // passes the plan check and then wedges physical cores at run time, where native's block path
+    // handles it. Only the measured envelope is claimed.
+    constexpr uint32_t kMaxMeasuredWt = 64;
+    if ((w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH > kMaxMeasuredWt) {
         return false;
     }
 
