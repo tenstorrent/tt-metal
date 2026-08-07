@@ -650,13 +650,18 @@ targets:
       p300x2:
         entries:
           # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
-          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
-          # (b4 aggregate); accuracy is the token-matching (b1) target.
+          # token-matching (b1) accuracy check. Accuracy is the token-matching (b1) target.
+          # Perf re-seeded 2026-08-07 from the b4 data-parallel run 31146018726 after #48886
+          # (0a0510e7fc1, "Enable force_argmax fast-path on non-Galaxy") landed: measured
+          # 37.34 t/s/u / 149.35 t/s / 14.44 ms vs the old 20.88 / 83.5 / 19 targets, which
+          # tripped the validator's "much better than expected" upper bound. The 14 scheduled
+          # runs before #48886 sat at 18.9-21.3 t/s/u with no runner correlation, so this is a
+          # genuine step change from that optimization, not machine variance.
           - status: active
             perf:
-              prefill_time_to_first_token: 19
-              decode_t/s/u: 20.88
-              decode_t/s: 83.5
+              prefill_time_to_first_token: 14.4
+              decode_t/s/u: 37.3
+              decode_t/s: 149.4
             accuracy:
               top1: 90.0
               top5: 97.6
