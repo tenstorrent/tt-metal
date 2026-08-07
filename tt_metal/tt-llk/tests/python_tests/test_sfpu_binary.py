@@ -16,6 +16,7 @@ from helpers.golden_generators import (
     BinarySFPUGolden,
     BroadcastGolden,
     get_golden_generator,
+    quantize_input_to_unpack_format,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
@@ -352,12 +353,23 @@ def sfpu_binary(
             )
         src_A = override.repeat(src_A.numel() // override.numel())
 
+    # generate_stimuli round-trips Bfp4_b and Bfp2_b stimuli through their pack/unpack
+    # quantization but not Bfp8_b: the Bfp8_b format default only ever draws values that
+    # are already representable (integer 0..2 plus k/16), so nothing needed it. A registry
+    # domain -- or an src_A_override -- draws arbitrary values, and then the device sees
+    # Bfp8_b-quantized operands while the golden still sees the unrounded bf16 originals.
+    # That is the same golden/hardware split Phase 0 fixed inside UnarySFPUGolden. Quantize
+    # the golden's copy only, before broadcast: src_A keeps the unrounded values because
+    # the packer applies exactly this rounding when it writes the buffer to L1.
     golden_src = src_A
+    if formats.input_format == DataFormat.Bfp8_b:
+        golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_src = generate_broadcast_golden(
             broadcast_type,
-            src_A,
+            golden_src,
             (
                 formats.input_format
                 if formats.input_format != DataFormat.Bfp8_b
