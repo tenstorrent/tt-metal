@@ -275,7 +275,7 @@ protected:
 
     // ---- Census / AUTO-classifier probe harness ----
     // One binding kernel in a census shape. All kernels are single-node so per-node runtime args stay
-    // simple; an "off-node binder" shape is built by adding a second kernel on another node.
+    // simple; off-node shapes set CensusKernel::node (sole kernel elsewhere, or a second kernel there).
     struct CensusKernel {
         experimental::NodeCoord node{core};
         uint32_t num_threads = 1;
@@ -313,7 +313,9 @@ protected:
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
         // Each kernel gets barrier slot = its index; only NUM_KERNEL_BARRIERS(3) slots exist and
-        // wait_threads() does not bounds-check.
+        // wait_threads() does not bounds-check. A 3rd kernel using slot 2 (the seeder's) is safe:
+        // every census kernel binds counter_sem, so a multi-kernel census has >= 2 binder kernels
+        // and can never resolve DM_LOCAL_CACHED -- no seeder coexists.
         EXPECT_LE(kernels.size(), 3u) << "run_census supports at most 3 kernels (barrier slots)";
         // WorkUnitSpecs must have DISJOINT target nodes, so kernels sharing a node go into ONE work
         // unit (a work unit holds a Group of kernels). Grouped here by node, preserving order.
@@ -351,7 +353,7 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u},
-                     // Distinct barrier slot per kernel; slot 2 is reserved for the cached-sem seeder.
+                     // Distinct barrier slot per kernel (see the safety note on the cap above).
                      {"barrier_idx", static_cast<uint32_t>(i)}}),
             });
         }
@@ -406,7 +408,8 @@ protected:
 
     // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
     // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
-    // Throws (TT_FATAL) on a contradiction. No JIT/emu-kernel execution.
+    // Throws (TT_FATAL) on a contradiction before compiling. Nothing runs on the device, but the
+    // accepted scopes do JIT-compile (MakeProgramFromSpec builds the program).
     void make_program_with_forced_scope(SemaphoreScope scope, const experimental::Nodes& sem_target) {
         experimental::SemaphoreSpec sem{
             .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
@@ -449,7 +452,8 @@ TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
 
 // LOCAL_NONATOMIC scope: the legacy default (plain L1 read-modify-write). Single writer ->
 // value() == iterations. This also confirms the default path (used by existing DFB/CCL/SDPA
-// callers, and by every AUTO-resolved semaphore) still compiles + works after the token flip.
+// callers, and by Gen1 / Gen2-single-writer AUTO resolutions) still compiles + works after the
+// token flip.
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     const uint32_t observed = run_scope(SemaphoreScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
@@ -479,7 +483,8 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
 }
 
 // NOTE: token-CTAD deduction is exercised by every test here: sem::counter is a
-// SemaphoreBindingToken<id, baked-scope> and the kernels construct via plain `Semaphore s(sem::counter)`.
+// SemaphoreBindingToken<id, baked-scope, read_only> and the kernels construct via plain
+// `Semaphore s(sem::counter)`.
 
 // ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
 // atomic path from a non-atomic one; these do. ----
