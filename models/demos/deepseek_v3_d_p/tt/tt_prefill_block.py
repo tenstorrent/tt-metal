@@ -67,8 +67,20 @@ class TtPrefillBlock(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, is_dense: bool, experts_per_chip: int = 8) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        is_dense: bool,
+        experts_per_chip: int = 8,
+        *,
+        model_cfg: type | None = None,
+    ) -> bool:
+        """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
+        cannot know to look for the latent-projection cache files, and would report a cache that is
+        missing them as complete. Left optional so existing callers are unaffected.
+        """
         prefix = f"layer_{layer_idx}"
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
@@ -82,7 +94,15 @@ class TtPrefillBlock(LightweightModule):
             if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
                 return False
         else:
-            if not TtMoe.check_cache_complete(cache_path, layer_idx, experts_per_chip):
+            routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) if model_cfg else None
+            emb_size = getattr(model_cfg, "EMB_SIZE", None) if model_cfg else None
+            if not TtMoe.check_cache_complete(
+                cache_path,
+                layer_idx,
+                experts_per_chip,
+                use_latent_moe=routed_emb_dim is not None and routed_emb_dim != emb_size,
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True) if model_cfg else True,
+            ):
                 return False
 
         return True
@@ -188,6 +208,15 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 cache_path=cache_path,
                 layer_idx=layer_idx,
+                # LatentMoE dims must be read off model_cfg here exactly as _build_moe does. Omitting
+                # them would cache the shared expert at MOE_INTERMEDIATE_SIZE instead of
+                # SHARED_EXPERT_INTERMEDIATE_SIZE and skip the latent projections entirely -- and
+                # because a cache miss is regenerated from whatever tensor it is handed, that lands as
+                # a wrong-shaped-but-plausible cache rather than an error.
+                shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+                routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+                latent_weights=state_dict.get("latent_weights"),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
             )
         else:
             # Use static method (no device copy!)
@@ -412,6 +441,21 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+            # LatentMoE (Kimi-K3 only). getattr rather than a hard attribute read because every other
+            # model config lacks these; None then makes TtMoe fall back to emb_dim / hidden_dim, so
+            # their behaviour is untouched.
+            routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+            latent_weights=state_dict.get("latent_weights"),  # None if cache exists
+            latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            # From the HF config, the same source the block's attn_norm and ffn_norm use above, so
+            # all three norms in a block cannot disagree. Reading model_cfg.RMS_NORM_EPS instead
+            # happened to agree for K3 (kimi_k3_hf_config copies it) but nothing enforced that, and
+            # its 1e-5 fallback is wrong for the DeepSeek family's 1e-6.
+            rms_norm_eps=config.rms_norm_eps,
+            # Only models that declare a gate L1 ceiling get one; everything else passes None and is
+            # unaffected. Kimi-K3 declares 3200 (see KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP).
+            max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
