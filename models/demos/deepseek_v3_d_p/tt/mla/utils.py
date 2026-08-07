@@ -111,6 +111,28 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     return positions
 
 
+def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int) -> list[int]:
+    """Per-chip count of REAL (non-pad) rows carried by a rotated chunk, keyed off
+    rotated_chip_positions so it cannot drift from the writer kernel.
+
+    A rotated chunk's `chunk_size_global` rows tile [kv_actual_isl, kv_actual_isl + chunk_size_global)
+    but are spread across chips by the KV-pad-aware rotation, so a chip's real-row count is NOT
+    ``min(chunk_local, actual_isl - c * chunk_local)`` -- that formula only holds for the SEQUENTIAL
+    layout (which is the degenerate kv_actual_isl == 0 / slab-aligned case, where this function
+    reduces to it exactly).
+
+    Positions increase monotonically with the chip-local row (a slab step adds chunk_size_global
+    while the within-slab offset rewinds by at most chunk_local < chunk_size_global), so each chip's
+    real rows are a contiguous PREFIX of its local rows. That is what lets a single count per chip
+    describe the split, and why the consumers' RIGHT-padding contract still holds under rotation.
+    """
+    valid_end = kv_actual_isl + actual_isl
+    return [
+        sum(1 for p in row if kv_actual_isl <= p < valid_end)
+        for row in rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+    ]
+
+
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
     """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
     split of the cache's seq dim yields each chip's rows).

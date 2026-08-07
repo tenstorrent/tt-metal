@@ -6,7 +6,7 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include <stdint.h>
 
@@ -19,8 +19,8 @@
  */
 
 void kernel_main() {
-    constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
+    constexpr uint32_t src_dfb_idx = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_dfb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
 
@@ -48,11 +48,11 @@ void kernel_main() {
     auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
     using dst_accessor_type = decltype(s_dst);
 
-    CircularBuffer src_cb(src_cb_idx);
-    const uint32_t src_cb_addr = src_cb.get_write_ptr();
-    constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
-    CircularBuffer dst_cb(dst_cb_idx);
-    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
+    DataflowBuffer src_dfb(src_dfb_idx);
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    constexpr DataFormat src_data_format = get_dataformat(src_dfb_idx);
+    DataflowBuffer dst_dfb(dst_dfb_idx);
+    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     using src_element_type = decltype(default_val);
@@ -81,9 +81,9 @@ void kernel_main() {
         face_height_rem,
         face_width_rem,
         src_data_format,
-        src_cb_addr);
+        src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_cb_addr, output_page_elements);
+    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_dfb_addr, output_page_elements);
 
     Noc noc;
 
@@ -101,7 +101,7 @@ void kernel_main() {
             for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
                 const uint32_t src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
 
-                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
 
                 process_loaded_tile_all_h_columns<src_element_type, src_data_format>(

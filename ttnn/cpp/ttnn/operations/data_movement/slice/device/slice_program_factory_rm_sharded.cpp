@@ -25,8 +25,19 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
         return chunks;
     }
 
+    // Contiguous values coalesce into far fewer chunks than there are values, so count the
+    // runs up front instead of reserving the worst case
+    size_t num_chunks = 1;
+    for (size_t i = 1; i < values.size(); ++i) {
+        if (values[i] != values[i - 1] + 1) {
+            ++num_chunks;
+        }
+    }
+    chunks.reserve(num_chunks);
+
     // Initialize the first chunk
     std::vector<uint32_t> current_chunk;
+    current_chunk.reserve(values.size());
     current_chunk.push_back(values[0]);
 
     for (size_t i = 1; i < values.size(); ++i) {
@@ -39,7 +50,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
         }
     }
     // Add the last chunk
-    chunks.push_back(current_chunk);
+    chunks.push_back(std::move(current_chunk));
     return chunks;
 }
 
@@ -110,6 +121,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // stores all sticks id for a core
         std::vector<uint32_t> stick_ids_per_core;
+        stick_ids_per_core.reserve(num_sticks_per_core_unpadded);
         uint32_t src_stick_id = start_id;
         for (uint32_t i = 0; i < num_sticks_per_core_unpadded; ++i) {
             stick_ids_per_core.push_back(src_stick_id);
@@ -151,6 +163,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
+        reader_kernel_args.reserve(1 + 3 * core_stick_map.size() + 2 * num_sticks_per_core_unpadded);
         reader_kernel_args.push_back(core_stick_map.size());  // num_cores
 
         for (const auto& core_stick_pair : core_stick_map) {
@@ -166,11 +179,12 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        stick_chunks_per_core.reserve(core_stick_map.size());
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_values(core_stick_pair.second);
-            stick_chunks_per_core.push_back(stick_chunks);
-
             reader_kernel_args.push_back(stick_chunks.size());  // num_chunks for current core
+
+            stick_chunks_per_core.push_back(std::move(stick_chunks));
         }
         for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
@@ -180,7 +194,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         std::vector<uint32_t> writer_kernel_args;
-        ret_val[i] = {reader_kernel_args, writer_kernel_args};
+        ret_val[i] = {std::move(reader_kernel_args), std::move(writer_kernel_args)};
     }
 
     return ret_val;
@@ -254,6 +268,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // sizing in its own cache entry.  On cache hit, the framework copies runtime
     // args and patches dynamic CB addresses (.buffer is set below); CB sizing
     // itself is not re-applied — it is carried by the cached descriptor.
+    // CB order here (src0, then c_16) is mirrored positionally by override_runtime_arguments; keep in sync.
     constexpr uint8_t src0_cb_index = 0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = shard_height_padded * stick_size_padded,
@@ -327,14 +342,25 @@ void SliceDeviceOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth), then
-    // re-apply its rt-args + tensor-backed CB addresses to the cached program. No rebuild (still a hit).
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+
+    // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
+    // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
+    // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
+    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+        return;
+    }
+
+    // Other factories bake buffer addresses into their runtime args, so re-derive and re-apply.
     auto desc = std::visit(
-        [&](auto&& factory) {
-            return std::decay_t<decltype(factory)>::create_descriptor(
-                operation_attributes, tensor_args, tensor_return_value);
+        [&](auto&& f) {
+            return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
         },
-        select_program_factory(operation_attributes, tensor_args));
+        factory);
     tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 

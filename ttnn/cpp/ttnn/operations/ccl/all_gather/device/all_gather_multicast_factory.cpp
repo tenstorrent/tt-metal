@@ -48,7 +48,8 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor, barrier_sem);
+        auto cached_program = create_at(
+            operation_attributes, coord, tensor_args, output_tensor, barrier_sem, available_cores.num_cores());
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -61,7 +62,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const ttnn::MeshCoordinate& sender_device_coord,
     const AllGatherInputs& tensor_args,
     const Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& barrier_sem) {
+    const tt::tt_metal::GlobalSemaphore& barrier_sem,
+    uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
@@ -69,6 +71,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Fabric setup
     ////////////////////////////////////////////////////////////////
 
+    auto* mesh_device = input_tensor.device();
     const uint32_t num_devices = operation_attributes.num_devices;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
@@ -120,7 +123,29 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
-    const uint32_t packet_size = operation_attributes.packet_size;
+    // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+    auto physical_slot = [&](const MeshCoordinate& neighbor) {
+        const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
+            sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
+        TT_FATAL(
+            dir.has_value() && static_cast<uint32_t>(dir.value()) < tt::tt_fabric::eth_chan_directions::Z,
+            "AllGather expected a cardinal (E/W/N/S) fabric forwarding direction to a mesh neighbor");
+        return static_cast<uint32_t>(dir.value());
+    };
+    uint32_t e_dir = 0, w_dir = 0, n_dir = 0, s_dir = 0;
+    if (e_coord.has_value()) {
+        e_dir = physical_slot(*e_coord);
+    }
+    if (w_coord.has_value()) {
+        w_dir = physical_slot(*w_coord);
+    }
+    if (n_coord.has_value()) {
+        n_dir = physical_slot(*n_coord);
+    }
+    if (s_coord.has_value()) {
+        s_dir = physical_slot(*s_coord);
+    }
 
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
     // Enabled if any axis is an even-sized ring.
@@ -130,6 +155,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // matters when the output is freshly allocated by the op; a persistent/preallocated
     // output is guaranteed to already exist on every device before op kernel begins.
     const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+
+    const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -141,10 +168,26 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
     const uint32_t links0 = operation_attributes.axis_num_links[0];
     const uint32_t links1 = operation_attributes.axis_num_links[1];
-    const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+    uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
 
     // Get worker cores
     uint32_t num_workers_per_link = 1;
+    // Shrink core usage to fit available core grid.
+    if (min_num_links * num_workers_per_link > num_available_cores) {
+        const uint32_t fitted_links = num_available_cores / num_workers_per_link;
+        TT_FATAL(
+            fitted_links > 0,
+            "all_gather needs at least {} worker core(s) but only {} are available; provide a larger sub_core_grid.",
+            num_workers_per_link,
+            num_available_cores);
+        log_warning(
+            tt::LogOp,
+            "Using {} out of {} Fabric links due to limited {} worker cores. This may lead to performance loss.",
+            fitted_links,
+            min_num_links,
+            num_available_cores);
+        min_num_links = fitted_links;
+    }
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,
@@ -152,6 +195,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         operation_attributes.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
+    TT_FATAL(
+        worker_cores.size() == static_cast<size_t>(min_num_links) * num_workers_per_link,
+        "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
+        "sub_core_grid.",
+        static_cast<size_t>(min_num_links) * num_workers_per_link,
+        min_num_links,
+        num_workers_per_link,
+        worker_cores.size());
 
     ////////////////////////////////////////////////////////////////
     // Page indexing
@@ -181,13 +232,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-
-    auto input_shape = input_tensor.padded_shape();
-    uint32_t rank = input_shape.rank();
-    int32_t gather_dim = operation_attributes.dim;
-    if (gather_dim < 0) {
-        gather_dim += rank;
-    }
+    const auto& input_shape = input_tensor.padded_shape();
 
     // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
@@ -211,6 +256,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
+    TT_FATAL(
+        num_output_chunks / split_factor == num_input_pages,
+        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
+        num_input_pages,
+        split_factor);
 
     ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
 
@@ -241,21 +291,21 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     }
 
     // --- Stripe geometry ---
-    // input_pages_per_stripe = num input pages along [gather_dim .. rank-1] this
-    // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
+    // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
+    // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
     auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
-    for (int32_t i = gather_dim; i < rank; i++) {
+    for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
         uint32_t extent;
-        if (i == rank - 1) {
+        if (i == -1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
                 extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
             }
-        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
+        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
             extent = input_shape[i] / tile_spec.get_height();
         } else {
             extent = input_shape[i];
@@ -345,7 +395,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Runtime args
     ////////////////////////////////////////////////////////////////
 
-    auto* mesh_device = input_tensor.device();
     for (uint32_t link = 0; link < min_num_links; link++) {
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -356,11 +405,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
-        // Map this worker's slice of input pages to its slice of output chunks.
-        // num_output_chunks already accounts for split_factor, so in matched/concat
-        // modes the ratio cancels back to num_input_pages.
-        uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
-        uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+        // Map this worker's slice of input pages to its slice of output chunks. num_output_chunks is
+        // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
+        // matched/concat).
+        uint32_t local_output_start = input_tile_id_start * split_factor;
+        uint32_t local_output_end = input_tile_id_end * split_factor;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
         // s_start = global chunk index of this worker's first write:
         //     stripe_index  = local / output_chunks_per_stripe
@@ -403,8 +452,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
+            e_dir,                              // line_dir
+            e_dir,                              // rect_e_dir
+            w_dir,                              // rect_w_dir
+            s_dir,                              // rect_spine_dir
         };
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -444,8 +496,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
+            w_dir,                              // line_dir
+            e_dir,                              // rect_e_dir
+            w_dir,                              // rect_w_dir
+            n_dir,                              // rect_spine_dir
         };
-
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
         if (w_hops > 0 && w_coord.has_value()) {

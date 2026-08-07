@@ -434,6 +434,10 @@ jobs:
             echo "$SET"
             echo "EOF"
           } >> $GITHUB_OUTPUT
+          # Consumed directly by manual-docker-bake.sh (SBOM attest generator,
+          # oras binary for SBOM enrichment), not as a build-stage context.
+          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> $GITHUB_OUTPUT
+          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> $GITHUB_OUTPUT
 
       - name: Build and push Ubuntu images
         if: steps.bake.outputs.targets != ''
@@ -444,6 +448,13 @@ jobs:
           ubuntu-version: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
           python-version: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
+          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
+          oras-image: ${{ steps.bake.outputs.oras-image }}
+          # See publish-release-image.yaml's "Build and push" step for why:
+          # transient network blips against any external host, not a
+          # specific-registry problem.
+          retries: "2"
+          retry-delay-seconds: "15"
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
@@ -515,6 +526,10 @@ jobs:
             echo "$SET"
             echo "EOF"
           } >> $GITHUB_OUTPUT
+          # Consumed directly by manual-docker-bake.sh (SBOM attest generator,
+          # oras binary for SBOM enrichment), not as a build-stage context.
+          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> $GITHUB_OUTPUT
+          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> $GITHUB_OUTPUT
 
       - name: Build and push ManyLinux image
         uses: ./.github/actions/manual-docker-bake
@@ -522,6 +537,10 @@ jobs:
           targets: manylinux
           set-lines: ${{ steps.bake.outputs.set }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
+          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
+          oras-image: ${{ steps.bake.outputs.oras-image }}
+          retries: "2"
+          retry-delay-seconds: "15"
 
   build-llk-images:
     name: "🐳️ Build LLK Docker images"
