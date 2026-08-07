@@ -349,6 +349,7 @@ protected:
             });
         }
         std::vector<experimental::WorkUnitSpec> work_units;
+        work_units.reserve(by_node.size());
         for (size_t w = 0; w < by_node.size(); w++) {
             work_units.push_back(experimental::WorkUnitSpec{
                 .name = "wu" + std::to_string(w), .kernels = by_node[w].second, .target_nodes = by_node[w].first});

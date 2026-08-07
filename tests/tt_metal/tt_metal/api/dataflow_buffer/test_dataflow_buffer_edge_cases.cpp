@@ -299,10 +299,15 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     producer.compile_time_args = {
         {"num_entries_per_producer", kPushTiles}, {"implicit_sync", 1u}, {"kPreloadPostedValue", kPreloadValue}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
-    // The producer set()s prod_ready but only wait_min()s cons_ready, so cons_ready is OBSERVE
-    // (kept out of the writer census -> the sem stays on the cheap single-writer path).
+    // The producer set()s prod_ready and only wait_min()s cons_ready, so label each for what it does:
+    // SET for the one it writes (a destructive store, not an increment) and OBSERVE for the one it only
+    // reads. OBSERVE keeps cons_ready out of the writer census, so the sem stays on the cheap
+    // single-writer path. Both labels are load-bearing declarations the host trusts -- see the trust
+    // boundary note on KernelSpec::SemaphoreBinding::access_type.
     producer.semaphore_bindings = {
-        {.semaphore_spec_name = SEM_PROD_READY, .accessor_name = "prod_ready"},
+        {.semaphore_spec_name = SEM_PROD_READY,
+         .accessor_name = "prod_ready",
+         .access_type = m2::SemaphoreAccessType::SET},
         {.semaphore_spec_name = SEM_CONS_READY,
          .accessor_name = "cons_ready",
          .access_type = m2::SemaphoreAccessType::OBSERVE}};
@@ -321,12 +326,14 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         {"implicit_sync", 1u},
         {"kPreloadAckedValue", kPreloadValue}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
-    // Mirror image: the consumer set()s cons_ready but only wait_min()s prod_ready -> prod_ready is OBSERVE.
+    // Mirror image: the consumer set()s cons_ready and only wait_min()s prod_ready.
     consumer.semaphore_bindings = {
         {.semaphore_spec_name = SEM_PROD_READY,
          .accessor_name = "prod_ready",
          .access_type = m2::SemaphoreAccessType::OBSERVE},
-        {.semaphore_spec_name = SEM_CONS_READY, .accessor_name = "cons_ready"}};
+        {.semaphore_spec_name = SEM_CONS_READY,
+         .accessor_name = "cons_ready",
+         .access_type = m2::SemaphoreAccessType::SET}};
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
