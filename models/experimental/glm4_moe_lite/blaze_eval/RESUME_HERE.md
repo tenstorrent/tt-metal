@@ -1457,3 +1457,35 @@ config difference and points at the model's op interleaving.
 
 Note the log also shows `k/n_pad/k2/n_pad2 = None`: the q-stage `prepared` dict uses different key
 names than the qkv_a one, so those fields in the print need fixing to be useful.
+
+### L1 activation: ALSO CLEAN (6th). Every config difference is now eliminated.
+
+`bench_e_fused_stage_mesh_l1act.py` — the mesh bench with the activation moved from
+`DRAM_MEMORY_CONFIG` to `L1_MEMORY_CONFIG`, matching the model — **passes**: PCC 0.999819, no hang,
+and the multi-program probe keeps running after it.
+
+So the bench now matches the model on grid, banks, worker cores, receiver `(11,9)`, 32-chip mesh,
+Mcast, multiple programs, and L1 activation — and still does not hang.
+
+**Six hypotheses, six eliminated:**
+
+| # | hypothesis | result |
+|---|---|---|
+| 1 | shared `_PROGRAM_SEMAPHORES` | still hangs |
+| 2 | Mcast broken by trace | still hangs |
+| 3 | Mcast broken on a mesh | bench clean |
+| 4 | >1 program (N=2..5) | bench clean |
+| 5 | receiver-core collision | still hangs |
+| 6 | L1 vs DRAM activation | bench clean |
+
+**What is left is what the bench structurally cannot reproduce:** the model runs the stage
+*interleaved with* SDPA, the paged KV cache, MoE and the rest of the ttnn decode graph, 47 times
+per token, sharing L1 with all of it. The stage in isolation is fine at every configuration tried.
+
+**Suggested next moves, cheapest first:**
+1. Extend the multi-program probe from 5 to 47 in the bench — the only untested scale.
+2. Add ttnn ops *between* the probe's program runs (an SDPA-shaped L1 allocation would do) to
+   emulate sharing L1 with the decode graph.
+3. If both stay clean, the stage is fine and the fault is an interaction with the model's L1
+   allocator/CB layout — at which point dump the CB core ranges and L1 offsets from a model run
+   and check them against SDPA's static region, which `blaze_ops.py` already warns about.
