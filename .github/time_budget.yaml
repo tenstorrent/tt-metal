@@ -160,7 +160,7 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 30
+    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
   unit:
     bh_p100: 90
     bh_p150b_civ2: 90
