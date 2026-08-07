@@ -14,7 +14,9 @@
 #
 # Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
 #
-# Set SAFE_PYTEST_DISPATCH_TIMEOUT to override the five-second per-operation
+# Dev-mode overrides (all accept 0 or 1): SAFE_PYTEST_WATCHER,
+# SAFE_PYTEST_LLK_ASSERTS, and SAFE_PYTEST_DISABLE_MULTI_AERISC. Set
+# SAFE_PYTEST_DISPATCH_TIMEOUT to override the five-second per-operation
 # watchdog for an instrumented test while retaining hang detection.
 #
 # Options:
@@ -207,6 +209,12 @@ if [[ "$DEV_MODE" == true ]]; then
         exit 3
     fi
 
+    LLK_ASSERTS_ENABLED="${SAFE_PYTEST_LLK_ASSERTS:-1}"
+    if [[ "$LLK_ASSERTS_ENABLED" != "0" && "$LLK_ASSERTS_ENABLED" != "1" ]]; then
+        echo "SAFE_PYTEST_ERROR: SAFE_PYTEST_LLK_ASSERTS must be 0 or 1 (got: $LLK_ASSERTS_ENABLED)"
+        exit 3
+    fi
+
     DISABLE_MULTI_AERISC="${SAFE_PYTEST_DISABLE_MULTI_AERISC:-1}"
     if [[ "$DISABLE_MULTI_AERISC" != "0" && "$DISABLE_MULTI_AERISC" != "1" ]]; then
         echo "SAFE_PYTEST_ERROR: SAFE_PYTEST_DISABLE_MULTI_AERISC must be 0 or 1 (got: $DISABLE_MULTI_AERISC)"
@@ -220,6 +228,7 @@ if [[ "$DEV_MODE" == true ]]; then
     # while isolating a debug-only failure.
     if [[ "$DISABLE_MULTI_AERISC" == "1" ]]; then
         export TT_METAL_DISABLE_MULTI_AERISC=1
+        echo "SAFE_PYTEST_WARNING: --dev is using single-AERISC mode; a passing run does not validate the shipping dual-AERISC configuration. Set SAFE_PYTEST_DISABLE_MULTI_AERISC=0 to exercise it."
     else
         unset TT_METAL_DISABLE_MULTI_AERISC
     fi
@@ -233,7 +242,7 @@ if [[ "$DEV_MODE" == true ]]; then
     # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
     # Catches invalid hardware configurations, wrong unpack/pack parameters,
     # and API misuse deep in the compute pipeline. Also compiles as ebreak.
-    export TT_METAL_LLK_ASSERTS="${SAFE_PYTEST_LLK_ASSERTS:-1}"
+    export TT_METAL_LLK_ASSERTS="$LLK_ASSERTS_ENABLED"
 
     # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
     # waypoints, CB sanitization) with the host polling thread. Recent watcher
@@ -249,10 +258,15 @@ if [[ "$DEV_MODE" == true ]]; then
         export TT_METAL_WATCHER_NOINLINE=1
         export TT_METAL_WATCHER_DISABLE_ASSERT=1
         export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+    else
+        unset TT_METAL_WATCHER
+        unset TT_METAL_WATCHER_NOINLINE
+        unset TT_METAL_WATCHER_DISABLE_ASSERT
+        unset TT_METAL_WATCHER_DISABLE_DISPATCH
     fi
 
     if [[ "$SIM_MODE" == true ]]; then
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)"
+        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=${TT_METAL_LLK_ASSERTS} watcher=${WATCHER_ENABLED} single_aerisc=${DISABLE_MULTI_AERISC} (no hang detection on sim)"
     else
         echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=${TT_METAL_LLK_ASSERTS} watcher=${WATCHER_ENABLED} single_aerisc=${DISABLE_MULTI_AERISC} triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
