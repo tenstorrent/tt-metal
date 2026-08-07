@@ -189,8 +189,6 @@ public:
     void set_per_pid_tracking(bool enabled) { per_pid_tracking_enabled_ = enabled; }
     bool is_per_pid_tracking_enabled() const { return per_pid_tracking_enabled_; }
 
-    bool is_cb_tracking_enabled() const { return cb_tracking_enabled_; }
-
 private:
     uint64_t asic_id_;               // UMD chip_unique_id (for SHM naming)
     int device_id_;                  // Logical Metal device ID (for internal tracking)
