@@ -97,30 +97,24 @@ def _load_counter_names(arch: ChipArchitecture) -> dict:
     if arch_dir is None:  # Quasar / unsupported: no hw_counters.h yet.
         return {bank: {} for bank in COUNTER_BANK_NAMES.values()}
     header = _metal_root() / f"tt_metal/hw/inc/internal/tt-1xx/{arch_dir}/hw_counters.h"
-    return _parse_hw_counters(header.read_text())
+    banks = _parse_hw_counters(header.read_text())
+    # Fail loudly, not open: if the regex stops matching, every column becomes UNKNOWN and metrics.py
+    # turns the misses into 0.0, so the report is a page of plausible zeros with no error.
+    missing = [
+        b
+        for b in ("INSTRN_THREAD", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
+        if not banks.get(b)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Could not parse counter names from {header}: empty banks {missing}. "
+            "The pair syntax in hw_counters.h probably changed; update _parse_hw_counters."
+        )
+    return banks
 
 
-# The L1 group names that come out of hw_counters.h are UNVERIFIED and several are wrong. Only eight
-# physical L1 counters exist, and MUX_CTRL[6:4] routes one group of eight client interfaces into them
-# while they COUNT rather than when they are read, so a run observes group g = interfaces 8g..8g+7 and
-# the names are only labels on those indices.
-#
-# What measurement does establish, reproducibly, is the driving thread of each active interface, taken
-# from the isolated run types: an interface busy only in UNPACK_ISOLATE belongs to unpack, only in
-# PACK_ISOLATE to pack. On perf_matmul TILE_LOOP, by grant count:
-#   unpack  group0 slots 0 (163840) and 1 (32768); group1 slots 1-3 (32768 each);
-#           group2 slots 0-3 (32768 each); group4 slots 3-7 (163840 each)
-#   pack    group1 slot 0 (5120); group3 slots 4-5 (5120) and 6 (1280); group4 slot 2 (5120)
-# Grants are exactly conserved between ISOLATE and L1_CONGESTION, so contention shows up only as
-# request-asserted-minus-granted cycles, never as a change in grant count.
-#
-# So group2's "NOC_RING2_*" columns are unpack traffic and group1's "RISC_CORE" is pack traffic. Do not
-# read these names as client functions. They are deliberately not renamed yet: one RTL reading put
-# interfaces 35-39 as tied off, which would make group4 slots 3-7 dead, but those slots scale 160x with
-# tile count (1024 -> 163840 grants) while the window scales only 73x, so they carry real per-tile
-# traffic. The likeliest explanation is that USE_4_NOCS comes from the build rather than from RTL
-# source. Settle that before renaming any column.
-# Active-arch table: {bank: {id: name}} with L1 keyed by (id, mux).
+# The L1 group names from hw_counters.h are UNVERIFIED and several are wrong: the mux routes
+# interfaces at count time, so these are labels on indices, not confirmed client functions.
 COUNTER_NAMES = _load_counter_names(get_chip_architecture())
 
 
@@ -215,6 +209,15 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
 
         bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+
+        if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
+            # The group is baked into brisc.elf, and nothing keys a rebuild on it, so a stale ELF
+            # would otherwise return a self-consistently labelled duplicate dataset.
+            raise RuntimeError(
+                f"L1 counters were captured with mux group {l1_mux}, but "
+                f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
+                "the change; recompile the producer (the group is a compile-time constant)."
+            )
 
         if bank_name == "L1":
             counter_name = COUNTER_NAMES["L1"].get(

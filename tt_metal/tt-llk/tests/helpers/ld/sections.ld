@@ -132,10 +132,8 @@ SECTIONS
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
-    /* Perf-counter zone allocator (counters.h) goes last in .bss. It exists only in the counter
-       build, so keeping it after every other global means its presence cannot shift the gp-relative
-       offsets of shared globals between the two builds. Still inside [__ldm_bss_start,
-       __ldm_bss_end), so do_crt0() zero-inits it. */
+    /* Counter-build only, so it goes last: its presence must not shift other globals' gp-relative
+       offsets between builds. Inside [__ldm_bss_start, __ldm_bss_end), so do_crt0() zero-inits it. */
     *(.perf_counters_bss)
     . = ALIGN(4);
     __ldm_bss_end = .;
