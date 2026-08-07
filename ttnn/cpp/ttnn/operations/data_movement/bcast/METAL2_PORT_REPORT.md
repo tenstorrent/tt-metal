@@ -37,6 +37,17 @@ Target: **Blackhole (`p100a`)** — the physical device on this host (UMD auto-d
 
 The C++ gtest and `test_binary_bcast -k test_bcast` were re-run at `ARCH_NAME=blackhole` (both green). `misc/test_bcast.py` (640) and the SD cross-attention case ran on the same Blackhole device. No-regression baseline confirmed with the invoker (pass 1).
 
+**Transitive coverage (independent consumers, all green on Blackhole).** The op is also exercised by other ttnn ops and models that call `ttnn::bcast` internally — independent confirmation of the ported factories:
+
+| Consumer | bcast path | Result |
+|---|---|---|
+| `test_stats.py` — `std_hw`/`var_hw`/`normalize_hw`/`normalize_global` (`unary_composite_op.cpp` → `bcast(SUB, HW)`) | HW interleaved | 15 passed |
+| `test_backward_prod.py` — `prod_bw` (`unary_backward.cpp` → `bcast(MUL, H/W)`) | H + W interleaved | 219 passed |
+| SD `test_resnet_block_2d.py` (`bcast(·, H)`) | H | 22 passed |
+| Falcon40B `test_falcon_layernorm.py` (1×1 grid; `bcast(·, H)`) | H | 1 passed |
+
+*Not runnable on this card (not a bcast issue):* BERT-large-11 `test_ffn.py`/`test_mha.py` abort in **matmul** (`MatmulMultiCoreReuseMultiCastProgramConfig` needs a 12×9 grid > Blackhole p100a's 11×10) before any bcast op is reached — a device-grid mismatch in the model, unrelated to the port (0 bcast ops fired in those logs). `ttnn.add` and `ops_for_profiling.py` are *not* bcast exercisers (the `ttnn.bcast` call in `test_add.py` is commented out; profiling is not a correctness test).
+
 **HW coverage — both paths verified on device.** Interleaved HW: C++ gtest + the `-k test_bcast` HW cases. **HEIGHT-sharded HW** (`IN0_SHARDED`+`OUT_SHARDED`, borrowed DFBs on the shard grid): the stable-diffusion cross-attention self-attention path exercises exactly this — `ttnn_functional_cross_attention.py:517` calls `ttnn.bcast(dim=HW, memory_config=<HEIGHT_SHARDED>)` on a resharded (line 496) tensor — and **all 16** of `test_cross_attention.py`'s `has_encoder_hidden_states=False` cases pass (verified here across down/mid/up blocks × head_dim 40/80/160; also in CI: perf-models / single-card-demo / t3k). *(Earlier draft wrongly called sharded HW "unverified"; it is production-exercised and now confirmed across 16 shapes.)*
 
 ## TTNN ProgramFactory
