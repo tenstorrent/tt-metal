@@ -170,6 +170,12 @@ private:
     // so the main thread can handle the exception
     std::atomic<bool> thread_exception_state_ = false;
 
+    // Poll completion-queue reads, aborting early if watcher trips in test mode.
+    void wait_for_outstanding_reads(std::unique_lock<std::mutex>& reads_processed_lock);
+
+    // Route watcher faults through the same exception path as the completion-queue reader thread.
+    bool record_watcher_error_in_test_mode(ChipId device_id);
+
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 

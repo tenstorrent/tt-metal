@@ -42,13 +42,13 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
 
 InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    std::vector<ttnn::TensorSpec> specs;
+    std::vector<tt::tt_metal::TensorSpec> specs;
     // tokens: identical per-shard spec to the backing tensor.
     specs.push_back(tensor_args.backing.tensor_spec());
     // metadata: [1,1,1, metadata_size_bytes/4] uint32 ROW_MAJOR DRAM, replicated.
     if (args.metadata_size_bytes > 0) {
         const ttnn::Shape meta_shape({1u, 1u, 1u, args.metadata_size_bytes / 4u});
-        specs.push_back(TensorSpec(
+        specs.push_back(tt::tt_metal::TensorSpec(
             meta_shape,
             TensorLayout(
                 DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})));
@@ -66,27 +66,6 @@ InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyn
         outputs.push_back(create_device_tensor(spec, device));
     }
     return outputs;
-}
-
-ttsl::hash::hash_t InboundSocketServiceSyncOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Stable across calls for a given (service, config): the changing output
-    // address is a BufferBinding (patched on cache hit), NOT part of the hash.
-    auto program_factory = select_program_factory(args, tensor_args);
-    return operation::hash_operation<InboundSocketServiceSyncOperation>(
-        program_factory.index(),
-        args.data_ready_sem_addr,
-        args.page_size,
-        args.num_pages,
-        args.scratch_cb_index,
-        args.metadata_size_bytes,
-        args.metadata_l1_addr,
-        args.worker_cores,
-        args.mesh_num_cols,
-        args.consumed_addrs,
-        args.service_core_x,
-        args.service_core_y,
-        tensor_args.backing.dtype());
 }
 
 }  // namespace ttnn::experimental::prim
@@ -146,7 +125,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
+    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
     return inbound_socket_service_sync_impl(service, metadata_size_bytes);
 }
 

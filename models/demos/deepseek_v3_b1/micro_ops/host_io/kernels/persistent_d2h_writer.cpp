@@ -90,6 +90,22 @@ void kernel_main() {
             break;
         }
 
+        if constexpr (num_socket_pages == 0) {
+            // Metadata-only: wait for the reader's per-transfer token page (gated on write_ack)
+            // before pushing metadata, so we don't free-run stale records into the socket FIFO.
+            while (!data_cbuf.pages_available_at_front(1)) {
+                invalidate_l1_cache();
+                if (termination_semaphore[0] == 1) {
+                    terminated = true;
+                    break;
+                }
+            }
+            if (terminated) {
+                break;
+            }
+            data_cbuf.pop_front(1);
+        }
+
         if constexpr (metadata_enabled) {
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
                 terminated = true;

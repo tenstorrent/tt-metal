@@ -11,7 +11,6 @@
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -114,24 +113,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
-ttsl::hash::hash_t AllToAllCombineDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Workaround for PR #44408: the cross_device_semaphore and init_semaphore
-    // L1 addresses are baked into the cached program at first miss and never
-    // refreshed on cache hit (the descriptor framework only re-patches Buffer*
-    // slots).  Hash the input tensor buffer addresses so any allocation churn
-    // -- e.g. the failing test reallocating input tensors per iter -- forces
-    // a fresh build with current semaphore addresses.  Stable across trace
-    // replays that reuse the same buffers, so trace tests still cache-hit.
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<AllToAllCombineDeviceOperation>,
-        attrs,
-        tensor_args,
-        tensor_args.input_tensor.buffer()->address(),
-        tensor_args.mapping_tensor.buffer()->address(),
-        tensor_args.metadata_tensor.buffer()->address());
-}
-
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
@@ -164,7 +145,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
         ttnn::Shape({selected_experts_k, total_batch_per_device_size, total_seq_per_device_size, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(output_shape),
         TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), mem_config));
 }

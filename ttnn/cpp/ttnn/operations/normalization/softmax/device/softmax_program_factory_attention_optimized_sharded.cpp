@@ -351,7 +351,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     }
 
     // Runtime Args
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
+    Buffer* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask->buffer() : nullptr;
     uint32_t scale_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 
@@ -365,6 +365,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     uint32_t num_cores_per_batch_index = 0;
 
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+        std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+        reader_args.reserve(4);
         for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 CoreCoord core = {
@@ -372,15 +374,15 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
                     static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                KernelDescriptor::CoreRuntimeArgs reader_args;
+                reader_args.clear();
                 reader_args.push_back(scale_u);
-                reader_args.push_back(mask_addr);
+                reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }
 
-                reader_desc.runtime_args.emplace_back(core, std::move(reader_args));
+                reader_desc.emplace_runtime_args(core, reader_args);
 
                 num_cores_per_batch_index++;
 
@@ -406,6 +408,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
             }
         }
     } else {
+        std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+        reader_args.reserve(4);
         for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
                 CoreCoord core = {
@@ -413,15 +417,15 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
                     static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                KernelDescriptor::CoreRuntimeArgs reader_args;
+                reader_args.clear();
                 reader_args.push_back(scale_u);
-                reader_args.push_back(mask_addr);
+                reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }
 
-                reader_desc.runtime_args.emplace_back(core, std::move(reader_args));
+                reader_desc.emplace_runtime_args(core, reader_args);
 
                 num_cores_per_batch_index++;
 

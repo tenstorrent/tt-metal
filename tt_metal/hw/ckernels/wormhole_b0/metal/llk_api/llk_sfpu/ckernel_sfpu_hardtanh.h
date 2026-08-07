@@ -6,10 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
+
+inline void hardtanh_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // Hardtanh(x) = max_val if x > max_val, min_val if x < min_val, else x
 // Equivalent to: clamp(x, min_val, max_val) = min(max(x, min_val), max_val)
@@ -21,13 +24,7 @@ inline void calculate_hardtanh(uint param0, uint param1) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        // Branchless clamp: vec_min_max(a, b) sets a = min(a, b), b = max(a, b).
-        // Use fresh copies of the bounds each iteration since they get overwritten.
-        sfpi::vFloat lo = min_val;
-        sfpi::vFloat hi = max_val;
-        sfpi::vec_min_max(lo, v);  // v = max(v, min_val)
-        sfpi::vec_min_max(v, hi);  // v = min(v, max_val)
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[0] = sfpi::clamp(v, min_val, max_val);
         sfpi::dst_reg++;
     }
 }

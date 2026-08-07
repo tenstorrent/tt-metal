@@ -6,6 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstring>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -96,4 +99,35 @@ TEST(SafeTensorsTest, DISABLED_LoadSimpleMlp) {
     EXPECT_EQ(tensors[3].name, "net.2.weight");
     EXPECT_EQ(tensors[4].name, "net.4.bias");
     EXPECT_EQ(tensors[5].name, "net.4.weight");
+}
+
+TEST(SafeTensorsTest, F16DecodeSubnormals) {
+    // uint16 F16 bit patterns, little-endian, decoded via bytes_to_float_vec.
+    const std::vector<uint16_t> halves = {
+        0x0000,  // +0
+        0x0001,  // smallest subnormal, 2^-24
+        0x0200,  // mid subnormal, 2^-15
+        0x03FF,  // largest subnormal
+        0x0400,  // smallest normal, 2^-14
+        0x3C00,  // 1.0
+    };
+    const std::vector<float> expected = {
+        0.0f,
+        5.9604645e-08f,
+        3.0517578e-05f,
+        6.0975552e-05f,
+        6.1035156e-05f,
+        1.0f,
+    };
+
+    std::vector<std::byte> bytes(halves.size() * sizeof(uint16_t));
+    std::memcpy(bytes.data(), halves.data(), bytes.size());
+
+    auto out = ttml::serialization::SafetensorSerialization::bytes_to_float_vec(
+        std::span<const std::byte>(bytes.data(), bytes.size()), "F16");
+
+    ASSERT_EQ(out.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_EQ(out[i], expected[i]);
+    }
 }

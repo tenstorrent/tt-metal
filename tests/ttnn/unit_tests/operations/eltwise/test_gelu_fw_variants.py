@@ -11,10 +11,12 @@ matching torch.nn.functional.gelu reference with a ULP-based assertion.
 """
 
 import math
+
 import pytest
 import torch
 import ttnn
 from loguru import logger
+
 from tests.ttnn.utils_for_testing import ulp_distance
 
 pytestmark = pytest.mark.use_module_device
@@ -39,11 +41,10 @@ _VARIANTS = {
 #   FP32 ULPs. Computing via the sigmoid identity `x * sigmoid(2*scaled)`
 #   avoids cancellation but diverges from torch by a similar magnitude.
 #
-# Tanh BF16 (0 + 2 tolerated):
-#   BF16's 7-bit mantissa hides the cancellation precision loss, so the kernel
-#   matches torch FP32 -> BF16 exactly except at two specific inputs
-#   (-4.625, -4.8125) where the FP32 rounding direction in tanh's
-#   `2*sigmoid(2x) - 1` flips vs torch's. Those get +1 ULP grace.
+# Tanh tiny negative tail:
+#   For outputs near zero, tiny absolute differences in the tanh residual
+#   (`1 + tanh(scaled)`) can be millions of final-output ULPs. Validate that
+#   region with an absolute-error bound and keep strict ULP checks elsewhere.
 _THRESHOLDS = {
     ("accurate", "bf16"): (128, []),
     ("accurate", "fp32"): (1_000_000_000, []),
@@ -52,6 +53,9 @@ _THRESHOLDS = {
     ("tanh", "bf16"): (0, [-4.625, -4.8125]),
     ("tanh", "fp32"): (400, []),
 }
+
+_TANH_TAIL_OUTPUT_THRESHOLD = 5.0e-3
+_TANH_TAIL_ABS_TOLERANCE = 5.0e-7
 
 # Tile-aligned input grid size. 256x256 = 65536 elements, 8x8 tiles.
 _GRID = (256, 256)
@@ -134,8 +138,15 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
     actual = ttnn.to_torch(tt_output)
 
-    # Drop NaN/Inf slots (tested separately).
-    valid = finite_mask & ~expected.isnan() & ~expected.isinf() & ~actual.isnan() & ~actual.isinf()
+    # Drop NaN/Inf slots (tested separately), but first make sure finite
+    # reference outputs did not become non-finite on device.
+    finite_reference = finite_mask & ~expected.isnan() & ~expected.isinf()
+    bad_actual_nonfinite = finite_reference & (actual.isnan() | actual.isinf())
+    assert not bad_actual_nonfinite.any(), (
+        f"{variant_name} [{dtype_name}]: device produced NaN/Inf for "
+        f"{int(bad_actual_nonfinite.sum().item())} finite reference outputs"
+    )
+    valid = finite_reference & ~actual.isnan() & ~actual.isinf()
     ulps = ulp_distance(expected, actual)
 
     # Inputs where |x| < 2^-125 cause the kernel's `0.5 * x` intermediate to
@@ -145,6 +156,12 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
     FTZ_INPUT_THRESHOLD = 2.0**-125  # ~2.35e-38
     ftz_safe = input_tensor.abs() >= FTZ_INPUT_THRESHOLD
     assertable = valid & ftz_safe
+    tanh_tiny_tail = (
+        assertable
+        & (variant_name == "tanh")
+        & (input_tensor < 0)
+        & (expected.abs().float() < _TANH_TAIL_OUTPUT_THRESHOLD)
+    )
 
     # Log max/mean ULP and the single worst offender for the assertable set.
     assertable_ulps = ulps[assertable]
@@ -171,6 +188,18 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
             f"  [note] {excluded_count} inputs with |x| < 2^-125 excluded from the strict ULP "
             f"assertion (SFPU FTZ on the 0.5*x intermediate). Their max ULP was {excluded_max}."
         )
+    tail_count = int(tanh_tiny_tail.sum().item())
+    if tail_count > 0:
+        tail_absdiff = (actual.float() - expected.float()).abs()[tanh_tiny_tail]
+        tail_max_absdiff = float(tail_absdiff.max().item())
+        logger.info(
+            f"  [note] {tail_count} tanh tiny-tail outputs with |expected| < "
+            f"{_TANH_TAIL_OUTPUT_THRESHOLD:g} checked by abs tolerance. "
+            f"max absdiff={tail_max_absdiff:.6g}"
+        )
+        assert tail_max_absdiff <= _TANH_TAIL_ABS_TOLERANCE, (
+            f"{variant_name} [{dtype_name}]: tiny-tail max absdiff {tail_max_absdiff} > " f"{_TANH_TAIL_ABS_TOLERANCE}"
+        )
 
     if ulp_threshold is not None:
         # Tolerated inputs get +1 ULP grace.
@@ -178,7 +207,7 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
         for v in tolerated_inputs:
             is_tolerated = is_tolerated | (input_tensor == torch.tensor(v, dtype=torch_dtype))
 
-        strict_mask = assertable & ~is_tolerated
+        strict_mask = assertable & ~is_tolerated & ~tanh_tiny_tail
         max_strict_ulp = int(ulps[strict_mask].max().item()) if strict_mask.any() else 0
         assert max_strict_ulp <= ulp_threshold, (
             f"{variant_name} [{dtype_name}]: max ULP {max_strict_ulp} > {ulp_threshold} on "
@@ -186,7 +215,7 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
         )
 
         if is_tolerated.any():
-            loose_mask = assertable & is_tolerated
+            loose_mask = assertable & is_tolerated & ~tanh_tiny_tail
             max_loose_ulp = int(ulps[loose_mask].max().item()) if loose_mask.any() else 0
             assert max_loose_ulp <= ulp_threshold + 1, (
                 f"{variant_name} [{dtype_name}]: max ULP {max_loose_ulp} > {ulp_threshold + 1} "

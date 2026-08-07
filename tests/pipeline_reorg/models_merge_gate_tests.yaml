@@ -2,6 +2,7 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id, model (optional).
 # For max allowed timeout refer to .github/time_budget.yaml (models -> merge_gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 #
 # Intended first entry:
 # - name: GPT-OSS 120B e2e tests

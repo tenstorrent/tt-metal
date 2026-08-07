@@ -459,9 +459,20 @@ def run_all_to_all_combine_test(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     test_skew=False,
+    check_program_cache_entries=None,
 ):
     if test_skew and local_reduce:
         pytest.skip("Skip skew test for local reduce")
+    # When asserting cache behavior, run with the program cache ENABLED and reallocate inputs per
+    # iter (done below) so a cache hit exercises the stale-runtime-arg path. Regression guard for
+    # the address-in-hash workaround removed from AllToAllCombineDeviceOperation::compute_program_hash:
+    # if a baked semaphore/buffer address were to go stale on a hit the correctness check fails, and
+    # if keying regressed to per-realloc misses the entry-count assertion fails.
+    if check_program_cache_entries is not None:
+        mesh_device.enable_program_cache()
+        from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+        mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
     devices = mesh_shape[0] * mesh_shape[1]
     # input, output, interm core range set
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -569,7 +580,11 @@ def run_all_to_all_combine_test(
         else:
             return [tt_out_tensor]
 
-    tt_out_tensor_list = run_op(num_iters, store_all_results=True)
+    if check_program_cache_entries is not None:
+        with mesh_device.cache_entries_counter.measure():
+            tt_out_tensor_list = run_op(num_iters, store_all_results=True)
+    else:
+        tt_out_tensor_list = run_op(num_iters, store_all_results=True)
 
     failed = False
     for tt_out, (ref, data_map) in zip(tt_out_tensor_list, output_tensor_goldens_list):
@@ -585,6 +600,14 @@ def run_all_to_all_combine_test(
         else:
             tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
         check_results(tt_out_agg, ref, data_map)
+
+    if check_program_cache_entries is not None:
+        logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
+        assert mesh_device.cache_entries_counter.total == check_program_cache_entries, (
+            f"Expected {check_program_cache_entries} program cache entry/entries, got "
+            f"{mesh_device.cache_entries_counter.total} -- program cache is missing on cache hit "
+            f"(stale-address hash workaround regression?)"
+        )
 
 
 def check_results(test_tensor, ref_tensor, data_map):
@@ -720,7 +743,17 @@ def test_all_to_all_combine_no_trace(
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
-    mesh_device.disable_and_clear_program_cache()
+    # Program cache stays enabled (see run_all_to_all_combine_test): with num_iters=2 and inputs
+    # reallocated each iter, iter 2 must be a cache HIT so the count reflects distinct programs, not
+    # dispatches. The measured (device-wide) delta counts every program-cached op run in the window:
+    #   - all_to_all_combine itself (1 entry; hits on iter 2 -- this is what the guard protects).
+    #   - the zeroed output it allocates internally via ttnn::moreh_full when no output tensor is
+    #     passed (all_to_all_combine.cpp) -- moreh_full is itself a cached device op (+1, hits on iter 2).
+    # A genuine keying regression (rebuild every realloc) would make all_to_all_combine miss twice,
+    # pushing the total to 3 (or 4 with skew) -- so this assertion still catches it. test_skew adds a
+    # separate apply_device_delay program (+1). Unlike the dispatch sibling, combine's output goes
+    # through moreh_full, which is why its baseline is one higher.
+    expected_cache_entries = 3 if test_skew else 2
 
     run_all_to_all_combine_test(
         mesh_device,
@@ -739,6 +772,7 @@ def test_all_to_all_combine_no_trace(
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         test_skew=test_skew,
+        check_program_cache_entries=expected_cache_entries,
     )
 
 

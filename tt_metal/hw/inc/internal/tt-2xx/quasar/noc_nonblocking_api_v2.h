@@ -46,7 +46,7 @@ constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 // NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
 constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
 constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
-constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 1;
 constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
 constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
@@ -132,10 +132,66 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     *ptr = val;
 }
 
+inline __attribute__((always_inline)) uint64_t NOC_CMD_BUF_READ_OVERLAY_REG(uint32_t buf, uint32_t reg_offset) {
+    // The AT buffer is backed by Quasar's simple command buffer; WR/RD buffers are regular indexed command buffers.
+    if (buf == OVERLAY_AT_CMD_BUF) {
+        return __builtin_riscv_ttrocc_scmdbuf_rd_reg(reg_offset / 8);
+    }
+    return __builtin_riscv_ttrocc_cmdbuf_rd_reg(buf, reg_offset / 8);
+}
+
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    uintptr_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-    volatile uint32_t* ptr = (volatile uint32_t*)offset;
-    return *ptr;
+    switch (addr) {
+        // NOC_TARG_ADDR_* -> cmd-buf SRC_{ADDR,COORD} (data source: remote for reads, local for writes)
+        case NOC_TARG_ADDR_LO:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET);
+
+        case NOC_TARG_ADDR_MID:
+            return (
+                uint32_t)(NOC_CMD_BUF_READ_OVERLAY_REG(buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET) >>
+                          32);
+
+        case NOC_TARG_ADDR_HI:  // NOC_TARG_ADDR_COORDINATE aliases this
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET);
+
+        // NOC_RET_ADDR_* -> cmd-buf DEST_{ADDR,COORD} (data dest: local for reads, remote for writes)
+        case NOC_RET_ADDR_LO:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET);
+
+        case NOC_RET_ADDR_MID:
+            return (uint32_t)(NOC_CMD_BUF_READ_OVERLAY_REG(
+                                  buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET) >>
+                              32);
+
+        // NOC_RET_ADDR_COORDINATE aliases this
+        case NOC_RET_ADDR_HI:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET);
+
+        // NOC_AT_LEN_BE aliases NOC_AT_LEN on Quasar
+        case NOC_AT_LEN:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET);
+
+        // Inline write / atomic data value
+        case NOC_AT_DATA:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET);
+
+        // NOC_CMD_CTRL is the transaction trigger on BH/WH (written as 0x1 to fire);
+        // on Quasar the trigger is cmdbuf_issue_trans() with no stored state.
+        case NOC_CMD_CTRL: return 0;
+
+        // NOC_NODE_ID and other NOC config registers are true MMIO globals - not cmd buf registers (buf-independent).
+        default: {
+            ASSERT(buf == 0);  // cmd-buf regs route through RoCC above; this path is globals-only
+            uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+            return *((volatile uint32_t*)offset);
+        }
+    }
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_REG_ADDR(uint32_t noc, uint32_t reg_id) {
@@ -1485,9 +1541,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // Same as above, but with src_noc_addr giving the source NOC address separately.
@@ -1519,9 +1576,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // clang-format off

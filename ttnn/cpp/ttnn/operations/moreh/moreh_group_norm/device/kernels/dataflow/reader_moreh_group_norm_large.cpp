@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -53,10 +53,10 @@ void kernel_main() {
     const auto cb_id_mask_h = cb_id++;
     const auto cb_id_mask_w = cb_id++;
 
-    CircularBuffer cb_scaler(cb_id_scaler);
-    CircularBuffer cb_eps(cb_id_eps);
-    fill_cb_with_value(cb_scaler, scaler);
-    fill_cb_with_value(cb_eps, eps);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_eps(cb_id_eps);
+    fill_cb_with_value(dfb_scaler, scaler);
+    fill_cb_with_value(dfb_eps, eps);
 
     const bool do_mask_h = (origin_h % TILE_H) != 0;
     const auto mask_h = do_mask_h ? origin_h % TILE_H : TILE_H;
@@ -65,12 +65,12 @@ void kernel_main() {
     const auto mask_w = do_mask_w ? origin_w % TILE_W : TILE_W;
 
     if (do_mask_h) {
-        CircularBuffer cb_mask_h(cb_id_mask_h);
-        generate_mask_h(cb_mask_h, mask_h);
+        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        generate_mask_h(dfb_mask_h, mask_h);
     }
     if (do_mask_w) {
-        CircularBuffer cb_mask_w(cb_id_mask_w);
-        generate_mask_w(cb_mask_w, mask_w);
+        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+        generate_mask_w(dfb_mask_w, mask_w);
     }
 
     // input
@@ -86,58 +86,58 @@ void kernel_main() {
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_gamma(cb_id_gamma);
-    CircularBuffer cb_beta(cb_id_beta);
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_gamma(cb_id_gamma);
+    DataflowBuffer dfb_beta(cb_id_beta);
 
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
         // For E[x]
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_input.reserve_back(block_size);
+            dfb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                 noc.async_read(
                     input_addrg,
-                    cb_input,
+                    dfb_input,
                     input_tile_bytes,
                     {.page_id = input_tile_idx},
                     {.offset_bytes = r * input_tile_bytes});
             }
             noc.async_read_barrier();
-            cb_input.push_back(block_size);
+            dfb_input.push_back(block_size);
         }  // inner_idx loop
 
         // For Var[x]
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_input.reserve_back(block_size);
+            dfb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                 noc.async_read(
                     input_addrg,
-                    cb_input,
+                    dfb_input,
                     input_tile_bytes,
                     {.page_id = input_tile_idx},
                     {.offset_bytes = r * input_tile_bytes});
             }
             noc.async_read_barrier();
-            cb_input.push_back(block_size);
+            dfb_input.push_back(block_size);
         }  // inner_idx loop
 
         // For (x - E[x]) * (1.0/(sqrt(E[(x-E[x])^2] + eps)))
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_input.reserve_back(block_size);
+            dfb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                 noc.async_read(
                     input_addrg,
-                    cb_input,
+                    dfb_input,
                     input_tile_bytes,
                     {.page_id = input_tile_idx},
                     {.offset_bytes = r * input_tile_bytes});
             }
             noc.async_read_barrier();
-            cb_input.push_back(block_size);
+            dfb_input.push_back(block_size);
 
             // input (N, C, H, W)
             // input_tile_idx = n * C * Ht * Wt + c * Ht * Wt + h * Wt + w
@@ -146,14 +146,14 @@ void kernel_main() {
             // gamma (1, 1, 1, C)
             if (gamma_has_value) {
                 uint32_t gamma_tile_idx;
-                const auto gamma_l1_write_ptr = cb_gamma.get_write_ptr();
-                cb_gamma.reserve_back(block_size);
+                const auto gamma_l1_write_ptr = dfb_gamma.get_write_ptr();
+                dfb_gamma.reserve_back(block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     gamma_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
                     noc.async_read(
                         gamma_addrg,
-                        cb_gamma,
+                        dfb_gamma,
                         gamma_tile_bytes,
                         {.page_id = gamma_tile_idx},
                         {.offset_bytes = r * gamma_tile_bytes});
@@ -170,20 +170,20 @@ void kernel_main() {
                         gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                     }
                 }
-                cb_gamma.push_back(block_size);
+                dfb_gamma.push_back(block_size);
             }
 
             // beta (1, 1, 1, C)
             if (beta_has_value) {
                 uint32_t beta_tile_idx;
-                const auto beta_l1_write_ptr = cb_beta.get_write_ptr();
-                cb_beta.reserve_back(block_size);
+                const auto beta_l1_write_ptr = dfb_beta.get_write_ptr();
+                dfb_beta.reserve_back(block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     beta_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
                     noc.async_read(
                         beta_addrg,
-                        cb_beta,
+                        dfb_beta,
                         beta_tile_bytes,
                         {.page_id = beta_tile_idx},
                         {.offset_bytes = r * beta_tile_bytes});
@@ -200,7 +200,7 @@ void kernel_main() {
                         beta_ptr[0] = beta_ptr[tilized_beta_idx_in_tile];
                     }
                 }
-                cb_beta.push_back(block_size);
+                dfb_beta.push_back(block_size);
             }
         }  // inner_idx loop
     }  // outer_idx loop

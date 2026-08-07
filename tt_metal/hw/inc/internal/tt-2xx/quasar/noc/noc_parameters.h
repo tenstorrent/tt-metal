@@ -7,8 +7,13 @@
 #ifndef _NOC_PARAMETERS_H_
 #define _NOC_PARAMETERS_H_
 
-// TODO: review these values
-#define VIRTUAL_TENSIX_START_X 1
+// Quasar functional workers occupy physical x[2..9], y[2..5] (no harvesting;
+// physical col x=1 is empty, x=0 is router). Coordinate virtualization is
+// identity here (tt-umd translated==physical, craq-sim applies no QSR remap),
+// so the virtual Tensix origin must equal the physical worker start. X was
+// copy-pasted from Blackhole (=1, where BH's physical Tensix start is 1) and
+// must be 2 for Quasar; Y already matches (physical y-start is 2).
+#define VIRTUAL_TENSIX_START_X 2
 #define VIRTUAL_TENSIX_START_Y 2
 #define COORDINATE_VIRTUALIZATION_ENABLED 1
 
@@ -471,28 +476,26 @@
 //   3. Change this macro to identity: #define NOC_LOCAL_ADDR(addr) (addr)
 #define NOC_LOCAL_ADDR(addr) NOC_LOCAL_ADDR_OFFSET(addr)
 
-// TODO review these alignment restrictions
-// Alignment restrictions
-#define NOC_L1_READ_ALIGNMENT_BYTES 16
-#define NOC_L1_WRITE_ALIGNMENT_BYTES 16
+// NOC transfer alignment. The Quasar NOC shifts the data to make it so things don't need to be
+// aligned, hence no L1/DRAM restriction. Kept DECOUPLED from L1_ALIGNMENT/DRAM_ALIGNMENT below: the
+// NOC's relaxed alignment does not apply to other L1 consumers (e.g. the unpacker), which still
+// need the physical L1 width.
+#define NOC_L1_READ_ALIGNMENT_BYTES 1
+#define NOC_L1_WRITE_ALIGNMENT_BYTES 1
 #define NOC_PCIE_READ_ALIGNMENT_BYTES 64
 #define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
-#define NOC_DRAM_READ_ALIGNMENT_BYTES 64
-#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES 1
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 1
 // TODO(quasar): For Quasar, do a per-register lookup - 4 or 8 depending on target reg.
 #define NOC_REG_ALIGNMENT_BYTES 4
 
-#define L1_ALIGNMENT                                                                              \
-    (static_cast<uint32_t>(                                                                       \
-        NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES \
-                                                                    : NOC_L1_WRITE_ALIGNMENT_BYTES))
+// Allocation / layout alignment. Pinned to the physical floor (L1 = 16B, GDDR = 64B), NOT derived
+// from the NOC values above
+#define L1_ALIGNMENT (static_cast<uint32_t>(16))
 #define PCIE_ALIGNMENT                                                                                  \
     (static_cast<uint32_t>(                                                                             \
         NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES \
                                                                         : NOC_PCIE_WRITE_ALIGNMENT_BYTES))
-#define DRAM_ALIGNMENT                                                                                  \
-    (static_cast<uint32_t>(                                                                             \
-        NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES \
-                                                                        : NOC_DRAM_WRITE_ALIGNMENT_BYTES))
+#define DRAM_ALIGNMENT (static_cast<uint32_t>(64))
 
 #endif

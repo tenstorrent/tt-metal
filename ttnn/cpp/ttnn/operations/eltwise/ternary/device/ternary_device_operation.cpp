@@ -75,8 +75,8 @@ CoreRangeSet get_worker_grid(
 
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
-            input_tensor_b ? std::optional<TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
-            input_tensor_c ? std::optional<TensorSpec>{input_tensor_c->tensor_spec()} : std::nullopt,
+            input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
+            input_tensor_c ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_c->tensor_spec()} : std::nullopt,
             memory_config_actual)) {
         if (input_tensor_a.is_sharded()) {
             log_debug(
@@ -109,7 +109,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     const int rank_a = a_shape.rank();
     const int rank_b = b_shape.rank();
     const int largest_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;
@@ -459,7 +459,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TernaryDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TernaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -475,7 +475,7 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
 
     if (broadcast_type == TernaryBroadcastType::NONE && !args.memory_config.is_sharded()) {
         // Early return for NONE broadcast with non-sharded memory config
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
 
@@ -528,7 +528,7 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
             }
         }
 
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 args.dtype.value(),
@@ -537,7 +537,8 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
     }
 
     // If not sharded, use the memory config from attributes
-    return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
 Tensor TernaryDeviceOperation::create_output_tensors(

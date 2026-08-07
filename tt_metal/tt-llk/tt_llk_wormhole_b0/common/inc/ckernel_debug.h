@@ -265,8 +265,6 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     }
 
     // Disable debug control
-    dbg_array_rd_cmd.val = 0;
-    reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
 

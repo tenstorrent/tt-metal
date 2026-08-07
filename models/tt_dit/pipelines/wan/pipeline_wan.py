@@ -20,15 +20,17 @@ from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanCheckpoi
 from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
-from models.tt_dit.solvers import UniPCSolver, UniPCVariant
+from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.tensor import float32_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from diffusers.schedulers import SchedulerMixin
 
 _UNSET = object()  # sentinel for "use config default" in WanPipelineConfig.default
 
@@ -226,8 +228,9 @@ class WanPipeline(PipelineAPIMixin):
             Number of links to use for CCL operations.
         checkpoint_name (`str`, *optional*, defaults to `"Wan-AI/Wan2.2-T2V-A14B-Diffusers"`):
             HuggingFace Hub repo ID to load model weights from.
-        scheduler (`UniPCMultistepScheduler`, *optional*):
-            Scheduler to use for denoising. Defaults to `UniPCMultistepScheduler` loaded from the checkpoint.
+        scheduler (`SchedulerMixin`, *optional*):
+            Scheduler to use for denoising; it also selects the solver family. Defaults to
+            `UniPCMultistepScheduler` loaded from the checkpoint.
         boundary_ratio (`float`, *optional*, defaults to `0.875`):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
             denoising. `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
@@ -251,35 +254,92 @@ class WanPipeline(PipelineAPIMixin):
     """
 
     @classmethod
-    def create_pipeline(
+    def _config_overrides(cls) -> dict[str, object]:
+        """`WanPipelineConfig.default` fields this variant pins, keyed by argument name.
+
+        A variant overrides this instead of reimplementing `create_pipeline`, and layers on
+        top via ``{**super()._config_overrides(), ...}``. A caller's `config_overrides` wins
+        over anything returned here.
+        """
+        return {"model_type": "t2v", "checkpoint_name": _DEFAULT_CHECKPOINT}
+
+    @classmethod
+    def default_config(
         cls,
         *,
         mesh_device: ttnn.MeshDevice,
-        checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        checkpoint_name: str | None = None,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
         cfg_enabled: bool = True,
         max_sequence_length: int = 512,
+        config_overrides: dict[str, object] | None = None,
+    ) -> WanPipelineConfig:
+        """The config this variant runs by default, with `config_overrides` layered on top.
+
+        `config_overrides` takes any `WanPipelineConfig.default` keyword. Pair this with a
+        direct constructor call to build a variant whose `__init__` takes more than the
+        arguments `create_pipeline` knows about.
+        """
+        overrides = {**cls._config_overrides(), **(config_overrides or {})}
+        if checkpoint_name is not None:
+            overrides["checkpoint_name"] = checkpoint_name
+        return WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            cfg_enabled=cfg_enabled,
+            max_sequence_length=max_sequence_length,
+            **overrides,
+        )
+
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        checkpoint_name: str | None = None,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        cfg_enabled: bool = True,
+        max_sequence_length: int = 512,
+        config_overrides: dict[str, object] | None = None,
+        scheduler: SchedulerMixin | None = None,
+        run_warmup: bool = True,
+        lora_enabled: bool = False,
         pipeline_class: type[WanPipeline] | None = None,
     ) -> WanPipeline:
-        config = WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
+        """Build a pipeline from this variant's defaults plus the given overrides."""
+        # Resolved off the class being constructed, not `cls`, so `pipeline_class` gets its
+        # own overrides rather than those of whichever class the call was made on.
+        pipeline_class_ = pipeline_class or cls
+        config = pipeline_class_.default_config(
+            mesh_device=mesh_device,
             checkpoint_name=checkpoint_name,
             height=height,
             width=width,
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
+            config_overrides=config_overrides,
         )
-        pipeline_class_ = pipeline_class or cls
-        return pipeline_class_(device=mesh_device, config=config)
+        return pipeline_class_(
+            device=mesh_device,
+            config=config,
+            scheduler=scheduler,
+            run_warmup=run_warmup,
+            lora_enabled=lora_enabled,
+        )
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: WanPipelineConfig,
+        scheduler: SchedulerMixin | None = None,
         run_warmup: bool = True,
         lora_enabled: bool = False,
     ) -> None:
@@ -360,12 +420,9 @@ class WanPipeline(PipelineAPIMixin):
             TransformerState(self.transformer_2, self._checkpoint_2, guidance_scale=3.0),
         ]
 
-        self._scheduler = UniPCMultistepScheduler.from_pretrained(
-            self.checkpoint_name, subfolder="scheduler", flow_shift=12.0
-        )
-        self._solver = UniPCSolver(
-            order=self._scheduler.config.solver_order,
-            variant=UniPCVariant(self._scheduler.config.solver_type),
+        self._solver = solver_for_scheduler(
+            scheduler
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
         )
 
         # persistent latent buffers to enable safe tracing.
@@ -431,7 +488,7 @@ class WanPipeline(PipelineAPIMixin):
         self,
         *,
         step: int,
-        t: torch.Tensor,
+        t: float,
         ts: TransformerState,
         permuted_latent_tt: ttnn.Tensor,
         mask: torch.Tensor,
@@ -448,13 +505,21 @@ class WanPipeline(PipelineAPIMixin):
             # batch_size, seq_len
             timestep = temp_ts.unsqueeze(0).expand(latents_batch_size, -1)
         else:
-            timestep = t.expand(latents_batch_size)
+            timestep = torch.full((latents_batch_size,), t, dtype=torch.float32)
 
         permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
 
         assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
         timestep = float32_tensor(
             timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
+        )
+
+        # guidance_scale is passed as a 1-element device tensor (broadcast via ttnn.lerp's
+        # tensor-weight overload) so it can be updated in place between traced executions,
+        # mirroring how `timestep` above is threaded through the captured trace.
+        guidance_scale_tt = float32_tensor(
+            torch.tensor(ts.guidance_scale, dtype=torch.float32).reshape(1, 1, 1, 1),
+            device=(None if traced else self.mesh_device),
         )
 
         permuted_velocity_pred_tt = ts.model.combined_step(
@@ -465,7 +530,7 @@ class WanPipeline(PipelineAPIMixin):
             N=latents_sequence_length,
             timestep=timestep,
             **rope_args,
-            guidance_scale=ts.guidance_scale,
+            guidance_scale=guidance_scale_tt,
             traced=traced,
             gather_output=False,
         )
@@ -482,6 +547,19 @@ class WanPipeline(PipelineAPIMixin):
         if latents.dtype == ttnn.float32:
             latents = ttnn.typecast(latents, ttnn.bfloat16)
         return latents
+
+    def prepare_schedule(self, num_inference_steps: int, *, flow_shift: float | None = None) -> None:
+        """Adopt the schedule for one denoising run.
+
+        Override to derive the schedule from something other than the solver's own scheduler,
+        e.g. an explicit sigma ladder stepped by a scheduler-less solver.
+
+        Args:
+            num_inference_steps: Number of denoising steps.
+            flow_shift: Flow shift for this run only; the solver's construction-time value is
+                used when omitted.
+        """
+        self._solver.set_schedule(num_inference_steps, shift=flow_shift)
 
     def prepare_latents(
         self,
@@ -520,6 +598,8 @@ class WanPipeline(PipelineAPIMixin):
         num_inference_steps: int,
         guidance_scale: float = 4.0,
         guidance_scale_2: float | None = 3.0,
+        flow_shift: float | None = None,
+        boundary_ratio: float | None = None,
         num_videos_per_prompt: int | None = 1,
         seed: int = 0,
         output_type: str | None = "uint8",
@@ -535,6 +615,10 @@ class WanPipeline(PipelineAPIMixin):
         width = self._width
         num_frames = self._num_frames
 
+        # Per-request boundary_ratio overrides the construction-time default. It only affects
+        # host-side expert selection (no captured trace depends on it).
+        effective_boundary_ratio = boundary_ratio if boundary_ratio is not None else self._boundary_ratio
+
         if guidance_scale > 1 and not self._cfg_enabled:
             msg = "guidance_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
@@ -546,8 +630,11 @@ class WanPipeline(PipelineAPIMixin):
             msg = f"`height` and `width` have to be divisible by 16 but are {height} and {width}."
             raise ValueError(msg)
 
-        if self._boundary_ratio is None and guidance_scale_2 is not None:
-            msg = "`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None."
+        if effective_boundary_ratio is None and guidance_scale_2 is not None:
+            msg = (
+                "`guidance_scale_2` is only supported when `boundary_ratio` is not None. "
+                "Set it per-request (pass `boundary_ratio=...` to this call) or at construction time."
+            )
             raise ValueError(msg)
 
         if num_frames % self.vae_scale_factor_temporal != 1:
@@ -558,7 +645,7 @@ class WanPipeline(PipelineAPIMixin):
             num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
         num_frames = max(num_frames, 1)
 
-        if self._boundary_ratio is not None and guidance_scale_2 is None:
+        if effective_boundary_ratio is not None and guidance_scale_2 is None:
             guidance_scale_2 = guidance_scale
 
         self.transformer_states[0].guidance_scale = guidance_scale
@@ -581,9 +668,11 @@ class WanPipeline(PipelineAPIMixin):
         on_event(SectionEnd("encoder"))
 
         # 4. Prepare schedule
-        self._scheduler.set_timesteps(num_inference_steps)
-        self._solver.set_schedule(self._scheduler.sigmas.tolist())
-        timesteps = self._scheduler.timesteps
+        # flow_shift is host-side only (it reshapes the sigma schedule); no captured trace
+        # depends on it. None restores the solver's construction-time shift, so a per-request
+        # value never persists into a later request.
+        self.prepare_schedule(num_inference_steps, flow_shift=flow_shift)
+        timesteps = self._solver.timesteps
 
         # 5. Prepare latent variables
         torch.manual_seed(seed)
@@ -604,8 +693,8 @@ class WanPipeline(PipelineAPIMixin):
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
 
         # 6. Denoising loop
-        if self._boundary_ratio is not None:
-            boundary_timestep = self._boundary_ratio * 1000
+        if effective_boundary_ratio is not None:
+            boundary_timestep = effective_boundary_ratio * self._solver.schedule.num_train_timesteps
         else:
             boundary_timestep = -1  # Always use transformer (no transformer_2)
 
@@ -652,6 +741,10 @@ class WanPipeline(PipelineAPIMixin):
                         else:
                             ttnn.copy(cond_latents_tt, self.condition_buffer)
 
+                        # Conditioning now lives in the persistent buffer; drop the host copy
+                        # so a later iteration cannot re-enter this branch and redo the work.
+                        cond_latents = None
+
                     rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
@@ -687,6 +780,7 @@ class WanPipeline(PipelineAPIMixin):
                 )
 
                 progress_bar.update()
+                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=self._solver.sigmas[i]))
 
         self._current_timestep = None
 
@@ -694,7 +788,7 @@ class WanPipeline(PipelineAPIMixin):
         permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
             permuted_latent_tt, dim=2, mesh_axis=sp_axis
         )
-        permuted_latent = ttnn.to_torch(ttnn.get_device_tensors(permuted_latent_tt)[0])
+        permuted_latent = tensor.local_device_to_torch(permuted_latent_tt)
 
         # Postprocess spatial output
         latents = ts.model.postprocess_spatial_output_host(

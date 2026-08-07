@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
+#include "cmath_common.h"
 
 using namespace sfpi;
 
@@ -45,15 +46,9 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x1DFF;  // 0.90625*x
-    imm1 = 0x481A;  // 0.09375*x + 0.8125
-    imm2 = 0xFF00;  // 1
-    _sfpu_load_imm16_(0, imm0);
-    _sfpu_load_imm16_(1, imm1);
-    _sfpu_load_imm16_(2, imm2);
+    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x1DFF));  // 0.90625*x
+    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x481A));  // 0.09375*x + 0.8125
+    l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF00));  // 1
 }
 
 // =============================================================================
@@ -217,6 +212,7 @@ inline void calculate_tanh_derivative_sech2() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // No special initialization needed — no reciprocal, no LUT.
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }

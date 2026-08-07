@@ -559,3 +559,139 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
         f"Batched decode (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
         f"tp={tp}, sliding_window={sliding_window}) PCC too low: {pcc_msg}"
     )
+
+
+# ── Cross-call chunked prefill tail lifetime regression ──────────────────
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, request):
+    """Regression test for the sliding-window prefill-tail-lifetime bug.
+
+    vLLM-driven token-chunked prefill makes separate ``__call__`` invocations
+    for each chunk. The first call slices the sliding tail from tt_k/tt_v and
+    stores it on ``self._sliding_prefill_tail``. After the call returns, tt_k
+    and tt_v are deallocated. If the tail is a view (not an independent copy)
+    of tt_k, the second call finds an unallocated tensor and crashes with
+    ``TT_FATAL: Input Tensor is not allocated``.
+
+    This test simulates two separate prefill calls with ``chunk_start_idx``
+    and verifies the second call consumes the persisted tail without error.
+    """
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    hf_text_config = TestFactory.create_hf_text_config()
+    layer_idx = find_layer_idx(hf_text_config, "sliding_attention")
+    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
+    state_dict = {k: v.clone() for k, v in hf_layer.self_attn.state_dict().items() if not k.startswith("v_norm")}
+
+    chunk_size = 1024
+    block_size = 64
+    total_seq = chunk_size * 2  # two chunks
+    max_num_blocks = total_seq // block_size + 2
+    max_seq_len = max_num_blocks * block_size
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
+    kv_cache = init_kv_cache(
+        mesh_device=mesh_device,
+        config=config,
+        paged_attention_config=paged_attention_config,
+        cache_dtype=ttnn.bfloat16,
+    )
+
+    tt_attn = Gemma4Attention(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=None,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+    )
+    tt_attn.kv_cache = kv_cache
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)
+    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
+
+    # region Chunk 1 (chunk_start_idx=0)
+    x1 = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
+    x1_tt = _to_device(x1, mesh_device)
+    chunk1_pt = page_table[:, : chunk_size // block_size]
+    chunk1_pt_tt = ttnn.from_torch(chunk1_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    out1 = tt_attn(
+        x1_tt,
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=0,
+        chunk_page_table=chunk1_pt_tt,
+    )
+    # Force deallocation of the output to simulate the model runner dropping it
+    # between scheduling steps (mimics real vLLM inter-step behavior).
+    out1.deallocate(True)
+
+    # The tail must be alive after the first call.
+    tail = getattr(tt_attn, "_sliding_prefill_tail", None)
+    assert tail is not None, "Sliding tail was not persisted after chunk 1"
+    assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    # endregion
+
+    # region Chunk 2 (chunk_start_idx=chunk_size, consumes persisted tail)
+    x2 = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
+    x2_tt = _to_device(x2, mesh_device)
+    chunk2_pt = page_table[:, chunk_size // block_size : total_seq // block_size]
+    chunk2_pt_tt = ttnn.from_torch(chunk2_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    # This call used to crash with "Input Tensor is not allocated" before the
+    # `ttnn.clone` fix in `_prefill_forward_single.
+    out2 = tt_attn(
+        x2_tt,
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=chunk_size,
+        chunk_page_table=chunk2_pt_tt,
+    )
+    # If we get here, the tail survived the cross-call deallocation.
+    out2_torch = _from_device(out2, mesh_device)
+    assert out2_torch.shape[-2] == chunk_size, f"Expected seq_len={chunk_size} in output, got {out2_torch.shape[-2]}"
+    # endregion
+
+    # region No DRAM pinning during decode
+    # After the last prefill chunk, the tail is still stored (for a potential
+    # next chunk that never comes). The first decode call must release it.
+    tail_before_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
+    assert tail_before_decode is not None, "Tail should still be present after chunk 2 (not yet in decode)"
+
+    # Simulate a decode call: minimal input, just needs to trigger the
+    # `is_decode=True` branch which releases the tail.
+    x_dec = torch.randn(1, 1, 1, config.hidden_size, dtype=torch.bfloat16)
+    x_dec_tt = _to_device(x_dec, mesh_device)
+    position_idx_tt = ttnn.from_torch(
+        torch.tensor([[total_seq]], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+    )
+    tt_attn(
+        x_dec_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=position_idx_tt,
+        is_decode=True,
+        token_index=total_seq,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+    )
+
+    tail_after_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
+    assert tail_after_decode is None, (
+        "Tail should be released after the first decode call - " "DRAM must not be pinned during decode"
+    )
+    # endregion

@@ -17,6 +17,43 @@ if TYPE_CHECKING:
     from types import EllipsisType
 
 
+def prepare_for_fused_swiglu(
+    tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
+) -> torch.Tensor:
+    """Reorder a packed [.., 2N] SwiGLU weight/bias for the fused matmul kernel.
+
+    The fused kernel emits ``silu(even_tile) * odd_tile`` per pair, so gate (the silu'd half)
+    must occupy the even tile slot and up (the multiplicand) the odd tile slot within each
+    device block.
+
+    ``gate_is_first`` specifies the input column ordering:
+
+    - ``gate_is_first=False`` (default): input is ``[up (N) | gate (N)]``, i.e.
+      ``up, gate = chunk(., 2, -1); up * silu(gate)`` — torch/HuggingFace convention.
+    - ``gate_is_first=True``: input is ``[gate (N) | up (N)]``, i.e.
+      ``gate, up = chunk(., 2, -1); silu(gate) * up``.
+
+    In both cases the output is laid out as ``ndev`` contiguous device blocks, each containing
+    interleaved gate/up tile pairs ``[gate_t0, up_t0, gate_t1, up_t1, ...]`` for that device's shard.
+    Splitting the output evenly across ``ndev`` devices along the last dimension gives each device
+    a correctly interleaved local block.
+    """
+    rows = tensor.shape[0]
+    two_N = tensor.shape[-1]
+    N = two_N // 2
+    assert (
+        N % (ndev * tile_width) == 0
+    ), f"SwiGLU half-width N={N} must be divisible by ndev*tile_width={ndev * tile_width}"
+    tiles_per_dev = N // ndev // tile_width
+    # [rows, half=2, d=ndev, t=tiles_per_dev, c=tile_width] -> [rows, d, t, half, c]
+    t = tensor.reshape(rows, 2, ndev, tiles_per_dev, tile_width)
+    t = t.permute(0, 2, 3, 1, 4)
+
+    if not gate_is_first:
+        t = t.flip(3)
+    return t.reshape(rows, two_N)
+
+
 def typed_tensor(
     x: torch.Tensor,
     dtype: ttnn.DataType,
@@ -565,14 +602,18 @@ def fast_device_to_host(
 
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
-                # mesh_partition's internal slice asserts per-chip W is
-                # tile-aligned in TILE layout. Predict the per-chip shape
-                # after the upcoming repeat (× n_hosts on inter_dim) and
-                # mesh_partition (÷ inter_axis_size on inter_dim), then drop
-                # to ROW_MAJOR if W won't be tile-aligned.
+                # A TILE-layout all_gather/repeat/mesh_partition is only safe when
+                # BOTH of the last two dims are tile-aligned. If the second-to-last
+                # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
+                # TILE repeat/mesh_partition interleave H rows across the shards ->
+                # horizontal-band noise corruption on multi-host (single-host skips
+                # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
+                # per-chip shape after repeat (× n_hosts) and mesh_partition
+                # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
+                # BOTH last dims are tile-aligned (matches the known-good behavior).
                 post_shape = list(gathered_tensor.shape)
                 post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
-                if post_shape[-1] % ttnn.TILE_SIZE != 0:
+                if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
                     gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
                 repeat_dims = [1] * len(gathered_tensor.shape)

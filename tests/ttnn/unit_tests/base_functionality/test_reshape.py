@@ -907,3 +907,30 @@ def test_reshape_4d_5d_layout(device):
 
     diff = (result.float() - expected.float()).abs().max().item()
     assert diff == 0.0
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((128, 4096), (64, 8192)),  # 128 source rows -> >1 page per core; wide rows (multi-packet writes)
+        ((256, 2048), (128, 4096)),
+    ],
+)
+def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shape):
+    """
+    Correctness guard for the row-major interleaved reshape data-movement kernel (rm_reshape_interleaved)
+    on the wide multi-page path: DRAM row-major input, 16B-aligned wide rows (the clean async_write
+    branch), and >1 source page per core.
+
+    The kernel reuses a single L1 source_buffer slot every iteration, so correct output relies on each
+    async_write draining before the next iteration's read reuses that slot; otherwise the read would
+    overwrite the buffer while the prior write is still sourcing from it (WAR) and corrupt the result.
+    This checks the wide multi-page RM path produces the expected reshape.
+    """
+    torch.manual_seed(0)
+    t = torch.randn(*input_shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(
+        t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    y = ttnn.reshape(x, output_shape)
+    assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))

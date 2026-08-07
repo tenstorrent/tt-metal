@@ -76,9 +76,9 @@ inline void llk_sfpu_srcs_init(
     td_pack.buf_desc_id = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(pack_S_src_format);
     ckernel::trisc::_configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
 
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::math::TRISC_ID] = !implied_math_format;
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
     _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);

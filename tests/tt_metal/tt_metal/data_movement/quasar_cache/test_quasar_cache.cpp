@@ -61,9 +61,7 @@ bool run_l2_flush_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -82,7 +80,8 @@ bool run_l2_flush_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
     experimental::SetProgramRunArgs(program, params);
@@ -149,9 +148,7 @@ bool run_l1_dcache_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -170,7 +167,8 @@ bool run_l1_dcache_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
     experimental::SetProgramRunArgs(program, params);

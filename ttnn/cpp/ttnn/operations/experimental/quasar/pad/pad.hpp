@@ -24,7 +24,7 @@ struct PadSpecDim {
 // to a different code path than Python-driven tests cover.
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding,
+    const ttsl::SmallVector<PadSpecDim>& padding,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -32,7 +32,7 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -41,8 +41,8 @@ ttnn::Tensor pad(
 // legacy API
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::Array4D& output_padded_shape,
-    const tt::tt_metal::Array4D& input_tensor_start,
+    const ttnn::Array4D& output_padded_shape,
+    const ttnn::Array4D& input_tensor_start,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,

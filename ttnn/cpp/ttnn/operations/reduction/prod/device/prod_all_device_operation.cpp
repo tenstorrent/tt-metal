@@ -11,7 +11,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
 
     TT_FATAL(
-        input.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input.storage_type() == ttnn::StorageType::DEVICE,
         "Operands need to be on device! Got storage type: {}",
         input.storage_type());
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -22,18 +22,23 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
         "Memory layout must be INTERLEAVED, got: {}",
         input.memory_config().memory_layout());
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input.dtype() == tt::tt_metal::DataType::BFLOAT8_B || input.dtype() == tt::tt_metal::DataType::BFLOAT4_B,
+        "Error - unsupported data type for prod, expected BFLOAT16, FLOAT32, BFLOAT8_B or BFLOAT4_B but got {}.",
         input.dtype());
 }
 
 ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    return TensorSpec(
+    const auto output_dtype =
+        (input.dtype() == tt::tt_metal::DataType::FLOAT32 || tt::tt_metal::is_block_float(input.dtype()))
+            ? tt::tt_metal::DataType::FLOAT32
+            : input.dtype();
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, input.tensor_spec().tile().get_tile_hw()}),
         tt::tt_metal::TensorLayout(
-            input.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
+            output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
 ProdAllDeviceOperation::tensor_return_value_t ProdAllDeviceOperation::create_output_tensors(

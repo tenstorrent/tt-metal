@@ -104,7 +104,7 @@ TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
     auto& device = *device_;
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
     ttnn::Shape shape(dimensions);
-    SmallVector<int> dim = {0, 1};
+    ttsl::SmallVector<int> dim = {0, 1};
 
     {
         const auto input_tensor = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -143,7 +143,7 @@ TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
         const ttnn::Shape tensor_shape{1, 1, param.h, param.w};
         const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
         const TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        const tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
         std::vector<float> host_data(tensor_shape.volume());
         for (int i = 0; i < param.h; i++) {
             for (int j = 0; j < param.w; j++) {
@@ -202,7 +202,7 @@ TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
         const ttnn::Shape tensor_shape{1, 1, param.h, param.w};
         const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
         const TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        const tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
         std::vector<float> host_data(tensor_shape.volume());
         for (int i = 0; i < param.h; i++) {
             for (int j = 0; j < param.w; j++) {
@@ -254,12 +254,12 @@ class MinMaxTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<MinMaxTens
 TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
     auto param = GetParam();
     auto& device = *device_;
-    SmallVector<int> dim = {-2, -1};
+    ttsl::SmallVector<int> dim = {-2, -1};
     {
         const ttnn::Shape tensor_shape{1, 1, param.h, param.w};
         const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
         const TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        const tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
         std::vector<float> host_data(tensor_shape.volume());
         for (int i = 0; i < param.h; i++) {
             for (int j = 0; j < param.w; j++) {

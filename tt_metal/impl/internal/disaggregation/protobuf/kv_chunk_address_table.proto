@@ -17,6 +17,17 @@ message FabricNodeHost {
     string host_name = 3;
 }
 
+// One config ("group") — a distinct attention implementation / tensor
+// representation a layer may use. A table holds one or more.
+message KvChunkConfig {
+    string name = 1;
+    uint32 num_layers = 2;
+    uint32 max_sequence_length = 3;
+    uint32 num_slots = 4;
+    uint32 chunk_n_tokens = 5;
+    uint32 chunk_size_bytes = 6;
+}
+
 message KvCacheEntry {
     uint32 slot = 1;
     uint32 layer = 2;
@@ -24,9 +35,13 @@ message KvCacheEntry {
     uint64 noc_addr = 4;
     uint32 size_bytes = 5;
     uint32 device_group_index = 6;
+    uint32 config_idx = 7;  // which config ("group") this entry belongs to (default 0)
 }
 
 message KvChunkAddressTable {
+    // Legacy single-config scalar fields (1-5): mirror config 0's dims so old
+    // single-config readers keep working. `configs` (field 9) is authoritative
+    // when present; readers should prefer it and fall back to these otherwise.
     uint32 num_layers = 1;
     uint32 max_sequence_length = 2;
     uint32 num_slots = 3;
@@ -35,4 +50,5 @@ message KvChunkAddressTable {
     repeated DeviceGroup device_groups = 6;
     repeated FabricNodeHost fabric_node_hosts = 7;
     repeated KvCacheEntry entries = 8;
+    repeated KvChunkConfig configs = 9;  // all configs ("groups"); index == config_idx
 }

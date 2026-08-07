@@ -389,7 +389,7 @@ struct ReduceToOneB1 {
 
                 noc_semaphore_set(ready_sem_ptr, 0);
 
-                fabric_sender.close();
+                fabric_sender.template close<use_posted_transport_writes, forwarder_to_fabric_noc>();
                 return;
             }
 
@@ -593,7 +593,7 @@ struct ReduceToOneB1 {
             }
 
             // Initialize for binary operations
-            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
+            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
             pack_block_contiguous_init(CTArgs::scratch_cb);
 

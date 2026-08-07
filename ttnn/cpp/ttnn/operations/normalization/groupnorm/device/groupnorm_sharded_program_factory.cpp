@@ -305,13 +305,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             block_wt * tile_width);
     }
 
-    // get sharded addr
-    // gamma, beta addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
-    auto input_negative_mask_dram_addr = negative_mask.has_value() ? negative_mask.value().buffer()->address() : 0;
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -373,6 +366,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
     if (shard_orientation == ShardOrientation::ROW_MAJOR) {
+        core_coords2D.reserve((num_cores_c / num_cores_per_group) * num_cores_r);
         for (uint32_t i = 0; i < num_cores_c / num_cores_per_group; ++i) {
             for (uint32_t j = 0; j < num_cores_r; ++j) {
                 std::vector<CoreCoord> temp;
@@ -381,10 +375,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     const uint32_t idx = j * num_cores_c + i * num_cores_per_group + k;
                     temp.push_back(core_coords[idx]);
                 }
-                core_coords2D.push_back(temp);
+                core_coords2D.push_back(std::move(temp));
             }
         }
     } else {
+        core_coords2D.reserve((num_cores_r / num_cores_per_group) * num_cores_c);
         for (uint32_t i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             for (uint32_t j = 0; j < num_cores_c; ++j) {
                 std::vector<CoreCoord> temp;
@@ -393,7 +388,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     const uint32_t idx = j * num_cores_r + k + i * num_cores_per_group;
                     temp.push_back(core_coords[idx]);
                 }
-                core_coords2D.push_back(temp);
+                core_coords2D.push_back(std::move(temp));
             }
         }
     }
@@ -426,6 +421,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
+    mcast_groups.reserve(num_cores);
     int group_index = -1;
     if (is_height_sharding) {
         for (uint32_t i = 0; i < num_cores; ++i) {
@@ -568,11 +564,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    // Unlike the interleaved paths these ship as RUNTIME args (8, 9).
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
+    const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);
+
     // writer defines
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
     if (negative_mask.has_value()) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
+    }
+    if (pad.active) {
+        writer_defines["PAD_CORRECTION"] = "1";
     }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
@@ -682,6 +688,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
+    // Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
+    // above shifts them). Only the two-pass kernel reads them.
+    mcast_sender_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_sender_compute_compile_time_args.push_back(pad.padded_hw);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -716,6 +726,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
+    mcast_receiver_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1111,6 +1123,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
+
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
@@ -1141,6 +1162,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     std::swap(mcast_start, mcast_end);
                 }
                 std::vector<uint32_t> mcast_sender_args;
+                mcast_sender_args.reserve(17 + group.size() * 2);
                 mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_first.empty()));
                 mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_last.empty()));
                 mcast_sender_args.push_back(mcast_start.x);
@@ -1210,6 +1232,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
 
                 // add all coords within a group
                 std::vector<uint32_t> mcast_noc_xy;
+                mcast_noc_xy.reserve(group.size() * 2);
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.x);
@@ -1236,16 +1259,37 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
     for (const auto& core : core_coords) {
-        std::vector<uint32_t> writer_mcast_sender_args;
+        tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
+        // 8 base args plus the two #50682 pad-correction args pushed unconditionally below.
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
-        writer_mcast_sender_args.push_back(input_negative_mask_dram_addr);
+        if (gamma.has_value()) {
+            writer_mcast_sender_args.push_back(gamma.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (beta.has_value()) {
+            writer_mcast_sender_args.push_back(beta.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (input_mask.has_value()) {
+            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (negative_mask.has_value()) {
+            writer_mcast_sender_args.push_back(negative_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+        // args 8, 9: only read when PAD_CORRECTION.
+        writer_mcast_sender_args.push_back(pad_scaler_bits);
+        writer_mcast_sender_args.push_back(pad.k_bits);
+        writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
