@@ -496,3 +496,100 @@ The hardening collapses to a short list that a reasonable engineer would write a
 inputs, a diff check that keeps the agent out of the test files, budgets, and a card reset on exit.
 None of it is architectural. Proceed directly to the §9 design — single on-card job, agent in AWF,
 measurement behind an `mcp-scripts` tool.
+
+---
+
+## 12. V1 BUILT AND VALIDATED (2026-08-07)
+
+V1 is implemented on this branch: `.github/workflows/port-op.md` plus four scripts under
+`.github/scripts/port/`. 1,519 lines against the 41,240 the full pipeline costs today, or roughly
+7,700 for the translate-plus-verify slice it replaces.
+
+| File | Lines | Replaces |
+| --- | ---: | --- |
+| `port-op.md` | 373 | phase engine, retry, state machine, `phase4a_translate/prompt.md` |
+| `gate.py` | 379 | `skills/verify/lib/gates.py` (599) + `constants.py` |
+| `measure.py` | 339 | the three harness runners + `perf_harness.py` |
+| `scaffold.py` | 246 | `phase3_scaffold/` (261, and it needed an LLM; this does not) |
+| `ledger.py` | 182 | `skills/verify/lib/ledger.py` (511) |
+
+### 12.1 The ccache question is answered: yes, and it is fast
+
+Dispatching the production `build-artifact.yaml` with `runs-on` pointed at an N150 card runner
+(run 31201004336, runner `tt-ubuntu-2204-n150-viommu-stable-cr4wt-runner-gbq26`) settled the
+question that gated the whole design:
+
+- **"Verify S3 connectivity (write / read-back / delete)" passed** on the card runner. Garage at
+  `garage.garage.svc.cluster.local:3900` is reachable from the card pool, not just from builders.
+- **Compile: 2.6 minutes** with a warm remote ccache. CPM restore 0.2m, CMake configure 1.5m,
+  checkout 3.4m, package 1.2m — about **10 minutes wall for a full warm build on a card**.
+
+The feared 90-minute cold build was the wrong worry. The single-job design holds comfortably, and
+the tight edit-build-measure loop is worth having: the agent's rebuilds recompile three translation
+units against an already-configured tree.
+
+One caveat found the hard way: `runs-on` as a JSON-array *string* is not parsed by GitHub. Passed
+that way it becomes a single label with a literal `["N150",...]` name and the job queues forever.
+Reusable-workflow `runs-on` inputs take a single label (`tt-ubuntu-2204-N150-viommu-stable`);
+in-workflow `runs-on` takes a real YAML list.
+
+### 12.2 Architecture correction: no job-level `container:`
+
+The first cut put the job in a `container:` with the dev image and `--device /dev/tenstorrent`,
+copying `bisect-dispatch.yaml`. It compiles, but reading the generated lock file shows the agent
+firewall and the MCP gateway each start their own containers via `docker run`. A job-level
+container nests Docker inside both.
+
+V1 therefore keeps the job **on the runner host** — which section 9's probe already proved can open
+the card — and starts one long-lived `portdev` container holding the toolchain. Steps and both
+tools `docker exec` into it. Keeping it alive across steps is what makes the agent's rebuilds
+incremental: build tree, local ccache and CMake configure all persist between tool calls.
+
+### 12.3 Validated on real hardware before ever reaching CI
+
+This dev box turned out to have cards and a built tt-metal on the hand-written pad port branch, so
+the whole harness was exercised against a known-good port:
+
+- **Ledger**: 240 cases (12 pad_specs x 2 values x 5 dtypes x 2 layouts) classified 140 in / 44 out
+  / 56 dropped, matching every expectation the manifest documents — `bfloat8_b`/row_major dropped as
+  not constructible, `float32`/row_major/nonzero dropped as `known_bad_golden`, TILE front-padding
+  dropped, TILE sub-tile back-pad routed out.
+- **Correctness**: 16/16 bit-exact against a torch golden.
+- **Wall**: ported ~74us vs native ~77us vs prototype ~210us. The prototype's per-call descriptor
+  rebuild costs ~130us of host overhead — exactly the cost the port exists to remove.
+- **Device**: `device_vs_native` 1.07–1.31, `device_vs_generic_op` ~0.985–1.02 (the port ships the
+  same kernels, so parity here is the expected result and a good check that attribution is sane).
+- **Scaffold**: produces byte-identical CMake registration to the hand-written port.
+
+Profiler attribution is positional, because signpost columns do not reliably survive
+post-processing. The safety net is an op-code consistency check, and it worked: each leg mapped to
+exactly one distinct code (`PadDeviceOperation`, `PadCodegenDeviceOperation`,
+`GenericOpDeviceOperation`). When counts disagree, `gate.py` reports the device band inconclusive
+rather than reporting numbers it cannot stand behind. Warmup dispatches are profiled too, so they
+are recorded in the order sidecar and consumed positionally but excluded from samples.
+
+### 12.4 Gotchas worth remembering
+
+- gh-aw's frontmatter schema has **no job-level or container-level `env`**. Environment goes
+  through `$GITHUB_ENV` in a step, or `-e` on the `docker exec`.
+- **Strict mode rejects secrets used in `steps:`** unless bound as step-level `env:` on a `run:`
+  step or `with:` on a `uses:` step. This is a real finding, not a nuisance: writing the Garage
+  credentials to `$GITHUB_ENV` would have handed shared-cache write access to the agent. They are
+  now scoped to the one build step that needs them.
+- Strict mode also requires `persist-credentials: false` on **every** checkout, including the
+  tt-metal one.
+- `mcp-scripts` inputs support no `enum`. The `band` allowlist is enforced in the tool script by
+  matching against literals before use.
+- **`inputs` cannot appear in workflow-level fields** (`name`, `run-name`, `concurrency`) when the
+  workflow can also be triggered by `push` — they are evaluated before a push event has inputs, and
+  the run fails at startup with no jobs and no annotation. Cost an hour to diagnose.
+- gh-aw automatically rewrites `${{ inputs.* }}` inside `run:` blocks into env vars to prevent shell
+  injection, and reports each one as a warning. The hardening rule in section 10 is enforced by the
+  compiler rather than by discipline.
+- `python3 -m tracy` takes the script **positionally** (`-m` means "profile a module"); `-o` pins
+  the artifacts folder so the CSV is found by path instead of globbing a shared directory.
+- `gh aw compile` keeps re-touching `.gitattributes` and `.github/aw/actions-lock.json`. Revert both
+  before committing.
+- `workflow_dispatch` resolves against the default branch, so a workflow not yet on main cannot be
+  dispatched. V1 carries a temporary `push` trigger on `ebanerjee/port-op-dryrun` for shakedown;
+  **remove it before merge**.
