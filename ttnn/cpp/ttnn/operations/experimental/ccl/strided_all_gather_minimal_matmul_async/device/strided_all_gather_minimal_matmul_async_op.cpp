@@ -28,8 +28,7 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
             !attributes.matmul_struct.fused_activation.has_value(),
             "StridedAllGatherMinimalMatmulAsync cannot combine fused_activation with ternary (addcmul) inputs.");
 
-        // Matmul output is [.., M, N]; ternary_a must match [M, N], ternary_b is [1, N] (broadcast) or [M, N].
-        // Derive M/N the same way compute_output_specs does (standalone matmul on input + weight).
+        // Matmul output is [.., M, N]
         auto mm_specs = matmul_device_operation_t::compute_output_specs(
             attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
         const auto& mm_logical = mm_specs[0].logical_shape();
@@ -67,8 +66,7 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
-    // Matmul specs: one per output chunk (chunks == 1 by default). Output layout is
-    // [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
+    // Matmul specs: one per output chunk (chunks == 1 by default)
     auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
 
@@ -130,8 +128,7 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     int32_t chunks) {
     using OperationType = ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
 
-    // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar; the
-    // matmul factory unconditionally reads the scalar RT arg once ternary tensors are present.
+    // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar
     if (fused_ternary_input_a.has_value() && !fused_ternary_scalar.has_value()) {
         fused_ternary_scalar = 1.0f;
     }

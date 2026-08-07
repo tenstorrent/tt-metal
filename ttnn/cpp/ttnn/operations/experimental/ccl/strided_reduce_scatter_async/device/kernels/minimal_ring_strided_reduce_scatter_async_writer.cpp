@@ -422,12 +422,7 @@ void kernel_main() {
                                                     page_size * num_in_bounds_tiles);
                                             } else {
                                                 // Non-contiguous or single tile: individual unicast writes.
-                                                // All iterations reuse pkt_unicast_hdr, and the fabric
-                                                // sends the header NON-BLOCKING (send_payload_flush_non_blocking).
-                                                // Without a flush between writes, iteration t+1's
-                                                // populate_unicast_write_fields() overwrites the header while
-                                                // t's header send is still in flight -> the previous packet
-                                                // lands at the wrong destination (silent PCC corruption).
+                                                // All iterations reuse pkt_unicast_hdr
                                                 for (uint32_t t = 0; t < num_in_bounds_tiles; t++) {
                                                     fabric_unicast_noc_unicast_write_with_state<
                                                         UnicastWriteUpdateMask::DstAddr>(

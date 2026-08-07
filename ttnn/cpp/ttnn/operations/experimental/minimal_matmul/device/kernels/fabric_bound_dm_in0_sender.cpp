@@ -18,10 +18,7 @@
 #define IN0_SUB_CHUNKS 1
 #endif
 
-// Two-NoC output-write split: under SPLIT_OUTPUT_WRITE, dm_in0 becomes a co-writer draining the second
-// output CB (AG_OUT_WRITE_CB = c_8) and writing the block's high M-rows [split_rows, M) on NOC_0, while
-// dm_in1 writes [0, split_rows) on NOC_1. split_rows = M_block_tiles*AG_SPLIT_NOC1_PCT/100; must match
-// compute/dm_in1. Defaults: single out CB c_2, 50% (inactive unless SPLIT_OUTPUT_WRITE is set).
+// Two-NoC output-write split: under SPLIT_OUTPUT_WRITE, dm_in0 becomes a co-writer draining the second output CB
 #ifndef AG_OUT_WRITE_CB
 #define AG_OUT_WRITE_CB 2
 #endif
@@ -72,9 +69,7 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    // Leading (self/local) k-block positions this device owns. Receivers don't run the AG scheduler,
-    // so they use this to compute the same per-position band count the injector derives from streamed_dir.
-    // (Read unconditionally to keep the arg layout fixed; only consumed by receivers / IN0_SUB_CHUNKS > 1.)
+    // Leading (self/local) k-block positions this device owns
     [[maybe_unused]] const uint32_t num_local_k_blocks = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
@@ -107,13 +102,11 @@ void kernel_main() {
 #if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
 // If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
 #ifdef FUSE_BIAS
-    // After in2, then in3, then ternary. TensorAccessorArgs counts are tensor-config dependent, so advance
-    // the accessor-aware way (never a fixed arg count): skip in2 + in3 starting from in2's offset.
+    // After in2, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, in2_args_cta_offset>();
 #else
-    // After outputs, then in3, then ternary. Treat in3 as one more accessor past the N_chunks outputs so its
-    // real (config-dependent) arg count is skipped.
+    // After outputs, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks + 1, out_tensor_args_cta_offset>();
 #endif
@@ -151,8 +144,7 @@ void kernel_main() {
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
 #ifdef FUSE_SWIGLU
-    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N
-    // is half the matmul (weight) N. The weight-space n ranges are halved at each write.
+    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N is half the matmul (weight) N
     constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
     constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
     const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
@@ -224,8 +216,7 @@ void kernel_main() {
     uint32_t mm_progress_counters_base = 0;
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
-        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array,
-        // pushed as the next RT arg right after the OpSignaler args.
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
     }
 #endif
@@ -271,14 +262,10 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
 #if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
                 if constexpr (is_injector_core) {
-                    // Interleave a forward remote k-block with the following backward one: read/push/mcast
-                    // A.b0, B.b0, A.b1, B.b1, ... Position-based pairing matches compute and dm_in1 so the
-                    // per-band in0 CB counts stay in lockstep. Injectors never defer_write, so the deferred
-                    // output flush below never applies on this path.
+                    // Interleave a forward remote k-block with the following backward one: read/push/mcast A.b0
                     if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
                         ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
-                        // Resolve both slots up front; each call advances the schedule and updates
-                        // streamed_dir, so capture the forward direction before resolving the backward slot.
+                        // Resolve both slots up front
                         const uint32_t kb_a =
                             fused_op_receiver.compute_actual_k_block_iter(true, k_block_iter, k_forward);
                         const uint8_t dir_a = fused_op_receiver.streamed_dir;
@@ -292,10 +279,7 @@ void kernel_main() {
                             if (band_h == 0) {
                                 break;
                             }
-                            // Reserve a uniform M_block_tiles/IN0_SUB_CHUNKS-tile slot per band so each band
-                            // tiles the in0 CB exactly (no fifo wrap on a ragged M block), but forward only
-                            // the band_h real tiles. Receivers mirror this member-inner order (see the
-                            // !is_injector_core branch), so exact band_bytes stays in lockstep.
+                            // Reserve a uniform M_block_tiles/IN0_SUB_CHUNKS-tile slot per band so each band tiles
                             const uint32_t band_slot_tiles = (M_block_tiles / (uint32_t)IN0_SUB_CHUNKS) * K_block_tiles;
                             const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
                             const uint32_t band_start = m_tile + band_lo;
@@ -304,8 +288,7 @@ void kernel_main() {
                                 cb_in0.reserve_back(band_slot_tiles);
                                 uint32_t in0_start_address = get_write_ptr(cb_in0_id);
                                 {
-                                    // band 0's signal was consumed by compute_actual_k_block_iter above; later
-                                    // bands wait this member's own per-direction aggregator signal.
+                                    // band 0's signal was consumed by compute_actual_k_block_iter above
                                     if (band > 0) {
                                         fused_op_receiver.wait_for_dir(dir_pair[member]);
                                     }
@@ -359,15 +342,10 @@ void kernel_main() {
 #endif
 #if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
                 if constexpr (!is_injector_core) {
-                    // Receiver mirror of the injector's paired interleave above. The injector mcasts bands
-                    // member-inner (A.b0, B.b0, A.b1, B.b1, ...); receivers must recv AND forward in that SAME
-                    // order. The sequential non-interleave loop below walks the two k-blocks separately, so it
-                    // would forward each slot with the wrong (sequential) band_h and drop the last tile of
-                    // band 0's backward member. Uniform per-band slot, exact band_bytes forward.
+                    // Receiver mirror of the injector's paired interleave above
                     if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
                         ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
-                        // Receivers can defer_write; this branch consumes both paired positions and continues
-                        // past the top-of-loop flush below, so honor a flush scheduled on either one here.
+                        // Receivers can defer_write
                         if constexpr (is_output_writer) {
                             if (defer_write &&
                                 (k_block_iter == defer_write_k_block || (k_block_iter + 1) == defer_write_k_block)) {
@@ -506,8 +484,7 @@ void kernel_main() {
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_out_id);
 
-                        // write_block_sync_split is more generic (support multiple output tensors)
-                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                        // write_block_sync_split is more generic (support multiple output tensors) But for N_chunks
                         if constexpr (N_chunks == 1) {
                             write_block_sync<M_block_tiles, N_block_tiles>(
                                 std::get<0>(outputs_tuple),
@@ -534,13 +511,7 @@ void kernel_main() {
                     }
                 }
 
-                // ---- Sub-chunked (banded) delivery ----
-                // Each k-block position is delivered as `nb` M-row bands. Remote positions on the first
-                // N-block use IN0_SUB_CHUNKS bands (matching the AG's per-band signalling); local positions
-                // and every position on later N-blocks use a single whole-block band. Reserve/read (or
-                // recv)/push/forward happen per band so the matmul and the downstream forward pipeline at
-                // band granularity. N-stride in0 reuse is intentionally disabled here (every position is
-                // delivered fresh), so there is no reuse skip on this path.
+                // ---- Sub-chunked (banded) delivery ---- Each k-block position is delivered as `nb` M-row bands
                 [[maybe_unused]] uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
 #ifdef FUSE_AG
                 if constexpr (is_injector_core) {
@@ -563,8 +534,7 @@ void kernel_main() {
                     if (band_h == 0) {
                         break;  // only when nb > current_M_block_tiles
                     }
-                    // Uniform per-band slot (see the interleave branches above); this path serves
-                    // single-k-block positions (local or unpaired remote), so band_h forwards match.
+                    // Uniform per-band slot (see the interleave branches above)
                     const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
                     const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
                     cb_in0.reserve_back(band_slot_tiles);
@@ -573,8 +543,7 @@ void kernel_main() {
                         const uint32_t band_start = m_tile + band_lo;
                         const uint32_t band_end = band_start + band_h;
 #ifdef FUSE_AG
-                        // band 0's signal was already awaited by compute_actual_k_block_iter above; each
-                        // later band waits its own aggregator signal.
+                        // band 0's signal was already awaited by compute_actual_k_block_iter above
                         if (nb > 1 && band > 0) {
                             fused_op_receiver.wait_for_dir(k_dir);
                         }
@@ -705,12 +674,10 @@ void kernel_main() {
                     }
 #else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
 #ifdef SPLIT_OUTPUT_WRITE
 #ifdef AGMM_INTERLEAVED_OUTPUT_WRITE
-                        // NOC_0 writer: drains the rows split_row_to_noc1() assigns to NOC_0 from c_8,
-                        // interleaved across the block so it overlaps the NOC_1 writer (dm_in1).
+                        // NOC_0 writer: drains the rows split_row_to_noc1() assigns to NOC_0 from c_8
                         write_block_sync_granular_interleaved<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,

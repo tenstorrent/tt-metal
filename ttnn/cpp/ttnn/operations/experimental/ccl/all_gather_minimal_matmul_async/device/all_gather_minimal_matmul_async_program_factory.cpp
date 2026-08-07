@@ -533,22 +533,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_workers_per_link);
     const uint32_t single_mux_row = full_grid_size.y - 1;
 
-    // A mux must sit at the far end of the in0 forwarding chains it serves, adjacent to that chain's
-    // two fabric-sender cores, and its index must run along the axis perpendicular to the chain:
-    //
-    //   transposed     -> in0 chains are vertical COLUMNS spanning y (initial_endpoint = top_core),
-    //                     so the far end is the bottom row and the link index runs along x.
-    //   non-transposed -> in0 chains are horizontal ROWS spanning x (initial_endpoint = left_core),
-    //                     so the far end is the right column and the link index runs along y.
-    //
-    // Keeping every mux on the bottom row in the non-transposed case would leave all but one row's
-    // senders up to full_grid_size.y - 1 hops from their mux and funnel all of those fabric writes
-    // onto a single row. The single-row interleave scheme below is x-indexed in both orientations
-    // by construction (it packs all muxes onto one row on purpose).
-    //
-    // Mirrors fsdp_mux_in_column above: the column layout is only available when the matmul grid
-    // leaves the last column free. On a full-width grid that column holds workers, so fall back to
-    // the bottom-row layout -- still correct, just farther from the senders.
+    // A mux must sit at the far end of the in0 forwarding chains it serves
     const bool in0_mux_in_column = !single_row_muxes && !transpose_core_grid && (grid_size.x < full_grid_size.x);
     const bool mux_index_on_x = !in0_mux_in_column;
     TT_FATAL(
@@ -687,8 +672,7 @@ all_gather_minimal_matmul_async_factory_helper(
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
     }
-    // Per-chunk tile widths + prefix-sum offsets, as defines (not CTAs, which would shift the
-    // kernels' fixed TensorAccessor arg offsets). Always emitted; uniform chunks are the equal case.
+    // Per-chunk tile widths + prefix-sum offsets, as defines
     {
         std::vector<uint32_t> chunk_tile_widths;
         chunk_tile_widths.reserve(N_chunks);
@@ -1271,13 +1255,7 @@ all_gather_minimal_matmul_async_factory_helper(
         auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
         auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
-        // Fabric senders sit beside the mux at the in0 chain's far (high-coordinate) end. The chain
-        // direction follows in0_noc: increasing on NOC_0 (transposed), decreasing on NOC_1
-        // (non-transposed). With an increasing chain the far end is the tail, so the senders are at
-        // size-1 / size-2. With a decreasing chain build_core_order_for_axis emits
-        // [endpoint, L-1, L-2, ...], so the far end is reached immediately and the senders are at
-        // indices 1 / 2. Derive both from the same predicate that sets the direction so host
-        // dispatch, mux wiring and the kernel's own role test all agree on the same two cores.
+        // Fabric senders sit beside the mux at the in0 chain's far (high-coordinate) end
         const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
         const uint32_t in0_fwd_idx = in0_increasing ? static_cast<uint32_t>(in0_core_order.size() - 1) : 1u;
         const uint32_t in0_bwd_idx = in0_increasing ? static_cast<uint32_t>(in0_core_order.size() - 2) : 2u;
@@ -1347,11 +1325,7 @@ all_gather_minimal_matmul_async_factory_helper(
             // direction it actually sends in. (Previously both directions were registered, with
             // the unused one returning nullptr from build_and_connect — wasting 5 semaphores per
             // core for nothing.)
-            // Core at in0_bwd_idx → backward fabric sender → backward mux only.
-            // Core at in0_fwd_idx → forward  fabric sender → forward  mux only.
-            // The termination master is worker 0 of this core's link group, on the same chain-axis
-            // coordinate as the sender itself -- derive it from the actual sender core rather than
-            // from the chain tail, which is only the far end when the chain runs increasing.
+            // Core at in0_bwd_idx → backward fabric sender → backward mux
             const bool is_in0_backward_sender = (in0_core_order_index == in0_bwd_idx);
             if (is_in0_backward_sender) {
                 auto termination_master_logical_core_backward =

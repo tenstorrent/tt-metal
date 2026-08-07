@@ -296,13 +296,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
-    // Experimental (env-gated): have the AG writer signal the *remote* device's matmul directly over
-    // fabric, right after the chunk's data + out_ready_sem land, instead of relying on the remote AG
-    // reader to relay the signal after its forwarding read. Decouples matmul start from the remote
-    // reader's pace. Multi-worker safe: each of the N = num_links * num_workers_per_direction workers
-    // signals its own per-worker matmul semaphore, and the matmul waits for all N per k-block (see
-    // MinimalMatmulOpReceiver). The matmul-side semaphore count must agree (see the fused program's
-    // MinimalMatmulFusedOpSignaler::num_ag_workers). Always enabled when fusing a matmul.
+    // Experimental (env-gated): have the AG writer signal the *remote* device's matmul directly over fabric
     const bool writer_signals_mm = fuse_op;
     const uint32_t num_ag_workers = num_links * num_workers_per_direction;
 
@@ -323,10 +317,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
 
-    // Option W: carve `num_directions_per_link` extra trailing cores as per-direction matmul-signal
-    // aggregators. choose_worker_cores(1, T) fills T cores row-major from the offset, so the first
-    // num_links*num_cores_per_link are the AG worker/mux cores (unchanged layout) and the last ones
-    // are the aggregators.
+    // Option W: carve `num_directions_per_link` extra trailing cores as per-direction matmul-signal aggregators
     const uint32_t num_agg_cores = writer_signals_mm ? num_directions_per_link : 0;
     const uint32_t total_worker_cores = num_links * num_cores_per_link + num_agg_cores;
     const auto [all_core_range, all_cores] =
@@ -368,14 +359,10 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     CoreRangeSet mux_forward_core_range_set = CoreRangeSet(mux_forward_core_ranges);
     CoreRangeSet mux_backward_core_range_set = CoreRangeSet(mux_backward_core_ranges);
 
-    // Option W: per-direction matmul-signal aggregator cores (the trailing cores from choose_worker_cores),
-    // each holding N per-worker semaphores that the AG writer workers of that direction increment.
-    // Indexed by direction (0 = backward, 1 = forward).
+    // Option W: per-direction matmul-signal aggregator cores (the trailing cores from choose_worker_cores)
     std::vector<CoreCoord> agg_core_logical(num_directions_per_link);
     std::vector<CoreCoord> agg_core_virtual(num_directions_per_link);
-    // Holds L1 ADDRESSES (not semaphore ids): these are cross-device fabric atomic-inc targets, so they
-    // must be GlobalSemaphores. They are supplied by the caller appended to `semaphore` after the
-    // num_directions_per_link out_ready sems, laid out [dir0_w0..dir0_wN-1, dir1_w0..dir1_wN-1].
+    // Holds L1 ADDRESSES (not semaphore ids): these are cross-device fabric atomic-inc targets
     std::vector<std::vector<uint32_t>> agg_per_worker_sem_ids(num_directions_per_link);
     if (writer_signals_mm) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -393,9 +380,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
-    // scatter-write packs this many tiles (distinct dest noc addresses) per fabric packet, up to the
-    // hardware max of 4. Capped below by the actual per-packet page capacity, so 4 degrades gracefully
-    // when the fabric payload cannot hold 4 tiles.
+    // scatter-write packs this many tiles (distinct dest noc addresses) per fabric packet
     uint32_t max_target_noc_addresses_per_packet = 4;
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
@@ -438,17 +423,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     std::map<std::string, std::string> writer_compute_defines;
     std::map<std::string, std::string> agg_defines;
 
-    // Streaming matmul signal: deliver each chunk's M-rows as IN0_SUB_CHUNKS row-bands, one
-    // aggregator inc per band. All three kernels must agree on the count. Default 1 = legacy (one
-    // inc per chunk). The reader is the CB producer, so it must band-split identically to the writer.
+    // Streaming matmul signal: deliver each chunk's M-rows as IN0_SUB_CHUNKS row-bands, one aggregator inc per band
     const char* in0_sub_chunks_env = std::getenv("IN0_SUB_CHUNKS");
     const std::string in0_sub_chunks_str = (in0_sub_chunks_env != nullptr) ? in0_sub_chunks_env : "1";
     reader_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     writer_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     agg_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
 
-    // Route the worker->fabric path through Mux V2 (dual-RISC forwarder+manager) instead of Mux V1.
-    // Always enabled for strided all-gather (and the fused AGMM).
+    // Route the worker->fabric path through Mux V2 (dual-RISC forwarder+manager) instead of Mux V1
     const bool use_mux_v2 = true;
     writer_compute_defines["USE_MUX_V2"] = "1";
 
@@ -522,8 +504,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 buffer_size_bytes_full_size_channel,
                 mux_base_l1_address);
 
-            // V2 places one logical channel per worker; the config also lays out the shared control
-            // regions the forwarder/manager pair use. Only constructed when opted in.
+            // V2 places one logical channel per worker
             std::optional<tt::tt_fabric::FabricMuxV2Config> mux_v2_config;
             if (use_mux_v2) {
                 mux_v2_config.emplace(
@@ -540,8 +521,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 const auto dst_node_id =
                     mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
                 if (use_mux_v2) {
-                    // Creates both the forwarder (RISCV_0) and manager (RISCV_1) kernels on the mux
-                    // core and wires the forwarder's downstream fabric connection runtime args.
+                    // Creates both the forwarder (RISCV_0) and manager
                     tt::tt_fabric::add_fabric_mux_v2_to_program(
                         program,
                         *mux_v2_config,
@@ -641,8 +621,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                             worker + (link * num_workers_per_direction),
                             0);
                     }
-                    // When the writer signals the matmul directly over fabric, the reader must not
-                    // also relay the signal (it would double-count the matmul semaphore).
+                    // When the writer signals the matmul directly over fabric
                     reader_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? 1 : 0));
                 }
 
@@ -668,9 +647,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     global_worker_id,
                 };
                 if (use_mux_v2) {
-                    // V2 is runtime-arg driven and needs no mux compile-time args. Emit the same
-                    // number of slots (is_termination_master + 12 fillers) the V1 helper pushes so the
-                    // trailing line-unicast route info keeps its fixed compile-time-arg index.
+                    // V2 is runtime-arg driven and needs no mux compile-time args
                     sender_writer_compile_args.push_back(worker == 0);
                     sender_writer_compile_args.insert(sender_writer_compile_args.end(), 12, 0);
                 } else {
@@ -726,8 +703,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     }
                 }
                 if (use_mux_v2) {
-                    // Layout: [mux_connection_valid][11 client-connection args]. The writer's
-                    // FabricMuxV2Sender::build_from_args consumes the 11 args in this exact order.
+                    // Layout: [mux_connection_valid][11 client-connection args]
                     writer_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
                     const uint32_t flow_control_sem_id = CreateSemaphore(program, {core}, 0);
                     const uint32_t teardown_sem_id = CreateSemaphore(program, {core}, 0);
@@ -746,9 +722,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                         writer_rt_args);
                 }
                 if (fuse_op) {
-                    // Local self-signal path (op_signaler_sender): targets the single 'self' semaphore,
-                    // which is the last entry in the matmul semaphore vector [backward_0..N-1,
-                    // forward_0..N-1, self].
+                    // Local self-signal path (op_signaler_sender): targets the single 'self' semaphore
                     const uint32_t self_sem_index =
                         fused_op_signaler_sender_workers->fused_op_receiver_signal_semaphores.size() - 1;
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
@@ -757,7 +731,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                         worker + (link * num_workers_per_direction),
                         self_sem_index);
                     // Option W: this worker signals its own per-worker semaphore on the remote direction's
-                    // aggregation core (single core), which collects all N workers and signals the matmul.
                     writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? 1 : 0));
                     writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? agg_core_virtual[dir].x : 0));
                     writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? agg_core_virtual[dir].y : 0));
@@ -769,9 +742,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         }
     }
 
-    // Option W: create one matmul-signal aggregator kernel per direction. Each waits for all N AG
-    // writer workers of its direction to signal a k-block landed, then signals every matmul core's
-    // direction semaphore once - decoupling the matmul from the AG reader's forwarding pace.
+    // Option W: create one matmul-signal aggregator kernel per direction
     if (writer_signals_mm) {
         const uint32_t num_mm_cores = fused_op_signaler.value().num_fused_op_cores_to_signal;
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {

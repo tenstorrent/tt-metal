@@ -17,9 +17,7 @@
 #define IN0_SUB_CHUNKS 1
 #endif
 
-// Two-NoC output-write split: this writer (NOC_1) handles the block's low M-rows [0, split_rows) from c_2;
-// dm_in0 writes [split_rows, M) from c_8 on NOC_0. split_rows = M_block_tiles*AG_SPLIT_NOC1_PCT/100, and
-// must match compute/dm_in0. Default 50% (no effect unless SPLIT_OUTPUT_WRITE is set).
+// Two-NoC output-write split: this writer (NOC_1) handles the block's low M-rows [0, split_rows) from c_2
 #ifndef AG_SPLIT_NOC1_PCT
 #define AG_SPLIT_NOC1_PCT 50
 #endif
@@ -66,9 +64,7 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    // Leading (self/local) k-block positions this device owns; used by receivers to derive the same
-    // per-position band count the injector gets from streamed_dir (see dm_in0_sender.cpp).
-    // (Read unconditionally to keep the arg layout fixed; only consumed by receivers / IN0_SUB_CHUNKS > 1.)
+    // Leading (self/local) k-block positions this device owns
     [[maybe_unused]] const uint32_t num_local_k_blocks = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
@@ -126,9 +122,7 @@ void kernel_main() {
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
 #ifdef FUSE_SWIGLU
-    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N
-    // is half the matmul (weight) N. Compute the halved output geometry once here; the
-    // weight-space n ranges (n_tile, N_tiles, ...) are halved at each write call site.
+    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N is half the matmul (weight) N
     constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
     constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
     const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
@@ -139,9 +133,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
-    // Scratch that holds the whole K_block x N_block once per k-block position so the injector can
-    // re-present it to compute once per M-row band (read once from DRAM, pushed nb times) without
-    // re-reading DRAM. Only used on the sub-chunked injector path.
+    // Scratch that holds the whole K_block x N_block once per k-block position so the injector can re-present
     constexpr uint32_t cb_in1_scratch_id = tt::CBIndex::c_7;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_in2_id = tt::CBIndex::c_4;
@@ -192,8 +184,7 @@ void kernel_main() {
     uint32_t mm_progress_counters_base = 0;
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
-        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array,
-        // pushed as the next RT arg right after the OpSignaler args.
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
     }
 #endif
@@ -240,9 +231,6 @@ void kernel_main() {
 #if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
                 if constexpr (is_injector_core) {
                     // Re-present a forward remote k-block and the following backward one interleaved per band
-                    // (A.b0, B.b0, ...), matching dm_in0/compute. Both blocks are read once into the two-slot
-                    // scratch; in1 has no M dimension so each band re-presents the whole block. Injectors
-                    // never defer_write, so the deferred output flush below never applies on this path.
                     if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
                         ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
                         const uint32_t kb_pair[2] = {
@@ -337,8 +325,7 @@ void kernel_main() {
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_out_id);
 
-                        // write_block_sync_split is more generic (support multiple output tensors)
-                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                        // write_block_sync_split is more generic (support multiple output tensors) But for N_chunks
                         if constexpr (N_chunks == 1) {
                             write_block_sync<M_block_tiles, N_block_tiles>(
                                 std::get<0>(outputs_tuple),
@@ -365,12 +352,7 @@ void kernel_main() {
                     }
                 }
 
-                // ---- Read-once, re-present-per-band ----
-                // in1 has no M dimension, so an M-row band consumes the whole K_block x N_block. To stay
-                // in lockstep with the banded in0 (so the matmul fires per band), the injector reads the
-                // block once from DRAM into scratch and re-presents it to compute once per band (pushed nb
-                // times, no DRAM re-read); receivers receive/push/forward once per band. nb is computed
-                // exactly as in dm_in0_sender so per-band CB and semaphore counts never desync.
+                // ---- Read-once, re-present-per-band ---- in1 has no M dimension
                 [[maybe_unused]] uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 uint32_t nb;
                 if constexpr (is_injector_core) {
@@ -381,9 +363,7 @@ void kernel_main() {
 #else
                     nb = 1u;
 #endif
-                    // Read the whole K_block x N_block once into scratch. The scratch CB is used as a
-                    // plain fixed L1 region (single slot, single-core produce+consume in this kernel), so
-                    // we take its write pointer directly without reserve/push/pop.
+                    // Read the whole K_block x N_block once into scratch
                     uint32_t scratch_addr = get_write_ptr(cb_in1_scratch_id);
                     {
                         read_in1_block_sync<K_block_tiles, N_block_tiles>(
@@ -458,8 +438,6 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             // Under the two-NoC split both DMs are output writers, so the !is_output_writer read never fires
-            // on either and nobody would fill the bias CB. dm_in1 (NOC_1 writer) reads it here; dm_in0 keeps
-            // skipping it (its !is_output_writer is already false under split).
 #ifdef SPLIT_OUTPUT_WRITE
             constexpr bool read_bias = true;
 #else
@@ -546,12 +524,10 @@ void kernel_main() {
                     }
 #else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
 #ifdef SPLIT_OUTPUT_WRITE
 #ifdef AGMM_INTERLEAVED_OUTPUT_WRITE
-                        // NOC_1 writer: drains the rows split_row_to_noc1() assigns to NOC_1 from c_2,
-                        // interleaved across the block so it overlaps the NOC_0 writer (dm_in0).
+                        // NOC_1 writer: drains the rows split_row_to_noc1() assigns to NOC_1 from c_2
                         write_block_sync_granular_interleaved<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,
