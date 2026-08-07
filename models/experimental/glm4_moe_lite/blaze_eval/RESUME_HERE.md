@@ -1331,3 +1331,43 @@ and all 256 workers (8 x 32) starved uniformly at the consumer of the mcast.
 `mesh_qkv_a_ab.py` does (`open_mesh_device(MeshShape(4,8))` + `create_submesh`, `ReplicateTensorToMesh`
 on every tensor, underscore-only prefixes). That reproduces or clears the hang in ~1 minute rather
 than ~10, and if it hangs it is a small self-contained repro to hand to the blaze owners.
+
+### Mcast-on-mesh: ALSO WRONG. The stage is clean on 32 chips.
+
+`bench_e_fused_stage_mesh.py` (this bench ported to a 4x8 submesh) runs the **whole** fused stage,
+Mcast and all, on all 32 chips:
+
+```
+GATE BASE  out1 PCC 0.999909   out2 PCC 0.999912   -> PASS
+GATE FUSED out1 PCC 0.999819                       -> PASS
+BASE  = 2029.6 us summed / 32 = 63.4 us per chip
+FUSED = 2034.7 us summed / 32 = 63.6 us per chip
+```
+
+Identical per-chip to the single-chip run. **No hang.** Three hypotheses tested, all disproved:
+
+| hypothesis | test | result |
+|---|---|---|
+| shared `_PROGRAM_SEMAPHORES` | `..._OWN_SEM=1` | still hangs |
+| Mcast broken by trace | no `--enable-trace` | still hangs |
+| Mcast broken on a mesh | mesh port of the bench | **runs clean, PCC 0.9998** |
+
+Porting note: `ttnn.to_torch` on a mesh tensor raises `buffers.size() == 1`; take
+`ttnn.get_device_tensors(t)[0]` first. That is a harness detail, not a device problem.
+
+### What is left: MANY programs, not one
+
+Everything single-stage now works — one chip, 32 chips, with and without trace. The model differs
+by building and running **47 Q-stage programs**, one per layer, interleaved with ttnn ops, SDPA and
+the KV cache.
+
+And `blaze_ops.py` already records exactly this shape of failure, for the shared-scratch arena:
+*"binding all 12 CBs into a single 120-core arena wedges the **second** `_build_q_stage_program`
+call, while the same op chain with ordinary per-CB allocation builds and runs"*. The arena is off
+by default, but the note says the **second** program is where things break — and the model builds
+47.
+
+**Next test (~1 min, no model run):** in `bench_e_fused_stage_mesh.py`, build and run the stage
+**twice** (two independent `FusedProgram`s, as separate layers would). If the second wedges, that
+is the whole bug, reproduced in a script small enough to hand to the blaze owners. Then try N=3..5
+to see whether it is "the second" specifically or cumulative L1/CB exhaustion.
