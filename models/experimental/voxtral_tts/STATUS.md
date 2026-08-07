@@ -3723,6 +3723,57 @@ either end, in both cases non-monotonically. The residual is activation precisio
 accumulation — and the one place that could be attacked, the KV cache, is closed by op support.
 **Treat Block 1's weight precision as settled and stop re-opening it.**
 
+### 6.58 — full ship-readiness pass on HEAD, and the one defect traced to the model
+
+Everything runnable, on `1e778bc297`, model code unchanged since `1c91d3de4c` (verified: no commit
+since touches `tt/*.py`), so the 15×3 audio and these gates describe the same build.
+
+| check | result |
+|---|---|
+| pytest | **129 passed** |
+| `--gate wiring` | 1-layer prefill PCC 0.99995965 |
+| `--gate prefill26` | PCC last 0.99987–0.99992 — **ahead of tt_transformers' 0.999564 @P=200** |
+| `--gate flow` | semantic exact **True**; 2 of 74 codes — matches the record exactly |
+| `--gate codec` | waveform PCC **0.999767** (T=8), **0.999920** (T=24) |
+| `--gate codes`, real prompts | **34/864 (3.9%), 100% off-by-one, 0 semantic mismatches** |
+| `--gate codes`, synthetic | 85/288 — the §6.54 proxy, not an accuracy number |
+| `--gate decode`, 15×22 frames | mean **0.91%**, p90 1.31%, max 3.30%, min PCC **0.999390** |
+| long-form WER, 15 cases × 3 seeds | **1 wrong of 894 words** |
+| `[END_AUDIO]` termination | **90/90** |
+| clipping / DC offset | **0.00% clipped**, DC 7.5e-05 mean |
+| **determinism** | **bit-identical** on a repeat run, cases 1 and 6 |
+| performance | **39.14 ms/frame, RTF 0.507** (long-form, warmup case excluded — §6.52) |
+
+**THE ONE AUDIO DEFECT IN 90 UTTERANCES, AND IT IS NOT OURS.** `artifacts()` counts
+discontinuities (|step| > 0.5 at 24 kHz). Across all 90, only **case 6** (`de_male`, *"Grüße aus
+München — die Straße ist schön."*, 8 words) ever registers any — and only on seed 1:
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| device, baseline | 0 | 48 | 0 |
+| device, §6.52 | 1 | 60 | 0 |
+| **fp32 CPU reference** | **1** | **69** | — |
+
+**The reference clicks MORE than the device.** It is a property of that prompt on that seed, not a
+port defect, and the device is if anything slightly better. `case6_de_male_FP32REF_s1.wav` is kept
+next to the device version for a side-by-side.
+
+**WHAT IS STILL NOT ESTABLISHED — and it is the part that decides "ship".**
+- **Naturalness has not been evaluated on this build.** §3's listening pass was on `82d04f977a1`,
+  before §6.52 moved codes and frame counts. `generated/SAMPLER_p150_HEAD.wav` (143.6 s, 15 clips)
+  is built from this build for exactly that, with `case1_*_FP32REF_s0.wav` as a prosody A/B.
+- **No MOS-style eval with real raters**, which §3 already said is the bar for any naturalness
+  claim to a customer.
+- **The WER number comes from a scipy port** of `score_quality_set.py`, not the repo scorer, which
+  cannot run here (torchaudio ABI). Faithful, but a systematic bug in it would pass silently.
+- **894 words over 4 long-form cases** is a thin sample.
+- **Functional limits**: prefill beyond ~1024 tokens needs chunked prefill; batch=1 only.
+- **CC BY-NC 4.0 weights** — a hard non-technical blocker regardless of quality.
+
+**Verdict: every objective check is at or better than the reference implementation, and the one
+measurable defect belongs to the model. What remains is listening, which no metric here
+substitutes for.**
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
