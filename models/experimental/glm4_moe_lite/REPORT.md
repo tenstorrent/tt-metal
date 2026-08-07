@@ -378,3 +378,171 @@ wins do not translate into step-time wins, and can invert. Any future Blaze work
 gated on a traced end-to-end measurement from the start, and should target stages large enough that
 the ~40 µs model-boundary crossing is amortised — or should target the weight-bandwidth problem
 directly, where the numbers are much larger.
+
+---
+
+## 14. What actually makes Blaze different
+
+### 14.1 One program instead of many
+
+ttnn is op-at-a-time: each op is its own program with its own dispatch and CB allocation, and its
+inputs/outputs are **tensors** — usually a DRAM round trip between ops.
+
+Blaze composes **micro-ops** into a single `ttnn.generic_op` dispatch. `emit()` returns a
+`CBHandle`, and the next micro-op consumes that handle rather than a tensor:
+
+```
+TileRowReplicate.emit(...) -> CB -> DRAMStreamingMatmul.emit(...) -> CB -> GatherRowToDRAM.emit(...)
+```
+
+Data never materialises as a tensor in between; it moves producer→consumer through L1 circular
+buffers on the same cores. Measured here: **chaining inside one program costs 0.5–1.0 µs; crossing
+back to a model tensor costs ~40 µs.**
+
+### 14.2 Micro-ops are below the granularity ttnn exposes
+
+`TileRowReplicate`, `GatherRowToDRAM`, `Mcast`, `ResidualAdd`, `Retilize`, `Scatter`, `CbReconfig`
+— these are not ops anyone would ship as ttnn ops. They are data-movement and plumbing primitives
+that only make sense as glue *inside* a fused program.
+
+### 14.3 Compile-time specialisation
+
+Parameters are baked into the kernel as C++ template constants:
+
+```cpp
+static constexpr CB dst = A::dst;
+static constexpr uint32_t src_addr = A::src_addr;
+```
+
+instantiated as e.g. `ct_args::glm_q_stage__norm_q_b__q_b_proj`. This needs the
+`-ftt-nttp / -ftt-constinit / -ftt-consteval / -ftt-no-dyninit` SFPI flags, which is why Blaze only
+builds inside its own tt-metal checkout.
+
+*Upside:* no runtime branching; addresses and sizes are constants.
+*Costs seen here:* `TileRowReplicate` bakes `src.buffer_address()` as a **compile-time** arg, so a
+different activation buffer needs a whole new program (hence a program cache keyed by buffer
+address); and every distinct fused program is a fresh JIT compile — trace capture went 7 s → 43 s
+for 47 programs.
+
+### 14.4 Explicit placement, and CCL as micro-ops
+
+Blaze states exactly which core does what — bank workers, mcast sender, gather receiver. ttnn picks
+grids from program configs and heuristics. Blaze also has collectives as composable micro-ops
+(`all_gather`, `all_reduce`, `cross_device_send`, `d2d_sender_socket`), so a fused program can span
+devices rather than breaking out to a ttnn CCL op.
+
+### 14.5 `DRAMStreamingMatmul` — where the philosophies diverge
+
+| | Blaze | ttnn dram-sharded |
+|---|---|---|
+| cores | **1 pinned per DRAM bank = 8** | up to **80** |
+| decode tile | 1×32, no M padding | pads M to 32 |
+| weights | streamed from DRAM, triple-buffered | DRAM-sharded |
+
+Blaze bets the bottleneck is per-bank streaming. Measured here that bet loses: **56 GB/s vs ttnn's
+152 GB/s of a 512 GB/s device** — one Tensix core cannot saturate a DRAM bank.
+
+---
+
+## 15. Everything we built or changed in Blaze
+
+**Fused ops authored for GLM-4.7-Flash**
+- `GLMQKVAProjection` — q_a + kv_a from one shared activation (later superseded by a single
+  `DRAMStreamingMatmul` over the model's concatenated weight).
+- `GLMQANormQBProjection` — q_a RMSNorm → q_b, chained in L1.
+- `GLMOProjResidual` — head-flatten → o_proj → residual add, five ttnn dispatches in one program
+  (second agent).
+- `GLM4_FLASH_BLAZE_CONFIG` — an authored model config (`blaze/models/glm4_flash/`) that passes
+  `sanity_check_model_config`, rather than a mutated GLM-5 one.
+
+**Micro-op fixes (the durable contribution)** — saved as `blaze_eval/upstream/*.patch`
+- `07` `TileRowReplicate`: chunked reads, removing a NOC barrier per tile.
+- `08` `DRAMStreamingMatmul`: `BLAZE_DSM_WORKERS_PER_BANK`, W workers per bank with a per-core
+  column byte offset; **3.01× on the matmul core**.
+- `09` `GatherRowToDRAM`: chunked writes, then row-0-only writes removing 32× write amplification.
+
+**Harnesses** — `blaze_eval/`: `native_boundary_ab.py`, `boundary_decompose.py`,
+`oproj_residual_ab.py`, `mesh_qkv_a_ab.py`, `bench_e_fused_stage_mesh.py`, `bench_e_stage_47.py`.
+All gate PCC against the actual ttnn op being replaced.
+
+---
+
+## 16. The thing we got wrong: Blaze's unit is the *layer*, not the op
+
+Blaze's op registry contains **whole decoder layers as single fused ops**:
+
+| op | docstring |
+|---|---|
+| `dense_layer` | "Dense decoder layer: MLA + CbReconfig + FFNInterleaved... DeepSeek V3 layers 0-3" |
+| `dflash_decoder` | "a full DFlash GQA decoder layer as one fused op" |
+| `dsa_glm_sparse_layer` | "Fused sparse layer: DSA attention followed by GLM MoE" |
+| `minimax_m3_decoder_layer`, `minimax_m2_global_layer`, `sparse_layer` | same pattern |
+
+**Every model Blaze supports well has a one-op-per-layer implementation.** That is the intended
+granularity, and it changes the arithmetic completely:
+
+- **Blaze as designed:** one program per layer → **2 boundary crossings per layer** (in, out).
+- **What we did:** individual clusters swapped inside an otherwise-ttnn layer → **2 crossings per
+  cluster**, plus every ttnn op still dispatching around them.
+
+At ~40 µs per crossing, the hybrid approach pays a toll the design never intended. This is the
+single best explanation for why a 1.39× kernel win became a 6.4% step-time loss, and it is
+consistent with the intra-stage figure: chaining is ~1 µs, so Blaze expects you to chain *the whole
+layer*, not two matmuls.
+
+Note `blaze/models/glm4_flash/` contains **only a config** — there is no GLM-4.7-Flash layer op. A
+real port would mean writing one, in the shape of `dsa_glm_sparse_layer`.
+
+---
+
+## 17. What models suit Blaze
+
+From the models Blaze carries (`deepseek_v3`, `deepseek_v4`, `deepseek_v4_flash`, `dflash`,
+`glm_5_1`, `glm_5_2`, `gpt_oss_120b`, `kimi_k2*`, `llama_3p1_8b`, `minimax_m2`, `minimax_m3`), the
+common characteristics:
+
+**Blaze fits when:**
+1. **The whole layer is ported**, so intermediates never leave L1 — the boundary is paid twice per
+   layer instead of twice per op.
+2. **Intermediate data movement is a large share of the step** — many small ops chained, each
+   round-tripping through DRAM in the ttnn implementation.
+3. **The model needs ops ttnn does not express well** — DSA/sparse attention (`dsa*`,
+   `compressor*`, `distributed_indexer`), MLA variants, block-diffusion routing, custom top-k
+   (`cross_device_topk_merge`). Several of these have no ttnn equivalent at all.
+4. **Weights fit L1, or the matmul is not the bottleneck** — `Matmul`/`KNMatmul` read from L1, which
+   is where Blaze's fastest paths live.
+5. **Multi-device is part of the fusion** — collectives as micro-ops, and pipeline parallelism via
+   `PipelineLayout`/`create_submesh` (including 4 stages × 8 chips on a single Galaxy).
+6. **Very large models** where pipeline/expert parallelism is mandatory for capacity — DeepSeek V3
+   at 671B is the archetype.
+
+**Blaze fits poorly when:**
+- The step is **weight-bandwidth-bound** and the weights already stream efficiently under ttnn.
+- The model is **already well served by tuned ttnn ops** on a wide core grid.
+- You are **integrating op-by-op** into a ttnn model rather than porting whole layers.
+- **Op count is already free** (traced, pipelined dispatch).
+
+---
+
+## 18. Why GLM-4.7-Flash did not fit — corrected
+
+Ranked by how much each contributed:
+
+1. **We used the wrong granularity.** Blaze is built around whole-layer fusion; we swapped
+   individual clusters into a ttnn layer and paid ~40 µs of boundary per cluster. This is a
+   property of *our integration*, not of Blaze, and it is the most fixable item on the list.
+2. **The step is weight-bandwidth-bound** and `DRAMStreamingMatmul` streams the same bf8 bytes.
+   Blaze does not reduce the dominant quantity.
+3. **Op count is a measured 0.0 ms lever under trace** — Blaze's headline mechanism is a null here.
+4. **8 bank workers vs ttnn's 80 cores** — 56 vs 152 GB/s. Widening recovers 3.01×, but GLM's
+   768/576 projection widths then pay 33–78% padding to satisfy `N % (32·banks·W) == 0`.
+5. **GLM-4.7-Flash's specific shapes fight Blaze's assumptions** — 20 heads breaks
+   `layout_plan`'s `n_heads_per_device % 8 == 0`; `glm_post_sdpa` needs w_o in L1 (523 MB against
+   180 MB available); the routed-expert path gives PCC 0.0235 at 64 experts.
+
+**The honest summary:** Blaze is not unsuited to GLM — `dsa_glm_sparse_layer` shows GLM-family
+models are first-class there. What is unsuited is *retrofitting Blaze ops into a working ttnn
+model one cluster at a time*. To use Blaze on GLM-4.7-Flash properly, the layer would have to be
+ported wholesale, in the shape of `dsa_glm_sparse_layer` — a rewrite, not an integration. Whether
+that beats the current 33.2 ms/token is unknown, and points 2–4 above are reasons for caution even
+then.
