@@ -26,8 +26,17 @@ image tokens out via a per-key additive attention bias, so it matches the refere
   bit-identical to the rows above (frame PCC 1.00000000, max abs pixel diff 0.0):
   | task | tier | denoise | **e2e** | vs baseline |
   |---|---|---|---|---|
-  | **i2v** | 480p | 1:20 (1.60 s/it) | **4:50** | −32.2% denoise |
-  | **i2v** | 720p | 3:56 (4.72 s/it) | **8:11** | −23.1% denoise |
+  | **i2v** | 480p | 1:20 (1.60 s/it) | **3:33** | −32% denoise, −33% e2e |
+  | **i2v** | 720p | 3:56 (4.72 s/it) | 8:11 | −23% denoise *(e2e measured before the cache/writeout work; expect ~6:30)* |
+
+  The 480p row is a full 121f/50-step run with `HY_DIT_SKIP_PARTS_STUBS=1
+  HY_VAE_WEIGHT_CACHE=1 HY_FAST_WRITEOUT=1 HY_SAVE_GIF=0
+  HY_CFG_PADDING_POLICY=masked` and the heads-major layout (now default), but
+  **without** `HY_DIT_WEIGHT_CACHE` — that flag is worth a further ~50s and takes
+  DiT weight upload from 69.4s to ~17s (e2e ≈ **2:41**), at the cost of 16 GB of
+  disk per configuration. Phase split of the 3:33 run: generate 93.7s (denoise
+  80s + VAE), DiT weight upload 69.4s, text encode 10.2s, checkpoint load 2.8s,
+  writeout 1.1s, VAE weight upload 0.8s (cached).
 
   t2v was not re-measured: only the two i2v checkpoints are in the local HF
   cache, so the t2v rows above remain at their original measurement.
