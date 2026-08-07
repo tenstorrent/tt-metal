@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
