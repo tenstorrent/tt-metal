@@ -9,9 +9,17 @@ from typing import ClassVar
 
 import pandas as pd
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
-from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.schema import (
+    MARKER,
+    MEAN,
+    NON_RENDEZVOUS_MARKERS,
+    STD,
+    stat_column,
+    stat_prefix,
+)
 from .test_config import TestConfig
 
 
@@ -79,6 +87,77 @@ class ProfilerData:
         if not start_entries.equals(end_entries):
             raise AssertionError("Zone START and END entries don't match")
 
+    @staticmethod
+    def _assert_zones_dont_overlap(starts: pd.DataFrame, ends: pd.DataFrame) -> None:
+        """No thread may open a phase before every thread has closed the previous one, per run.
+
+        Phases are zone names in first-open order; a zone containing another zone on the same
+        thread (like KERNEL) is a wrapper, not a phase. START_PERF_MEASURE's entry rendezvous is
+        what makes this hold, so NON_RENDEZVOUS_MARKERS are exempt and Quasar is skipped.
+        """
+        if get_chip_architecture() == ChipArchitecture.QUASAR:
+            return
+        if MARKER not in starts.columns or "timestamp" not in starts.columns:
+            return
+        # run_index is declared but NA until core.py tags it, and groupby drops NA keys, so grouping
+        # naively would check nothing on an untagged frame.
+        if "run_index" in starts.columns:
+            keys = list(pd.unique(starts["run_index"]))
+        else:
+            keys = [None]
+        for key in keys:
+            if "run_index" not in starts.columns:
+                s, e = starts, ends
+            elif pd.isna(key):
+                s = starts[starts["run_index"].isna()]
+                e = ends[ends["run_index"].isna()]
+            else:
+                s = starts[starts["run_index"] == key]
+                e = ends[ends["run_index"] == key]
+            # Identity is the NAME: marker_id is a per-callsite hash, different on every thread.
+            span = (
+                s.groupby([MARKER, "thread"])["timestamp"]
+                .min()
+                .rename("begin")
+                .to_frame()
+            )
+            span["finish"] = e.groupby([MARKER, "thread"])["timestamp"].max()
+            span = span.reset_index()
+            envelopes = set()
+            for _, group in span.groupby("thread"):
+                rows = group.to_dict("records")
+                for a in rows:
+                    for b in rows:
+                        if (
+                            a is not b
+                            and a["begin"] <= b["begin"]
+                            and b["finish"] <= a["finish"]
+                        ):
+                            envelopes.add(a[MARKER])
+            phases = (
+                span[~span[MARKER].isin(envelopes)]
+                .groupby(MARKER)
+                .agg(first_open=("begin", "min"), last_close=("finish", "max"))
+                .sort_values("first_open")
+                .reset_index()
+            )
+            prev = None
+            for row in phases.itertuples(index=False):
+                if prev is not None and row.marker not in NON_RENDEZVOUS_MARKERS:
+                    if prev.last_close > row.first_open:
+                        where = (
+                            "" if key is None or pd.isna(key) else f" (run_index={key})"
+                        )
+                        raise AssertionError(
+                            f"Zones overlap across threads{where}: the last {prev.marker} closed at "
+                            f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
+                            f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                            f"cover time belonging to the other phase. The usual cause is a kernel opening "
+                            f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
+                            f"supplies the cross-thread rendezvous at zone entry."
+                        )
+                prev = row
+
     def raw(self) -> pd.DataFrame:
         """Returns the raw event view of the underlying data"""
 
@@ -89,6 +168,7 @@ class ProfilerData:
         end_entries = self.df[self.df["type"] == "ZONE_END"]
 
         self._assert_zones_valid(start_entries, end_entries)
+        self._assert_zones_dont_overlap(start_entries, end_entries)
 
         return self.df
 
@@ -106,6 +186,7 @@ class ProfilerData:
         end_entries = self.df[self.df["type"] == "ZONE_END"].reset_index(drop=True)
 
         self._assert_zones_valid(start_entries, end_entries)
+        self._assert_zones_dont_overlap(start_entries, end_entries)
 
         zone_entries = start_entries.copy()
 
@@ -218,8 +299,6 @@ def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
-    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
-    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
     if raw_data.empty:
         return pd.DataFrame()
 
@@ -326,7 +405,6 @@ def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
-    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
     if raw_thread.empty:
         return pd.DataFrame()
 
