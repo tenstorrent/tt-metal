@@ -1970,3 +1970,84 @@ differs from it — costs one `dispatch_progress_update_ms` interval, nothing mo
 It explains the *symptom* completely and kills any theory of a host-side dispatch deadlock. It says nothing
 about *why the endpoint dies* — that is still the open question, and the reason for the num_hw_cqs experiment
 in §N+16.
+
+## §N+16 — Arming the operation timeout SUPPRESSES the hang; and degradation needs a FREEZE, not a hang (bh-05, 2026-08-07)
+
+### The result: a host-side spin knob changes whether the DEVICE wedges
+
+`TT_METAL_OPERATION_TIMEOUT_SECONDS` does more than add a timeout. In `loop_and_wait_with_timeout`, a
+non-zero duration selects a **different loop body**: the timeout path calls `std::this_thread::yield()`
+each iteration, while the default (0.0) path is a bare `do { func_body(); } while (wait_condition());`
+with no yield at all. So arming it converts the completion-queue poller from a flat-out spin on host
+DRAM into a yielding one.
+
+Two blocks, identical in every other respect (DRISC + fast dispatch, `--gx 0 --gy 0 --iters 500
+--delay 500`, alternating `num_hw_cqs`, same binary, same card):
+
+| block | timeout | hangs / runs |
+|---|---|---|
+| A | armed (45 s) | **0 / 179** |
+| B | not set (stock tight-spin) | **5 / 125** |
+
+Fisher p ~ 0.02. Block B's first hang landed on **run 1**. Pooling B with the earlier no-timeout data
+(2x2 era + NoC-1 + the 84-run monitored churn) gives ~6/235 = 2.6% against 0/179.
+
+The build is not the variable: diffed against `80b5263c240`, the last commit that demonstrably hung, the
+only deltas are a removed `if constexpr (kAblate == 2)` early-return (dead code when ABLATE is unset) and
+a comment block. **Functionally identical on the default path.**
+
+Mechanistically this is consistent with §N+15: the poller hammers the hugepage that the device writes
+completions into. Relieving that pressure appears to make the endpoint wedge less often. Not proven as
+the mechanism — but it is a host-side knob that changes a device-side failure, which is worth knowing.
+
+### The num_hw_cqs comparison is VOID — attribution artifact, not just low power
+
+All 5 of block B's hangs landed in the `q=1` arm, 0 in `q=2`. That is an artifact of the harness:
+
+```
+q2_22   init-ok  drain=1335 sweeps  exits CLEANLY (cluster.cpp:811) 03:05:25.455
+q1_23   profiler init trips MMIO watchdog 03:05:27.053, then hangs
+```
+
+Same shape for `q2_28` -> `q1_29`. The wedge's onset **straddles the run boundary**, and because the arms
+strictly alternate q1->q2->q1, a wedge seeded by a q2 run always surfaces in the following q1 run. Only
+`q1_1` (first run of the block, 1470 sweeps then wedged at teardown) is unambiguously a q1 event.
+Any future arm comparison must randomize or block the order and probe health between runs.
+
+### A real early-warning signal exists (§N+11's "no early warning" is superseded)
+
+The failing runs log `MMIO per-op timeout: 4B load took 220214 us (budget=2 ms)` — **220 ms**, not 220 s;
+check the units, the whole run spans ~1 s. A 4-byte MMIO load ~110x over budget, at the leading edge of
+the wedge. The profiler then disables itself and the run continues unprofiled before hanging.
+
+### Degradation requires a box FREEZE, not a card hang
+
+**~510 runs today, 9 hangs, ZERO degradation.** ACK-WRITE never exceeded 471 ns (dynamic) / 219 ns (static).
+Conditions covered: delay 500, and the full knee region 150/100/50/0, on both TLB paths.
+
+The reason is already in this file: the historical degradation followed the **box hard-freezing** under a
+sweep and the IRD watchdog rebooting it — not a PCIe hang. Verified on bh-05 with the documented check:
+`last -x` shows **every** reboot today has a preceding `shutdown` record and there are no `crash` entries.
+We were never in the state that produces degradation. Card hangs recover clean; freezes are what leave it
+degraded.
+
+### RETRACTED before it spread: "the static TLB window is immune to degradation"
+
+Proposed on the basis that healthy static is 175 ns and healthy dynamic is 386 ns, matching the historical
+"386 ns healthy" exactly — so the old degraded/healthy pair was indeed measured on the dynamic path. But the
+immunity claim is **already refuted above in this file**: a static window degrades 13x, both drainers degrade
+identically, and device *reads* degrade 3.8x without touching that window. The penalty attaches to the device
+access itself. The static/dynamic split explains the healthy baselines and nothing about degradation.
+
+### Correction to the recovery matrix: `tt-smi -r` DOES recover a HUNG card
+
+Measured 3x today on cards reading `Unknown|63` with all-ones config space: `tt-smi -r` completed cleanly,
+did not take the box down, and restored full health (post-recovery ack 392 / 404 / 171-176 ns). The standing
+warning that reset kills a hung box did not reproduce. Warm `sudo reboot` also recovers (4/4). Neither
+produces degradation.
+
+### Dynamic-path block, for the record
+
+160 runs at delay 150/100 with `NO_STATIC_TLB=1`: **2 hangs** (run 30 @ 150, run 90 @ 100), 0 degradation,
+ack 367-471 ns throughout. An early "hung after 2 runs on dynamic" reading was coincidence — the full block
+puts the dynamic-path rate at ~1.2%, indistinguishable from static.
