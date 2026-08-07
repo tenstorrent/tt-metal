@@ -1710,6 +1710,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logits_i = tt_logits[i]
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
+            # EXPERIMENT ONLY (#52176) — do not merge. Locate the corruption: read the logits to
+            # host and take argmax there, so it can be compared against the token the device
+            # sampling op returns for the same logits. Divergence means sampling is producing the
+            # wrong token from good logits; agreement means the logits themselves are already
+            # wrong (model / KV cache) and sampling is faithful. Wrapped so a shape mismatch logs
+            # instead of failing the run.
+            _dbg_host_tok = None
+            try:
+                _dbg_n = getattr(self, "_dbg_step", 0)
+                if _dbg_n < 12:
+                    _dbg_logits = self.model[i].process_output_decode(logits_i, B=32, S=1, is_tokens=False)
+                    _dbg_host_tok = int(torch.argmax(_dbg_logits[0, 0, :]).item())
+            except Exception as _e:
+                logger.warning(f"[#52176 dbg] host-argmax probe failed: {_e}")
             # Some models must run the on-device sampling op eagerly rather than from its
             # own captured trace: the force-argmax path does an all_gather_async whose
             # multi_device_global_semaphore is taken from get_and_cycle_*() at capture time
@@ -1725,13 +1739,27 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if sampling_enable_trace and self.trace_inputs_decode[True]
                 else None
             )
-            sampled_outputs.append(
-                sampling_module.sample(
-                    logits=logits_i,
-                    tt_out_tok=tt_out_tok,
-                    enable_trace=sampling_enable_trace,
-                )
+            _sampled = sampling_module.sample(
+                logits=logits_i,
+                tt_out_tok=tt_out_tok,
+                enable_trace=sampling_enable_trace,
             )
+            sampled_outputs.append(_sampled)
+            # EXPERIMENT ONLY (#52176) — do not merge. See the host-argmax probe above.
+            try:
+                _dbg_n = getattr(self, "_dbg_step", 0)
+                if _dbg_n < 12:
+                    _tok_t = _sampled[0] if isinstance(_sampled, tuple) else _sampled
+                    _dev_tok = int(
+                        self.model[i].process_output_decode(_tok_t, B=32, S=1, is_tokens=True)[0].item()
+                    )
+                    logger.info(
+                        f"[#52176 dbg] step={_dbg_n} host_argmax_tok={_dbg_host_tok} device_sampled_tok={_dev_tok} "
+                        f"{'AGREE' if _dbg_host_tok == _dev_tok else 'DIVERGE'}"
+                    )
+                    self._dbg_step = _dbg_n + 1
+            except Exception as _e:
+                logger.warning(f"[#52176 dbg] device-token probe failed: {_e}")
         return sampled_outputs
 
     @staticmethod
