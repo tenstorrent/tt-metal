@@ -311,36 +311,48 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
         const uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
         const uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
 
-        // reader: {q, k, v, idx, work_start, work_count, k_batch_off, v_batch_off, k_stride, v_stride, chunk_start}
         auto& reader = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
-        reader[0] = q_addr;
-        reader[1] = k_addr;
-        reader[2] = v_addr;
-        reader[3] = idx_addr;
-        reader[4] = work_start;
-        reader[5] = work_count;
-        reader[6] = dyn.k_batch_tile_offset;
-        reader[7] = dyn.v_batch_tile_offset;
-        reader[8] = dyn.k_group_tile_stride;
-        reader[9] = dyn.v_group_tile_stride;
-        reader[10] = dyn.chunk_start_local;
+        TT_FATAL(
+            reader.size() == kReaderArgCount,
+            "sparse_sdpa_msa reader expected {} runtime args, cached program has {}",
+            static_cast<uint32_t>(kReaderArgCount),
+            reader.size());
+        reader[kReaderQAddr] = q_addr;
+        reader[kReaderKAddr] = k_addr;
+        reader[kReaderVAddr] = v_addr;
+        reader[kReaderIdxAddr] = idx_addr;
+        reader[kReaderWorkStart] = work_start;
+        reader[kReaderWorkCount] = work_count;
+        reader[kReaderKBatchOffset] = dyn.k_batch_tile_offset;
+        reader[kReaderVBatchOffset] = dyn.v_batch_tile_offset;
+        reader[kReaderKGroupStride] = dyn.k_group_tile_stride;
+        reader[kReaderVGroupStride] = dyn.v_group_tile_stride;
+        reader[kReaderChunkStart] = dyn.chunk_start_local;
 
-        // writer: {out, work_start, work_count, k, v, k_batch_off, v_batch_off, k_stride, v_stride}
         auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
-        writer[0] = out_addr;
-        writer[1] = work_start;
-        writer[2] = work_count;
-        writer[3] = k_addr;
-        writer[4] = v_addr;
-        writer[5] = dyn.k_batch_tile_offset;
-        writer[6] = dyn.v_batch_tile_offset;
-        writer[7] = dyn.k_group_tile_stride;
-        writer[8] = dyn.v_group_tile_stride;
+        TT_FATAL(
+            writer.size() == kWriterArgCount,
+            "sparse_sdpa_msa writer expected {} runtime args, cached program has {}",
+            static_cast<uint32_t>(kWriterArgCount),
+            writer.size());
+        writer[kWriterOutAddr] = out_addr;
+        writer[kWriterWorkStart] = work_start;
+        writer[kWriterWorkCount] = work_count;
+        writer[kWriterKAddr] = k_addr;
+        writer[kWriterVAddr] = v_addr;
+        writer[kWriterKBatchOffset] = dyn.k_batch_tile_offset;
+        writer[kWriterVBatchOffset] = dyn.v_batch_tile_offset;
+        writer[kWriterKGroupStride] = dyn.k_group_tile_stride;
+        writer[kWriterVGroupStride] = dyn.v_group_tile_stride;
 
-        // compute: {work_start, work_count}
         auto& compute = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx, core);
-        compute[0] = work_start;
-        compute[1] = work_count;
+        TT_FATAL(
+            compute.size() == kComputeArgCount,
+            "sparse_sdpa_msa compute expected {} runtime args, cached program has {}",
+            static_cast<uint32_t>(kComputeArgCount),
+            compute.size());
+        compute[kComputeWorkStart] = work_start;
+        compute[kComputeWorkCount] = work_count;
     }
 }
 

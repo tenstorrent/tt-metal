@@ -45,6 +45,36 @@ struct SparseSDPAMsaOperation {
 
     using program_factory_t = std::variant<SparseSDPAMsaProgramFactory>;
 
+    // Runtime-arg slots, named so create_descriptor's emplace order and override_runtime_arguments'
+    // in-place writes reference the same symbols instead of agreeing on bare positions.
+    enum ReaderArg : uint32_t {
+        kReaderQAddr,
+        kReaderKAddr,
+        kReaderVAddr,
+        kReaderIdxAddr,
+        kReaderWorkStart,
+        kReaderWorkCount,
+        kReaderKBatchOffset,
+        kReaderVBatchOffset,
+        kReaderKGroupStride,
+        kReaderVGroupStride,
+        kReaderChunkStart,
+        kReaderArgCount,
+    };
+    enum WriterArg : uint32_t {
+        kWriterOutAddr,
+        kWriterWorkStart,
+        kWriterWorkCount,
+        kWriterKAddr,
+        kWriterVAddr,
+        kWriterKBatchOffset,
+        kWriterVBatchOffset,
+        kWriterKGroupStride,
+        kWriterVGroupStride,
+        kWriterArgCount,
+    };
+    enum ComputeArg : uint32_t { kComputeWorkStart, kComputeWorkCount, kComputeArgCount };
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-checks invariants excluded from the program hash, such as interleaved K/V length and cache_batch_idx.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
