@@ -634,6 +634,7 @@ class RowParallelLinear(Module):
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
             dtype=dtype,
+            mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)

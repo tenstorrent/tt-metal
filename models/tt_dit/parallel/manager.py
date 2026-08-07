@@ -36,6 +36,9 @@ class CCLManager:
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
         self._fused_norm_stats_buffer_cache = {}
 
+        # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
+        self._mm_progress_counters_buffer = None
+
         # Setup semaphores
         self._init_subdevice()
 
@@ -301,6 +304,33 @@ class CCLManager:
         buf = bufs[entry["idx"]]
         entry["idx"] = (entry["idx"] + 1) % len(bufs)
         return buf
+
+    def get_mm_progress_counters_buffer(self):
+        """Own the progress-counter array for the fused matmul -> strided reduce-scatter op's
+        per-core MM->RS signaling: one uint32 slot per matmul core, one row per core.
+
+        Same per-core row as the array the op allocates for itself, over the whole compute grid
+        rather than just the RS worker cores, and allocated once here instead of per compiled
+        program. The op's own copy is retained for as long as the program stays cached, and because
+        L1 is handed out top-down each of those small permanent blocks pins the freed space above it,
+        which eventually leaves a later op (the VAE's ring joint SDPA) short of contiguous L1 for its
+        circular buffers.
+        """
+        if self._mm_progress_counters_buffer is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            slots = grid.x * grid.y
+            self._mm_progress_counters_buffer = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([slots, slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+        return self._mm_progress_counters_buffer
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """
