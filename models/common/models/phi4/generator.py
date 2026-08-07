@@ -134,7 +134,7 @@ class Phi4Generator:
         optimizations="performance",
         trace_mode: TraceMode = "all",
         hf_revision: str | None = DEFAULT_HF_REVISION,
-        device_sampling_enabled: bool = False,
+        device_sampling_enabled: bool = True,
     ):
         """Build the configured single-lane or data-parallel Phi target."""
 

@@ -132,7 +132,7 @@ class Llama33_70BGenerator:
         tt_data_parallel=1,
         optimizations="performance",
         trace_mode: TraceMode = "all",
-        device_sampling_enabled: bool = False,
+        device_sampling_enabled: bool = True,
     ):
         """Build the configured single-lane or data-parallel Llama target."""
 

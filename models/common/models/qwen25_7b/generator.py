@@ -134,7 +134,7 @@ class Qwen25Generator:
         optimizations="performance",
         trace_mode: TraceMode = "all",
         hf_revision: str | None = None,
-        device_sampling_enabled: bool = False,
+        device_sampling_enabled: bool = True,
     ):
         """Build the configured single-lane or data-parallel Qwen target."""
 

@@ -111,7 +111,7 @@ class Qwen25_72BGenerator:
         tt_data_parallel=1,
         optimizations="performance",
         trace_mode: TraceMode = "all",
-        device_sampling_enabled: bool = False,
+        device_sampling_enabled: bool = True,
     ):
         hf_model = getattr(hf_config, "_name_or_path", None)
         if not hf_model:

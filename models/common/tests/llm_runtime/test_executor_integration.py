@@ -4,6 +4,7 @@
 """Generic host-only executor/generator integration for migrated siblings."""
 
 import inspect
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec
 
@@ -232,6 +233,22 @@ EXECUTOR_BINDINGS = {
         ),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="microsoft/phi-4",
+    ),
+}
+
+GENERATOR_PATHS = {
+    "llama32_1b": "models.common.models.llama32_1b.generator:Llama32_1BGenerator",
+    "llama32_3b": "models.common.models.llama32_3b.generator:Llama32_3BGenerator",
+    "llama33_70b": "models.common.models.llama33_70b.generator:Llama33_70BGenerator",
+    "mistral_7b": "models.common.models.mistral_7b.generator:Mistral7BGenerator",
+    "phi4": "models.common.models.phi4.generator:Phi4Generator",
+    "qwen2_7b": "models.common.models.qwen2_7b.generator:Qwen2Generator",
+    "qwen25_7b": "models.common.models.qwen25_7b.generator:Qwen25Generator",
+    "qwen25_72b": "models.common.models.qwen25_72b.generator:Qwen25_72BGenerator",
+    "qwen25_coder_32b": "models.common.models.qwen25_coder_32b.generator:Qwen25Coder32BGenerator",
+    "qwen3_32b": "models.common.models.qwen3_32b.generator:Qwen3_32BGenerator",
+    "deepseek_r1_distill_qwen_14b": (
+        "models.common.models.deepseek_r1_distill_qwen_14b.generator:DeepSeekR1Qwen14BGenerator"
     ),
 }
 
@@ -929,6 +946,19 @@ def test_initialize_vllm_model_threads_policy(binding, monkeypatch):
     assert config.optimizations == "accuracy"
     assert config.trace_mode == "decode_only"
     assert config.device_sampling_enabled is True
+
+
+@pytest.mark.parametrize("model_id,generator_path", GENERATOR_PATHS.items(), ids=GENERATOR_PATHS)
+def test_vllm_generator_path_and_construction_defaults(model_id, generator_path):
+    module_name, class_name = generator_path.split(":", maxsplit=1)
+    generator_class = getattr(import_module(module_name), class_name)
+
+    assert generator_class is EXECUTOR_BINDINGS[model_id].generator_class
+    assert callable(getattr(generator_class, "initialize_vllm_model", None))
+
+    parameters = inspect.signature(generator_class.initialize_vllm_model).parameters
+    assert parameters["trace_mode"].default == "all"
+    assert parameters["device_sampling_enabled"].default is True
 
 
 class _FakeLane:
