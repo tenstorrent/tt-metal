@@ -86,6 +86,12 @@ That is the entire adapter contract — four methods plus the attributes. The ad
 a factory + descriptor; it performs no device work or comms itself, and it does not
 hold the cache (the engine does).
 
+One opt-in policy attribute worth knowing about: `supports_compressed_fp8_dispatch`
+(default `False`). Set it `True` only after validating the model with FP8 MoE dispatch
+on Blackhole — validated models then run it by default there
+(`PREFILL_COMPRESSED_FP8_DISPATCH=0` is the kill switch; the effective value comes from
+`resolve_compressed_fp8_dispatch()`, shared by the runner and the pytest suites).
+
 Test-only metadata (HF download coordinates, reference-model classes, PCC
 thresholds) is optional and only needed if you wire pytest coverage; see the
 attributes and lazy `reference_*_cls` properties on `PrefillModelAdapter`. Keep the

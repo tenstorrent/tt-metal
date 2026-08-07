@@ -217,6 +217,7 @@ def run_chunked_block(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -464,6 +465,7 @@ def run_chunked_block_multiuser(
         is_chunked=True,
         slot_num=num_users,
         layer_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -681,6 +683,7 @@ def run_chunked_block_padded(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -1052,6 +1055,7 @@ def run_chunked_block_glm_indexer(
         slot_num=1,
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     ttnn.synchronize_device(mesh_device)
 

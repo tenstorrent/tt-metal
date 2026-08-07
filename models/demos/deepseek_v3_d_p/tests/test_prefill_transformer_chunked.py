@@ -480,6 +480,7 @@ def run_chunked_transformer_padded(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -665,6 +666,7 @@ def run_chunked_transformer(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1292,6 +1294,7 @@ def run_chunked_transformer_updated(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
         # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
         # output, so the tail is dead work that would otherwise land inside the measured per-chunk
         # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
@@ -2092,6 +2095,7 @@ def run_chunked_transformer_padded_trace(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
         # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,

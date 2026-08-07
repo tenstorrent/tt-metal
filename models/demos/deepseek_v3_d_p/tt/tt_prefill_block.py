@@ -228,6 +228,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        compressed_fp8_dispatch: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -338,6 +339,7 @@ class TtPrefillBlock(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
                 overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
+                compressed_fp8_dispatch=compressed_fp8_dispatch,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -379,6 +381,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
+        compressed_fp8_dispatch=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -396,6 +399,10 @@ class TtPrefillBlock(LightweightModule):
             mesh_device.get_num_devices(),
             mesh_config.dispatch_group_size,
             dispatch_buffer_capacity_factor,
+            # fp8 dispatch ships each token's per-128-block fp32 scales in the metadata tail,
+            # so the metadata rows must be sized 3 + emb_dim/128.
+            emb_dim=emb_dim,
+            fp8_scaled_input=compressed_fp8_dispatch,
         )
 
         return TtMoe(
@@ -429,6 +436,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            compressed_fp8_dispatch=compressed_fp8_dispatch,
         )
 
     def set_trace_controller(self, controller):

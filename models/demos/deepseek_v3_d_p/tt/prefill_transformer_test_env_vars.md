@@ -152,6 +152,19 @@ Default `~/.cache/huggingface`.
 
 ## Tier 2 — optional behavior toggles
 
+### `PREFILL_COMPRESSED_FP8_DISPATCH`
+Kill switch / explicit request for **compressed FP8 MoE dispatch** (e4m3 compression of x
+around dispatch, per-token fp32 scales in the metadata tail). The test resolves it via
+`variant.resolve_compressed_fp8_dispatch()`:
+
+- **unset (default)**: ON for validated models (DSV3, Kimi) **on Blackhole**; OFF everywhere
+  else (Wormhole, GLM). This changes the numerics the PCC checks measure on BH.
+- **`0`**: force OFF (debugging / bf16 comparison runs).
+- **`1`**: explicit request — still gated by model validation
+  (`supports_compressed_fp8_dispatch`) and Blackhole hardware; a refused explicit request
+  logs a warning and runs bf16.
+- any other value: warning, falls back to the default.
+
 ### `TT_DS_PREFILL_INFINITEBENCH_CACHE`
 Where InfiniteBench prompt subsets are cached (only relevant when `input_source` is
 `passkey`/`kv_retrieval`/`longdialogue_qa_eng`/`longbook_qa_eng`). Falls back under `HF_HOME`.

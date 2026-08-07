@@ -75,6 +75,10 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
+    # FP8 MoE dispatch: compress x to fp8_e4m3 (per-token/128-block fp32 scales riding in the
+    # dispatch metadata tail) before dispatch, decompress the dispatched buffer back to bf16 after.
+    # Halves dispatch fabric traffic. Blackhole only.
+    compressed_fp8_dispatch: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -205,6 +209,7 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            compressed_fp8_dispatch=self.config.compressed_fp8_dispatch,
         )
         self.model_built = True
 
