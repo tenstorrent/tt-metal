@@ -15,7 +15,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt::tt_metal::detail {
+namespace tt::tt_metal::slow_dispatch {
 
 // MeshDevice-aware L1 / DRAM channel / MeshBuffer access for unit meshes.
 //
@@ -33,12 +33,12 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
 // detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
 template <typename DType>
 inline void WriteToBuffer(const distributed::MeshBuffer& mesh_buffer, const std::vector<DType>& host_buffer) {
-    WriteToBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
+    detail::WriteToBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 template <typename DType>
 inline void ReadFromBuffer(const distributed::MeshBuffer& mesh_buffer, std::vector<DType>& host_buffer) {
-    ReadFromBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
+    detail::ReadFromBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 inline bool WriteToL1(
@@ -47,7 +47,8 @@ inline bool WriteToL1(
     uint32_t address,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER) {
-    return WriteToDeviceL1(physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
+    return detail::WriteToDeviceL1(
+        physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
 }
 
 inline bool WriteToL1(
@@ -56,7 +57,8 @@ inline bool WriteToL1(
     uint32_t address,
     std::span<const uint8_t> host_buffer,
     CoreType core_type = CoreType::WORKER) {
-    return WriteToDeviceL1(physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
+    return detail::WriteToDeviceL1(
+        physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
 }
 
 inline bool ReadFromL1(
@@ -66,7 +68,7 @@ inline bool ReadFromL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER) {
-    return ReadFromDeviceL1(
+    return detail::ReadFromDeviceL1(
         physical_device_from_unit_mesh(unit_mesh), logical_core, address, size, host_buffer, core_type);
 }
 
@@ -76,17 +78,20 @@ inline bool ReadFromL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type = CoreType::WORKER) {
-    return ReadFromDeviceL1(physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
+    return detail::ReadFromDeviceL1(
+        physical_device_from_unit_mesh(unit_mesh), logical_core, address, host_buffer, core_type);
 }
 
 inline bool WriteToDRAMChannel(
     distributed::MeshDevice& unit_mesh, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
-    return WriteToDeviceDRAMChannel(physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
+    return detail::WriteToDeviceDRAMChannel(
+        physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
 }
 
 inline bool WriteToDRAMChannel(
     distributed::MeshDevice& unit_mesh, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer) {
-    return WriteToDeviceDRAMChannel(physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
+    return detail::WriteToDeviceDRAMChannel(
+        physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
 }
 
 inline bool ReadFromDRAMChannel(
@@ -95,13 +100,14 @@ inline bool ReadFromDRAMChannel(
     uint32_t address,
     uint32_t size,
     std::vector<uint32_t>& host_buffer) {
-    return ReadFromDeviceDRAMChannel(
+    return detail::ReadFromDeviceDRAMChannel(
         physical_device_from_unit_mesh(unit_mesh), dram_channel, address, size, host_buffer);
 }
 
 inline bool ReadFromDRAMChannel(
     distributed::MeshDevice& unit_mesh, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    return ReadFromDeviceDRAMChannel(physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
+    return detail::ReadFromDeviceDRAMChannel(
+        physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
 }
 
-}  // namespace tt::tt_metal::detail
+}  // namespace tt::tt_metal::slow_dispatch

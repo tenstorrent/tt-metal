@@ -17,7 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/impl/buffers/memory_access.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -40,8 +40,8 @@ bool SimpleL1Loopback(
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     CoreCoord bank0_logical_core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
-    tt_metal::detail::WriteToL1(*mesh_device, bank0_logical_core, local_address, inputs);
-    tt_metal::detail::ReadFromL1(*mesh_device, bank0_logical_core, local_address, outputs);
+    tt_metal::slow_dispatch::WriteToL1(*mesh_device, bank0_logical_core, local_address, inputs);
+    tt_metal::slow_dispatch::ReadFromL1(*mesh_device, bank0_logical_core, local_address, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
         log_info(tt::LogTest, "Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
@@ -120,12 +120,12 @@ bool SimpleTiledL1WriteCBRead(
             (uint32_t)num_tiles,
         });
 
-    tt_metal::detail::WriteToL1(*mesh_device, core, input_local_address, inputs);
+    tt_metal::slow_dispatch::WriteToL1(*mesh_device, core, input_local_address, inputs);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
-    tt_metal::detail::ReadFromL1(*mesh_device, core, input_local_address, byte_size, outputs);
+    tt_metal::slow_dispatch::ReadFromL1(*mesh_device, core, input_local_address, byte_size, outputs);
     log_debug(tt::LogTest, "input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
-    tt_metal::detail::ReadFromL1(*mesh_device, core, output_local_address, byte_size, outputs);
+    tt_metal::slow_dispatch::ReadFromL1(*mesh_device, core, output_local_address, byte_size, outputs);
     log_debug(tt::LogTest, "inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
     bool pass = (inputs == outputs);
     if (not pass) {

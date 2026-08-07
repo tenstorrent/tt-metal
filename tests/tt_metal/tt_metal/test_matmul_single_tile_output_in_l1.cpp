@@ -88,12 +88,12 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(tensor.get_values()));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    detail::WriteToBuffer(*src0_dram_buffer, activations);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    detail::WriteToBuffer(*src1_dram_buffer, weights);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
 
     SetRuntimeArgs(
         program,
@@ -118,7 +118,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(*dst_l1_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
 
     // Validation
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
