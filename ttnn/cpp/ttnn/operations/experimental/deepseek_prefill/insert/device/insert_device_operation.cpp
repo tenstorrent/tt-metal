@@ -56,11 +56,16 @@ void validate_data_tensor(const ttnn::Tensor& tensor, const std::string& name) {
 }  // namespace
 
 // Host-side validation covers only static invariants (dtypes, layouts, shape
-// relationships, tile alignment of host-known scalars). Two *data-dependent*
+// relationships, tile alignment of host-known scalars). Three *data-dependent*
 // bounds are checked on-device at runtime inside the reader/writer kernels:
+//   * global_expert_idx_table[local_expert_id] < num_experts — the runtime id
+//     is a legal index into the start/counts scratch pages. Out of range ⇒ the
+//     kernels do nothing.
 //   * start[id] + ceil_tile(counts[id]) <= global_rows — slice stays inside
 //     global_tensor.
 //   * ceil_tile(counts[id]) <= local_rows — kernel doesn't over-read local_tensor.
+// These are enforced with unconditional branches (clamps / early returns), not
+// just ASSERT, which compiles away in release builds.
 // Host can't check these here without reading device-resident start/counts,
 // which we deliberately avoid (op must be device-local for multi-device mesh
 // use — each device may have its own start/counts values).
@@ -117,8 +122,11 @@ void InsertDeviceOperation::validate_on_program_cache_miss(
         counts_last_dim);
 
     // local_expert_id must index into global_expert_idx_table's last dimension.
-    // Validity of global_expert_idx_table[local_expert_id] as an index into start/counts
-    // is checked in-kernel at runtime (the value is device-resident).
+    // We cannot check here that global_expert_idx_table[local_expert_id] is itself a valid
+    // index into start/counts — the value is device-resident and reading it host-side would
+    // defeat the op's device-local contract. The kernels are given num_experts as a compile-
+    // time arg and range-check the looked-up id before using it (skipping all work if it is
+    // out of range).
     const auto idx_table_last_dim = global_expert_idx_table.logical_shape()[-1];
     TT_FATAL(
         operation_attributes.local_expert_id < idx_table_last_dim,
