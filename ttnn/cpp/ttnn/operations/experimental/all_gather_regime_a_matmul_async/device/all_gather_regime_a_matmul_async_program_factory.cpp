@@ -557,6 +557,60 @@ enum RingSlotArg : uint32_t {
     kRsArgCount = kRsFwdBase + 2u * 7u,  // G-1 == 7 forwards; == 33
 };
 
+// ---------------------------------------------------------------------------------------------------
+// The ring schedule: ONE source of truth for the writer and the in1 reader.
+// ---------------------------------------------------------------------------------------------------
+// `consume_pos[p][s]` = which ring POSITION's stripe core at ring position `p` consumes at step `s`. Every
+// other quantity either side needs is derived from it:
+//
+//   in1 reader : reads in1 block `consume_pos[p][s]*W + wb` at step s   (it must walk the identical global-K
+//                order as the in0 side -- a spec requirement, and the desync this branch has hit twice)
+//   writer     : own_slot   = the s where consume_pos[p][s] == p        (its own stripe)
+//                src_slot   = s                                        (forward what it just consumed)
+//                dst_slot   = the j where consume_pos[p+1][j] == consume_pos[p][s]
+//                             i.e. the SUCCESSOR's slot for that same stripe -- inverting the successor's
+//                             map is what makes the two sides provably consistent instead of coincidentally
+//                             so, since both now come from this one array.
+//
+// Expressed in ring-position space, not core indices: the successor of position `p` is `p+1 mod G`, and
+// consume order depends only on position, so no core-index bookkeeping is needed here.
+//
+// PHASE 2 fills it with today's rotation, `consume_pos[p][s] = (p - s) mod G`, which reproduces phase 1's
+// hand-derived values exactly (asserted below). PHASE 3 replaces only this function.
+struct RingSchedule {
+    static constexpr uint32_t kG = 8u;
+    uint32_t consume_pos[kG][kG]{};  // [ring position][step] -> ring position of the stripe consumed
+
+    uint32_t slot_of(uint32_t p, uint32_t pos) const {
+        for (uint32_t s = 0; s < kG; ++s) {
+            if (consume_pos[p][s] == pos) {
+                return s;
+            }
+        }
+        TT_THROW("ring schedule: position {} never consumed by ring position {}", pos, p);
+    }
+};
+
+inline RingSchedule build_ring_schedule() {
+    RingSchedule sch;
+    for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
+        for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
+            // Today's rotation: at step s, position p consumes the stripe that originated p-s positions back.
+            sch.consume_pos[p][s] = (p + RingSchedule::kG - s) % RingSchedule::kG;
+        }
+    }
+    // Every core must consume every stripe exactly once, or some global K tile is dropped or double-counted
+    // on this device -- the failure the spec calls out first ("every global K tile is consumed once").
+    for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
+        uint32_t seen = 0;
+        for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
+            seen |= 1u << sch.consume_pos[p][s];
+        }
+        TT_FATAL(seen == 0xFFu, "ring schedule for position {} is not a permutation (mask {:#x})", p, seen);
+    }
+    return sch;
+}
+
 // Offsets WITHIN the fused-gather writer arg block, i.e. relative to fused_rt_base. The kernel reads this
 // block sequentially, create_at pushes it in this order, and override_runtime_arguments patches the three
 // entries that can change between invocations. All three places must agree, so they name these constants
@@ -1731,6 +1785,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t in1_addr = in1.buffer()->address();
     const uint32_t out_addr = out.buffer()->address();
 
+    // ONE ring schedule for the whole program: both the writer's slot args and the in1 reader's consume order
+    // are derived from it below, so the two cannot disagree about the global-K order.
+    const RingSchedule ring_sch = build_ring_schedule();
+
     auto phys = [&](uint32_t core_idx) {
         const auto& c = P.cores[core_idx].coord;
         return device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
@@ -1794,6 +1852,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.n_local,   // 4 within-bank column offset
             k_valid,      // 5 valid K tiles (rest of capacity zero-filled)
             cp.valid_n};  // 6 valid N tiles this core owns
+        // 7..7+G-1: the consume order, from the SAME RingSchedule the writer's slot args come from. The
+        // reader used to recompute it as (ring_pos + G - step) % G, i.e. a second independent derivation of
+        // the global-K order the spec requires both sides to walk identically. One array, one derivation.
+        for (uint32_t s = 0; s < geo.G; ++s) {
+            ra.push_back(ring_sch.consume_pos[cp.ring_pos][s]);
+        }
         if (Sm == 1u) {
             ra.push_back(2u);  // 5 mrole = solo
             ra.push_back(0u);  // 6 mpeers
@@ -1815,8 +1879,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             ra.push_back(p.y);
         }
         if (fused_gather.enabled) {
-            // Appended last, after the variable-length M-split peer coords; the kernel locates them at
-            // 9 + 2*mpeers. Only present when FUSED_GATHER is defined for the reader.
+            // Appended last, after the consume order and the variable-length M-split peer coords; the kernel
+            // locates them at 9 + G + 2*mpeers. Only present when FUSED_GATHER is defined for the reader.
             ra.push_back(k_run_len);
             ra.push_back(k_stripe_base);
             ra.push_back(k_shard_stride);
@@ -1847,16 +1911,34 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
         // ---- Ring slot schedule (args 17..32; see RingSlotArg) ----
-        // PHASE 1 emits exactly today's implicit rotation, so the program stays bit-identical: own stripe in
-        // slot 0, and the forward at step s reads slot s and writes slot s+1 on the successor. Phase 3
-        // replaces only the values computed here -- the kernel is already schedule-driven after this.
+        // PHASE 2: derived from `ring_sch` rather than hand-written, so the writer and the in1 reader cannot
+        // describe different orders. Still today's rotation, so the program stays bit-identical.
         {
-            const uint32_t own_slot = 0u, peer_slot = 0u;
+            const uint32_t p = cp.ring_pos;
+            const uint32_t succ = (p + 1u) % geo.G;
+            const uint32_t own_slot = ring_sch.slot_of(p, p);  // the step at which I consume my own stripe
+            // peer_slot: the slot the same stripe occupies on the same core index of the NEIGHBOUR DEVICE.
+            // Equal to own_slot while all devices share one schedule; phase 3's schedule is per-device and
+            // this becomes the peer device's slot for that stripe.
+            const uint32_t peer_slot = own_slot;
             wa.push_back(own_slot);
             wa.push_back(peer_slot);
             for (uint32_t s = 0; s + 1u < geo.G; ++s) {
-                wa.push_back(s);       // read this slot of mine
-                wa.push_back(s + 1u);  // write that slot on my successor
+                // Forward what I just consumed, into whichever slot my successor consumes it at.
+                wa.push_back(s);
+                wa.push_back(ring_sch.slot_of(succ, ring_sch.consume_pos[p][s]));
+            }
+            // Phase-1 equivalence: own_slot 0, and (src, dst) == (s, s+1). Asserted so that deriving the
+            // schedule cannot silently change the program while it is still supposed to be bit-identical.
+            TT_FATAL(own_slot == 0u, "phase-2 schedule must reproduce own_slot 0, got {}", own_slot);
+            for (uint32_t s = 0; s + 1u < geo.G; ++s) {
+                TT_FATAL(
+                    wa[kRsFwdBase + 2u * s] == s && wa[kRsFwdBase + 2u * s + 1u] == s + 1u,
+                    "phase-2 schedule must reproduce the rotation at position {} step {}: got ({}, {})",
+                    p,
+                    s,
+                    wa[kRsFwdBase + 2u * s],
+                    wa[kRsFwdBase + 2u * s + 1u]);
             }
             TT_FATAL(
                 wa.size() == kRsArgCount,

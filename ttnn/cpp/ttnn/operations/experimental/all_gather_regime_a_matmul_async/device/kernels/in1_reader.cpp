@@ -33,25 +33,33 @@ void kernel_main() {
 
     const uint32_t in1_addr = get_arg_val<uint32_t>(0);
     const uint32_t bank_id = get_arg_val<uint32_t>(1);
-    const uint32_t ring_pos = get_arg_val<uint32_t>(2);
+    // Kept for arg-index stability (the host still pushes it) but no longer READ: the consume order below is
+    // supplied rather than derived from it.
+    [[maybe_unused]] const uint32_t ring_pos = get_arg_val<uint32_t>(2);
     const uint32_t k_start = get_arg_val<uint32_t>(3);  // first logical K tile of this slice (balanced)
     const uint32_t n_local = get_arg_val<uint32_t>(4);  // column offset within this core's bank shard
     const uint32_t valid_k = get_arg_val<uint32_t>(5);  // valid K tiles (rest of capacity zero-filled)
     const uint32_t valid_n = get_arg_val<uint32_t>(6);  // valid N tiles this core owns
-    const uint32_t mrole = get_arg_val<uint32_t>(7);    // 0 = slave, 1 = reader(read+fwd), 2 = solo
-    const uint32_t mpeers = get_arg_val<uint32_t>(8);   // forward peer count
-    // M-split peer coords (only present when Sm > 1) start at arg 9.
+    // 7..7+G-1: consume order -- the ring POSITION whose in1 blocks this core reads at each step. Supplied by
+    // the host from the same RingSchedule the writer's cb0 slot args come from, rather than recomputed here
+    // as (ring_pos + G - step) % G. The spec requires both sides to walk the identical global-K order, and two
+    // independent derivations of it is exactly how they drift apart.
+    constexpr uint32_t kR1ConsumeBase = 7;
+    const uint32_t mrole = get_arg_val<uint32_t>(kR1ConsumeBase + G);       // 0 = slave, 1 = reader, 2 = solo
+    const uint32_t mpeers = get_arg_val<uint32_t>(kR1ConsumeBase + G + 1);  // forward peer count
+    // M-split peer coords (only present when Sm > 1) start at arg kR1ConsumeBase + G + 2.
+    constexpr uint32_t kR1PeerBase = kR1ConsumeBase + 8u + 2u;  // G == 8; asserted against the host's push
 
     // Blocked-cyclic global-K mapping, appended after the peer coords on the fused path. The in1 reader
     // MUST walk the identical global-K order as the in0 side, so this mirrors the writer exactly.
 #if defined(FUSED_GATHER)
-    const uint32_t k_run_len = get_arg_val<uint32_t>(9 + 2 * mpeers);
-    const uint32_t k_stripe_base = get_arg_val<uint32_t>(10 + 2 * mpeers);
-    const uint32_t k_shard_stride = get_arg_val<uint32_t>(11 + 2 * mpeers);
+    const uint32_t k_run_len = get_arg_val<uint32_t>(kR1PeerBase + 2 * mpeers);
+    const uint32_t k_stripe_base = get_arg_val<uint32_t>(kR1PeerBase + 1 + 2 * mpeers);
+    const uint32_t k_shard_stride = get_arg_val<uint32_t>(kR1PeerBase + 2 + 2 * mpeers);
     // Capacity-local slots PER SOURCE RANK. Equals k_run_len on the DRAM-staged path (rank stripes packed
     // back to back), and is larger under direct-L1, which pads each rank up to a whole number of ring slots
     // so that one slot never straddles two ranks. Only the first k_run_len slots of each rank are valid.
-    const uint32_t k_rank_span = get_arg_val<uint32_t>(12 + 2 * mpeers);
+    const uint32_t k_rank_span = get_arg_val<uint32_t>(kR1PeerBase + 3 + 2 * mpeers);
 #else
     constexpr uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u, k_rank_span = 1u;
 #endif
@@ -88,8 +96,8 @@ void kernel_main() {
     if (mrole == 0) {
         volatile tt_l1_ptr uint32_t* valid =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(in1valid_sem));
-        uint64_t reader_ready =
-            get_noc_addr(get_arg_val<uint32_t>(9), get_arg_val<uint32_t>(10), get_semaphore(in1ready_sem));
+        uint64_t reader_ready = get_noc_addr(
+            get_arg_val<uint32_t>(kR1PeerBase), get_arg_val<uint32_t>(kR1PeerBase + 1), get_semaphore(in1ready_sem));
         const uint32_t nblk = N_bpc * G * W;
         for (uint32_t b = 0; b < nblk; ++b) {
             cb_reserve_back(in1_cb, in1_blk);
@@ -114,7 +122,8 @@ void kernel_main() {
         }
         noc_semaphore_wait_min(in1ready, (mbc + 1) * mpeers);
         for (uint32_t s = 0; s < mpeers; ++s) {
-            uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
+            uint32_t sx = get_arg_val<uint32_t>(kR1PeerBase + s * 2),
+                     sy = get_arg_val<uint32_t>(kR1PeerBase + 1 + s * 2);
             noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
         }
         // Signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without waiting on the
@@ -124,7 +133,8 @@ void kernel_main() {
         // later block (an exit-only barrier would be too late). The flush is merely off the slave-release
         // critical path, NOT removed.
         for (uint32_t s = 0; s < mpeers; ++s) {
-            uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
+            uint32_t sx = get_arg_val<uint32_t>(kR1PeerBase + s * 2),
+                     sy = get_arg_val<uint32_t>(kR1PeerBase + 1 + s * 2);
             noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
         }
         noc_async_writes_flushed();
@@ -183,7 +193,7 @@ void kernel_main() {
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
         for (uint32_t step = 0; step < G; ++step) {
             // Shard read order MUST match the in0 cb0 order. Ring: block `step` = shard (rp-step).
-            const uint32_t s = (ring_pos + G - step) % G;
+            const uint32_t s = get_arg_val<uint32_t>(kR1ConsumeBase + step);
             for (uint32_t wb = 0; wb < W; ++wb) {
                 const uint32_t kblk = s * W + wb;
                 cb_reserve_back(in1_cb, in1_blk);
