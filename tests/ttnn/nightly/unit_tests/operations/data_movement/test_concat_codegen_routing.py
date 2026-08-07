@@ -26,57 +26,164 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
+def _inputs(shapes, dtype, layout, device):
+    xs = [ttnn.from_torch(_make_input(s, dtype), dtype=dtype, layout=layout, device=device) for s in shapes]
+    return xs
+
+
 _ROUTING = [
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 64], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 2, 32, 64], {"dim": 1}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 32, 32], {"dim": 2}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([2, 32, 64], {"dim": 1}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([32, 32], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([32, 64], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.int32,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        [[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]],
+        {"dim": -1},
+        ttnn.uint32,
+        ttnn.TILE_LAYOUT,
+    ),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 2, 32, 64], [1, 3, 32, 64]], {"dim": 1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64], [2, 32, 64]], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 32], [32, 32], [32, 32]], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[32, 32], [32, 64], [32, 96]], {"dim": -1}, ttnn.uint32, ttnn.TILE_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.float32, ttnn.TILE_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.int32, ttnn.TILE_LAYOUT),
+    ([[32, 64], [32, 64], [32, 64]], {"dim": 0}, ttnn.uint32, ttnn.TILE_LAYOUT),
 ]
 _ROUTING_IDS = [
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|float32|row_major",
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|float32|tile",
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|int32|tile",
+    "[[1, 1, 1024, 1024], [1, 1, 1024, 1024], [1, 1, 1024, 1024]]|dim=-1|uint32|tile",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|float32|row_major",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|float32|tile",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|int32|tile",
+    "[[1, 1, 128, 128], [1, 1, 128, 128], [1, 1, 128, 128]]|dim=-1|uint32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|float32|row_major",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|float32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|int32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|uint32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|float32|row_major",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|float32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|int32|tile",
+    "[[1, 1, 256, 256], [1, 1, 256, 256], [1, 1, 256, 256]]|dim=-1|uint32|tile",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|float32|row_major",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|float32|tile",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|int32|tile",
+    "[[1, 1, 512, 512], [1, 1, 512, 512], [1, 1, 512, 512]]|dim=-1|uint32|tile",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|bfloat16|tile",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|bfloat8_b|tile",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|float32|row_major",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|float32|tile",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|int32|tile",
+    "[[1, 1, 64, 64], [1, 1, 64, 64], [1, 1, 64, 64]]|dim=-1|uint32|tile",
     "[[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]]|dim=0|bfloat16|tile",
     "[[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]]|dim=0|bfloat8_b|tile",
     "[[1, 1, 64, 64], [2, 1, 64, 64], [1, 1, 64, 64]]|dim=0|float32|row_major",
@@ -128,50 +235,48 @@ _ROUTING_IDS = [
 ]
 
 
-@pytest.mark.parametrize("shape,kwargs,dtype,layout", _ROUTING, ids=_ROUTING_IDS)
-def test_concat_codegen_routing(device, shape, kwargs, dtype, layout):
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    golden = ttnn.to_torch(ttnn.concat(xt, **kwargs, implementation=_NATIVE))
+@pytest.mark.parametrize("shapes,kwargs,dtype,layout", _ROUTING, ids=_ROUTING_IDS)
+def test_concat_codegen_routing(device, shapes, kwargs, dtype, layout):
+    xs = _inputs(shapes, dtype, layout, device)
+    golden = ttnn.to_torch(ttnn.concat(xs, **kwargs, implementation=_NATIVE))
     entries_before = device.num_program_cache_entries()
-    out = ttnn.concat(xt, **kwargs, implementation=_ROUTED)
+    out = ttnn.concat(xs, **kwargs, implementation=_ROUTED)
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
 
 
 _CACHE_HIT = [
-    ([1, 32, 32], {"dim": 2}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _CACHE_HIT_IDS = [
     "[[1, 32, 32], [1, 32, 64], [1, 32, 32]]|dim=2|bfloat16|row_major",
 ]
 
 
-@pytest.mark.parametrize("shape,kwargs,dtype,layout", _CACHE_HIT, ids=_CACHE_HIT_IDS)
-def test_concat_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    golden = ttnn.to_torch(ttnn.concat(xt, **kwargs, implementation=_NATIVE))
-    assert_equal(golden, ttnn.to_torch(ttnn.concat(xt, **kwargs, implementation=_CODEGEN)))
+@pytest.mark.parametrize("shapes,kwargs,dtype,layout", _CACHE_HIT, ids=_CACHE_HIT_IDS)
+def test_concat_codegen_program_cache_hit(device, shapes, kwargs, dtype, layout):
+    xs = _inputs(shapes, dtype, layout, device)
+    golden = ttnn.to_torch(ttnn.concat(xs, **kwargs, implementation=_NATIVE))
+    assert_equal(golden, ttnn.to_torch(ttnn.concat(xs, **kwargs, implementation=_CODEGEN)))
     entries_after_miss = device.num_program_cache_entries()
     # Same spec, a distinct allocation: the cached program must rebind its Buffer*s
     # instead of reusing the first dispatch's addresses.
-    yt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    second_golden = ttnn.to_torch(ttnn.concat(yt, **kwargs, implementation=_NATIVE))
-    assert_equal(second_golden, ttnn.to_torch(ttnn.concat(yt, **kwargs, implementation=_CODEGEN)))
+    ys = _inputs(shapes, dtype, layout, device)
+    second_golden = ttnn.to_torch(ttnn.concat(ys, **kwargs, implementation=_NATIVE))
+    assert_equal(second_golden, ttnn.to_torch(ttnn.concat(ys, **kwargs, implementation=_CODEGEN)))
     msg = "second forced-codegen dispatch missed the program cache"
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
-_SELECTOR_CASE = ([1, 32, 32], {"dim": 2}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+_SELECTOR_CASE = ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.parametrize("selector", ["", "Codegen", "codgen", "default"])
 def test_concat_codegen_rejects_an_unknown_implementation(device, expect_error, selector):
-    shape, kwargs, dtype, layout = _SELECTOR_CASE
-    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    shapes, kwargs, dtype, layout = _SELECTOR_CASE
+    xs = _inputs(shapes, dtype, layout, device)
     # The selector is parsed on every call, including ones a front-end shortcut would
     # otherwise answer without dispatching, so an unknown value never passes silently.
-    with expect_error(RuntimeError, "invalid implementation"):
-        ttnn.concat(xt, **kwargs, implementation=selector)
+    with expect_error(RuntimeError, "Unknown concat implementation '"):
+        ttnn.concat(xs, **kwargs, implementation=selector)
