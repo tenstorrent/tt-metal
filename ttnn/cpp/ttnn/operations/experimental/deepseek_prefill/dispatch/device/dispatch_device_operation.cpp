@@ -49,6 +49,28 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Expert dispatch table tensor must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
 
+    // The dispatch reader indexes offsets[] and expert_dispatch_table[] with the raw expert id read
+    // out of the indices tensor. On device that index is bounded by
+    // min(num_routed_experts, allocated L1 capacity) — see expert_index_bound in
+    // kernels/dataflow/reader_worker_dispatch.cpp — and anything at or beyond it is dropped. Assert
+    // here that both tensors are at least num_routed_experts wide so that bound resolves to
+    // num_routed_experts and the device-side guard only ever drops genuinely out-of-range ids, never
+    // a valid expert. ">=" rather than "==": the padding-aware dispatch table is deliberately one
+    // column wider (trailing sentinel column at index num_routed_experts, always -1), and a wider
+    // offsets tensor is harmless.
+    TT_FATAL(
+        tensor_args.expert_offsets_tensor.logical_shape()[-1] >= operation_attributes.num_routed_experts,
+        "Expert offsets tensor last dim ({}) must be at least num_routed_experts ({}); the dispatch "
+        "reader indexes it by expert id and would otherwise drop valid experts",
+        tensor_args.expert_offsets_tensor.logical_shape()[-1],
+        operation_attributes.num_routed_experts);
+    TT_FATAL(
+        tensor_args.expert_dispatch_table_tensor.logical_shape()[-1] >= operation_attributes.num_routed_experts,
+        "Expert dispatch table tensor last dim ({}) must be at least num_routed_experts ({}); the "
+        "dispatch reader indexes it by expert id and would otherwise drop valid experts",
+        tensor_args.expert_dispatch_table_tensor.logical_shape()[-1],
+        operation_attributes.num_routed_experts);
+
     // FP8 (input or output) is Blackhole-only.
     if (operation_attributes.fp8_output) {
         TT_FATAL(

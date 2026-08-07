@@ -201,6 +201,29 @@ void kernel_main() {
     tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
     tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
 
+    // ===== Bound for tensor-derived expert indices =====
+    // offsets[] and expert_dispatch_table[] are indexed as FLAT element arrays from their CB base,
+    // while the CBs are allocated as num_pages * aligned_page_size (detail::create_tensor_cb in
+    // dispatch_program_factory.cpp). Flat indexing is exactly the tensor layout when the tensor is a
+    // single page — which is the case for every supported configuration: the per-device shapes are
+    // (1, n_routed_experts) for offsets and (1, n_routed_experts) or (1, n_routed_experts + 1) for
+    // the dispatch table, i.e. one row-major page. If either tensor ever became multi-page with
+    // aligned_page_size > page_size, flat indexing would walk into the inter-page alignment padding,
+    // but it still cannot leave the CB — so these capacities stay hard memory bounds either way.
+    constexpr uint32_t offsets_capacity = (offsets_pages * aligned_offsets_page_size) / sizeof(uint32_t);
+    constexpr uint32_t dispatch_table_capacity =
+        (dispatch_table_pages * aligned_dispatch_table_page_size) / sizeof(int32_t);
+    constexpr uint32_t l1_expert_capacity =
+        offsets_capacity < dispatch_table_capacity ? offsets_capacity : dispatch_table_capacity;
+    // The intended bound is n_routed_experts, capped by what is actually allocated. n_routed_experts
+    // is an operation attribute that nothing forces to match the offsets / dispatch_table extents, so
+    // on its own it is not a *provable* bound; the capacities are derived from the real allocation and
+    // are. Taking the min is therefore provably inside both L1 copies, and equals n_routed_experts
+    // whenever the tensors are sized as intended (host-side TT_FATALs in dispatch_device_operation.cpp
+    // assert exactly that, so this min never silently narrows the valid expert range).
+    constexpr uint32_t expert_index_bound =
+        n_routed_experts < l1_expert_capacity ? n_routed_experts : l1_expert_capacity;
+
     // ===== Baton-ring setup =====
     // Each core waits on its own turn semaphore (local poll) and signals the next core's
     // semaphore after finishing its batch. The owner seeds its own semaphore to 1 so the
@@ -227,8 +250,9 @@ void kernel_main() {
 
     // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
     // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
-    // in the trailing batch keep their sentinel expert index, so expert_dispatch_table[sentinel] == -1
-    // drops them — making a coarse ceil(real/32) batch bound safe
+    // in the trailing batch keep their sentinel expert index (== n_routed_experts), which the
+    // expert_index_bound guard in the plan loop drops (it previously relied on the dispatch table's
+    // trailing -1 sentinel column) — making a coarse ceil(real/32) batch bound safe
     uint32_t effective_total_batches = total_batches;
 #ifdef HAS_PADDING_CONFIG
     {
@@ -363,7 +387,22 @@ void kernel_main() {
             // Walk this token's top-k experts; emit a plan entry for each one routed to this
             // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                int32_t routed_expert = indices_t[k];
+                uint32_t routed_expert = indices_t[k];
+                // Guard the tensor-derived index before it touches L1. indices_t[] is read straight
+                // from the indices tensor and nothing upstream constrains its range, so an
+                // out-of-range value would read expert_dispatch_table[] out of bounds and — far
+                // worse — perform an out-of-bounds 4-byte L1 STORE through offsets[routed_expert]
+                // below, corrupting whatever CB or kernel state follows c_3.
+                // Drop the expert rather than clamping it into a valid slot: silently routing a token
+                // to the wrong expert is worse than dropping it (same policy as the dispatch-buffer
+                // capacity drop below).
+                // This also subsumes the padding sentinel: padded tokens carry expert id ==
+                // n_routed_experts and previously relied on the dispatch table's trailing -1 column to
+                // `continue`. Dropping them here is behaviourally identical — no plan entry, no
+                // offsets[] bump, and the round-robin send counters are untouched in both paths.
+                if (routed_expert >= expert_index_bound) {
+                    continue;
+                }
                 int32_t expert_chip_og = expert_dispatch_table[routed_expert];
                 if (expert_chip_og == -1) {
                     continue;
@@ -486,4 +525,14 @@ void kernel_main() {
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
+
+    // Drain everything still in flight before returning.  The baton hand-off above issues
+    // noc_semaphore_inc(next_turn_sem_noc_addr, 1) -- a non-posted ATOMIC, tracked on a different
+    // hardware counter than writes (NIU_MST_ATOMIC_RESP_RECEIVED vs NIU_MST_WR_ACK_RECEIVED), so the
+    // noc_async_write_barrier() covering the offsets write does NOT cover it.  Returning with that
+    // atomic outstanding is an inter-kernel data race: the ack lands after the program completes,
+    // into whatever the next program has put at that address.  Watcher flags this as
+    // "kernel completing with pending NOC transactions (missing NOC non-posted atomics flushed
+    // barrier)".  A full barrier covers reads, writes and atomics, matching writer_worker_dispatch.
+    noc_async_full_barrier();
 }
