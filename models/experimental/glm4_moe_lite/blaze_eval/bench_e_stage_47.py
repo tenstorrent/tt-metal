@@ -342,7 +342,19 @@ for _n in range(2, 48):  # 47 total, matching the model layer count
         _prog = build_fused(_o, dram_out(n_pad))
         print(f"RESULT   #{_n} built, running ...", flush=True)
         _prog.run()
-        print(f"RESULT   #{_n} RAN OK", flush=True)
+        # Emulate the model interleaving other ttnn work between stage dispatches: churn a
+        # sizeable L1 allocation, as SDPA / the KV cache / MoE do, so the stage's CBs are not the
+        # only thing in L1 between runs. This is the last difference the bench can express.
+        _scratch = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 8192),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=d,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        _ = ttnn.to_memory_config(_scratch, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(_scratch)
+        print(f"RESULT   #{_n} RAN OK (+L1 churn)", flush=True)
     except Exception as _e:
         print(f"RESULT   #{_n} FAIL: {str(_e).split(chr(10))[0][:180]}", flush=True)
         break

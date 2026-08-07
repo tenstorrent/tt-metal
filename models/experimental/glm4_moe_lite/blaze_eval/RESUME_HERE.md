@@ -1512,3 +1512,25 @@ repro for the blaze owners.
 If even that stays clean, stop trying to reproduce it outside the model: instead dump the stage's
 CB core ranges and L1 offsets from a real model run and compare them against SDPA's static region
 directly.
+
+### L1 churn between runs: ALSO CLEAN (8th). Stop reproducing outside the model.
+
+Added an SDPA-shaped L1 alloc/copy/free between each of the 47 program runs, to emulate the model
+interleaving other ttnn work. **All 47 still pass.**
+
+**Eight hypotheses, eight eliminated.** The bench now matches the model on grid, banks, workers,
+receiver, 32-chip mesh, Mcast, L1 activation, 47 programs, *and* L1 churn between dispatches — and
+never hangs. **The bench cannot reproduce this. Stop trying.**
+
+The remaining next step is therefore instrumentation of the real run, not another repro attempt:
+dump the stage's CB ids, core ranges and L1 offsets from inside `_build_q_stage_program` during a
+model run, and compare against SDPA's static CB region and the model's other allocations. The
+`QSTAGE_CFG` print added in this session is the hook to extend — note its `k/n_pad/k2/n_pad2`
+fields currently print `None` because the q-stage `prepared` dict uses different key names.
+
+### Housekeeping: the root filesystem filled up
+
+Repeated JIT compiles took `/` to 99% (1.1 GiB free) and the bench guard started aborting with
+"only 1.01 GiB free on /, floor is 2.0 GiB". `~/.cache/tt-metal-cache` had grown to 28 GB.
+Clearing only entries older than 2 days recovered it to 27 GiB free (72%) while leaving the hot
+cache intact. Worth checking `df -h /` before a long session.
