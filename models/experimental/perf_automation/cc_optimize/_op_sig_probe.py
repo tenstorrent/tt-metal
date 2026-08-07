@@ -67,6 +67,7 @@ def _install():
 
 
 _BLOCK_TAG = "_perf_block_idx"
+_STACK_TAG = "_perf_stack_idx"
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
 
 
@@ -476,6 +477,24 @@ def _tag_stack(stack) -> bool:
     return tagged
 
 
+def _tag_all_stacks(stacks) -> bool:
+    """Tag every block in every StackInfo with both _perf_block_idx and _perf_stack_idx.
+
+    Returns True if at least one block was successfully tagged.
+    """
+    tagged_any = False
+    n_stacks = len(stacks)
+    for si in stacks:
+        for j, blk in enumerate(si.stack):
+            try:
+                setattr(blk, _BLOCK_TAG, j)
+                setattr(blk, _STACK_TAG, si.stack_idx)
+                tagged_any = True
+            except Exception:  # noqa: BLE001
+                pass
+    return tagged_any
+
+
 def _install_block_signposts():
     """Emit a real per-block signpost into the op stream at every repeated-block invocation, so a
     consumer can attribute each op to an exact block (not an inferred boundary).
@@ -493,14 +512,21 @@ def _install_block_signposts():
     from the single all-layers probe.
 
     No per-model code, no markers baked into model source; probe-local only.
+
+    Returns a list of StackInfo objects (one per discovered stack). Empty list when no stacks were
+    found or tagging is deferred until the first call fires.
     """
-    state = {"tagged": False}
+    state = {"tagged": False, "n_stacks": 0}
 
     def _emit(self):
         idx = getattr(self, _BLOCK_TAG, None)
         if idx is not None:
             try:
-                _SEQ.append("%s%d" % (_SIGNPOST_PREFIX, idx))
+                si = getattr(self, _STACK_TAG, None)
+                if si is not None and state["n_stacks"] > 1:
+                    _SEQ.append("%sstack%d:%d" % (_SIGNPOST_PREFIX, si, idx))
+                else:
+                    _SEQ.append("%s%d" % (_SIGNPOST_PREFIX, idx))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -513,15 +539,11 @@ def _install_block_signposts():
         _torch_orig = torch.nn.Module.__call__
 
         def _torch_tag(root):
-            best = None
-            for m in root.modules():
-                for _, child in m.named_children():
-                    if isinstance(child, torch.nn.ModuleList) and len(child) >= 2:
-                        if best is None or len(child) > len(best):
-                            best = child
-            if best is None:
+            stacks = find_all_stacks(root)
+            if not stacks:
                 return False
-            return _tag_stack(list(best))
+            state["n_stacks"] = len(stacks)
+            return _tag_all_stacks(stacks)
 
         def _torch_wrapped(self, *a, **k):
             if not state["tagged"]:
@@ -538,20 +560,30 @@ def _install_block_signposts():
     try:
         from models.common.lightweightmodule import LightweightModule
     except Exception:  # noqa: BLE001
-        return
+        return []
 
     _lw_orig = LightweightModule.__call__
 
     def _lw_wrapped(self, *a, **k):
         if not state["tagged"]:
             try:
-                state["tagged"] = _tag_stack(_find_stack(self))
+                stacks = find_all_stacks(self)
+                if stacks:
+                    state["n_stacks"] = len(stacks)
+                    state["tagged"] = _tag_all_stacks(stacks)
+                else:
+                    # fall back to single-stack upward search
+                    single = _find_stack(self)
+                    if single:
+                        state["n_stacks"] = 1
+                        state["tagged"] = _tag_stack(single)
             except Exception:  # noqa: BLE001
                 pass
         _emit(self)
         return _lw_orig(self, *a, **k)
 
     LightweightModule.__call__ = _lw_wrapped
+    return []
 
 
 def main(node: str, case: str | None = None) -> None:
