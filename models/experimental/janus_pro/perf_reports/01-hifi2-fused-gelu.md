@@ -39,7 +39,7 @@ config: passing `activation=` alongside an explicit config appends a **second** 
 | attn qkv | 576 x 1024 x 3072 | 24 | 128.7 | -9.4 | 3.090 | 48 | 28.5 | 29.7 | HiFi2 |
 | mlp c_proj | 576 x 4096 x 1024 | 24 | 125.1 | -5.4 | 3.003 | 48 | 39.1 | 39.6 | HiFi2 |
 | attn wo | 576 x 1024 x 1024 | 24 | 46.9 | -3.6 | 1.125 | 48 | 26.1 | 33.0 | HiFi2 |
-| mlp c_fc | 576 x 1024 x 4096 | 1 | 181.1 | +3.7 | 0.181 | 48 | 54.1 | 27.4 | HiFi4 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | 181.1 | +3.7 | 0.181 | 48 | 54.1 | 27.4 | HiFi4 |
 | aligner hidden | 576 x 4096 x 4096 | 1 | 490.4 | -0.4 | 0.490 | 48 | 79.9 | 30.4 | HiFi4 |
 | patch embed | 576 x 768 x 1024 | 1 | 42.7 | -2.2 | 0.043 | 48 | 21.5 | 29.6 | HiFi2 |
 

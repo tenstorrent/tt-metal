@@ -240,7 +240,10 @@ def _render(csv_path, stage, sha, note, single_pass):
     # them apart is position: the aligner runs after every block, so within a shape its trailing
     # instances are the aligner's. The block count is the number of head-concats, one per block.
     blocks = int((one["OP Code"].astype(str) == "NLPConcatHeadsDeviceOperation").sum())
-    matmuls["rank"] = matmuls.groupby(["shape", "fidelity"]).cumcount()
+    # Ranked within the shape alone: the aligner's fc1 differs from c_fc in fidelity at most
+    # stages, so ranking within (shape, fidelity) would restart its count at zero and place it
+    # before the blocks it actually follows.
+    matmuls["rank"] = matmuls.groupby("shape").cumcount()
     matmuls["after_blocks"] = blocks > 0
     matmuls.loc[matmuls["after_blocks"], "after_blocks"] = matmuls["rank"] >= blocks
     by_shape = matmuls.groupby(["shape", "fidelity", "after_blocks"], as_index=False).agg(

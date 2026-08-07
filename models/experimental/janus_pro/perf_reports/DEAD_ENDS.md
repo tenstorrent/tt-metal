@@ -61,6 +61,8 @@ Each row is a device measurement, not an opinion.
 
 | stage | lever | measured | why it lost |
 |---|---|---|---|
+| 28 | dropping the `qkv` output shard, so the matmul writes DRAM and no unshard is needed | **11.507 ms against 9.300**, +23.7% | re-tested because changes 18 and 19 were measured against an 11.7 ms tower, before LoFi and before the norm shard. The unshard costs 226 us; removing it costs the matmuls **+1.76 ms**. The margin is wider now, not narrower |
+| 26 | narrowing the layer-norm output to bfloat8_b, so `qkv` and `c_fc` read a bfp8 in0 under LoFi | **+0.355 ms**, 295 -> 343 ops | the matmuls *do* gain — `c_fc` 79.2 -> 77.5 us, `qkv` 48.2 -> 47.6, **-0.042 ms** over all 99 — but the conversion cannot ride inside the norm, so it is 48 separate typecasts at **+0.396 ms**, 9.4x what it buys. Why it cannot ride inside: [below](#where-the-bfp8-norm-output-is-blocked) |
 | 24 | `nlp_create_qkv_heads` / `nlp_concat_heads` as slice + reshape + permute | **+29.5 ms, 3.9x slower** | its own section [below](#long-form-the-head-reshape-rewrite) |
 | 25 | `ttnn.linear(activation=...)` in place of a fused config on the aligner | the gelu came back as its own op, 0.123 ms | **`activation=` does not fuse.** With no program config it emits a separate unary op; folding into the matmul happens only through the config's `fused_activation` field |
 | 25 | unsharding the aligner in0 to lift the `in0_block_w` bound | 9.975 against 9.984, reproducible to ±0.001 | real and trivial. 0.09% for an extra op, an extra conversion and another constant — measured three times on each side, then discarded |
@@ -82,6 +84,88 @@ Each row is a device measurement, not an opinion.
 | `pre` | `core_grid` value | 6x8 identical to 8x8 to the last digit of PCC | ttnn reaches 48 cores from either |
 | `pre` | 1D reuse on `qkv` | +33% | 96 N-tiles cannot spread past 48 cores |
 | `pre` | `c_fc`/`c_proj` fusion | predicted 3.66 ms from 216 MB / 59 GB/s, measured **0.240** | `c_proj` did not move at all — its DRAM read was already hidden behind compute. A bandwidth estimate is not a bound |
+
+## Where the bfp8 norm output is blocked
+
+The weights were never the problem — every weight in the tower is already bfloat8_b
+(`janus_pro_layernorm.py:26`, `janus_pro_image_mlp.py:60,63`, `janus_pro_vision_aligner.py:54`), which
+is why the report reads `BFP8 x BFP8`. What is bfloat16 is the *activation*: the norm output that
+`qkv` and `c_fc` take as in0. It is produced at runtime, so there is nothing to preload.
+
+**The capability exists. Only the entry point is missing.**
+
+| layer | state |
+|---|---|
+| device op | `layernorm_device_operation.cpp:441` — `operation_attributes.dtype.value_or(input_tensor.dtype())`. Honoured, and specifically in the **sharded** branch, which is the one this tower takes. The interleaved branch at `:446` ignores it |
+| validate | no constraint on the output dtype at all — the `TT_FATAL`s cover the input (`:49`), gamma (`:110`), beta (`:157`) and stats (`:213`) |
+| params struct | `LayerNormParams::dtype` exists and is bound read-write to Python (`layernorm_nanobind.cpp:232`) |
+| **wrapper** | **`layernorm.cpp:58` passes `std::nullopt, // dtype` — hardcoded.** This is the break |
+| Python | dead end. `layer_norm_t` is only the callable's class, the same `ttnn.layer_norm`. `LayerNormDeviceOperation` binds `compute_program_hash`, `create_output_tensors`, `compute_output_specs`, `select_program_factory` — **no invoke**. The field is settable and unreachable |
+
+So `LayerNormParams().dtype = ttnn.bfloat8_b` type-checks and does nothing: no call accepts it. There
+is no Python workaround, and looking for one is the wasted day this entry exists to prevent.
+
+Opening it is three lines of C++:
+
+1. `layernorm.hpp:16` — add `const std::optional<DataType>& dtype = std::nullopt` to the signature
+2. `layernorm.cpp:58` — forward it in place of the hardcoded `std::nullopt`
+3. `layernorm_nanobind.cpp:196-210` — add the type to the `overload_cast` list and `nb::arg("dtype") = nb::none()`
+
+**Worth `-0.42%` of the tower**, plus whatever the norm saves writing half the bytes (1.18 -> 0.59 MB
+per call, unmeasured). That is the whole prize, and it is small: it edits a shared ttnn op that every
+model in the repo calls, for four tenths of a percent on this one. The gap is real — the device op
+supports what the wrapper drops — but the case for closing it is the API, not this tower's numbers.
+
+## What `tt-perf-report`'s advice asks for, against what was measured
+
+Its advice on the optimized tower makes two suggestions, and both are settled:
+
+- **"If possible place input 0 in L1"** — true where it is asked, and the advice is asked of matmuls:
+  **+14.1%** on `qkv` block-sharded (stage 17), **+134%** on the interleaved-L1 residual (stage 7),
+  and 330.7 -> 354.9 us on the aligner's second projection. DRAM gives every core its own parallel
+  read; a shard makes each core multicast out of its own piece, and the fan-out costs more than the
+  read it replaces. **Do not generalise it past matmul in0** — see below.
+- **"Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"** — an accuracy suggestion, not a
+  perf one. Taking it undoes change 22: **-0.693 ms for 0.0051 of tower PCC**. Every gate has slack;
+  the tower sits 0.0165 above its own.
+
+The inversion is the better idea and it is in the table above — if LoFi truncates anyway, feed it
+bfp8 and halve the multicast bytes. It gains 1.7 us on `c_fc` and loses 8.25 us to the typecast that
+produces it.
+
+**`SLOW` on every matmul is a diagnosis, not a verdict.** `perf_report.py:1119-1126` prints it when
+neither DRAM% nor FLOPs% reaches 65; both sit far below, which is true and is exactly where the
+per-RISC split started. What the advice cannot say, because it does not measure it, is that BRISC
+runs 99-100% of every one of these ops.
+
+
+## L1 is not worse than DRAM — mcast is
+
+The three measurements above read as "L1 loses here", and for two years of this tower's history that
+is how they were applied: everything DRAM unless a matmul's own output could be sharded. Stages 27
+and 28 show the rule was drawn one level too wide.
+
+| tensor | consumer | L1 vs DRAM |
+|---|---|---|
+| `qkv` output as `c_fc`-style in0 | a matmul | **+14.1%** |
+| the residual | a matmul's in0 | **+134%** |
+| the aligner's intermediate | a matmul | +24 us |
+| **q/k/v from `nlp_create_qkv_heads`** | **SDPA** | **-306.9 us, 48.0 -> 35.2 us each** |
+| **SDPA's output** | **`nlp_concat_heads`** | **-104.8 us, 17.1 -> 12.7 us each** |
+
+The split is not the tensor and not its size. It is **what the consumer does to read it**. A 2D
+matmul multicasts its in0 across the core grid, so an L1 source makes every core fan its own piece
+out over the NOC, and that fan-out costs more than the parallel DRAM read it replaced. SDPA and the
+head ops read what is in front of them; nothing multicasts, so an L1 write is simply local and an
+L1 read is simply near.
+
+`nlp_concat_heads`'s *own* output stays in DRAM for exactly this reason: `wo` reads it as a matmul
+in0. Two of the three tensors in that stretch belong in L1 and the third does not, and the rule that
+tells them apart is the consumer's access pattern, not the producer's.
+
+**The general form:** ask what reads the tensor before choosing where it lives. For a data-movement
+op the write is most of what it costs, and an L1 write is the cheaper write.
+
 
 ## Closed without a device run
 
@@ -189,3 +273,4 @@ Not dead ends — just surfaces with nothing left on them, recorded so a sweep i
 | SDPA | `q_chunk_size` and `k_chunk_size` (see PERF.md changes 2 and 13), math fidelity (20), `fp32_dest_acc` (21), both approx-mode flags (above) |
 | LayerNorm | `welford`, `inplace`, `legacy_reduction`, `legacy_rsqrt`, `subblock_w`, grid shape |
 | the four body matmuls | `in0_block_w` in both directions at two fidelities, `out_subblock`, `transpose_mcast`, `core_grid`, 1D vs 2D, output memory config, output dtype |
+| the head ops and SDPA | output memory config (changes 27 and 28 took L1 on all three; `nlp_concat_heads` keeps DRAM because `wo` reads it) |

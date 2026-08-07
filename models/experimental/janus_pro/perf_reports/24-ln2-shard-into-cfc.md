@@ -41,7 +41,7 @@ optimal for `c_fc` in isolation. Together they are the fastest configuration mea
 | mlp c_proj | 576 x 4096 x 1024 | 24 | 55.2 | +0.5 | 1.326 | 48 | 50.1 | 26.4 | LoFi |
 | attn qkv | 576 x 1024 x 3072 | 24 | 48.4 | +0.1 | 1.162 | 48 | 42.9 | 22.6 | LoFi |
 | attn wo | 576 x 1024 x 1024 | 24 | 18.3 | -0.1 | 0.439 | 48 | 37.8 | 31.1 | LoFi |
-| mlp c_fc | 576 x 1024 x 4096 | 1 | 164.7 | +0.8 | 0.165 | 48 | 29.7 | 18.8 | HiFi2 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | 164.7 | +0.8 | 0.165 | 48 | 29.7 | 18.8 | HiFi2 |
 | aligner hidden | 576 x 4096 x 4096 | 1 | 312.0 | -0.6 | 0.312 | 48 | 62.8 | 29.2 | HiFi2 |
 | patch embed | 576 x 768 x 1024 | 1 | 43.5 | -1.2 | 0.043 | 48 | 21.1 | 29.0 | HiFi2 |
 
