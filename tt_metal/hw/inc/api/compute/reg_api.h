@@ -69,8 +69,8 @@ ALWI void tile_regs_wait() {
  * configuration.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated("Use tile_regs_release() instead")]]
-ALWI void release_dst() {
+[[deprecated("Use tile_regs_release() instead")]] ALWI void
+release_dst() {
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }

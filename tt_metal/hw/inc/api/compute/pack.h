@@ -92,6 +92,9 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 #ifndef ARCH_QUASAR
     PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
+    static_assert(
+        is_fp32_dest_acc_en == DST_ACCUM_MODE,
+        "Quasar pack_tile does not support runtime FP32 DEST accumulation mode override");
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
 }
@@ -140,6 +143,9 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
+    static_assert(
+        is_fp32_dest_acc_en == DST_ACCUM_MODE,
+        "Quasar pack_block does not support runtime FP32 DEST accumulation mode override");
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
 }
