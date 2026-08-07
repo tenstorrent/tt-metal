@@ -118,6 +118,14 @@ sizes:
   gpt-oss-120b:
     aliases: ["GPT-OSS-120B", "gpt-oss-120b", "openai/gpt-oss-120b", "models/demos/gpt_oss/configs/gpt-oss-120b"]
     skus:
+      # EXPERIMENT ONLY (#52176) — do not merge. bh_quietbox_2 and bh_galaxy have no entry here,
+      # so they fall back to trace_region_size=0 (dynamic). Every SKU with clean output has an
+      # explicit reservation; both SKUs with garbage output are the ones without. Reserve a region
+      # for them to test whether trace buffers colliding with ordinary allocations is the cause.
+      bh_quietbox_2:
+        trace_region_size: 100000000
+      bh_galaxy:
+        trace_region_size: 100000000
       wh_llmbox_perf:
         trace_region_size: 50000000
       wh_galaxy_perf:
