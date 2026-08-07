@@ -150,8 +150,13 @@ VISION_DIM, MLP_DIM, QKV_DIM, PATCH_K = 1024, 4096, 3072, 768
 PER_LAYER, PER_IMAGE = 0, 1
 
 
-def matmul_layer(shape, instances):
-    """`(group, label)` naming which projection a matmul row is, from its shape and count."""
+def matmul_layer(shape, instances, after_blocks=None):
+    """`(group, label)` naming which projection a matmul row is.
+
+    `after_blocks` says the row's instances run past the last encoder block, which is what separates
+    the aligner's `fc1` from `c_fc` where the two share shape and fidelity. Reports written before
+    that split pass None and keep the merged label.
+    """
     parts = [int(v) for v in re.findall(r"\d+", shape)]
     if len(parts) != 3:
         return PER_IMAGE, "?"
@@ -167,10 +172,9 @@ def matmul_layer(shape, instances):
     if k == MLP_DIM and n == MLP_DIM:
         return PER_IMAGE, "aligner hidden"
     if k == VISION_DIM and n == MLP_DIM:
-        # Both live at this shape; the count tells them apart, and 25 means the report groups them.
-        if instances == 1:
-            return PER_IMAGE, "aligner fc1"
-        return PER_LAYER, "mlp c_fc" if instances == 24 else "mlp c_fc + aligner fc1"
+        if after_blocks is None:
+            return (PER_IMAGE, "aligner fc1") if instances == 1 else (PER_LAYER, "mlp c_fc + aligner fc1")
+        return (PER_IMAGE, "aligner fc1") if after_blocks else (PER_LAYER, "mlp c_fc")
     return PER_IMAGE, "?"
 
 
@@ -232,9 +236,14 @@ def _render(csv_path, stage, sha, note, single_pass):
         matmuls[name] = pd.to_numeric(matmuls[col].astype(str).str.rstrip(" %"), errors="coerce")
     matmuls["fidelity"] = matmuls["Math Fidelity"].astype(str).str.split().str[0]
     matmuls["shape"] = matmuls["OP Code"].astype(str)
-    # Grouped by shape AND fidelity: the tower runs 576x1024x4096 both as the MLP's c_fc at LoFi and
-    # as the aligner's fc1 at HiFi2, and averaging the two hides both.
-    by_shape = matmuls.groupby(["shape", "fidelity"], as_index=False).agg(
+    # c_fc and the aligner's fc1 share the shape and, at most stages, the fidelity too. What tells
+    # them apart is position: the aligner runs after every block, so within a shape its trailing
+    # instances are the aligner's. The block count is the number of head-concats, one per block.
+    blocks = int((one["OP Code"].astype(str) == "NLPConcatHeadsDeviceOperation").sum())
+    matmuls["rank"] = matmuls.groupby(["shape", "fidelity"]).cumcount()
+    matmuls["after_blocks"] = blocks > 0
+    matmuls.loc[matmuls["after_blocks"], "after_blocks"] = matmuls["rank"] >= blocks
+    by_shape = matmuls.groupby(["shape", "fidelity", "after_blocks"], as_index=False).agg(
         n=("dt", "size"),
         ms=("dt", "sum"),
         cores=("cores", "max"),
@@ -295,10 +304,12 @@ def _render(csv_path, stage, sha, note, single_pass):
         "",
     ]
     mm_before = matmul_table(prev.read_text()) if prev else None
+    # No Δ inst here: a matmul's instance count is fixed by the model -- 24 blocks, one aligner --
+    # so it never moves and a column of +0 says nothing.
     if mm_before:
         lines += [
-            "| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     else:
         lines += [
@@ -308,14 +319,14 @@ def _render(csv_path, stage, sha, note, single_pass):
     rows = []
     for _, row in by_shape.iterrows():
         shape = row["shape"].replace("MatmulDeviceOperation ", "")
-        group, label = matmul_layer(shape, int(row.n))
+        group, label = matmul_layer(shape, int(row.n), bool(row.after_blocks))
         rows.append((group, -row.ms, label, shape, row))
     # Per-layer work first, then what runs once per image; heaviest first inside each group.
     for group, _, label, shape, row in sorted(rows, key=lambda r: (r[0], r[1])):
         cells = [label, shape, f"{int(row.n)}"]
         if mm_before:
-            d_n, d_us = matmul_deltas(shape, row.fidelity, int(row.n), row.us_each, mm_before)
-            cells += [d_n, f"{row.us_each:.1f}", d_us]
+            _, d_us = matmul_deltas(shape, row.fidelity, int(row.n), row.us_each, mm_before)
+            cells += [f"{row.us_each:.1f}", d_us]
         else:
             cells += [f"{row.us_each:.1f}"]
         cells += [
@@ -326,15 +337,6 @@ def _render(csv_path, stage, sha, note, single_pass):
             str(row.fidelity),
         ]
         lines.append("| " + " | ".join(cells) + " |")
-    if any(label.startswith("mlp c_fc + ") for _, _, label, _, _ in rows):
-        lines += [
-            "",
-            "**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's",
-            "`fc1` once, and at this stage they share both the shape (576 x 1024 x 4096) and the math fidelity.",
-            "Rows are grouped by exactly those two, so nothing in this profile separates them: `us each` is the",
-            "average over all 25 instances and belongs to neither. They appear apart wherever their fidelities",
-            "differ — changes 1-6 and 25 onward.",
-        ]
     lines += [
         "",
         "`FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how",

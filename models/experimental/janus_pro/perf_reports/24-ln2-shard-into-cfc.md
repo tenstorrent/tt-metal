@@ -35,21 +35,20 @@ optimal for `c_fc` in isolation. Together they are the fastest configuration mea
 
 ## Matmul instances by shape
 
-| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 81.6 | +2.7 | 2.041 | 48 | 35.2 | 18.6 | LoFi |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 55.1 | +0.1 | 1.324 | 48 | 50.2 | 26.4 | LoFi |
-| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 48.8 | +0.5 | 1.170 | 48 | 42.6 | 22.4 | LoFi |
-| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.2 | -0.1 | 0.438 | 48 | 37.9 | 31.2 | LoFi |
-| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
+| layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | 81.6 | +2.7 | 2.041 | 48 | 35.2 | 18.6 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 55.1 | +0.1 | 1.324 | 48 | 50.2 | 26.4 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | 48.8 | +0.5 | 1.170 | 48 | 42.6 | 22.4 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | 18.2 | -0.1 | 0.438 | 48 | 37.9 | 31.2 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
 
-**The first row is two projections, not one, and here they are separable.** `c_fc` runs 24 times
-per pass at LoFi and the aligner's `fc1` once at HiFi2; only the shape (576 x 1024 x 4096) is
-shared. This report predates grouping by shape *and* fidelity, so the row averages all 25 instances
-and its `fidelity` cell shows only the first one seen. It cannot be regenerated — the 12 MB profile
-it came from is no longer on disk. Stage 26 shows the same two rows apart: 24 x 72.4 us LoFi and
-1 x 236.4 us HiFi2.
+**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
+`fc1` once; they share the shape (576 x 1024 x 4096), so this row averages all 25 instances and its
+`us each` belongs to neither. Later reports tell them apart by position — the aligner runs after
+every block — but that needs the source profile, and this stage's 12 MB CSV is no longer on disk.
+Stage 26 shows the two apart: 24 x 72.4 us and 1 x 236.4 us.
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

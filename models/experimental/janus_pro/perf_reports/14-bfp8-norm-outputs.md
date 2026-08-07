@@ -34,20 +34,15 @@ in matmul.
 
 ## Matmul instances by shape
 
-| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 84.1 | -39.7 | 2.102 | 64 | 44.5 | 20.5 | HiFi2 |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 86.6 | -0.4 | 2.078 | 48 | 56.6 | 19.2 | HiFi2 |
-| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 81.3 | -1.9 | 1.950 | 48 | 45.2 | 23.5 | HiFi2 |
-| attn wo | 576 x 1024 x 1024 | 24 | +0 | 31.4 | -0.1 | 0.753 | 48 | 39.0 | 24.7 | HiFi2 |
-| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.8 | -1.8 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | +0 | 42.3 | -1.5 | 0.042 | 48 | 21.7 | 29.9 | HiFi2 |
-
-**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
-`fc1` once, and at this stage they share both the shape (576 x 1024 x 4096) and the math fidelity.
-Rows are grouped by exactly those two, so nothing in this profile separates them: `us each` is the
-average over all 25 instances and belongs to neither. They appear apart wherever their fidelities
-differ — changes 1-6 and 25 onward.
+| layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 86.6 | -0.4 | 2.078 | 48 | 56.6 | 19.2 | HiFi2 |
+| mlp c_fc | 576 x 1024 x 4096 | 24 | 81.8 | -41.3 | 1.963 | 64 | 44.9 | 20.3 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | 81.3 | -1.9 | 1.950 | 48 | 45.2 | 23.5 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | 31.4 | -0.1 | 0.753 | 48 | 39.0 | 24.7 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 312.8 | -1.8 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | 139.1 | +0.1 | 0.139 | 48 | 35.2 | 25.2 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 42.3 | -1.5 | 0.042 | 48 | 21.7 | 29.9 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

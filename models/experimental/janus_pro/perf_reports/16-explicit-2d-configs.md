@@ -38,20 +38,15 @@ that the compute/read balance had moved. It had not: larger (8/16/32) measured +
 
 ## Matmul instances by shape
 
-| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 82.9 | -0.1 | 2.073 | 64 | 45.2 | 20.8 | HiFi2 |
-| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 80.5 | -0.2 | 1.933 | 48 | 45.6 | 23.7 | HiFi2 |
-| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 74.9 | -11.5 | 1.796 | 48 | 65.4 | 22.2 | HiFi2 |
-| attn wo | 576 x 1024 x 1024 | 24 | +0 | 29.8 | -1.6 | 0.715 | 48 | 41.1 | 26.0 | HiFi2 |
-| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
-| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.6 | -0.2 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
-
-**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
-`fc1` once, and at this stage they share both the shape (576 x 1024 x 4096) and the math fidelity.
-Rows are grouped by exactly those two, so nothing in this profile separates them: `us each` is the
-average over all 25 instances and belongs to neither. They appear apart wherever their fidelities
-differ — changes 1-6 and 25 onward.
+| layer | shape | inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc | 576 x 1024 x 4096 | 24 | 80.6 | -0.1 | 1.934 | 64 | 45.6 | 20.6 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | 80.5 | -0.2 | 1.933 | 48 | 45.6 | 23.7 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | 74.9 | -11.5 | 1.796 | 48 | 65.4 | 22.2 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | 29.8 | -1.6 | 0.715 | 48 | 41.1 | 26.0 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | 139.0 | +0.5 | 0.139 | 48 | 35.2 | 25.2 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | 44.6 | -0.2 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
