@@ -85,7 +85,7 @@ constexpr size_t kWorkerSenderChannel = 0;
 // Identifies the router-side state backing the fabric connection a worker on `src` opens toward `dst`.
 struct InjectionChannel {
     ChipId src_physical_chip_id = 0;
-    tt::tt_metal::CoreCoord logical_eth_core{};
+    tt::tt_metal::CoreCoord logical_eth_core;
     chan_id_t eth_channel = 0;
     // config.sender_channels_buffer_index_semaphore_address[0] -- the persisted producer write counter.
     uint32_t persisted_write_counter_addr = 0;
