@@ -3,10 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exact token agreement -- `02_plan.md` §6's first gate, and R2.
 
-The plan puts this before everything else, and says why:
-
-> This is where #50781 lost the bounty despite working code, so it is designed
-> first, not last.
+The plan puts this before everything else.
 
 **Top-k overlap is not agreement.** Two gates, both deterministic, neither
 involving the sampler:

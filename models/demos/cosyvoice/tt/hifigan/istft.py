@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inverse STFT for the HiFT vocoder, built entirely from ops TTNN already has.
 
-TTNN has no FFT of any kind (verified absent across ttnn/ and tt_metal/). That is
-what forced the previous CosyVoice attempt to leave the whole vocoder on the host,
-which is the single reason PR #50781 was rejected. This module removes the need for
-one, by exploiting the fact that CosyVoice's HiFT uses `n_fft = 16`.
+TTNN has no FFT of any kind (verified absent across ttnn/ and tt_metal/). This
+module removes the need for one, by exploiting the fact that CosyVoice's HiFT
+uses `n_fft = 16`.
 
 The identity
 ------------
