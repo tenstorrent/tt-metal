@@ -284,13 +284,15 @@ void py_module(nb::module_& m) {
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
-                return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
+               const std::optional<autograd::TensorPtr>& mask,
+               bool no_mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask, 0.0F, no_mask);
             },
             nb::arg("query"),
             nb::arg("key"),
             nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
+            nb::arg("mask") = std::nullopt,
+            nb::arg("no_mask") = false);
         // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
         // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
         py_attention.def(
@@ -298,17 +300,19 @@ void py_module(nb::module_& m) {
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+               const std::optional<tt::tt_metal::Tensor>& mask,
+               bool no_mask) -> autograd::TensorPtr {
                 std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
                 if (mask.has_value()) {
                     mask_ptr = autograd::create_tensor(mask.value(), false);
                 }
-                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr);
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr, 0.0F, no_mask);
             },
             nb::arg("query"),
             nb::arg("key"),
             nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
+            nb::arg("mask") = std::nullopt,
+            nb::arg("no_mask") = false);
 
         py_attention.def(
             "scaled_dot_product_attention_composite",
