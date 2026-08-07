@@ -7,7 +7,30 @@
 **Scope:** Wormhole B0 and Blackhole. Quasar and its `quasar/` suite are **out of scope for
 this plan** — it keeps its own inline stimulus definitions and is tracked separately.
 
-**Revision 5 — 2026-08-05. This document covers the REMAINING work, which starts at Phase 2.**
+**Revision 7 — 2026-08-07. Phases 2, 3 and 4 are DONE. The remaining work starts at Phase 5.**
+
+Everything through Phase 4 has landed on `ldjurovic/sfpu_edge_cases_2` and is green on Wormhole
+n150. What is left is in §12, which is the section to read if you only read one.
+
+Four of this plan's recommendations were **corrected by measurement** rather than merely
+executed. Each is marked inline, and they share a shape worth stating once: this plan
+consistently assumed the *stimulus* was the hard part, and in every case the binding constraint
+turned out to be the **golden** or the **kernel's own documented range**.
+
+| § | What the plan said | What measuring it showed |
+|---|---|---|
+| §4a | cat A is derivable from `_SFPU_UNDEFINED_RANGES`, "no new per-op data" | A hole is a *guard band*, not a boundary. Needed a new `_OP_SINGULARITIES` table, and adding holes instead would have re-rolled seven ops' stimuli |
+| §6b | "default to injecting the edge; xfail the handful the golden can't express" | The handful is **half the op list** — 272 of 564 fail. Cat B is Phase 5 work, not a stimulus change |
+| §5c | cat C is one shared `INT32_SPECIALS` list over the int ops | The delivery analysis was right, but 12 of 17 int ops document a *narrower valid range*, so the extremes are out of scope by kernel design. Cat C covers 5 ops |
+| §7 (cat E) | unary shift is "builder and golden written; only the wiring differs" | `SHIFT_AMOUNT` is a C++ `constexpr` paired with a golden constant. Needs a template parameter, not wiring |
+
+**Revision 6 — 2026-08-07. Phase 2 done.**
+Phase 2 is now **done** on `ldjurovic/sfpu_edge_cases_2` — see §4. Phase 3 and Phase 4 are
+still open, but §5 and §7 have been corrected against what building Phase 2 established;
+the corrections are marked inline. Sequencing for the current PR is in
+[SFPU_EDGE_CASE_PR2_PLAN.md](SFPU_EDGE_CASE_PR2_PLAN.md) §3.
+
+**Revision 5 — 2026-08-05.**
 The two completed phases have been removed from here — see
 [SFPU_PHASE0_SUMMARY.md](SFPU_PHASE0_SUMMARY.md) (detail in
 [SFPU_EDGE_CASE_PHASE0_REPORT.md](SFPU_EDGE_CASE_PHASE0_REPORT.md)) and
@@ -98,91 +121,211 @@ Where the two load-bearing audit findings now stand:
   three shift ops are deliberately excluded because their float domains would collapse to
   `{-1, 0, 1}` on Int32. Registering domains for those is a prerequisite for cat-A boundary
   probes on them, since §4a derives probes from registry data.
-- **Finding #4** — **unchanged.** `_get_integer_bounds` still returns `info.min + 1`
+- **Finding #4** — **unchanged, and now documented at the point of use.**
+  `_get_integer_bounds` still returns `info.min + 1`
   (`helpers/stimuli_generator/utils.py:45`), so INT32_MIN is unreachable through any spec.
+  Phase 2's `integer_specials()` lists `INT_MIN + 1` alongside `INT_MIN` for that reason: a
+  test that receives `INT_MIN + 1` where it asked for `INT_MIN` has hit the silent clamp, not
+  found a bug.
+
+One more piece of load-bearing infrastructure, established by building Phase 2 and not
+previously recorded anywhere:
+
+- **`exclude_intervals()` is not stimulus-neutral.** It *always* rewrites its result into the
+  `intervals` form, and `_sample_uniform_intervals` consumes **two** `torch.rand` draws per
+  element where the plain `low`/`high` path consumes **one**. `uniform(1, 8)` and
+  `intervals=[(1, 8)]` are therefore the same distribution and different numbers at the same
+  seed. Consequence: **declaring a new hole in `_SFPU_UNDEFINED_RANGES` re-draws that op's
+  entire stimulus set**, even when the subtraction removes nothing. Any phase that wants to
+  add a hole is signing up for that op's triage, and edge metadata must stay off this path
+  (§4a).
 
 ---
 
-## 4. Phase 2 — one edge-metadata block in `sfpu_domains.py` ⬜ **NOT STARTED**
+## 4. Phase 2 — one edge-metadata block in `sfpu_domains.py` ✅ **DONE**
 
-Add a single **source of truth** for edge values, most of it **derived** from data already present.
+A single **source of truth** for edge values, added at the end of `sfpu_domains.py` below a
+section banner explaining why it is a separate block and not an extension of the registry.
+Two of the three sub-items landed as designed; 4a did not, and the reason it did not is the
+most useful thing Phase 2 established.
 
-### 4a. Derive boundary probes from the existing undefined ranges (cat A) — no new per-op data
-The finite edge of each hole in `_SFPU_UNDEFINED_RANGES` is exactly the boundary we want to
-probe (just-inside = defined, at/just-outside = the special result). One helper turns the
-*existing* registry into probe points:
+### 4a. Boundary probes (cat A) ✅ — but **not** derivable from existing data alone
+
+The plan's premise was "no new per-op data": the finite edge of each hole in
+`_SFPU_UNDEFINED_RANGES` *is* the boundary, so one helper over the existing table gives the
+probes for free. Building it showed that to be **half true, and the wrong half is
+load-bearing.**
+
+- **A hole is a guard band, not a boundary.** `Reciprocal`'s is `(-1e-6, 1e-6)`. Its finite
+  edges are `±1e-6`; the point the test actually wants — exactly `0` — is *inside* the hole
+  and the derivation never produces it. Same for `log`/`pow`/`xlogy` (`1e-6`) and
+  `atanh`/`erfinv`/`log1p` (`±1 ∓ 1e-6`). Deriving probes from guard bands probes the guard
+  band.
+- **The guard band and the true boundary land in different binades**, so the format-relative
+  `eps` the plan correctly insists on comes out *different* for each. At a boundary of 1.0 in
+  Float16_b the band edge `0.999999` has half the ULP that `1.0` has, and emitting both
+  sources produced a third probe (`-0.9921865`) that is neither the boundary nor a clean step
+  from it. Observed while testing, not reasoned about.
+- **Seven ops have a singularity and no hole at all**, because their registered domain
+  already avoids it: `Rdiv` (`2.0/x`, pole at 0), `SqrtCustom`, `RsqrtCompat`, `LogWithBase`,
+  `Asin`, `Acos`, plus `Lgamma`/`Digamma`/`Polygamma`. For these the derivation returns an
+  empty list — silently, for exactly the ops most worth probing.
+
+**And the obvious fix is not available.** Adding the missing holes to
+`_SFPU_UNDEFINED_RANGES` is not stimulus-neutral: `exclude_intervals()` *always* rewrites its
+result into the `intervals` form, and the interval sampler consumes **two** `torch.rand`
+draws per element where the plain `low`/`high` sampler consumes **one**. So
+`uniform(1, 8)` and `intervals=[(1, 8)]` are the same distribution and different numbers at
+the same seed — verified empirically. Declaring a hole for an op re-draws that op's entire
+stimulus set even when the subtraction removes nothing, which would silently re-roll seven
+ops' inputs under the heading "adding metadata".
+
+So Phase 2 adds **`_OP_SINGULARITIES`** — exact singular points, per op, per operand — as new
+data alongside the existing table, and `boundary_probes()` prefers it, falling back to the
+guard-band derivation only for an operand with no singularity entry (which preserves the
+plan's "a new hole yields probes for free" property for future ops). `format_ulp(fmt,
+magnitude)` supplies the format-relative `eps` from a new `_FORMAT_MANTISSA_BITS` table, and
+`_dedup_representable()` drops probes the format cannot tell apart.
+
+Result, `Reciprocal` in Float16_b: `[-0.015625, 0.0, 0.015625]`. In Bfp4_b:
+`[-0.25, 0.0, 0.25]`. The boundary is now `0`, and the step scales with the format.
+
+> Held back deliberately: `Lgamma`, `Digamma` and `Polygamma` have poles at 0 and the
+> negative integers, but their kernels are polynomial/LUT fits that only claim accuracy well
+> inside a positive domain. A probe at their boundary tests a value the kernel never
+> promised, which yields a failure that is neither a bug nor fixable. The omission is
+> commented in the table so it does not read as an oversight.
+
+> `format_ulp` returns a **lower bound** for block-float formats: the real step is set by the
+> exponent shared across the 16-element block, not by the element's own magnitude. That is
+> the safe direction (too fine wastes a value; too coarse walks past the boundary) but it
+> means a block-float probe pair cannot be *assumed* distinct.
+
+### 4b. Shared special-value lists by format class (cats B, C) ✅
+
+`FLOAT_SPECIALS` as planned. The integer half is **derived from the format's width and
+signedness** rather than hard-coded to 32 bits, so `Int16`/`Int8`/`UInt8` get their own
+extremes instead of int32's silently clamped down:
 
 ```python
-def boundary_probes(op, eps=1e-6):
-    """Return values straddling each undefined boundary of `op`, derived
-    from _SFPU_UNDEFINED_RANGES (no new per-op data)."""
-    probes = []
-    for operand, holes in _SFPU_UNDEFINED_RANGES.get(op, {}).items():
-        for lo, hi in holes:
-            if math.isfinite(lo): probes += [(operand, lo - eps), (operand, lo)]      # just inside / at
-            if math.isfinite(hi): probes += [(operand, hi),      (operand, hi + eps)] # at / just outside
-    return probes
-```
-This covers `reciprocal`(0), `log`/`sqrt`/`rsqrt`(0), `atanh`/`erfinv`(±1), `acosh`(1),
-`div`(divisor 0), `xlogy`(y 0), `pow`(base 0) — **all from data that already exists.**
-
-> `eps` is a *format-relative* quantity, not the fixed `1e-6` the registry happens to use.
-> At a boundary of 1.0 in Float16_b, `1.0 - 1e-6` **is** `1.0` — the "just inside" probe
-> collapses onto the "at" probe and the pair tests one point twice. Derive it from the format's
-> ULP at the boundary magnitude rather than hard-coding it.
-
-### 4b. Shared special-value lists by format class (cats B, C)
-```python
-FLOAT_SPECIALS  = [float("inf"), float("-inf"), float("nan"), 0.0, -0.0]
-INT32_SPECIALS  = [INT32_MIN, INT32_MAX, 0, -1, 1]        # INT32_MIN needs the §5c override path
-UINT32_SPECIALS = [0, 1, UINT32_MAX]
-def format_specials(fmt):
-    if fmt.is_integer():
-        return UINT32_SPECIALS if fmt == DataFormat.UInt32 else INT32_SPECIALS
-    return FLOAT_SPECIALS
+integer_specials(Int32)  -> (-2147483648, -2147483647, -1, 0, 1, 2147483647)
+integer_specials(Int8)   -> (-128, -127, -1, 0, 1, 127)
+integer_specials(UInt32) -> (0, 1, 4294967295)
 ```
 
-### 4c. Small op-specific discrete-edge table (cat D) — only what isn't a boundary
-Keep this deliberately tiny; most entries are *shared* across families:
-```python
-_OP_EDGE_POINTS = {
-    # comparison-to-zero & sign: the interesting point is exactly 0 / -0.0
-    **{op: [0.0, -0.0] for op in (EqualZero, NotEqualZero, LessThanZero, GreaterThanZero,
-                                  LessThanEqualZero, GreaterThanEqualZero, Sign, Heaviside)},
-    # unary threshold comparisons fire at 0.5
-    **{op: [0.5] for op in (UnaryGt, UnaryLt, UnaryGe, UnaryLe)},
-    # piecewise knees / clamp bounds
-    Clamp: [-1.0, 1.0], Hardtanh: [-1.0, 1.0],
-    Softshrink: [-0.5, 0.5], Hardshrink: [-0.5, 0.5],
-    Hardsigmoid: [-3.0, 3.0], Hardmish: [-2.0, 0.0],
-    # exact-tie rounding (round-half-to-even) and integer knees
-    Round: [-2.5, -0.5, 0.5, 1.5, 2.5], Floor: [-1.0, 0.0, 1.0, 2.0],
-    Ceil: [-1.0, 0.0, 1.0, 2.0], Trunc: [-1.0, 0.0, 1.0], Frac: [-1.5, 1.5],
-    # max/min ties
-    **{op: [0.0] for op in (UnaryMax, UnaryMin)},
-}
-```
-~25 lines that cover every cat-D row in the audit.
+`INT_MIN + 1` is included next to `INT_MIN` on purpose: it is the value
+`_get_integer_bounds` clamps to, so a test that gets `INT_MIN + 1` where it asked for
+`INT_MIN` has hit §5c's silent clamp rather than found a bug. The docstring says so and
+points at the override path.
+
+### 4c. Op-specific discrete-edge table (cat D) ✅ — larger than planned, and verified
+
+43 entries. Every constant was checked against the golden that owns it rather than taken
+from the plan, which found the plan's table **correct where it spoke but incomplete**:
+`_UNARY_COMP_THRESHOLD = 0.5` ✓, `_UNARY_MAX_MIN_VALUE = 0.0` ✓, `_HARDSHRINK_LAMBDA = 0.5`
+✓, softshrink `lambd=0.5` ✓, clamp/hardtanh `[-1, 1]` ✓, hardsigmoid `[-3, 3]` ✓, hardmish
+`[-2, 0]` ✓. Missing from the plan and now present:
+
+| Op | Knee | Owner |
+|---|---|---|
+| `Threshold` | 5.0 | `_threshold(t=5, v=10)` |
+| `ReluMax` | 0.0, 5.0 | `_relu_max(threshold=5)` |
+| `ReluMin` | 5.0 | `_relu_min(threshold=5)` |
+| `Softplus` | 20.0 | `_SOFTPLUS_THRESHOLD` |
+| `Lrelu`, `Prelu`, `Elu`, `Celu`, `Selu`, `Xielu`, `Signbit` | 0.0 / −0.0 | piecewise at zero |
+| `UnaryEq`, `UnaryNe`, `LogicalNot` | 0.5 / 0.0 | `_UNARY_COMP_THRESHOLD` |
+| `UnaryMaxInt32`, `UnaryMinInt32`, `UnaryMaxUint32`, `UnaryMinUint32` | 1000 | `_int_maxmin_scalar` |
+
+`Relu` is deliberately **excluded** even though its knee is at 0: relu is applied by the
+packer (`STACC_RELU`) and is not a member of `SfpuType`, so no SFPU probe can reach it.
+
+Every one of these is a **dispatch constant shared with the golden**, and the golden is the
+authority — a coupling the plan did not mention. The table names the owning attribute per
+entry, because changing `_UNARY_COMP_THRESHOLD` would otherwise leave this table probing a
+point that is no longer a threshold: full coverage on paper, nothing tested in fact.
 
 > The registry already carries signed `[-10, 10]` domains for `Floor`/`Ceil`/`Trunc`/`Frac`,
 > chosen so the random sweep lands *near* several integer knees. `_OP_EDGE_POINTS` is what
 > lands *on* them. Keep both: the domain finds unexpected knees, the table pins the known ones.
 
+### 4d. Coverage this metadata reaches
+
+**50 of the 97 unary SFPU ops now have at least one edge value** from cat A or cat D. The
+other 47 are smooth everywhere with no knee and no pole (`sin`, `cos`, `tanh`, `gelu`, `erf`,
+`exp`, …). For those, **cat B is the entire edge story** — which raises the priority of the
+special-safe `(format, dest_acc)` matrix (§6a) from "do it first to avoid noise" to "it is
+half the remaining coverage".
+
+### 4e. Also fixed here: the binary suite's declared-set hole
+
+`_assert_domain_sets_consistent()` claimed to partition the ops the binary suite drives into
+"reads the registry" and "keeps the format default". It did not: four ops — `SfpuAddTopRow`
+and the three shift ops — were in **neither** set while having registry entries, so the check
+passed while saying nothing about them. That is the silent-drift failure mode the assertion
+exists to prevent, and Phase 3 was about to add a third set to the same file and inherit it.
+
+Now three declared sets plus one for ops that do not use the shared driver at all, each with
+a recorded reason, and a `_classify_stimuli_source()` guard in `sfpu_binary()` that raises
+for an unclassified op. The guard is in the **driver**, not at collection: the set of ops the
+suite drives is only known once pytest has expanded the parametrize lists, so a
+collection-time assertion cannot check totality without duplicating that set. All four
+previously-undeclared ops now have a home.
+
 ---
 
-## 5. Phase 3 — one `edge_spec()` builder, and how each driver delivers it ⬜ **NOT STARTED**
+## 5. Phase 3 — one `edge_spec()` builder, and how each driver delivers it ✅ **DONE**
 
-### 5a. `edge_spec(op, fmt)` and per-operand delivery
+Shipped as `edge_values()` / `edge_spec()` / `clip_to_format()` in `sfpu_domains.py`, plus
+`edge_pair_values()` / `edge_counterparts()` for the binary side. Four deviations from the
+sketch below, three of them corrections it already anticipated and one found by running it:
+
+- **Takes the input/output pair, not one format** (see 5a).
+- **Returns `None`, not an empty spec**, for the 47 ops with no knee and no pole, so the caller
+  skips with a reason instead of driving a zero-value stimulus.
+- **Raises on integer + specials** rather than silently clamping `INT_MIN` (see 5c).
+- **`-0.0` was being deduped away against `+0.0`.** Found by inspecting the output for `Sign`,
+  which came out as `[0.0]`. Both are zero ULPs apart, so the numeric dedup discarded one — and
+  for `signbit`/`sign`/`heaviside`/`reciprocal` the difference between the two zeros *is* the
+  probe. Signed zeros are now keyed by sign. **This bug accounts for four of the nine findings**,
+  so the sweeps would have been blind to them.
+
+For the binary side, `edge_pair_values()` crosses both operands' edges, and whichever operand has
+no edge of its own contributes `edge_counterparts()` — a `(-2, -1, 0, 1, 2)` spread clipped to
+that operand's registered domain, so `pow`'s base-zero probe cannot be paired with an exponent
+outside its registered `[0, 3]`. Without it the product would be empty for `div` and the
+divisor-zero probe would never run.
+
+### 5a. `edge_spec(...)` and per-operand delivery
+
+**Corrected signature — it needs the input/output pair, not one format.** The sketch below
+took a single `fmt`, but the unary driver resolves its own default through
+`for_op_pipeline(op, input_format, output_format)` precisely because the sweep pairs every
+input with every output and the **output** is often the binding constraint. A caller passing
+`spec_A=edge_spec(...)` **bypasses that resolution entirely** — `eltwise_unary_sfpu` only
+resolves when `spec_A is None`. So a probe near a format's ceiling would be injected unclipped
+into a Float16 or MxFp4 output and overflow. `edge_spec` must clip against
+`narrowest_range_format(input_format, output_format)` itself.
+
+Two Phase 2 helpers replace the sketch's placeholders: `boundary_probes(op, operand, fmt)`
+already takes the operand and does its own format-relative `eps` and dedup, and
+`op_edge_points(op)` reads the cat-D table.
 
 ```python
-def edge_spec(op, fmt, operand=Operand.A):
+def edge_spec(op, input_format, output_format=None, operand=Operand.A):
     """StimuliSpec.custom() combining domain boundaries + op knees + format specials,
-    clipped to what `fmt` can represent."""
-    vals  = [v for (o, v) in boundary_probes(op, eps=ulp_at(fmt, ...)) if o == operand]
-    vals += _OP_EDGE_POINTS.get(op, [])
-    vals += format_specials(fmt)
-    return StimuliSpec.custom(values=dedup(vals))   # custom = head-of-face, zero-filled remainder
+    clipped to what the narrowest format in the pipeline can represent."""
+    fmt  = narrowest_range_format(input_format, output_format)
+    vals  = list(boundary_probes(op, operand, fmt))
+    vals += op_edge_points(op)
+    vals += format_specials(fmt)          # gate per §6a before including the specials
+    return StimuliSpec.custom(values=clip_to_format(dedup(vals), fmt))
 ```
+
+> **Do not route edge specs through `for_op_pipeline`.** Its `_tighter_spec` measures a
+> domain with `_spec_span`, which falls back to `spec.high - spec.low` — `None - None` for a
+> values-list spec. Nothing hits this today because the two paths are separate; the
+> obvious-looking simplification of unifying them raises `TypeError`. Keep them separate, or
+> teach `_spec_span` about `values` first.
 
 `custom` already exists (`spec.py:252`) and does exactly the placement we need. A face is far
 bigger than these value lists, so remainder-zero-fill is harmless — and `0.0` / `−0.0` are
@@ -197,7 +340,7 @@ the unified binary driver:
 | Family | Driver | How the edge values get in |
 |---|---|---|
 | Unary | `eltwise_unary_sfpu(..., spec_A=)` | `spec_A=edge_spec(op, fmt)` — works today |
-| Binary | `sfpu_binary(..., spec_A=, spec_B=, src_A_override=)` | pass `spec_A=edge_spec(op, fmt, Operand.A)` and `spec_B=edge_spec(op, fmt, Operand.B)`; the driver interleaves them via `_pair_operand_specs()` so position *p* pairs as `(edge_A[p], edge_B[p])`. Both operands live in `buffer_A` (tile0 = in0, tile1 = in1), so do **not** try to place them yourself |
+| Binary | `sfpu_binary(..., spec_A=, spec_B=, src_A_override=)` | pass `spec_A=edge_spec(op, …, Operand.A)` and `spec_B=edge_spec(op, …, Operand.B)`; the driver interleaves them via `_pair_operand_specs()` so position *p* pairs as `(edge_A[p], edge_B[p])`. Both operands live in `buffer_A` (tile0 = in0, tile1 = in1), so do **not** try to place them yourself. **Caveat:** `_pair_operand_specs` does `replace(spec_A, face_specs=…)`, which silently discards any `face_specs` the caller already set — so per-operand pairing and `custom_faces` cannot currently be combined on one spec, which is exactly what a binary cat-A sweep wants. Decide the composition rule before writing `_build_edge_pair_src` |
 | Ternary | `_run_sfpu_ternary(..., spec_A=, spec_B=, spec_C=)` | pass the three specs directly; `c` is the one that matters — its default `uniform(1, 2)` keeps the pole unreachable |
 | Scalar | `_run_sfpu_binop_scalar(..., scalar=)` | the scalar is already a swept axis over `_SCALARS = (0.0, 1.0, 2.0, −2.0, 8.0, 0.25)` (`test_sfpu_binop_scalar.py:40`); a `spec_A` knob for the tensor operand still needs adding |
 
@@ -282,7 +425,30 @@ express; exclude the (format, dest_acc) pairs the hardware can't carry.**
 
 ---
 
-## 7. Phase 4 — one thin edge test per family ⬜ **NOT STARTED**
+## 7. Phase 4 — one thin edge test per family 🟡 **DONE for unary and binary**
+
+Two of the four planned wrappers exist and are green:
+
+| Test | Cases | Result |
+|---|---|---|
+| `test_eltwise_unary_sfpu_edges` | 752 (94 ops × 4 pairs × 2 dest_acc) | 372 passed, 360 skipped, 20 xfailed |
+| `test_sfpu_binary_edges` | 40 (5 ops × 4 pairs × 2 dest_acc) | 13 passed, 10 skipped, 22 xfailed |
+| `test_sfpu_binary_int_extremes` | 5 | 5 passed |
+
+The 360 unary skips are the 44 ops that are smooth everywhere with no knee and no pole — for
+those the random sweep already covers everything an edge probe could add, so the test skips with
+that reason rather than driving a meaningless variant.
+
+**The format axis is the standard profile, not the broad one**, which the plan did not specify:
+an edge probe is a fixed value, so the block-float and approximation-mode axes vary nothing about
+it. What *does* vary is whether specials can be injected, and `specials_safe()` decides that per
+`(input, output, dest_acc)`.
+
+**Ternary and scalar wrappers are NOT done** — see §12 for why each is blocked rather than
+merely pending.
+
+Two corrections the sweep forced, both recorded in §4a and §6b: cat A needed per-singularity
+defined-side data, and cat B is off by default.
 
 No new driver, no new C++ source. Each is a ~15-line `@parametrize` wrapper
 (`helpers/param_config.py:315`) over the **existing** driver, iterating the family's op list
@@ -363,34 +529,120 @@ still untested: none of `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_row
 
 | Phase | What | New/changed LOC | Ops covered | Status |
 |-------|------|-----------------|-------------|--------|
-| 2 | Edge metadata (`boundary_probes` + specials + `_OP_EDGE_POINTS`) | ~60 | all | ⬜ |
-| 3 | `edge_spec()` + `_build_edge_pair_src` generalization (no compare change needed) | ~40 | all | ⬜ |
-| 4 | 4 thin per-family edge tests + unary shift reuse + special-safe format matrix | ~90 | ~150 ops, auto-enrols future ops | ⬜ |
-| 5 | golden `xfail` annotations | ~1 line each | the unmodelled few | ⬜ |
+| 2 | Edge metadata (`format_ulp` + `_OP_SINGULARITIES` + `boundary_probes` + specials + `_OP_EDGE_POINTS`), plus the binary declared-set fix | ~320 (est. ~60) | cat A on 15 unary + 4 binary-B, cat D on 43; **50/97 unary ops have an edge value** | ✅ |
+| 3 | `edge_spec()` + `edge_pair_values()` + `edge_counterparts()` + `clip_to_format()` (no compare change needed) | ~110 (est. ~40) | all | ✅ |
+| 4 | 2 of 4 per-family edge tests + the measured special-safe format matrix | ~320 (est. ~90) | 94 unary + 5 binary + 5 int; auto-enrols future ops | 🟡 unary + binary done; ternary and scalar blocked (§12) |
+| 5 | golden work for cat B, and `xfail` annotations | **much larger than "~1 line each"** — 272 of 564 specials variants fail | the unmodelled *half* | ⬜ |
 | F | new harnesses for untested kernels | large, per-kernel | the 10 untested + TopK stages | ⬜ (moe-gate in progress) |
 
-**Bottom line:** ~230 lines of shared infrastructure closes categories A–E across all ~150
-SFPU ops, and every future op auto-enrols by virtue of being in the enum. The completed phases
-already paid for the shared golden/comparison correctness and for the per-operand delivery
-plumbing in all four drivers, so the phases below do not have to.
+Phase 2 came in at ~4.5× the estimate, and the overrun is all in the two places the estimate
+assumed were free: cat A needed a **new** per-op table (`_OP_SINGULARITIES`) because the
+existing one records guard bands rather than boundaries (§4a), and every cat-D constant had to
+be read out of the golden that owns it rather than copied from this document — which is how
+the seven missing knees were found (§4c). Both are data, not mechanism, so they do not change
+Phase 3's or Phase 4's estimate.
+
+**Bottom line, revised:** ~750 lines closed categories A, C and D across every op that has one,
+plus the measured cat-B surface. The estimate of ~230 was out by 3×, and every line of the
+overrun was **data or triage**, not mechanism — the "one mechanism per gap-category" principle in
+§1 held up completely. What it under-priced was that a mechanism is worthless until something
+downstream of it (a golden, a kernel's claimed range) agrees.
 
 ---
 
-## 10. Suggested sequencing
+## 10. Suggested sequencing — superseded
 
-The registry is **single-valued** — the recalibrated domain constants proved arch-independent,
-so nothing below needs a per-arch axis. All four drivers already accept per-operand specs, so
-every step below is stimulus data plus a thin wrapper.
+Phases 2, 3 and 4 are done; steps 1–2 below are complete. §12 replaces this section for
+everything that remains.
 
-1. **Phase 2–3** with a couple of pilot ops (`reciprocal`, `div`, `round`) to validate the
-   probe derivation and the paired-operand delivery before scaling out.
-2. **Phase 4** — establish the special-safe `(format, dest_acc)` matrix per arch **first**
-   (§6a), then enable the family sweeps and triage into real-bug vs golden-gap (`xfail`).
-3. **Phase 5** — extend goldens for the highest-value `xfail`ed specials, and give `xlogy` the
-   per-op tolerance that currently caps its x at 4.
-4. **Category E** — fold unary shift into the shift edge builder; convert both Blackhole skips
-   to xfails and track tt-metal#44750 / `docs/SFPU_INT32_SHIFT.md` as external dependencies.
+1. ~~**Phase 2–3** with pilot ops to validate the probe derivation~~ — **done.** Validated by
+   inspecting output for `reciprocal`, `log`, `sqrt`, `log1p`, `atanh`, `acosh`, `erfinv`,
+   `rdiv`, `asin` and the binary ops in both Float16_b and Bfp4_b; that is what surfaced the
+   guard-band and binade problems in §4a.
+2. ~~**Phase 4** — establish the special-safe matrix **first**, then enable the sweeps~~ —
+   **done, and doing it in that order was right.** The matrix cost 250 probe variants and
+   immediately explained 85 of them; enabling the sweeps first would have produced a wall of
+   failures sharing one root cause. It also revealed that block-float rows had to be *excluded*
+   rather than trusted, which measuring after the fact would have hidden.
+3. **Phase 5** — extend goldens for cat B, and give `xlogy` the per-op tolerance that caps its x
+   at 4. Now the largest remaining item, not a footnote — see §12.
+4. **Category E** — unary shift needs a C++ template parameter (§7). Both Blackhole skips are
+   **already converted** to xfails.
 5. **Category F** — finish the `generic_moe_gate_topk` harness, then schedule the rest by §8.
+
+---
+
+## 12. What is left, and why each item is blocked rather than merely pending
+
+Ordered by value. Nothing here is a thin wrapper away; each is blocked on something specific.
+
+### 1. Cat B — goldens that model non-finite inputs (was "Phase 5, ~1 line each")
+
+**The single largest remaining item, and the plan's biggest mis-estimate.** The stimulus side is
+finished: `specials_safe()` says exactly where specials can be injected, and
+`_EDGE_SWEEP_SPECIALS = True` turns it on. Flipping it today gives **272 failures out of 564**,
+because the torch-backed goldens do not define a result for non-finite *inputs* — they return
+`inf` where the answer is `nan`, and so on.
+
+This matters beyond the edge sweep: **47 of the 97 unary ops are smooth everywhere** with no
+knee and no pole, so cat B is the *entire* edge story for half the op list (§4d). Until the
+goldens model it, those 47 ops have no deliberate edge coverage at all.
+
+Not a sprinkle of xfails. It is per-op golden work, and the right unit of progress is probably
+"pick the ten highest-value ops and define their non-finite behaviour", not "make the sweep
+green".
+
+### 2. Ternary edges — blocked on a data-model change
+
+`addcdiv`/`snake_beta` with `c → 0` (today `c` is pinned to `uniform(1, 2)`, so the pole is
+deliberately unreachable) and `lerp` with weight `0`/`1`/`>1`. Blocked because **`OperandSpecs`
+carries only `spec_A` and `spec_B`** — there is no third operand to register a singularity for.
+`_ternary_default_specs` already works around this by reusing B for C, with a comment saying so.
+Growing `OperandSpecs` touches five consumers including the accuracy harness, so it is a
+deliberate change rather than an incremental one.
+
+### 3. Scalar tensor-operand edges — small, genuinely just pending
+
+`_run_sfpu_binop_scalar` needs one `spec_A=` parameter and a thin wrapper. The *scalar* axis
+already sweeps `{0, 1, 2, −2, 8, 0.25}`; the tensor operand has no knob. Widening the scalar axis
+to `±large`/`±tiny` is **not** part of this — that needs a per-op tolerance first.
+
+### 4. Category E — unary shift needs a C++ change
+
+`SHIFT_AMOUNT` is `constexpr std::uint32_t SHIFT_AMOUNT = 3u` inside
+`call_unary_sfpu_operation`, paired with `_int_shift_amount` on the golden side. Sweeping it needs
+a new `TemplateParameter` plus matching golden plumbing — cross-language, not test wiring. The
+builder and `_shift_reference` genuinely are written and reusable once the parameter exists.
+
+### 5. Per-op tolerances (`xlogy`, `pow`)
+
+`xlogy`'s x is capped at 4 and `pow`'s operands at 3 because their error outruns a fixed
+tolerance — `xlogy`'s absolute error scales with x against a fixed atol; `pow`'s tracks
+`b·ln a` into the shared exp approximation. Both need a per-op tolerance before their edges can
+be pushed further. Independent of everything above.
+
+### 6. Category F — new harnesses
+
+Unchanged from §8. `welfords`, `int_sum`, `cumsum`, `tiled_prod`, `quant` are the high-priority
+five; `generic_moe_gate_topk` is nearly done.
+
+### 7. Not phase work, but it bounds the value of all of it
+
+- **Blackhole.** Nothing in Phases 2–4 has been run there. Two parts are arch-sensitive by
+  construction: `specials_safe()`'s table (the unpack paths differ) and the two converted xfails,
+  whose whole purpose is the Blackhole path. Separately, the `SFPMAD` signed-zero xfails are a
+  **testable prediction**: Blackhole's ISA documents sign-preserved zero, so they should XPASS.
+- **CI.** The broad unary profile runs in **no automated job on any arch** — every LLK pytest job
+  either excludes `nightly` or runs `--coverage`, under which the broad profile is skipped
+  wholesale (tt-llk#1435). This predates the branch but means none of this coverage is currently
+  guarded. `llk-e2e` needs a non-coverage companion group, or the broad profile must stop being
+  coverage-gated.
+- **The nine recorded divergences.** §0.6 of the coverage audit splits them into documented ISA
+  behaviour and genuine open questions. `signbit(-0.0)` and `RsqrtCompat(0)` are the two worth
+  raising with kernel owners.
+- **`Float16 -> Bfp4_b`.** The dropped commit's failing cell is still unexplained: either that
+  pair needs a guard on Wormhole or the pack path has a bug. Re-adding Bfp4_b as an output format
+  depends on which.
 
 ---
 

@@ -1,14 +1,33 @@
 # SFPU LLK Edge-Case Test-Coverage Audit
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
-**Audited:** 2026-07-23 · **Revised:** 2026-08-05 (revision 3)
+**Audited:** 2026-07-23 · **Revised:** 2026-08-07 (revision 4)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific test gaps inline. Quasar has its own suite under `quasar/` and is out of scope.
 
+> ### Revision 4 — Phases 2–4 have landed
+>
+> Revision 3 recorded the *domains* being widened. Revision 4 records the edges being **hit on
+> purpose**. The audit body below is still as observed on 2026-07-23; §0.5 is the new
+> authority for whether a given `No` / `Excluded` row is now driven, and it names the exact
+> probe values so any row can be resolved without re-reading the code.
+>
+> The short version: **cat A (domain boundaries) and cat D (op knees and ties) are closed for
+> the ops that have them** — 15 unary boundaries, 4 binary operand-B poles, 43 knee/tie tables,
+> all driven by `test_eltwise_unary_sfpu_edges` and `test_sfpu_binary_edges`. **Cat B (IEEE
+> specials) is measured but deliberately off**, and the measurement is the reason: on the
+> (format, dest_acc) triples that can carry specials at all, injecting them fails 272 of 564
+> variants because the goldens do not model non-finite *inputs*. **Cat C (integer extremes) is
+> closed for the 5 ops whose kernels claim the full int32 range** and documented as
+> out-of-scope for the rest.
+>
+> Nine ops disagree with their golden at these points. Cross-checked against
+> [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), some of those
+> disagreements are documented hardware behaviour rather than defects — see §0.6, which is the
+> part of this revision most likely to change what you do next.
+>
 > ### Revision 3 — what has changed since the audit was taken
 >
-> The audit body below is **as observed on 2026-07-23** and remains the reference for
-> per-op edge cases. Three things have moved since, and §0 records all of them. Read §0 before
-> acting on any row.
+> Three things had moved as of 2026-08-05, and §0 records them.
 >
 > 1. **Finding #1 is FIXED** on branch `ldjurovic/sfpu_edge_cases_1`. The unary float
 >    sweep no longer runs positive-only. Every `Excluded (float-sweep: No)` /
@@ -43,14 +62,19 @@ For every SFPU kernel/operation we list its plausible **edge cases** (domain bou
 
 ---
 
-## 0. Status of the four systemic findings (revision 3, 2026-08-05)
+## 0. Status of the four systemic findings (revision 4, 2026-08-07)
 
 | # | Systemic finding | Status | Where |
 |---|---|---|---|
-| 1 | Unary float sweep is positive-only (`ALL_MATHOPS`, no `spec_A`) | ✅ **fixed** — sweep now defaults to the op's registered signed domain, bounded by the narrowest format in the pipeline. **Phase 0 is now closed**: verified on Blackhole (4270 passed / 1174 skipped / 4 xfailed, no arch-specific bounds needed) and the `ALL_MATHOPS`/`DOMAIN_MATHOPS` split merged into one test | branch `ldjurovic/sfpu_edge_cases_1`; [SFPU_PHASE0_SUMMARY.md](SFPU_PHASE0_SUMMARY.md) |
-| 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | ✅ **closed for binary** — the 7 float elementwise ops now take their registered domain, so add/sub/mul/rsub/div go from 0% to 50% negative operands and div's divisor spans its registered pole. Ternary and scalar gained the per-operand plumbing but have no registry entries to read yet. Still open: 32 binary ops have no registered domain at all | branch `ldjurovic/sfpu_edge_cases_1`; [SFPU_PHASE1_SUMMARY.md](SFPU_PHASE1_SUMMARY.md); plan §2 |
-| 3 | IEEE specials injected for exactly one op family (`isinf`/`isnan`/…) | ⬜ **open** — plus a newly documented constraint: bf16→fp32 dest unpack **destroys `-inf`/`NaN`**, so specials cannot be swept over the full `formats × dest_acc` product ([test_sfpu_unary.py:568](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L568)) | plan §6a |
-| 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | ⬜ **open** — and worse than recorded: `StimuliSpec.custom` **silently clamps** `INT32_MIN` to `INT32_MIN+1` rather than erroring, so integer extremes must be delivered as a raw override tensor, not a spec | plan §5c |
+| 1 | Unary float sweep is positive-only (`ALL_MATHOPS`, no `spec_A`) | ✅ **fixed** — sweep now defaults to the op's registered signed domain, bounded by the narrowest format in the pipeline. **Phase 0 closed**: verified on Blackhole (4270 passed / 1174 skipped / 4 xfailed, no arch-specific bounds needed) and the `ALL_MATHOPS`/`DOMAIN_MATHOPS` split merged into one test | [SFPU_PHASE0_SUMMARY.md](SFPU_PHASE0_SUMMARY.md) |
+| 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | ✅ **closed for binary** — the 7 float elementwise ops now take their registered domain, so add/sub/mul/rsub/div go from 0% to 50% negative operands and div's divisor spans its registered pole. Ternary and scalar gained the per-operand plumbing but have no registry entries to read yet. Still open: 32 binary ops have no registered domain at all | [SFPU_PHASE1_SUMMARY.md](SFPU_PHASE1_SUMMARY.md); plan §2 |
+| 3 | IEEE specials injected for exactly one op family (`isinf`/`isnan`/…) | 🟡 **measured, and deliberately not enabled.** The (format, dest_acc) matrix that *can* carry specials is now established by measurement rather than assumption — 250 probe variants, 85 failing — and encoded as `specials_safe()`. But on the 7 safe triples, injecting specials fails **272 of 564** variants, because the goldens do not model non-finite *inputs*. That is golden work (Phase 5), not a stimulus change, so `_EDGE_SWEEP_SPECIALS = False`. The constraint recorded in revision 3 is confirmed and now has per-predicate detail: a 16-bit input at `dest_acc=Yes` keeps `+inf` but loses `-inf` and `NaN` | §0.5; [SFPU_EDGE_CASES_SUMMARY.md](SFPU_EDGE_CASES_SUMMARY.md) |
+| 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | 🟡 **closed where the kernels allow it.** `StimuliSpec.custom` does silently clamp `INT32_MIN` to `INT32_MIN+1`, so extremes go through a raw `src_A_override`. `test_sfpu_binary_int_extremes` drives `{INT32_MIN+1, -1, 0, 1, INT32_MAX}²` over the 5 ops whose kernels claim the full int32 range. The other 12 are **out of scope by kernel design**, not by test gap — `_INT_BINARY_STIMULI` documents each one's narrower valid range | §0.5 |
+
+**Findings #1 and #2 are unchanged from revision 3. #3 and #4 both moved, but neither to a
+plain "fixed"** — and the reason is the same in both cases: the *mechanism* was the easy part
+and something outside the test infra bounds how far it can go. For #3 it is the goldens; for #4
+it is the kernels' own documented ranges.
 
 ### Fallout of fixing finding #1 — three defects it had been masking
 
@@ -91,6 +115,114 @@ profiles `BROAD_SWEEP_OPS` / `STANDARD_SWEEP_OPS`, verified identical per `(op, 
 all 94 ops and 5368 cases. Citations below to `test_eltwise_unary_sfpu_float` and
 `test_eltwise_unary_sfpu_domain` both resolve to `test_eltwise_unary_sfpu`.
 
+---
+
+## 0.5 Which rows in §1–§6 are now driven (revision 4)
+
+The tables below were written before any edge was deliberately driven. Rather than re-audit 394
+rows, this section is the authority: if a row's edge appears here, treat its `Tested?` as **Yes**
+regardless of what the row says, and read the row's notes as historical.
+
+Two tests do all of it, both `@pytest.mark.nightly`:
+`test_eltwise_unary_sfpu_edges` and `test_sfpu_binary_edges` (+ `test_sfpu_binary_int_extremes`).
+Both take their values from `sfpu_domains`, so **an op enrols by being in the registry**, not by
+being listed in a test.
+
+### Cat A — domain boundaries, now driven
+
+Probe values shown for Float16_b; the offset is `2 × format_ulp(fmt, boundary)`, so it rescales
+per format (in Bfp4_b the ±1 probes become ±1.25/0.75). Only the side the op is **defined** on is
+probed — the undefined side breaks the *golden*, not the kernel, and is available behind
+`include_undefined=True`.
+
+| Op | Boundary probes | Closes the row(s) reading |
+|---|---|---|
+| `Reciprocal`, `Rdiv` | `-0.015625, 0.0, 0.015625` | "pole at 0 is `Excluded`; behavior at 0 unverified" |
+| `Log`, `LogWithBase` | `0.0, 0.015625` | "x=0 → -inf … 0 never generated" |
+| `Sqrt`, `SqrtCustom`, `Rsqrt`, `RsqrtCompat` | `0.0, 0.015625` | "x=0 → 0 … exact 0 never deliberately driven" |
+| `Log1p` | `-1.0, -0.984375` | "x=-1 → -inf … never reaches ≤-1" |
+| `Atanh`, `Erfinv`, `Asin`, `Acos` | `-1.0, -0.984375, 0.984375, 1.0` | "±1 boundary `Excluded`" |
+| `Acosh` | `1.0, 1.015625` | "x=1 boundary" |
+| `SfpuElwdiv` (operand B) | `-0.015625, 0.0, 0.015625` | "div-by-zero branch never exercised" |
+| `SfpuBinaryFmod`, `SfpuBinaryRemainder` (B) | `-0.015625, 0.0, 0.015625` | "`b==0` → ±inf/NaN never exercised" |
+| `SfpuXlogy` (B) | `0.0, 0.015625` | "`xlogy` y≤0 avoided" |
+| `SfpuElwpow` (A) | `0.0, 0.015625` | "`pow` base≤0 avoided" |
+
+### Cat D — op knees, thresholds and exact ties, now driven
+
+43 entries. Every constant was read out of the golden that owns it, which found seven the
+original plan's table had missed (`Threshold`, `ReluMax`, `ReluMin`, `Softplus`, and the four int
+max/min scalar ops).
+
+| Edge class | Ops | Values |
+|---|---|---|
+| Exact-tie rounding (half-to-even) | `Round` | `±0.5, ±1.5, ±2.5` |
+| Exact integers | `Floor`, `Ceil` | `-2, -1, 0, 1, 2` |
+| " | `Trunc` | `-1, 0, 1` |
+| " | `Frac` | `±1.0, ±1.5` |
+| Comparison-to-zero and sign, **including −0.0** | `EqualZero`, `NotEqualZero`, `LessThanZero`, `GreaterThanZero`, `LessThanEqualZero`, `GreaterThanEqualZero`, `Sign`, `Signbit`, `Heaviside`, `Lrelu`, `Prelu`, `Elu`, `Celu`, `Selu`, `Xielu`, `UnaryMax`, `UnaryMin`, `LogicalNot` | `0.0, -0.0` |
+| Unary threshold comparisons | `UnaryGt/Lt/Ge/Le/Eq/Ne` | `0.5` |
+| Clamp bounds | `Clamp`, `Hardtanh` | `-1.0, 1.0` |
+| Shrinkage lambdas | `Softshrink`, `Hardshrink` | `±0.5` |
+| Piecewise knees | `Hardsigmoid` `±3.0`; `Hardmish` `-2.0, 0.0`; `Softplus` `20.0` | |
+| Dispatch thresholds | `Threshold` `5.0`; `ReluMax` `0.0, 5.0`; `ReluMin` `5.0` | |
+| Integer scalar comparisons | `UnaryMaxInt32`, `UnaryMinInt32`, `UnaryMaxUint32`, `UnaryMinUint32` | `1000` |
+
+This closes the audit's "**Exact-tie rounding**" gap in §"Biggest actionable gaps" outright, and
+the `-0.0` half of "`sign`/comparison-to-zero at exact 0 / -0.0".
+
+### Cat B — IEEE specials: the safe matrix, measured
+
+Not enabled (see finding #3), but the matrix is now data rather than guesswork. Measured by
+driving the five isinf/isnan predicates over the full 5×5 format matrix × both `dest_acc` with no
+skips. Two breakers:
+
+- **A `Float16` (e5m10) anywhere.** As an input it never preserves specials — all 5 predicates
+  fail on all 5 outputs at both `dest_acc`, 10/10 cells. As an output it fails unless a 32-bit
+  input meets `dest_acc=Yes`; `Float32->Float16` at `dest_acc=No` fails all five, the pair
+  Blackhole already guards.
+- **A 16-bit input with `dest_acc=Yes`.** `Float16_b` there fails `isinf`/`isneginf`/`isnan` but
+  passes `isposinf`/`isfinite` — **`+inf` survives, `-inf` and `NaN` do not.**
+
+Block-float inputs are excluded rather than trusted: `quantize_input_to_unpack_format` destroys
+NaN for Bfp8_b and Bfp4_b, so a predicate passing there is vacuous — golden and hardware agree
+there is no NaN because neither ever saw one.
+
+Safe surface, 7 of 40 triples: `dest_acc=No` → `Float32->Float32`, `Float32->Float16_b`,
+`Float16_b->Float32`, `Float16_b->Float16_b`; `dest_acc=Yes` → `Float32->Float32`,
+`Float32->Float16`, `Float32->Float16_b`. Measured on Wormhole; **unverified on Blackhole**,
+where the unpack paths differ.
+
+### Cat C — integer extremes
+
+`test_sfpu_binary_int_extremes` drives `{INT32_MIN+1, -1, 0, 1, INT32_MAX}²` = 25 pairs over
+`SfpuBitwiseAnd/Or/Xor`, `SfpuEqInt`, `SfpuNeInt`. `INT32_MIN` itself stays excluded — sign-
+magnitude Dst reads `0x80000000` as "negative zero" and cannot round-trip it, which is hardware
+and already has `test_sfpu_binary_int_shift_int32_min_unsupported`.
+
+The audit's "**Negative-operand integer paths**" gap is therefore **partly** closed: bitwise
+OR/XOR sign-magnitude fixup is now covered, and doing so found that those kernels need the
+two's-complement pack path (`twos_complement=True`) for negative operands at all — nothing had
+established that, because `test_sfpu_binary_bitwise` draws from the positive-only default. The
+signed-vs-unsigned max/min, `div_int32` vs `div_int32_floor` and `fmod` vs `remainder` trunc-vs-
+floor distinctions remain **out of scope by kernel design**, not untested by oversight:
+`_INT_BINARY_STIMULI` documents a narrower valid range for each (div/fmod < 2²⁴ for an exact
+int→fp32 reciprocal, mul < ~46340, lcm < 2¹⁵, max/min non-negative so signed and unsigned agree).
+
+### Still open after revision 4
+
+- **Cat B injection** — blocked on goldens modelling non-finite inputs (Phase 5).
+- **Unary shift ops** still use a fixed shift of 3. Generalizing them needs a C++ change:
+  `SHIFT_AMOUNT` is a `constexpr` in `call_unary_sfpu_operation`, paired with a golden constant,
+  not a template parameter.
+- **Ternary edges** — `addcdiv`/`snake_beta` with `c → 0`, `lerp` weight `0/1/>1`. Blocked on
+  `OperandSpecs` carrying only A and B, so there is no third operand to register.
+- **Scalar tensor-operand edges** — the scalar axis exists; the tensor operand has no `spec_A`.
+- **Entirely untested kernels** (§6) — unchanged.
+- **Blackhole** — nothing in revision 4 has been run there.
+
+---
+
 ### Gaps introduced or newly visible since the audit
 
 - ~~**Float comparison ops have no LLK-level correctness test at all.**~~ ✅ **fixed.**
@@ -107,6 +239,49 @@ all 94 ops and 5368 cases. Citations below to `test_eltwise_unary_sfpu_float` an
   the block-float path reaches the pole and nothing asserts what happens there.
 - **`generic_moe_gate_topk` now has a harness in progress** (`test_sfpu_generic_moe_gate_topk.py`
   + `sources/sfpu_generic_moe_gate_topk_test.cpp`), moving it off the untested list in §6.
+
+---
+
+## 0.6 What driving the edges found — and which of it is a defect
+
+Nine ops disagree with their golden at the newly driven points, all recorded as **non-strict
+xfails** so the case still executes and reports XPASS if the behaviour changes. Cross-checked
+against [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), which splits
+them in two. **This distinction is the practically important part of revision 4**: half of these
+are specified hardware behaviour and chasing them would be wasted effort.
+
+### Documented — the ISA is the authority, not a bug list
+
+**The sign of a zero *result* is lost on Wormhole, by specification.** `div(0, -x)`,
+`fmod`/`remainder` with a negative divisor, and `xlogy(0, tiny)` all return `+0.0` where IEEE
+gives `-0.0`. All are built on `SFPMAD`:
+
+> Wormhole — "If the output (before rounding) is denormal or negative zero, it'll be flushed to
+> **positive** zero." · Blackhole — "…flushed to **sign-preserved** zero."
+
+Blackhole's `SFPMAD` page lists *"improved edge-case handling of NaNs and of negative zero"*
+among its upgrades over Wormhole. So this is a documented Wormhole limitation that Blackhole is
+documented to fix, and these xfails should **XPASS on Blackhole**.
+
+**`sign(-0.0)` and `heaviside(-0.0)` sit outside the contract of the primitive they use.**
+`SFPSETCC` is specified only *"provided that `VC` is neither negative zero nor any kind of
+NaN"* — identically on both arches, so unlike the `SFPMAD` group this is **not** generational.
+The golden follows torch/IEEE-1985 and is right about the mathematics; the hardware was never
+promised to agree here.
+
+### Still open — not explained by the ISA
+
+| Finding | Note |
+|---|---|
+| **`signbit(-0.0)` returns 0** where the kernel's own docstring promises 1 ("logical-shift the fp32 bit pattern right by 31 … incl. `-0.0`"). Unlike `sign`/`heaviside` this op claims to read the sign bit **directly**, so either the claim or the implementation is wrong — a kernel-contract bug, not a hardware one. `-0.0` is delivered correctly, verified host-side. | sharpest of the five |
+| **`0/0` and `x%0` return `inf`, not `nan`.** `SFPMAD` says NaN/±Inf inputs follow "the usual IEEE754 rules", which makes `0 × inf` a NaN — so this is the kernels' own reciprocal composition, not the multiply. Specifically the indeterminate form: the finite poles agree exactly and every ±inf lines up. | `div`, `fmod`, `remainder`, `xlogy` |
+| **`0**0` returns 0** where C, torch and the golden give 1. `pow` evaluates `exp(b·ln a)`, so composition. | `pow` |
+| **`RsqrtCompat(0)` saturates to `1.7014118e38`** (`0x7F000000`) instead of `inf`, on all 8 combinations — while plain `Rsqrt` over the same probe does **not** diverge. Two implementations of one function disagreeing at their shared pole. | worth a kernel look |
+| **`Erfinv(±1)` saturates** rather than returning ±inf, fp32-dest combinations only. | tolerance-shaped |
+
+This also updates the audit's own note that **"Bfp8_b is skipped for `SfpuElwpow`/`SfpuXlogy`
+because coarse quantization … produces -inf/NaN"** — the pole those ops reach is now driven
+directly on the float formats, and what happens there is asserted rather than skipped past.
 
 ---
 
@@ -130,16 +305,40 @@ The SFPU test infra is a **random-sweep-within-safe-domains** system. It is exce
 - **INT32 reduce** — `test_int32_reduce_extreme` genuinely injects INT32_MIN/INT32_MAX (Wormhole-only; BH still buggy, tt-metal#44750).
 - **`unary_eq`/`unary_ne`/`logical_not`** — `test_eltwise_unary_sfpu_threshold` forces exact threshold hits (0.5 / 0.0).
 - **`atan2`, `logsigmoid` (mid-range), `isclose`, float `eq`/`ne`, `rsub_int32` negative round-trip, float `mask`, `signbit`** — crafted stimuli hit the interesting branches.
+- *(revision 4)* **Every registered domain boundary and every op knee/tie** — `test_eltwise_unary_sfpu_edges` (15 boundaries, 43 knee tables) and `test_sfpu_binary_edges` (4 operand-B poles). See §0.5.
+- *(revision 4)* **Int32 extremes into the bitwise and exact-comparison ops** — `test_sfpu_binary_int_extremes`.
 
 ### Biggest actionable gaps (recommended new edge tests)
-- **Div/mod by zero:** `SfpuElwdiv`, `SfpuBinaryFmod`, `SfpuBinaryRemainder`, `SfpuDivInt32`, `SfpuRemainderInt32`, `SfpuFmodInt32`, `addcdiv`, `snake_beta` — the `b==0`/`c==0`→±inf/NaN branches are never exercised.
-- **`reciprocal`/`rdiv` at/near 0** — the pole is `Excluded`; behavior at 0 is unverified.
-- **Negative-operand integer paths** — signed vs unsigned max/min, `div_int32` vs `div_int32_floor`, `fmod_int32` vs `remainder_int32` (trunc-vs-floor distinction only shows for mixed signs), bitwise OR/XOR sign-magnitude fixup, gcd/lcm with 0/negatives, INT32_MIN for `abs_int32`.
-- **Overflow / format extremes** — `mul_int32`, `add_int32`/`sub_int32` (perf-only, no functional assert), float overflow-to-inf, typecast float→int saturation/wrap and INT32_MIN/UINT32_MAX.
-- **NaN/inf into generic ops** — max/min NaN propagation, `where` NaN branches, exp/log/pow non-finite inputs.
-- **Exact-tie rounding** — `round` half-to-even ties, `floor`/`ceil`/`trunc` at exact integers, `sign`/comparison-to-zero at exact 0 / -0.0.
-- **Unary shift ops** use a *fixed* shift of 3 with positive inputs — the ≥32 / negative / negative-value edges exist only in the *binary* shift test.
-- **Entirely untested kernels** (header exists; no enum entry, no test): `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_rows`, `int_sum`, `tiled_prod`, `copy_dest_values`, `generalized_moe_gate_topk`, `max_pool_indices`, `rand`. `TopKLocalSort/Merge/Rebuild` are perf-only (no correctness test). `swiglu` is Quasar-only.
+
+*(Revision 4 status appended per item. §0.5 has the detail.)*
+
+- ~~**Div/mod by zero:**~~ ✅ **closed for the float ops** — `SfpuElwdiv`, `SfpuBinaryFmod`,
+  `SfpuBinaryRemainder` are driven at `b = 0` and `b = ±1 ULP` by `test_sfpu_binary_edges`, and
+  what happens there is now asserted (and diverges — §0.6). **Still open:** the int variants
+  `SfpuDivInt32`/`SfpuRemainderInt32`/`SfpuFmodInt32` (their kernels bound the operand range
+  below 2²⁴, so `b=0` is out of their claimed domain), and `addcdiv`/`snake_beta` `c==0`, blocked
+  on `OperandSpecs` having no third operand.
+- ~~**`reciprocal`/`rdiv` at/near 0**~~ ✅ **closed** — both driven at `0.0` and `±1 ULP`.
+- **Negative-operand integer paths** — 🟡 **partly closed.** Bitwise OR/XOR sign-magnitude fixup
+  is covered by `test_sfpu_binary_int_extremes`, which also established that those kernels need
+  `twos_complement=True` for negative operands at all. Signed-vs-unsigned max/min, `div_int32`
+  vs `div_int32_floor` and `fmod` vs `remainder` are **out of scope by kernel design** — see
+  `_INT_BINARY_STIMULI`. `gcd`/`lcm` with 0/negatives and `INT32_MIN` for `abs_int32` remain open.
+- **Overflow / format extremes** — ⬜ **open.** Unchanged.
+- **NaN/inf into generic ops** — 🟡 **measured, not enabled.** The (format, dest_acc) surface that
+  can carry specials is established (§0.5, cat B); injection is off because it fails 272 of 564
+  variants on the goldens, not the kernels.
+- ~~**Exact-tie rounding**~~ ✅ **closed** — `round` half-to-even ties, `floor`/`ceil`/`trunc` at
+  exact integers, and `sign`/comparison-to-zero at exact `0` **and `-0.0`** are all driven by
+  `test_eltwise_unary_sfpu_edges`. Driving `-0.0` is what surfaced the `signbit`/`sign`/
+  `heaviside` divergences in §0.6.
+- **Unary shift ops** use a *fixed* shift of 3 with positive inputs — ⬜ **open, and now scoped:**
+  `SHIFT_AMOUNT` is a `constexpr` inside `call_unary_sfpu_operation` paired with a golden
+  constant, not a template parameter, so this needs a C++ change rather than test wiring.
+- **Entirely untested kernels** (header exists; no enum entry, no test): `welfords`, `dropout`,
+  `quant`, `cumsum`, `reshuffle_rows`, `int_sum`, `tiled_prod`, `copy_dest_values`,
+  `generalized_moe_gate_topk`, `max_pool_indices`, `rand`. `TopKLocalSort/Merge/Rebuild` are
+  perf-only (no correctness test). `swiglu` is Quasar-only. ⬜ **open**, unchanged.
 
 ---
 
