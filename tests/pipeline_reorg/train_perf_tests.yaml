@@ -16,10 +16,6 @@
 - name: "NanoGPT Shakespeare"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanogpt_shakespeare"
   skus:
-    wh_n150_civ2:
-      timeout: 25
-    wh_n300_civ2:
-      timeout: 25
     bh_p100:
       timeout: 15
     bh_p150b_civ2:
@@ -31,10 +27,6 @@
 - name: "NanoLlama3 Shakespeare"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanollama_shakespeare"
   skus:
-    wh_n150_civ2:
-      timeout: 25
-    wh_n300_civ2:
-      timeout: 25
     bh_p100:
       timeout: 15
     bh_p150b_civ2:
@@ -46,10 +38,6 @@
 - name: "Nano Deepseek (Char) Shakespeare"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nano_deepseek_char_shakespeare"
   skus:
-    wh_n150_civ2:
-      timeout: 55
-    wh_n300_civ2:
-      timeout: 55
     bh_p100:
       timeout: 45
     bh_p150b_civ2:
@@ -61,10 +49,6 @@
 - name: "Linear Regression"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "linear_regression"
   skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
     bh_p100:
       timeout: 5
     bh_p150b_civ2:
@@ -104,10 +88,6 @@
 - name: "NanoGPT Shakespeare (C++)"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanogpt_shakespeare_cpp"
   skus:
-    wh_n150_civ2:
-      timeout: 25
-    wh_n300_civ2:
-      timeout: 25
     bh_p100:
       timeout: 15
     bh_p150b_civ2:
@@ -119,10 +99,6 @@
 - name: "NanoLlama3 Shakespeare (C++)"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanollama_shakespeare_cpp"
   skus:
-    wh_n150_civ2:
-      timeout: 25
-    wh_n300_civ2:
-      timeout: 25
     bh_p100:
       timeout: 15
     bh_p150b_civ2:

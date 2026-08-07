@@ -86,7 +86,7 @@ ttnn:
     bh_p150b_civ2: 545
     bh_quietbox_2: 65
     bh_p300: 15
-    wh_llmbox: 25
+    wh_llmbox_civ2: 40
     sim_wormhole_b0: 680
     sim_blackhole: 680
   unit:
@@ -160,15 +160,11 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
   unit:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 160
-    wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
     bh_galaxy_perf: 180
@@ -222,7 +218,7 @@ scaleout:
     wh_galaxy: 20
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_llmbox: 20
+    wh_llmbox_civ2: 30
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
@@ -340,7 +336,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
-    bh_sc1: 230
+    bh_sc1: 140
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -350,8 +346,8 @@ models:
     bh_quietbox_2: 186
   e2e_tier3:
     wh_llmbox_perf: 64
-    wh_n150: 42
-    wh_n300: 15
+    wh_n150: 62
+    wh_n300: 60
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
@@ -378,8 +374,8 @@ models:
     bh_quietbox_2: 50
   unit_tier3:
     wh_llmbox_perf: 58
-    wh_n150: 33
-    wh_n300: 15
+    wh_n150: 41
+    wh_n300: 33
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21

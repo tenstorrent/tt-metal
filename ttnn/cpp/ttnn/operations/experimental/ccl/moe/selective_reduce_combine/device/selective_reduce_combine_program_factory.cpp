@@ -413,7 +413,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     // dense_token_maps_tensor page buffer
     // tensor pages are padded for alignment
-    const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
+    // Each expert row holds (total_tokens + 1) token indices -- the extra slot is the -1 terminator -- and each index
+    // is padded to the alignment for NoC DMA. Divide by the real row count: dividing by total_tokens over-estimates
+    // the stride for small token counts (total_tokens == 1 -> 8, == 2 -> 6, <= 4 -> 5; all of them should be 4).
+    const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / (total_tokens + 1);
     constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_4;
     const uint32_t aligned_dense_token_maps_buffer_size_bytes =
         tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
