@@ -100,6 +100,18 @@ void validate_runtime_args(
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
     }
 
+    // These bounds are computed on BOTH paths: on the scalar path they back the TT_FATALs below; on the
+    // metadata path the same limits are handed to the writer as common args 10/11 (create_descriptor)
+    // and clamped on-device, because the values themselves live in DRAM tensors that must stay off the
+    // host dispatch path.
+    const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
+    // This chunk is written at a per-chip offset derived from kv_actual_global; the prior valid KV
+    // plus this chunk must fit the global cache capacity (sp_factor slabs of cache_seq tokens each),
+    // else the write spills past the cache. sp_factor = mesh extent along cluster_axis.
+    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t chunk_global_tokens = sp_factor * tensor_args.input.padded_shape()[-2];
+    const uint32_t global_cache_capacity = sp_factor * cache.padded_shape()[-2];
+
     if (!tensor_args.slot_idx.has_value()) {
         // The writer divides kv_actual_global by TILE_HEIGHT to get its tile offset, so it must be aligned.
         TT_FATAL(
@@ -107,15 +119,7 @@ void validate_runtime_args(
             "kv_actual_global ({}) must be tile-aligned (a multiple of {})",
             args.kv_actual_global,
             TILE_HEIGHT);
-        const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
-
-        // This chunk is written at a per-chip offset derived from kv_actual_global; the prior valid KV
-        // plus this chunk must fit the global cache capacity (sp_factor slabs of cache_seq tokens each),
-        // else the write spills past the cache. sp_factor = mesh extent along cluster_axis.
-        const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-        const uint32_t chunk_global_tokens = sp_factor * tensor_args.input.padded_shape()[-2];
-        const uint32_t global_cache_capacity = sp_factor * cache.padded_shape()[-2];
         TT_FATAL(
             args.kv_actual_global + chunk_global_tokens <= global_cache_capacity,
             "kv_actual_global ({}) + chunk_global ({}) would overflow global cache capacity ({})",
@@ -364,6 +368,20 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
+    //
+    // Indices 10/11 are the STRUCTURAL BOUNDS the writer clamps those two per-call values against, and
+    // are identical on both paths (they derive from hashed attributes only, so they never need
+    // patching). They mirror the scalar-path host TT_FATALs `slot_idx < num_slots` and
+    // `kv_actual_global + chunk_global <= global_cache_capacity`, which validate_runtime_args cannot run
+    // on the metadata path (the values live in DRAM tensors, off the dispatch path). Without them a
+    // stale metadata value walks start_id past the cache; ASSERT() is a no-op in release builds.
+    //   [10] num_slots
+    //   [11] max_kv_actual_global_t -- the largest kv_actual_global, expressed in the writer's page-row
+    //        unit, that still leaves room for this whole chunk: sp_factor slabs of (cache_seq -
+    //        input_seq) tokens. Both seq dims are tile-aligned, so the page-row division is exact.
+    const uint32_t num_slots = cache_shape[0] / args.num_layers;
+    const uint32_t cache_local_t = cache_shape[-2] / writer_tile_height;  // cache seq in page-rows
+    const uint32_t max_kv_actual_global_t = sp_factor * (cache_local_t > input_Ht ? cache_local_t - input_Ht : 0);
     if (has_metadata) {
         const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
         const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
@@ -379,6 +397,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             slot_idx_addr,          // smuggled-rta-ok: 1-element metadata tensor DRAM addr; the writer reads
                                     // slot_idx on-device from it (trace-safe; value kept out of the program hash)
             kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
+            num_slots,
+            max_kv_actual_global_t,
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -392,6 +412,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             cache_CHtWt,
             args.slot_idx,
             args.kv_actual_global,
+            num_slots,
+            max_kv_actual_global_t,
         });
     }
 
