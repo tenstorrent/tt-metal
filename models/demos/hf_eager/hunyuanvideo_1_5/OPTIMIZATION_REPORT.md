@@ -382,6 +382,35 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### Two more flags measured: one rejected, one neutral
+
+- **`HY_VAE_ATTN_SDPA=1` on the TILED path: 4.4x slower. Reject.** VAE decode
+  13.3s -> 57.9s at 480p/121f. This is the exact inverse of the sharded-path
+  result, where the same flag was *required* to avoid materialising a 4.86 GB
+  score matrix at 49,290 tokens. With 128px tiles each tile's sequence is short
+  enough that materialising the matrix is cheap and the streaming kernel's
+  overhead dominates. **Same flag, opposite verdict, decided by sequence length.**
+- **`HY_DIT_RS_DOMAIN_BIAS=1`: bit-identical, but no measurable speedup.** It
+  adds the row-parallel bias to the reduce-scatter output instead of after the
+  all-gather, touching a tensor `tp` times narrower. Generated output is
+  bit-identical (frame PCC 1.00000000, max abs pixel difference 0.0), confirming
+  the parallel session's correctness argument. Timing across two batches:
+
+  | | s/step round 1 | s/step round 2 |
+  |---|---:|---:|
+  | base | 1.69 | 1.66 |
+  | `HY_DIT_RS_DOMAIN_BIAS=1` | 1.61 | 1.67 |
+
+  -4.7% then +0.6%; the two ranges overlap. The bias add is a small elementwise
+  op on the residual, so there is little to win. Safe to enable, not a win.
+
+- **Methodology correction.** An earlier entry said back-to-back runs inside one
+  batch are "reproducible to the hundredth of a second". That held for the
+  heads-major A/B (2.46/2.46 vs 1.67/1.67) -- but that was a **32%** effect. The
+  rows above are both within-batch and disagree by 4%. The honest rule is a
+  **resolution floor of roughly 5% regardless of batching**: effects below it
+  need many repeats or a device-level profile, not a wall-clock A/B.
+
 ### Prompt cache: MEASURED at last (-10.5s on a repeat prompt)
 
 - `HY_PROMPT_CACHE=1` already existed but had never been benchmarked; this
