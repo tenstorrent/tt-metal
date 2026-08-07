@@ -7,6 +7,7 @@
 import hashlib
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 
 SCRIPT = Path(__file__).parent / "run_json_writer.py"
 RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
+LLK_CONFTEST = Path(__file__).parents[2] / "tests" / "python_tests" / "conftest.py"
 
 
 def _run(log_dir, *args):
@@ -407,6 +409,20 @@ def test_verification_result_rejects_zero_coverage_even_with_exit_zero(tmp_path)
     assert result["execution"]["ran"] is False
 
 
+def test_cardless_collection_guard_precedes_device_initialization():
+    source = LLK_CONFTEST.read_text(encoding="utf-8")
+    start = source.index("def pytest_configure(config):")
+    end = source.index("def pytest_ignore_collect", start)
+    configure = source[start:end]
+    guard = configure.index("if config.option.collectonly:\n        return")
+    for operation in (
+        "override_gprs_used_by_tensix_dump()",
+        "tt_exalens_init.init_ttexalens(",
+        "ExalensServer(",
+    ):
+        assert configure.index(operation) > guard
+
+
 @pytest.mark.parametrize("returncode", [2, 4])
 def test_verification_result_rejects_nonzero_collection(tmp_path, returncode):
     inputs = _write_verification_inputs(tmp_path, collection_returncode=returncode)
@@ -493,6 +509,8 @@ def _sealed_result(
     executed=1,
     passed=1,
     failed=0,
+    skipped=0,
+    xfailed=0,
     collection_errors=0,
     collection_returncode=0,
     returncode=0,
@@ -510,8 +528,8 @@ def _sealed_result(
         "executed": executed,
         "passed": passed,
         "failed": failed,
-        "skipped": 0,
-        "xfailed": 0,
+        "skipped": skipped,
+        "xfailed": xfailed,
         "xpassed": 0,
         "returncode": returncode,
         "signal": None,
@@ -575,7 +593,7 @@ def _sealed_result(
     return result
 
 
-def _reduce(log_dir, manifest_path, scope="all", perf_result=None):
+def _reduce(log_dir, manifest_path, scope="all", perf_result=None, worktree=None):
     args = [
         "reduce-verification",
         "--manifest",
@@ -589,6 +607,8 @@ def _reduce(log_dir, manifest_path, scope="all", perf_result=None):
     ]
     if perf_result:
         args.extend(["--perf-result", str(perf_result)])
+    if worktree:
+        args.extend(["--worktree", str(worktree)])
     return _run(log_dir, *args)
 
 
@@ -627,6 +647,27 @@ def test_verification_reducer_derives_multi_arch_totals_and_success_token(tmp_pa
     assert reduction["success_token"]
     assert run["arch_results"]["blackhole"]["verdict"] == "SUCCESS"
     assert run["arch_results"]["wormhole"]["tests_total"] == 3
+
+
+def test_verification_reducer_cannot_hide_one_unexecuted_architecture(tmp_path):
+    requirements = [_requirement(), _requirement("wormhole")]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    blackhole = _sealed_result(manifest, requirements[0])
+    wormhole = _sealed_result(
+        manifest, requirements[1], executed=0, passed=0, job_id="job-wormhole"
+    )
+    (results / "blackhole.json").write_text(json.dumps(blackhole), encoding="utf-8")
+    (results / "wormhole.json").write_text(json.dumps(wormhole), encoding="utf-8")
+
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "coverage_error"
+    assert reduction["success_token"] is None
+    assert reduction["architecture_results"]["blackhole"]["verdict"] == "SUCCESS"
+    assert reduction["architecture_results"]["wormhole"]["verdict"] != "SUCCESS"
+    assert any("zero_executed" in reason for reason in reduction["reason_codes"])
 
 
 @pytest.mark.parametrize(
@@ -803,6 +844,280 @@ def test_verification_reducer_retains_foreign_attempt_and_rejects_duplicates(tmp
     assert reduction["classification"] == "infra_error"
     assert "duplicate_current_result" in reduction["reason_codes"][0]
     assert reduction["success_token"] is None
+
+
+def test_predeclared_xfail_requires_tracked_policy_and_replacement_coverage(tmp_path):
+    worktree = tmp_path / "worktree"
+    tests = worktree / "tt_metal" / "tt-llk" / "tests" / "python_tests"
+    tests.mkdir(parents=True)
+    (tests / "test_known_skip.py").write_text(
+        "def test_known_limitation(): pass\n", encoding="utf-8"
+    )
+    (tests / "test_replacement.py").write_text(
+        "def test_replacement_coverage(): pass\n", encoding="utf-8"
+    )
+    selector = {
+        "test": "test_known_skip.py",
+        "test_id": "test_known_skip.py::test_known_limitation",
+        "k": None,
+    }
+    replacement_selector = {
+        "test": "test_replacement.py",
+        "test_id": "test_replacement.py::test_replacement_coverage",
+        "k": None,
+    }
+    policy_path = worktree / "verification_waivers.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema": "tt.issue-solver.verification-waiver-policy",
+                "version": 1,
+                "policies": [
+                    {
+                        "policy_id": "known-architecture-xfail",
+                        "approver": "llk-verification-owners",
+                        "reason": "Known architecture limitation covered by an equivalent selector.",
+                        "scope": {
+                            "architecture": "blackhole",
+                            "suite": "llk",
+                            "backend": "silicon",
+                            "selector": selector,
+                        },
+                        "replacement": {
+                            "architecture": "blackhole",
+                            "suite": "llk",
+                            "backend": "silicon",
+                            "selector": replacement_selector,
+                            "minimum_selected": 1,
+                            "minimum_executed": 1,
+                            "required_measurements": [],
+                        },
+                        "allowed_outcomes": ["xfailed", "skipped"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(["git", "-C", str(worktree), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "commit", "-q", "-m", "base policy"],
+        check=True,
+    )
+    base = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    # Candidate-side policy changes are ignored; authority comes from base.
+    policy_path.write_text("candidate-controlled invalid policy\n", encoding="utf-8")
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: yes
+llk_coverage: existing
+"""
+    plan = """\
+## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: test_known_skip.py::test_known_limitation
+"""
+    proc, manifest_path = _required_manifest(
+        tmp_path,
+        analysis,
+        plan,
+        "--expected-base-sha",
+        base,
+        "--waiver-policy",
+        "verification_waivers.json",
+    )
+    assert proc.returncode == 0
+    manifest = json.loads(manifest_path.read_text())
+    assert len(manifest["requirements"]) == 2
+    assert manifest["waivers"][0]["policy_id"] == "known-architecture-xfail"
+    assert manifest["waivers"][0]["policy_path"] == "verification_waivers.json"
+
+    scope, replacement = manifest["requirements"]
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    xfailed = _sealed_result(
+        manifest, scope, executed=0, passed=0, xfailed=1, job_id="job-xfail"
+    )
+    replacement_result = _sealed_result(manifest, replacement, job_id="job-replacement")
+    (results / "xfailed.json").write_text(json.dumps(xfailed), encoding="utf-8")
+    (results / "replacement.json").write_text(
+        json.dumps(replacement_result), encoding="utf-8"
+    )
+    _reduce(tmp_path, manifest_path, worktree=worktree)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["success_token"]
+    assert reduction["tests_total"] == 2
+    assert reduction["tests_passed"] == 1
+    waived = next(
+        leaf
+        for leaf in reduction["leaves"]
+        if leaf["requirement_id"] == scope["requirement_id"]
+    )
+    assert waived["waived"] is True and waived["xfailed"] == 1
+    assert waived["passed"] == 0
+    assert waived["reason_codes"] == []
+    assert reduction["reason_codes"] == []
+
+    forged = json.loads(json.dumps(manifest))
+    forged["waivers"][0]["approver"] = "candidate-agent"
+    forged["waivers"][0]["waiver_id"] = _content_id(forged["waivers"][0], {"waiver_id"})
+    forged["manifest_id"] = _content_id(forged, {"manifest_id"})
+    forged_path = tmp_path / "forged_manifest.json"
+    forged_path.write_text(json.dumps(forged), encoding="utf-8")
+    forged_reduction = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "reduce-verification",
+            "--log-dir",
+            str(tmp_path),
+            "--manifest",
+            str(forged_path),
+            "--results-dir",
+            str(results),
+            "--scope",
+            "all",
+            "--output",
+            str(tmp_path / "forged_reduction.json"),
+            "--worktree",
+            str(worktree),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert forged_reduction.returncode != 0
+    assert "waiver is not policy-authorized" in forged_reduction.stderr
+
+    (results / "replacement.json").unlink()
+    _reduce(tmp_path, manifest_path, worktree=worktree)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] != "success"
+    assert reduction["success_token"] is None
+
+    retry, retry_manifest_path = _required_manifest(
+        tmp_path,
+        analysis,
+        plan,
+        "--expected-base-sha",
+        base,
+        "--supersedes-reason",
+        "retry infrastructure failure",
+    )
+    retry_manifest = json.loads(retry_manifest_path.read_text())
+    assert retry.returncode == 0 and retry_manifest["revision"] == 2
+    assert retry_manifest["waivers"][0]["policy_id"] == "known-architecture-xfail"
+    assert len(retry_manifest["requirements"]) == 2
+
+    late = tmp_path / "late-waiver"
+    revisions = late / "required_verification_manifests"
+    revisions.mkdir(parents=True)
+    unwaived = {
+        **manifest,
+        "manifest_id": "0" * 64,
+        "requirements": [scope],
+        "waivers": [],
+    }
+    unwaived["manifest_id"] = _content_id(unwaived, {"manifest_id"})
+    (revisions / "revision-001.json").write_text(json.dumps(unwaived), encoding="utf-8")
+    late_output = late / "required_verification_manifest.json"
+    late_output.write_text(json.dumps(unwaived), encoding="utf-8")
+    late_attempt = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "required-verification",
+            "--log-dir",
+            str(late),
+            "--output",
+            str(late_output),
+            "--analysis",
+            str(tmp_path / "analysis.md"),
+            "--plan",
+            str(tmp_path / "plan.md"),
+            "--worktree",
+            str(worktree),
+            "--run-id",
+            manifest["run_id"],
+            "--expected-base-sha",
+            base,
+            "--architectures-json",
+            '["blackhole"]',
+            "--backend",
+            "local",
+            "--supersedes-reason",
+            "observed an xfail",
+            "--waiver-policy",
+            "verification_waivers.json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert late_attempt.returncode != 0
+    assert (
+        "cannot introduce a verification waiver after revision 1" in late_attempt.stderr
+    )
+
+
+@pytest.mark.parametrize("seed", [20260804, 20260805, 20260806])
+def test_verification_reducer_is_repeatable_for_fixed_random_attempt_trees(
+    tmp_path, seed
+):
+    requirements = [
+        _requirement("blackhole", "llk", index=1),
+        _requirement("blackhole", "metal", index=1),
+        _requirement("wormhole", "llk", index=1),
+        _requirement("wormhole", "metal", index=1),
+        _requirement("quasar", "llk", index=1),
+    ]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    cases = [
+        {},
+        {"executed": 0, "passed": 0},
+        {"passed": 0, "failed": 1, "returncode": 1},
+        {"markers": ["tt_fatal"]},
+        {"collection_errors": 1, "collection_returncode": 2},
+    ]
+    rng = random.Random(seed)
+    choices = [rng.choice(cases) for _ in requirements]
+    for index, (requirement, result_case) in enumerate(zip(requirements, choices)):
+        result = _sealed_result(
+            manifest, requirement, job_id=f"job-{index}", **result_case
+        )
+        (results / f"result-{index}.json").write_text(
+            json.dumps(result), encoding="utf-8"
+        )
+
+    _reduce(tmp_path, manifest_path)
+    first = (tmp_path / "verification_reduction.json").read_bytes()
+    _reduce(tmp_path, manifest_path)
+    second = (tmp_path / "verification_reduction.json").read_bytes()
+    assert first == second
+
+    replay = random.Random(seed)
+    assert choices == [replay.choice(cases) for _ in requirements]
 
 
 def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
