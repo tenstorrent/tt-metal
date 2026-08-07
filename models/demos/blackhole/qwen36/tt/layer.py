@@ -151,9 +151,14 @@ class Qwen36DecoderLayer:
             ),
         )
         if self.num_devices > 1:
-            from models.tt_transformers.tt.distributed_norm import DistributedNorm
+            # PrefillTunedDistributedNorm == DistributedNorm except that the PREFILL pre-norm
+            # all-gather gets tuned chunks_per_sync / num_workers_per_link. Upstream only honours the
+            # per-op CCL configs for mode == "decode" and hardcodes 10/2 otherwise, which left the
+            # prefill gather at ~1,245us/layer; tuned it is ~1,015us. Decode/TG/distributed-norm all
+            # delegate to upstream unchanged. See tt/prefill_norm_tuned.py.
+            from models.demos.blackhole.qwen36.tt.prefill_norm_tuned import PrefillTunedDistributedNorm
 
-            return DistributedNorm(
+            return PrefillTunedDistributedNorm(
                 norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key, enable_all_gather=enable_all_gather
             )
         return norm
