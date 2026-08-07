@@ -63,7 +63,7 @@ def test_msda_correctness(device, N, h_in, w_in, D, Q, P, align_corners):
 
 
 @pytest.mark.parametrize("D", [8, 24, 40])
-def test_msda_rejects_non_multiple_of_16(device, D):
+def test_msda_rejects_non_multiple_of_16(device, expect_error, D):
     """D values that are not multiples of 16 must be rejected at validation
     with an actionable error, not fail deep in the kernels."""
     N, h_in, w_in, Q, P = 1, 10, 10, 16, 4
@@ -77,5 +77,5 @@ def test_msda_rejects_non_multiple_of_16(device, D):
         torch.softmax(torch.randn(N, Q, P), dim=-1).to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT
     )
 
-    with pytest.raises(RuntimeError, match="multiple of 16"):
+    with expect_error(RuntimeError, "multiple of 16"):
         ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)
