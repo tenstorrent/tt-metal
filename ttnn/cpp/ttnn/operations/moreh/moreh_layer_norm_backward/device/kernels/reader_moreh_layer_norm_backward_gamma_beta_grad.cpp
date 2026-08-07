@@ -7,11 +7,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 template <typename T>
 void read_mean_rstd(
     const Noc& noc,
-    uint32_t cb_id,
+    DFBBindingToken dfb_token,
     uint32_t tile_offset,
     uint32_t normalized_dims,
     uint32_t outer_idx,
@@ -23,9 +24,9 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer dfb(cb_id);
-    const uint32_t cb_tile_bytes = get_tile_size(cb_id);
-    const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
+    DataflowBuffer dfb(dfb_token);
+    const uint32_t dfb_tile_bytes = dfb.get_tile_size();
+    const auto dfb_dtype_bytes = dfb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     dfb.reserve_back(onetile);
 
@@ -52,9 +53,9 @@ void read_mean_rstd(
             noc.async_read(
                 addrg,
                 dfb,
-                cb_dtype_bytes * FACE_HEIGHT,
-                {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
-                {.offset_bytes = src_idx * cb_dtype_bytes});
+                dfb_dtype_bytes * FACE_HEIGHT,
+                {.page_id = noc_id, .offset_bytes = tilized_idx * dfb_dtype_bytes},
+                {.offset_bytes = src_idx * dfb_dtype_bytes});
 
             noc.async_read_barrier();
         }
@@ -82,9 +83,9 @@ void read_mean_rstd(
         noc.async_read(
             addrg,
             dfb,
-            cb_dtype_bytes,
-            {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
-            {.offset_bytes = tilized_idx * cb_dtype_bytes});
+            dfb_dtype_bytes,
+            {.page_id = noc_id, .offset_bytes = tilized_idx * dfb_dtype_bytes},
+            {.offset_bytes = tilized_idx * dfb_dtype_bytes});
 
         noc.async_read_barrier();
         if (idx != 0) {
@@ -97,39 +98,22 @@ void read_mean_rstd(
 
 void kernel_main() {
     using namespace tt::constants;
-    const auto output_grad_addr = get_arg_val<uint32_t>(0);
-    const auto input_addr = get_arg_val<uint32_t>(1);
-    const auto mean_addr = get_arg_val<uint32_t>(2);
-    const auto rstd_addr = get_arg_val<uint32_t>(3);
+    const auto num_cols_per_core = get_arg(args::num_cols_per_core);
+    const auto num_outer = get_arg(args::num_outer);
+    const auto num_inner = get_arg(args::num_inner);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto mask_h = get_arg(args::mask_h);
 
-    const auto num_cols_per_core = get_arg_val<uint32_t>(4);
-    const auto num_outer = get_arg_val<uint32_t>(5);
-    const auto num_inner = get_arg_val<uint32_t>(6);
-    const auto tile_offset = get_arg_val<uint32_t>(7);
-    const auto mask_h = get_arg_val<uint32_t>(8);
+    const auto normalized_dims = get_arg(args::normalized_dims);
+    const auto mean_rstd_height = get_arg(args::mean_rstd_height);
+    const auto mean_rstd_width = get_arg(args::mean_rstd_width);
 
-    const auto normalized_dims = get_arg_val<uint32_t>(9);
-    const auto mean_rstd_height = get_arg_val<uint32_t>(10);
-    const auto mean_rstd_width = get_arg_val<uint32_t>(11);
+    constexpr bool gamma_grad_has_value = get_arg(args::gamma_grad_has_value) == 1;
 
-    constexpr uint32_t cb_id_output_grad = 0;
-    constexpr uint32_t cb_id_input = 1;
-    constexpr uint32_t cb_id_mean = 2;
-    constexpr uint32_t cb_id_rstd = 3;
-    constexpr uint32_t cb_id_scaler = 4;
-    constexpr uint32_t cb_id_mask_h = 5;
-
-    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool do_mask_h = get_compile_time_arg_val(1) == 1;
-    constexpr auto output_grad_args = TensorAccessorArgs<2>();
-    constexpr auto input_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
-    constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
-
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
+    const auto output_grad_addrg = TensorAccessor(tensor::output_grad);
+    const auto input_addrg = TensorAccessor(tensor::input);
+    const auto mean_addrg = TensorAccessor(tensor::mean);
+    const auto rstd_addrg = TensorAccessor(tensor::rstd);
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
@@ -139,13 +123,15 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_scaler(dfb::scaler);
     fill_cb_with_value(dfb_scaler, scaler.u);
 
-    if (do_mask_h) {
-        DataflowBuffer dfb_mask_h(cb_id_mask_h);
-        generate_mask_h(dfb_mask_h, mask_h);
-    }
+    // The mask_h buffer only exists when the host allocated it, and its binding token only exists
+    // where the host bound it, so the gate has to be a preprocessor one.
+#ifdef DO_MASK_H
+    DataflowBuffer dfb_mask_h(dfb::mask_h);
+    generate_mask_h(dfb_mask_h, mask_h);
+#endif
 
     auto mean_rstd_Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
     auto mean_rstd_Wt = (mean_rstd_width + TILE_WIDTH - 1) / TILE_WIDTH;
@@ -153,10 +139,10 @@ void kernel_main() {
     const uint32_t start_tile_idx = tile_offset;
 
     Noc noc;
-    DataflowBuffer dfb_output_grad(cb_id_output_grad);
-    DataflowBuffer dfb_input(cb_id_input);
-    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto input_tile_bytes = get_tile_size(cb_id_input);
+    DataflowBuffer dfb_output_grad(dfb::output_grad);
+    DataflowBuffer dfb_input(dfb::input);
+    const auto output_grad_tile_bytes = dfb_output_grad.get_tile_size();
+    const auto input_tile_bytes = dfb_input.get_tile_size();
 
     for (uint32_t w_idx = 0; w_idx < num_cols_per_core; w_idx++) {
         for (uint32_t outer_idx = 0; outer_idx < num_outer; outer_idx++) {
@@ -185,7 +171,7 @@ void kernel_main() {
                 // mean
                 read_mean_rstd(
                     noc,
-                    cb_id_mean,
+                    dfb::mean,
                     mean_rstd_tile_offset,
                     normalized_dims,
                     outer_idx,
@@ -198,7 +184,7 @@ void kernel_main() {
                 // rstd
                 read_mean_rstd(
                     noc,
-                    cb_id_rstd,
+                    dfb::rstd,
                     mean_rstd_tile_offset,
                     normalized_dims,
                     outer_idx,
