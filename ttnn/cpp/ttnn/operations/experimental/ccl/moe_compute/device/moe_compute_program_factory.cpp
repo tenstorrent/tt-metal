@@ -353,6 +353,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
+    // and at least the W2 A2A matmul width.
     // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
     // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
     const uint32_t expected_matmul_n =
@@ -363,7 +364,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         expected_matmul_n,
         matmul_num_cores);
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;  // even-rounded per #43932
+    const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
