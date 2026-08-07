@@ -232,15 +232,21 @@ class TtLfm2ShortConv(LightweightModule):
 
     def _conv_decode(self, Bx: ttnn.Tensor) -> ttnn.Tensor:
         K = self.L_cache
-        B = Bx.shape[0]
-        Bx_host = self._replicated_to_torch(Bx).float().reshape(B, self.hidden_size)  # [B, H] (S == 1)
+        Bx_host = self._replicated_to_torch(Bx).float()
+        # tt_transformers decode packs users on the rows dim padded to a tile ([1, 1, 32, H]);
+        # the unit test feeds [B, 1, 1, H]. Flatten either layout to rows [num_rows, H]: the
+        # first `max_batch_size` rows are the real batch slots, the rest is tile padding.
+        orig_shape = tuple(Bx_host.shape)
+        rows = Bx_host.reshape(-1, self.hidden_size)
+        B = min(self.max_batch_size, rows.shape[0])
+        Bx_rows = rows[:B]  # [B, H]
 
         if K > 1:
             state = self._conv_state_host[:B]  # [B, K-1, H]
-            full = torch.cat([state, Bx_host.unsqueeze(1)], dim=1)  # [B, K, H]
+            full = torch.cat([state, Bx_rows.unsqueeze(1)], dim=1)  # [B, K, H]
             self._conv_state_host[:B] = full[:, 1:, :]
         else:
-            full = Bx_host.unsqueeze(1)  # [B, 1, H]
+            full = Bx_rows.unsqueeze(1)  # [B, 1, H]
 
         out = torch.zeros(B, self.hidden_size)
         for k in range(K):
@@ -248,9 +254,10 @@ class TtLfm2ShortConv(LightweightModule):
         if self._conv_bias_host is not None:
             out = out + self._conv_bias_host
 
-        out = out.reshape(B, 1, 1, self.hidden_size)
+        out_rows = torch.zeros_like(rows)
+        out_rows[:B] = out
         return ttnn.from_torch(
-            out,
+            out_rows.reshape(orig_shape),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
