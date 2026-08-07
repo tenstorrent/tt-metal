@@ -550,9 +550,10 @@ PY
     cp .claude/CLAUDE.md "$LOG_DIR/instructions/tt-llk-CLAUDE.md" 2>/dev/null || true
     cp -R .claude/skills "$LOG_DIR/instructions/claude-skills" 2>/dev/null || true
 
-    # LOG_DIR is the bootstrap key — write it to the worktree file so every later
-    # step (and refresh_cost) recovers it with no env vars.
+    # LOG_DIR and RUN_ID are bootstrap identity — write them to the worktree file
+    # so later steps and queue dispatch recover them with no persistent shell env.
     _disk_guard python "$S/state.py" --worktree-dir "$wt" set LOG_DIR "$LOG_DIR" || return $?
+    _disk_guard python "$S/state.py" --worktree-dir "$wt" set RUN_ID "$RUN_ID" || return $?
 
     # --- everything else lives in the run-state file ($LOG_DIR/state.json) --
     local _L="$LOG_DIR"
