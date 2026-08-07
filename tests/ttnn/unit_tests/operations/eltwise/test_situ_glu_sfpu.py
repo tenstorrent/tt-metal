@@ -1,0 +1,155 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Standalone device test for the fused situ_glu binary SFPU op (situ_glu_sfpu.h).
+
+Drives the op through ttnn.generic_op with a minimal binary test kernel (no
+production op wired), reaching both dst-accumulator modes and both up-half
+variants, and compares against the torch reference:
+
+    situ_a  = beta_gate * tanh(gate / beta_gate) * sigmoid(gate)
+    up_half = beta_up * tanh(up / beta_up)   if cap_up else up
+    result  = situ_a * up_half
+"""
+
+import pytest
+import torch
+import ttnn
+from loguru import logger
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_blackhole
+
+BETA_GATE = 4.0  # Kimi K3 gate-half beta
+BETA_UP = 25.0  # Kimi K3 up-half beta
+TILE_ELEMS = 32 * 32
+
+# (ttnn dtype, tile page bytes). bfp8_b: 1 mantissa byte/datum + 1 shared exp byte / 16.
+IN_DTYPES = {
+    "bf16": (ttnn.bfloat16, TILE_ELEMS * 2),
+    "bfp8_b": (ttnn.bfloat8_b, TILE_ELEMS + TILE_ELEMS // 16),
+}
+OUT_PAGE_BYTES = TILE_ELEMS * 2  # op rounds its result to bf16
+
+
+def situ_glu_reference(gate, up, cap_up):
+    g = gate.to(torch.float32)
+    u = up.to(torch.float32)
+    situ_a = BETA_GATE * torch.tanh(g / BETA_GATE) * torch.sigmoid(g)
+    if cap_up:
+        u = BETA_UP * torch.tanh(u / BETA_UP)
+    return situ_a * u
+
+
+def _coverage_inputs(num_tiles, seed=0):
+    """Sweeps that force each half's tanh saturation clamp to be entered, plus a
+    heavy tail, shuffled so every tile spans the range."""
+    n = num_tiles * TILE_ELEMS
+    torch.manual_seed(seed)
+    gate = torch.cat([torch.linspace(-6 * BETA_GATE, 6 * BETA_GATE, n // 2), torch.randn(n - n // 2) * (2 * BETA_GATE)])
+    up = torch.cat([torch.linspace(-6 * BETA_UP, 6 * BETA_UP, n // 2), torch.randn(n - n // 2) * (2 * BETA_UP)])
+    perm = torch.randperm(n)
+    return gate[perm].to(torch.bfloat16), up[perm].to(torch.bfloat16)
+
+
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up):
+    num_tiles = gate_t.numel() // TILE_ELEMS
+    shape = [1, num_tiles, 32, 32]
+
+    gate = ttnn.from_torch(
+        gate_t.reshape(shape),
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    up = ttnn.from_torch(
+        up_t.reshape(shape),
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb_gate, cb_up, cb_out = 0, 1, 16
+
+    def cb(idx, fmt, page):
+        return ttnn.CBDescriptor(
+            total_size=2 * page,
+            core_ranges=core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)],
+        )
+
+    cbs = [
+        cb(cb_gate, in_dtype, page_bytes),
+        cb(cb_up, in_dtype, page_bytes),
+        cb(cb_out, ttnn.bfloat16, OUT_PAGE_BYTES),
+    ]
+
+    reader_rt = ttnn.RuntimeArgs()
+    reader_rt[0][0] = [gate.buffer_address(), up.buffer_address(), num_tiles, 0]
+    writer_rt = ttnn.RuntimeArgs()
+    writer_rt[0][0] = [output.buffer_address(), num_tiles, 0]
+
+    reader_cta = (
+        ttnn.TensorAccessorArgs(gate).get_compile_time_args() + ttnn.TensorAccessorArgs(up).get_compile_time_args()
+    )
+    writer_cta = [cb_out] + ttnn.TensorAccessorArgs(output).get_compile_time_args()
+
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/reader_situ_glu.cpp",
+            core_ranges=core,
+            compile_time_args=reader_cta,
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            core_ranges=core,
+            compile_time_args=writer_cta,
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
+            core_ranges=core,
+            compile_time_args=[num_tiles, int(fp32_dest), int(cap_up)],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
+        ),
+    ]
+
+    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    out = ttnn.generic_op([gate, up, output], program)
+    return ttnn.to_torch(out).reshape(gate_t.shape)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
+@pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
+@pytest.mark.parametrize("cap_up", [True, False], ids=["beta2_25", "beta2_none"])
+def test_situ_glu_sfpu(device, in_name, fp32_dest, cap_up):
+    in_dtype, page_bytes = IN_DTYPES[in_name]
+    num_tiles = 8
+    gate_t, up_t = _coverage_inputs(num_tiles)
+
+    golden = situ_glu_reference(gate_t, up_t, cap_up)
+    actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, cap_up)
+
+    if cap_up:
+        # |situ_a| <= beta_gate, |up_half| <= beta_up -> |result| <= their product.
+        bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if in_name == "bfp8_b" else 1e-3))
+        assert actual.to(torch.float32).abs().max().item() <= bound
+
+    g = golden.to(torch.float32)
+    a = actual.to(torch.float32)
+    logger.info(f"{in_name} fp32_dst={fp32_dest} cap_up={cap_up}: max abs err {(a - g).abs().max().item():.4e}")
+
+    pcc = 0.99 if in_name == "bfp8_b" else 0.999
+    assert_with_pcc(g, a, pcc=pcc)
