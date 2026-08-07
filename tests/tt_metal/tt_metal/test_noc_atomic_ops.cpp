@@ -51,8 +51,9 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
+        // These probes exercise the Blackhole/Quasar atomic behaviors this feature relies on.
         if (arch_ == tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "No NoC atomics on Wormhole";
+            GTEST_SKIP() << "Probes target Blackhole/Quasar (Wormhole lacks RISC-V AMOs)";
         }
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];

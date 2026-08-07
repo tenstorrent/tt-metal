@@ -2,13 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// PROBE kernel: verify NoC atomic operations BEYOND plain increment on Quasar.
-//
-// The auto-path semaphore plan's "cross-domain atomic is increment-only" limit was
-// actually a SOFTWARE gap: the NoC atomic HW defines SWAP/CAS/ACC/RISCV_AMO opcodes
-// (noc_parameters.h:351-361) but tt-metal SW only ever emits INCR_GET. This probe
-// exercises the missing ops to confirm cross-domain atomic DECREMENT and CAS work,
-// which would make "all cross-domain ops atomic" a software deliverable on EXTERNAL.
+// PROBE kernel: NoC atomic ops beyond plain increment on Quasar. The NoC atomic HW defines
+// SWAP/CAS/ACC/RISCV_AMO opcodes (noc_parameters.h) but tt-metal only ever emits INCR_GET;
+// this probe confirms cross-domain atomic DECREMENT and CAS work.
 //
 // Encodings below are RTL-confirmed (aether tt_t6_l1_sub_bank_atomic.sv /
 // tt_t6_l1_pkg.sv). Modes selected by a -D from the host:
@@ -21,7 +17,7 @@
 #include "experimental/kernel_args.h"
 
 #if defined(PROBE_DECR_AMO) || defined(PROBE_CAS)
-// Raw NoC-atomic emit, mirroring noc_fast_atomic_increment (noc_nonblocking_api_v2.h:768)
+// Raw NoC-atomic emit, mirroring noc_fast_atomic_increment (noc_nonblocking_api_v2.h)
 // but with a caller-supplied at_len (opcode+fields) and inline operand. Does NOT program
 // the return-value addr (like noc_semaphore_inc); result is verified by reading L1 back.
 inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uint64_t at_len, uint32_t operand) {
@@ -41,10 +37,8 @@ inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uin
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)operand);
     __builtin_riscv_ttrocc_scmdbuf_issue_trans();
-    // Mirror noc_fast_atomic_increment's software bookkeeping for consistency. (On Quasar
-    // noc_async_atomic_barrier() actually waits on the HW ack counter via
-    // ncrisc_noc_nonposted_atomics_flushed, not this software counter, but keeping it in
-    // sync avoids surprising a later context save/restore.)
+    // Mirror noc_fast_atomic_increment's software bookkeeping (the Quasar atomic barrier waits
+    // on the HW ack counter, but keeping this in sync avoids surprising context save/restore).
     noc_nonposted_atomics_acked[noc] += 1;
 }
 #endif
@@ -78,7 +72,7 @@ void kernel_main() {
     // Host verifies the final word == 9. Only the lowest user DM acts.
     bool is_writer = true;
 #if defined(ARCH_QUASAR)
-    uint64_t hart = 0;
+    uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     is_writer = (hart == 2);  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
 #elif !defined(COMPILE_FOR_BRISC)

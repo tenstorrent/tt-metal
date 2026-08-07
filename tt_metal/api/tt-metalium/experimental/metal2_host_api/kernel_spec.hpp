@@ -152,42 +152,23 @@ struct KernelSpec {
     // turns into the semaphore's physical mechanism.
     struct SemaphoreBinding {
         // How this kernel accesses the semaphore. Drives the AUTO scope classifier
-        // (ResolveSemaphoreScope): the writer classes count toward concurrency; OBSERVE does not.
-        //   INCREMENT: up() / inc_multicast()        -- EXTERNAL makes these FULLY atomic
-        //   CONSUME:   down()                        -- EXTERNAL atomizes the decrement STEP, but
-        //                                               check-then-decrement is single-consumer-only
-        //   SET:       set() / set_multicast()       -- non-atomic destructive store under ALL scopes
+        // (ResolveSemaphoreScope): writer classes count toward concurrency; OBSERVE does not.
+        //   INCREMENT: up() / inc_multicast()
+        //   CONSUME:   down()
+        //   SET:       set() / set_multicast()
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
-        //
-        // NOTE on NoC-reaching access: none of these classes says "this binding is reached over the
-        // NoC" (a remote up(), a multicast set/inc, or a relay). A cached (DM_LOCAL_CACHED) semaphore
-        // is incompatible with every such entry point -- the device Semaphore static_asserts on the
-        // remote methods -- so if you bind a semaphore you reach remotely, force
-        // SemaphoreScope::EXTERNAL rather than relying on AUTO, which classifies from node placement
-        // and cannot see that intent.
+        // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
+        // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
         enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
 
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
-        // Default INCREMENT (a writer): fail-safe for the AUTO classifier -- an unlabeled binding can
-        // only RAISE the writer count, never lower it, so it can never leave a contended semaphore on
-        // the non-atomic LOCAL_NONATOMIC path. It pushes AUTO toward an ATOMIC mechanism (the cached
-        // pool when the semaphore is provably confined to one node with a single binder kernel, else
-        // EXTERNAL). Mark OBSERVE to opt a read-only binding out of the writer census.
-        //
-        // OBSERVE IS COMPILE-TIME ENFORCED, not merely trusted. The emitted sem:: token carries
-        // SemaphoreBindingToken<id, scope, read_only>, and read_only is set iff this label is OBSERVE.
-        // The kernel's Semaphore adopts it through CTAD, and every mutator -- up(), down(), set(),
-        // set_multicast(), inc_multicast(), and a relay's DESTINATION -- static_asserts on it. So a
-        // kernel that declares OBSERVE and then writes fails to BUILD; it cannot silently remove
-        // itself from the writer census and leave a contended semaphore on the non-atomic path.
-        // wait(), wait_min() and value() stay available, which is the point of the label.
-        //
-        // The other three labels are NOT enforced this way: a binding marked SET or CONSUME still
-        // yields a fully mutable Semaphore. That is deliberate -- "an OBSERVE binding must not write"
-        // is the one rule that protects a host DECISION, whereas policing INCREMENT-vs-SET-vs-CONSUME
-        // would reject legitimate kernels (a consumer that also initialises, say) for no gain. Those
-        // three remain host-side hints, checked by the AUTO honesty FATALs in ResolveSemaphoreScope.
+        // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only raise the
+        // writer count, pushing AUTO toward an atomic mechanism, never onto the non-atomic path.
+        // Mark OBSERVE to opt a read-only binding out of the writer census. OBSERVE is compile-time
+        // enforced: the emitted sem:: token carries read_only, and every Semaphore mutator
+        // static_asserts on it -- but only through the token; the raw-id Semaphore(uint32_t) ctor
+        // bypasses it. SET and CONSUME are unenforced hints for the AUTO classifier.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
