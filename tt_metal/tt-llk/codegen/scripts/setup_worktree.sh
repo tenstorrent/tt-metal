@@ -195,6 +195,8 @@ CLAUDE.md
 .codegen_run_state.json
 # Shared test venv: **/.venv/** ignores its contents but not the symlink itself
 tests/.venv
+# Per-worktree SFPI toolchain installed by setup_testing_env.sh
+tests/sfpi
 GITIGNORE
 
   # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json):

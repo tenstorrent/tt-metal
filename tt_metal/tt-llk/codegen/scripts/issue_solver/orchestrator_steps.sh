@@ -1389,10 +1389,6 @@ execute_step_write_generated_patch() {
         .
         ':(exclude,glob)**/perf_data/**'
         ':(exclude,glob)**/__pycache__/**'
-        ':(exclude)tt_metal/tt-llk/tests/.venv'
-        ':(exclude,glob)tt_metal/tt-llk/tests/.venv/**'
-        ':(exclude)tt_metal/tt-llk/tests/sfpi'
-        ':(exclude,glob)tt_metal/tt-llk/tests/sfpi/**'
     )
 
     base="$(sg GIT_COMMIT)"

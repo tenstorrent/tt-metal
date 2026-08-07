@@ -267,6 +267,13 @@ in surrounding fields; each `test` value must be one exact selector accepted by
 the issue explicitly requires measurement, even if later evidence refutes the
 primary hypothesis. Do not add waivers to the plan after observing a failure.
 
+`HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before
+returning it, keep every Plan Artifact section above, including an executable
+Test Strategy. When `perf_intent: optimize`, include an exact `perf_*.py`
+regression selector for every in-scope architecture (or one `arch: all` entry)
+with `required_measurements: ["cycle_comparison"]`; do not replace that selector
+with suggested commands, alternatives, brackets, ellipses, or prose.
+
 ```text
 HYPOTHESIS_REFUTED - issue #<number>
 - refuted_claim: ...
