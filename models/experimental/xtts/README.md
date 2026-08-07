@@ -168,8 +168,11 @@ models/experimental/xtts/
 │   └── xtts_text_embedding.py      # BPE tokenizer + text/position embedding
 ├── tests/
 │   ├── __init__.py
-│   └── pcc/                        # one PCC test per major block, plus end-to-end (eager + traced)
-│       └── ... (7 files, see Test cases)
+│   ├── pcc/                        # one PCC test per major block, plus end-to-end (eager + traced)
+│   │   └── ... (7 files, see Test cases)
+│   └── perf/
+│       ├── __init__.py
+│       └── test_e2e_perf.py        # e2e performance regression test (models_performance_bare_metal)
 └── tt/                              # TTNN implementation
     ├── __init__.py
     ├── xtts_conditioning.py
@@ -289,6 +292,23 @@ waveform PCC is logged as informational only. `test_tt_eval`/`test_tt_eval_trace
 gate; each of CER/UTMOS/SECS is best-effort (a missing/failing backend logs a skip rather than
 failing the test).
 
+### Performance — `tests/perf/`
+
+| File | Test | What it checks |
+|------|------|-----------------|
+| `test_e2e_perf.py` | `test_xtts_e2e_perf` | Times `TtXtts.inference_fully_traced()` on the demo's default text + voice; hard-asserts setup replay, decode (ms/code), vocoder (ms/code), and RTF each stay within 40% of the measured Blackhole P150 baseline (see [Performance](#performance)) |
+
+This is the only test in the repo carrying `@pytest.mark.models_performance_bare_metal` for a
+TTS/audio model — there was no existing XTTS/VibeVoice/Whisper example to follow, so it
+establishes the convention fresh here, modeled on `models/demos/wormhole/bert_tiny/tests/test_performance.py`
+and `models/demos/wormhole/mamba/tests/test_mamba_perf.py` (the two closest existing examples
+with a comparable hard `assert`/prefill-decode-split structure). Decode and vocoder are gated on
+a **per-code rate**, not absolute time, since the number of codes generated is itself sampled
+(temperature 0.65) and not perfectly fixed run to run — `reset_seeds` narrows that but a
+rate-based gate is robust either way. The 40% margin is deliberately generous: this is the first
+perf baseline ever recorded for this model, so there's no history yet to know normal hardware
+variance from a real regression.
+
 ## Commands — PCC checks
 
 ```bash
@@ -316,6 +336,16 @@ pytest models/experimental/xtts/tests/pcc/test_tt_inference.py \
 `-s` is required to see the per-test PCC / metric numbers on stdout. `device_params` is fixed at
 `l1_small_size` 32768/65536 (per test; see [Supported devices](#supported-devices)) — do not
 override.
+
+## Commands — Performance
+
+```bash
+pytest models/experimental/xtts/tests/perf/test_e2e_perf.py -v -s
+```
+
+Runs in well under a minute (the fully-traced path recompiles kernels only if the JIT build cache
+is cold) and needs no extra downloads beyond the checkpoint. See
+[Performance](#performance) for what it measures and gates.
 
 ## PCC results
 
@@ -376,6 +406,13 @@ The ≈8.1 ms/code decode rate matches the per-step device-time note in
 [tt/xtts_generator.py](tt/xtts_generator.py): each captured decode step is measured at ~8 ms of
 device work, with the per-step blocking fence and token readback hidden inside it (alternatives —
 non-blocking execute, polling less often — were all worse or equal; see the source comment).
+
+This baseline is now protected by [`tests/perf/test_e2e_perf.py`](tests/perf/test_e2e_perf.py)
+(see [Test cases](#test-cases)), which hard-asserts on it with a 40% margin. A
+same-day confirmation run (different sampled code count — 166 vs. 189, since the test fixes
+`torch`'s seed differently than an uncontrolled demo run — but the same text/voice/settings)
+landed almost exactly on the rate-based numbers: 12.47 ms setup, 8.062 ms/code decode, 0.1166
+ms/code vocoder, RTF 0.178.
 
 ### Module-level device time (standalone microbenchmarks, not this table's end-to-end number)
 
@@ -454,8 +491,9 @@ of removal — see the note at the end of [PCC results](#pcc-results).
 `.github/workflows/*.yaml` and `tests/pipeline_reorg/**/*.yaml` finds no nightly, demo-test, or
 model-perf job entry for `xtts` — there is no scheduled run, no gate, and no dashboard. The
 numbers in this README are point-in-time, captured manually on Blackhole P150, not continuously
-verified. Anyone picking this model up next should treat `pytest
-models/experimental/xtts/tests/pcc/` as the source of truth for current status, not this file.
+verified. Anyone picking this model up next should treat `pytest models/experimental/xtts/tests/pcc/`
+and `pytest models/experimental/xtts/tests/perf/` as the source of truth for current status, not
+this file.
 
 ## Upstream references
 
