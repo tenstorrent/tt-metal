@@ -9,7 +9,11 @@
 
 **Scope:** TTNN op, Gen1 (WH/BH) target — within scope of `audit/metal2_audit.md`.
 
-**Recipe docs:** `e9e376712e5 2026-07-22 docs(metal_2.0): route Gen1 porters away from the Quasar-uplift audit helper`
+**Recipe docs:** `8086bd9df7d 2026-08-07 docs(metal_2.0): add the fake-FIFO DM self-loop recipe, hardened by a cold run`
+
+**Re-audit note (HW factory).** The first four factories (`BcastMultiCoreH`, `BcastMultiCoreW`, `BcastShardedH`, `BcastShardedHOptimised`) are **already ported** to Metal 2.0 (`create_program_artifacts`; commits `64a31840f33`, `0d373d8c048`). `BcastMultiCoreHW` is the **fifth and only remaining** factory, still on `create_descriptor`. An earlier pass treated the HW factory as blocked by its **borrowed cross-family writer** (`eltwise/unary/.../writer_unary_interleaved_start_id.cpp`): at that time the only Metal 2.0 fork of that writer lived in the out-of-bounds `experimental/quasar/` tree, so the port would have had to create the fork itself, and the recipe did not yet sanction that cross-family carve-out. This re-audit runs the HW factory against the **current recipe**, whose `Caution: Porting a shared kernel` rungs now handle exactly this situation — and a **real `_metal2` fork now exists beside the original** (`writer_unary_interleaved_start_id_metal2.cpp`, committed by #51771, already consumed by `copy/typecast` and `experimental/unary_backward/gelu_backward`). The borrowed writer is therefore a **rung-1 reuse**, not a gate. **The HW factory clears GREEN** — see below.
+
+> **✅ PORT COMPLETE (pass 2):** the HW factory was subsequently ported and verified (interleaved) — all 5 factories are now on `MetalV2FactoryConcept`. The donor writer used rung-1 reuse; the lent compute `bcast_hw.cpp` used rung-2 (created `bcast_hw_metal2.cpp`). See `METAL2_PORT_REPORT.md`.
 
 **Unreferenced kernel files (out of scope — no factory instantiates them):** `reader_bcast_h_interleaved.cpp`, `reader_bcast_hw_interleaved.cpp`, `reader_bcast_scalar_interleaved_partitioned.cpp`, `reader_bcast_w_interleaved.cpp` (all under `device/kernels/dataflow/`). Their contents were not audited. Note: `reader_bcast_scalar_interleaved_partitioned.cpp` is the only file that `#include`s an out-of-directory header (`ttnn/kernel/dataflow/generate_bcast_scalar.hpp`); since it is unreferenced, that coupling is not in scope.
 
@@ -21,7 +25,7 @@
 | **Overall** | **GREEN** |
 | **DOps / Factories** | `BcastDeviceOperation` → H / W / HW / ShardedH / ShardedHOptimised (5 factories) |
 | *Prereqs* — Device 2.0 (every kernel used) | **Yes** (all own kernels + the one cross-family donor writer are Device 2.0) |
-| *Prereqs* — Cross-op escapes | Ok (1 file-path donor writer, Device 2.0-clean; no function-call escapes in referenced kernels) |
+| *Prereqs* — Cross-op escapes | Ok (2 shared kernel files on the HW factory — borrowed donor writer + lent `bcast_hw.cpp` compute — both Device 2.0-clean; no function-call escapes in referenced kernels) |
 | *Feature Support* — overall | **GREEN** (all Appendix A entries N/A) |
 | *Feature Support* — Variadic-CTA | N/A (fixed 2-input op; CTAs read at constexpr offsets only) |
 | *TTNN Readiness* — `Is able to port?` (the gate) | **Yes** (all 5 factory rows) |
@@ -43,7 +47,9 @@
 
 ## Result
 
-**GREEN → brief issued.** All five gate-bearing subjects clear for all five factories: Device 2.0 ✓, Feature compatibility ✓, TTNN factory concept ✓ (`Is able to port? = yes`), Offset base pointers ✓, TensorAccessor 3rd argument ✓. This op is a `descriptor`-concept, fixed-shape, `bfloat16` elementwise-broadcast op with no semaphores, no global buffers, no custom hash, and no offset-folded pointers — a clean mechanical port to `MetalV2FactoryConcept`. `METAL2_PORT_BRIEF.md` is issued alongside this report.
+**GREEN → brief issued.** All five gate-bearing subjects clear for all five factories — **including `BcastMultiCoreHW`, the re-audit target**: Device 2.0 ✓ (incl. the cross-family donor writer), Feature compatibility ✓, TTNN factory concept ✓ (`Is able to port? = yes`), Offset base pointers ✓, TensorAccessor 3rd argument ✓. This op is a `descriptor`-concept, fixed-shape, `bfloat16` elementwise-broadcast op with no semaphores, no global buffers, no custom hash, and no offset-folded pointers — a clean mechanical port to `MetalV2FactoryConcept`.
+
+**The HW factory's one distinguishing feature is shared-kernel coupling, and it does not gate:** the port **reuses** the existing `writer_unary_interleaved_start_id_metal2.cpp` fork (rung 1) for its cross-family donor writer, and **creates** a `bcast_hw_metal2.cpp` fork (rung 2) for its compute kernel, which is *lent* to `rotate_half`. Both are `Caution: Porting a shared kernel` port work (FYI-P), not blockers. `METAL2_PORT_BRIEF.md` is issued alongside this report.
 
 ## Gate detail
 
@@ -90,20 +96,23 @@
 ## Heads-ups  *(mirrors the brief)*
 
 - **CB endpoints (multi-binding shapes to watch):** none. No hidden second writer (no semaphore-gated raw co-fill), no multi-reader, no dual-instance work-split. The only non-1:1 CB is the sharded output self-loop above.
-- **Cross-op / shared kernels:** the HW factory instantiates the cross-family donor writer `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (owned by `eltwise/unary`). It is **broadly shared** — 46 program factories across the tree instantiate it — so its Metal 2.0 (CB→DFB, named-token) rewrite is a single change that every borrower must adopt together (a large port-together set). Note: a `writer_unary_interleaved_start_id_metal2.cpp` variant already exists in the `experimental/quasar/` tree, suggesting the shared-writer rewrite may land as a parallel file rather than in-place.
+- **Cross-op / shared kernels (HW factory — two items, both port work, neither gates):**
+  1. **Donor writer** `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (owned by `eltwise/unary`; **borrowed**, cross-family). Broadly shared — **32 legacy factories** instantiate it tree-wide. A real Metal 2.0 fork **now exists beside the original**: `writer_unary_interleaved_start_id_metal2.cpp` (committed by #51771; already consumed by `copy/typecast` and `experimental/unary_backward/gelu_backward`). → **Rung 1: reuse it.** Because it already has consumers it is **read-only** to this port; its interface is the porter's constraint (`dfb::out` CONSUMER, `tensor::dst`, named args `num_pages`/`start_id`, defines `OUT_SHARDED`/`BACKWARDS`, page size via `dfb.get_entry_size()`). The bcast HW call site fits this interface exactly (no fork edit needed). The 32 legacy binders are a **sunset/coordination list, not a port-together bundle**. *(The prior audit's note that the fork lived only in `experimental/quasar/` is stale — that quasar copy never counted; the real sibling fork is what the porter binds.)*
+  2. **Compute** `ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp` — bcast-owned but **LENT**: `experimental/transformer/rotate_half/device/rotate_half_program_factory.cpp` also binds it (at path, line 100). `rotate_half` is on the **legacy device-op concept** (`create()` + `override_runtime_arguments()`), so it is far from migrating and will keep binding the legacy `bcast_hw.cpp` for a long time. **No `bcast_hw_metal2.cpp` fork exists yet** → this port is the first to reach it → **rung 2: create the fork** beside the original (in bcast's own directory), convert it, point the HW compute `KernelSpec::source` at it, and leave the original untouched (apart from the pointer comment) to keep serving `rotate_half`. Record `rotate_half` on the sunset list.
 - **RTA varargs:** none. Every kernel reads runtime args at fixed constexpr indices as distinct named fields; no runtime-count loop and no data-selected element.
 
 ## Team-only
 
 - **Out-of-directory coupling & donor shape:**
   - **Op-level roll-up: ✓ clean.** No function-call escapes in any referenced kernel — they `#include` only `api/*` (tt_metal LLK/HAL/firmware, "no concern" class). One file-path kernel instantiation crosses a family boundary (donor writer, below), Device 2.0-clean.
-  - **Borrowed kernel files (file-path instantiation):**
+  - **Borrowed / shared kernel files (file-path instantiation):**
 
-    | Kernel file | Owning family | Sharing | Used by bcast factory |
-    |---|---|---|---|
-    | `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | `eltwise/unary` | broadly shared (46 factories) | HW |
+    | Kernel file | Owning family | Sharing | `_metal2` fork | Rung | Used by bcast factory |
+    |---|---|---|---|---|---|
+    | `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | `eltwise/unary` (borrowed, cross-family) | broadly shared (**32** legacy factories) | **exists** beside original (#51771; consumers: `copy/typecast`, `gelu_backward`) | **1 — reuse** (read-only) | HW |
+    | `data_movement/bcast/device/kernels/compute/bcast_hw.cpp` | `bcast` (own, but **lent**) | also bound by `experimental/transformer/rotate_half` (legacy device-op concept) | **none yet** | **2 — create** `bcast_hw_metal2.cpp` | HW |
 
-    All other referenced kernels (5 readers, `writer_unary_interleaved_input_cols_batched.cpp`, 4 compute) are bcast-owned.
+    The HW **reader** `reader_bcast_hw_interleaved_partitioned.cpp` is bcast-only (single binder) → convert in place. All other referenced kernels (the other 4 readers, `writer_unary_interleaved_input_cols_batched.cpp`, and the other 3 compute kernels) are bcast-owned; note `bcast_h.cpp` is also bound by the already-ported sharded-H factories (intra-op, all Metal 2.0). *(Correction to the prior audit: the donor-writer share count is 32, not 46; and `bcast_hw.cpp` is lent to `rotate_half`, so it is not a plain "bcast-owned" convert-in-place — it requires a fork.)*
 - **Relaxation candidates:** none (no custom hash to mine).
 - **TTNN factory analysis:** all 5 factories `descriptor`, no op-owned tensors, no MeshWorkload, no pybind `create_descriptor`, no custom hash, no custom `override_runtime_arguments`. Target concept `MetalV2FactoryConcept` for all.
 

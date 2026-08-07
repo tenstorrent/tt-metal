@@ -8,30 +8,30 @@ Written during the inventory and planning steps; committed alongside the port fo
 
 ## Scope of this pass
 
-`BcastDeviceOperation` has **five** program factories. This pass ports **four** (final result):
+`BcastDeviceOperation` has **five** program factories. **This second pass ports the fifth and final one, `BcastMultiCoreHWProgramFactory` (HW).** The other four were ported in the first pass:
 
-- `BcastMultiCoreHProgramFactory` (H, interleaved) — **PORTED**
-- `BcastMultiCoreWProgramFactory` (W, interleaved) — **PORTED**
-- `BcastShardedHProgramFactory` (H, sharded) — **PORTED**
-- `BcastShardedHOptimisedProgramFactory` (H, sharded, optimised) — **PORTED**
+- `BcastMultiCoreHProgramFactory` (H, interleaved) — **PORTED** (pass 1)
+- `BcastMultiCoreWProgramFactory` (W, interleaved) — **PORTED** (pass 1)
+- `BcastShardedHProgramFactory` (H, sharded) — **PORTED** (pass 1)
+- `BcastShardedHOptimisedProgramFactory` (H, sharded, optimised) — **PORTED** (pass 1)
+- **`BcastMultiCoreHWProgramFactory` (HW)** — **PORTED (this pass)** — see the HW-specific sections below.
 
-**One factory is deferred:**
+**Why HW was deferred in pass 1 and is portable now.** HW binds the cross-family donor writer
+`eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`. In pass 1 the only Metal 2.0
+fork of that writer lived in the out-of-bounds `experimental/quasar/` tree, so porting HW would have meant
+creating the fork itself — a cross-family write the older recipe did not sanction, hence the defer. Since
+then the recipe's `Caution: Porting a shared kernel` rungs cover this, and a **real `_metal2` fork now
+exists beside the original** (`writer_unary_interleaved_start_id_metal2.cpp`, committed by #51771). So HW's
+two shared kernels are handled cleanly:
+- **Donor writer** → **rung 1: reuse** the existing `writer_unary_interleaved_start_id_metal2.cpp` fork (read-only; already consumed by `copy/typecast` + `gelu_backward`).
+- **Compute `bcast_hw.cpp`** → **rung 2: create** `bcast_hw_metal2.cpp` beside the original — `bcast_hw.cpp` is *lent* to `experimental/transformer/rotate_half` (legacy device-op concept), which keeps binding the legacy original (sunset list).
 
-- **`BcastMultiCoreHWProgramFactory` (HW)** — binds the cross-family donor writer
-  `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`, shared by ~46 factories
-  tree-wide. Porting it requires forking that writer (a change *outside* bcast's directory), which the
-  brief flags for coordination and the recipe treats as its canonical stop signal. The invoker chose to
-  defer HW.
+With HW ported, **all five factories are now on `MetalV2FactoryConcept`.** The `program_factory_t` variant
+is unchanged in shape; all five alternatives now satisfy `MetalV2FactoryConcept`.
 
-`BcastShardedHOptimised` initially hung on `in1_batch_size == 2` (`batch_b > 1`) / wide-shard configs — a
-latent kernel buffer over-run this port surfaced. That was root-caused and fixed on `main` by **PR #51056**
-(`e09c6aea658`); this branch is rebased onto that fix and merges it into the Metal 2.0 kernel, so the
-factory now ports cleanly (640/640 `misc/test_bcast.py` configs pass). See `METAL2_PORT_REPORT.md`.
-
-The deferred HW factory stays on `create_descriptor` (`ProgramDescriptorFactoryConcept`) and the op keeps
-building and running (per-factory dispatch). The device-op `program_factory_t` variant is unchanged: four
-alternatives satisfy `MetalV2FactoryConcept`, one (`BcastMultiCoreHW`) stays on
-`ProgramDescriptorFactoryConcept`.
+`BcastShardedHOptimised` (pass 1) initially hung on `in1_batch_size == 2` (`batch_b > 1`) / wide-shard
+configs — a latent kernel buffer over-run surfaced then. It was root-caused and fixed on `main` by
+**PR #51056** (`e09c6aea658`); the branch is rebased onto that fix. See `METAL2_PORT_REPORT.md`.
 
 ## Legacy Inventory
 
@@ -185,3 +185,105 @@ No semaphore-ID RTAs (op has no semaphores). No page-size 3rd-arg CTAs/RTAs.
 
 - **HW factory deferred** (cross-op donor writer, see Scope above). No new structural surprises vs. the audit for the four ported factories.
 - Dead host RTAs and dead kernel-side reads noted in the audit's Misc anomalies are **not** carried where the kernel never reads them (host idx 1,2,5,6,7 / writer 1,2); kernel-side dead reads (`num_tiles`, `NCHtWt`) are kept faithfully as named args (cleanup is out of scope). All routed to the port report.
+
+---
+
+# HW factory (pass 2) — `BcastMultiCoreHWProgramFactory`
+
+Ported from `create_descriptor` → `ProgramDescriptor` to `create_program_artifacts` → `ProgramArtifacts`.
+Unlike the H/W/Sharded factories, **HW handles both interleaved and HEIGHT-sharded configs in one factory**
+(`validate` forces in0 and output to the same layout — so sharding is all-or-nothing, never mixed).
+
+## Legacy Inventory (HW)
+
+### Legacy factory shape
+- Concept: `ProgramDescriptorFactoryConcept` — `create_descriptor(...) → tt::tt_metal::ProgramDescriptor`.
+- Custom `compute_program_hash`: none (device-op uses default hash). Pybind: plain `bind_function<"bcast">`. No device-op-class edits forced.
+
+### Kernels
+| unique_id | source | core_ranges | CTAs (positional) | RTAs (kernel-read idx) | defines | config / opt_level |
+|---|---|---|---|---|---|---|
+| reader | `reader_bcast_hw_interleaved_partitioned.cpp` (bcast-owned) | all_device_cores | `TensorAccessorArgs(src0)` (unless IN0_SHARDED), `TensorAccessorArgs(src1)` | 0=src0_addr, 1=src1_addr, 2=num_tiles, 3=HtWt, 4=base_start_id_HtWt, 5=curr_id_from_base, 6=bcast_id | `BCAST_SCALAR` (if bnc1), `IN0_SHARDED` (if src0 sharded) | ReaderConfigDescriptor{} / O2 |
+| writer | `eltwise/unary/.../writer_unary_interleaved_start_id.cpp` (**borrowed**) | all_device_cores | `[0]=cb_id_out`, `TensorAccessorArgs<1>(dst)` | 0=dst_addr, 1=num_pages, 2=start_id | `OUT_SHARDED` (if output sharded) | WriterConfigDescriptor{} / O2 |
+| compute | `compute/bcast_hw.cpp` (**lent** → rotate_half) | all_device_cores | none | 0=B, 1=Ht, 2=Wt | `get_defines(HW, math_op)` + `BCAST_SCALAR` (if bnc1) | ComputeConfigDescriptor{} / **O3** (compute default) |
+
+### CBs
+Three CBs: `c_0` (src0/input_a), `c_1` (src1/input_b), `c_16` (output). Page size = `tt::tile_size` per format (the HW factory uses `src0/1/dst_single_tile_size` directly — **not** the `round_up_to_mul32` the ShardedH factory used; preserved verbatim).
+
+| CB | index | entry_size | num_entries | data_format | borrowed? |
+|---|---|---|---|---|---|
+| c_0 | 0 | `src0_single_tile_size` | `src0_sharded ? num_tiles_per_shard : 2` | src0 df | **yes → INPUT_A** iff src0 sharded |
+| c_1 | 1 | `src1_single_tile_size` | 2 | src1 df | no |
+| c_16 | 16 | `dst_single_tile_size` | `output_sharded ? num_tiles_per_shard : 2` | dst df | **yes → OUTPUT** iff output sharded |
+
+No `tile_format_metadata`, no GlobalCircularBuffer, no aliased CBs, no `address_offset`.
+
+### Semaphores
+none.
+
+### Tensor accessors
+| host site | originating Tensor | kernel accessor | notes |
+|---|---|---|---|
+| reader `TensorAccessorArgs(*src0_buffer)` | input_a | `TensorAccessor(tensor::src0)` | **conditional** — only when `!IN0_SHARDED` (sharded src0 is resident, backs borrowed c_0) |
+| reader `TensorAccessorArgs(*src1_buffer)` | input_b | `TensorAccessor(tensor::src1)` | always (src1 always interleaved) |
+| writer `TensorAccessorArgs(*dst_buffer)` | output | `TensorAccessor(tensor::dst)` | **conditional** — only when `!OUT_SHARDED` (sharded output resident, backs borrowed c_16) |
+
+All 2-arg accessors (no 3rd page-size arg). Addresses arrive via `Buffer*`-binding form → all **Case 1** (or clean borrowed). No `->address()`; no Case 2.
+
+### Work split
+- `split_work_to_cores(grid, num_tensor_tiles = NC*Ht*Wt)` → per-core tile count carried as RTA `num_tiles` (one compute descriptor, no CTA multiplicity).
+- If sharded: override `num_tiles_per_core_group_1 = num_tiles_per_shard`, `core_group_1 = all_cores = shard grid`.
+- Legacy per-core loop: `for i in [0,num_cores_total): core = {i/num_cores_y, i%num_cores_y}`; idle cores get all-zero (reader 7, compute {1,1,0}, writer 3).
+
+### Shared kernels (HW)
+| kernel | class | `_metal2` fork | rung | remaining consumers (sunset) |
+|---|---|---|---|---|
+| `eltwise/unary/.../writer_unary_interleaved_start_id.cpp` | borrowed (cross-family) | **exists** (`..._metal2.cpp`, #51771) | **1 — reuse** (read-only) | ~31 other legacy binders of the *original* |
+| `compute/bcast_hw.cpp` | lent (bcast-owned, bound by rotate_half) | **none** | **2 — create** `bcast_hw_metal2.cpp` | `experimental/transformer/rotate_half` (legacy device-op) |
+| `reader_bcast_hw_interleaved_partitioned.cpp` | bcast-only (single binder) | n/a | convert in place | — |
+
+**Reused-fork binding vocabulary** (`writer_unary_interleaved_start_id_metal2.cpp` — now the constraint on HW's writer `KernelSpec`): DFB `dfb::out` (CONSUMER), tensor `tensor::dst`, named args `num_pages` / `start_id`, defines `OUT_SHARDED` / `BACKWARDS` (BACKWARDS off for bcast), page size read via `dfb.get_entry_size()`.
+
+### Flags
+- Sharded HW is a **supported, reachable** config (validate: "HW bcast in0 supports Height Sharding or Interleaving"; in0 & out layouts must match). Primary CI coverage (C++ `test_bcast_op`, `test_binary_bcast.py -k test_bcast`) exercises **interleaved** HW; sharded-HW coverage is uncertain — flagged in the report.
+
+## TTNN ProgramFactory (HW)
+- **Concept (inherited from audit)**: `MetalV2FactoryConcept`.
+- **Custom `compute_program_hash`**: none.
+- **Implementation notes**: single factory spans interleaved + HEIGHT-sharded. DFB `borrowed_from` and the two conditional tensor bindings (`tensor::src0`, `tensor::dst`) are toggled by `src0_sharded` / `output_sharded`; the kernels already `#ifdef`-gate the matching `IN0_SHARDED` / `OUT_SHARDED` paths, so this is the [conditional-binding pattern](../shared/port_patterns.md). `WorkUnitSpec::target_nodes` = `all_device_cores` (interleaved, idle cores zero-filled as legacy) or the **shard grid** (sharded — required for borrowed-DFB backing to resolve per shard core; matches the ShardedH sibling, and is behavior-preserving since legacy's non-shard cores were idle no-ops).
+
+## Planned Spec Shape (HW)
+
+Accessor-name convention (shared with the ported siblings): `dfb::in0`=c_0, `dfb::in1`=c_1, `dfb::out`=c_16; `tensor::src0`=input_a, `tensor::src1`=input_b, `tensor::dst`=output. unique_ids `IN0/IN1/OUT`, `INPUT_A/INPUT_B/OUTPUT`, `READER/WRITER/COMPUTE`.
+
+- KernelSpecs: `reader`, `writer` (metal2 fork), `compute` (metal2 fork) — 1 each.
+- DataflowBufferSpecs: `IN0` (borrowed_from INPUT_A iff src0 sharded), `IN1` (plain), `OUT` (borrowed_from OUTPUT iff output sharded).
+- TensorParameters: `INPUT_A`, `INPUT_B`, `OUTPUT`.
+- WorkUnitSpecs: 1 (`{reader,writer,compute}` on `target_nodes`).
+- DFB roles (identical across configs): `IN0` reader-PRODUCER / compute-CONSUMER; `IN1` reader-PRODUCER / compute-CONSUMER; `OUT` compute-PRODUCER / writer-CONSUMER (**not** a self-loop — HW always has the writer, so `c_16` is a genuine 2-toucher 1P+1C even when borrowed/sharded).
+
+## Preserved Multiplicity (HW)
+none — one `KernelDescriptor` per kernel; per-core value is an RTA (`num_tiles`), not a per-group CTA.
+
+## Dropped Plumbing (HW)
+| legacy | legacy form | Metal 2.0 replacement |
+|---|---|---|
+| reader CTA `TensorAccessorArgs(src0)` + RTA 0 (`src0_addr`) | address RTA + accessor-args | `TensorParameter INPUT_A` + conditional `TensorBinding`→`tensor::src0` (or borrowed_from when sharded) |
+| reader CTA `TensorAccessorArgs(src1)` + RTA 1 (`src1_addr`) | address RTA + accessor-args | `TensorParameter INPUT_B` + `TensorBinding`→`tensor::src1` |
+| writer CTA `[0]=cb_id_out` | magic CB index | `DFBBinding OUT`→`dfb::out` (in the reused fork) |
+| writer CTA `TensorAccessorArgs<1>(dst)` + RTA 0 (`dst_addr`) | address RTA + accessor-args | `TensorParameter OUTPUT` + conditional `TensorBinding`→`tensor::dst` (or borrowed_from when sharded) |
+| reader `get_tile_size(cb_id)` | free-fn on magic id | `dfb.get_tile_size()` (DFB getter, whitelist §A) |
+| all kernels: positional CTAs/RTAs | positional | named (`args::`), CB ids → DFB bindings |
+
+No semaphore-ID RTAs. No page-size 3rd-arg. The writer's page size moves from legacy `get_local_cb_interface(cb).fifo_page_size` to the fork's `dfb.get_entry_size()` (already in the reused fork — not this port's edit).
+
+## Applied Patterns (HW)
+- [Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel): rung-1 reuse (donor writer fork) + rung-2 create (`bcast_hw_metal2.cpp` for the lent compute).
+- [Conditional / optional DFB & tensor bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings): `tensor::src0` (gated `IN0_SHARDED`) and `tensor::dst` (gated `OUT_SHARDED`), plus DFB `borrowed_from` toggled to match.
+- Borrowed-memory DFBs: `IN0`←`INPUT_A`, `OUT`←`OUTPUT` under HEIGHT sharding.
+- Two-toucher 1P+1C: `c_16` = compute-PRODUCER + writer-CONSUMER (writer `wait_front`s the resident output under OUT_SHARDED — a real consumer, not a self-loop).
+- [Pass DFB handles directly to LLKs](../shared/port_patterns.md): compute passes `dfb::in0/in1/out` into `init_bcast` / `BCAST_OP` / `pack_tile`.
+
+## Deferred / Flagged (HW)
+- Compute `opt_level` set to **O3** explicitly (legacy `ComputeConfigDescriptor` default resolves O3; Metal 2.0 default is O2). Note: the four pass-1 factories omitted this — a latent perf drop on their compute — routed to the report as a follow-up (not fixed here; out of scope for this factory's port).
+- Sharded-HW test coverage uncertain (see Flags) — routed to the report's Open items.

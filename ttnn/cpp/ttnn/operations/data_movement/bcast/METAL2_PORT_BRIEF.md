@@ -4,7 +4,11 @@
 
 **Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorAccessor 3rd arg ✓
 
-**Recipe docs:** `e9e376712e5 2026-07-22 docs(metal_2.0): route Gen1 porters away from the Quasar-uplift audit helper` *(carry this line into the port report's Provenance section)*
+**Recipe docs:** `8086bd9df7d 2026-08-07 docs(metal_2.0): add the fake-FIFO DM self-loop recipe, hardened by a cold run` *(carry this line into the port report's Provenance section)*
+
+> **Scope of this port: the `BcastMultiCoreHW` factory only.** The other four factories (`BcastMultiCoreH`, `BcastMultiCoreW`, `BcastShardedH`, `BcastShardedHOptimised`) are **already ported** (`create_program_artifacts`). HW is the fifth and last. It was previously held back by its borrowed cross-family writer; that is now a rung-1 fork reuse (see *Watch for*), so the port can proceed. The whole-op binding detail below is retained for context, but only the HW rows are new work.
+
+> **✅ PORT STATUS: HW PORTED and verified (interleaved).** All 5 factories now on `MetalV2FactoryConcept`. Writer → rung-1 reuse of `writer_unary_interleaved_start_id_metal2.cpp`; compute → rung-2 fork `bcast_hw_metal2.cpp` (legacy `bcast_hw.cpp` retained for `rotate_half`). See `METAL2_PORT_REPORT.md` for the full outcome, verification, and sunset lists.
 
 ## TTNN factory analysis
 
@@ -40,5 +44,14 @@ No Case 2 (raw-pointer) bindings — do not reach for the `get_bank_base_address
 ## Watch for
 
 - **CB endpoints (multi-binding):** none — no hidden second writer, no multi-reader, no dual-instance work-split. Do not set the multi-binding advanced option anywhere in this op.
-- **Cross-op / shared kernels:** the HW factory instantiates the cross-family donor writer `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (owned by `eltwise/unary`, borrowed by ~46 factories tree-wide). Its Metal 2.0 rewrite is a **single shared change every borrower must adopt together** — do not rewrite it in isolation for bcast. A `writer_unary_interleaved_start_id_metal2.cpp` already exists in the `experimental/quasar/` tree; coordinate with that pattern (likely a parallel `_metal2` file) rather than editing the shared writer in place.
+- **Cross-op / shared kernels — the HW factory's two shared kernels (this is the crux of the HW port):**
+  1. **Donor writer** `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (borrowed, cross-family; 32 legacy binders). **Rung 1 — REUSE the existing fork** `writer_unary_interleaved_start_id_metal2.cpp` (beside the original). Point the writer `KernelSpec::source` at it and adopt **its** interface (do **not** rename to bcast's locals):
+     - DFB: bind `c_16` (output) as `dfb::out`, **CONSUMER**.
+     - Tensor: bind the output `TensorParameter` as `tensor::dst`.
+     - Named args: `num_pages` (← legacy `num_tensor_tiles_per_core`), `start_id` (← legacy `num_tiles_read`).
+     - Defines: emit `OUT_SHARDED` when the output is sharded (matches the legacy `writer_defines`); `BACKWARDS` stays off for bcast.
+     - The fork reads page size from `dfb.get_entry_size()`, so the legacy writer CTAs (`output_cb_index` + `TensorAccessorArgs`) **dissolve** — don't carry them over.
+     - The fork **already has consumers** (`copy/typecast`, `gelu_backward`) → it is **read-only** to you: do not edit it, do not fork it. bcast's call site fits it exactly, so no change is needed; if you think it doesn't fit, re-derive from the legacy factory and, if the need is real, **stop and report** (per `Caution: Porting a shared kernel`).
+  2. **Compute** `bcast_hw.cpp` — bcast-owned but **LENT** to `experimental/transformer/rotate_half` (on the legacy device-op concept, not migrating soon). **No fork exists yet → Rung 2 — CREATE `bcast_hw_metal2.cpp`** beside the original in bcast's own compute dir. Convert the copy (named `dfb::`/`args::` bindings), point the HW compute `KernelSpec::source` at it, and **leave `bcast_hw.cpp` untouched** except for the standard pointer comment — it must keep serving `rotate_half`. Name the fork's bindings for the kernel's role (`dfb::in0`/`dfb::in1`/`dfb::out`), consistent with the sibling `bcast_h.cpp`/`bcast_w.cpp` Metal 2.0 kernels. Record `rotate_half` as the still-unmigrated consumer (sunset list) in the port report.
+  - The HW **reader** `reader_bcast_hw_interleaved_partitioned.cpp` is bcast-only → convert in place (no fork).
 - **RTA varargs:** none — all runtime args are fixed-index distinct fields; name each in `runtime_arg_schema`. (Note the dead RTAs/CTAs listed in the audit's Misc anomalies — do **not** carry them into the port; they route to the ops team, not the port diff.)
