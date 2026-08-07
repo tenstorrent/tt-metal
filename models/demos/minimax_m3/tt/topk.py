@@ -119,7 +119,12 @@ class TopKRouter:
     def __call__(self, hidden_states, use_throughput_experts):
         # Actual token count from volume (shape[0] after reshape is tile-padded).
         actual_tokens = hidden_states.volume() // self.hidden_dim
-        hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
+        # hidden_states is [1,1,S,H] (S may be SP-sharded, dim 2). Drop the two leading batch dims with
+        # squeeze rather than a blanket ttnn.reshape(-1, H): squeeze shifts a mesh Shard's recorded dim
+        # down to match each removed axis, so a dim-2 SP shard correctly becomes dim 0 here. A plain
+        # reshape instead carries the pre-squeeze TensorTopology forward unchanged, leaving a stale
+        # Shard{dim=2} that no longer indexes this tensor's rank once flattened to 2D.
+        hidden_states = ttnn.squeeze(ttnn.squeeze(hidden_states, 0), 0)
 
         # L1 for decode (small), DRAM for prefill (large sequences).
         is_decode = actual_tokens <= 128

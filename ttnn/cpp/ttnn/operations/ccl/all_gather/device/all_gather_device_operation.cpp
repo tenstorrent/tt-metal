@@ -103,17 +103,11 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
     // For each distribution dimension, if sharded on the gather dim, make it replicated
     const auto& logical_shape = input_tensor.logical_shape();
-    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
     const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
     for (auto& output_placement : output_placements) {
         if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
-            // Shard::dim is always unnormalized by construction, so normalize here. It can also be stale:
-            // ops that reduce a tensor's rank (reshape, squeeze, ...) copy the mesh topology forward as-is,
-            // so a Shard recorded against a higher-rank ancestor can carry a dim that no longer indexes this
-            // tensor's rank. Such a shard obviously isn't on the current gather dim, so skip it instead of
-            // letting get_normalized_index() assert.
-            if (shard->dim >= -rank && shard->dim < rank &&
-                logical_shape.get_normalized_index(shard->dim) == gather_dim) {
+            // Shard::dim is always unnormalized by construction, so normalize here
+            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
                 output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             }
         }
