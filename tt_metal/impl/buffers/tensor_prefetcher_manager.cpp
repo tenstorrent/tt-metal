@@ -1270,8 +1270,13 @@ void TensorPrefetcherManager::stop(bool force) {
     }
 
     // Wait for kernels to drain their request loop (they exit on the sentinel).
+    // read_device_profiler_results must be false: we hold the (non-recursive) MeshDevice api
+    // lock, and the profiler read reaches enqueue_read_shard_from_core, which takes that same
+    // lock. With the device profiler off the read is a no-op, so this only deadlocks under
+    // tracy. Nothing is lost by skipping it — the read covers worker/eth cores, not the DRAM
+    // cores this program runs on, and the profiler still drains on Finish and at device close.
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d]);
+        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d], /*read_device_profiler_results=*/false);
     }
 
     sockets_.clear();
