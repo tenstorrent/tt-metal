@@ -34,7 +34,7 @@ struct ChunkingParams {
 // Aligned source base address the reader kernel reads from: the input buffer base advanced to the
 // nearest aligned address at/below the slice's byte offset (begins_bytes - misalignment). begins_bytes
 // and misalignment are hash-constant per cache entry (slice_start, dtype, input memory_config are all
-// folded into compute_program_hash), so only the buffer address changes between dispatches. A plain
+// part of the program cache key), so only the buffer address changes between dispatches. A plain
 // Buffer* binding can only re-emit the bare base, not base+offset, so this value instead rides on
 // SliceDeviceOperation::get_dynamic_runtime_args (re-emitted on every cache hit). create_descriptor and
 // get_dynamic_runtime_args both call this helper so the emitted value can never drift.
@@ -312,7 +312,7 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     constexpr uint8_t src0_cb_index = 0;
 
     // CB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
-    // fold into compute_program_hash(), so cache entries stay distinct per unique CB layout.
+    // are in the program cache key, so cache entries stay distinct per unique CB layout.
     const auto sizing = ttnn::operations::data_movement::compute_cb_size(
         input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
