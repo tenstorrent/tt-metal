@@ -845,3 +845,174 @@ def test_sparse_matmul_sparsity_wrong_layout(device, expect_error):
             output_tile=ttnn.Tile([tile_h, tile_w]),
             program_config=pc,
         )
+
+
+def test_sparse_matmul_rejects_indivisible_subblock(device, expect_error):
+    """out_subblock_w must divide out_block_w, otherwise in1_num_subblocks is 0 and mcast_in0 deadlocks."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, _, tile_h, tile_w = dims
+
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=4,
+        out_block_h=pc.out_block_h,
+        out_block_w=1,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "must be divisible by out_subblock_w"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
+def test_sparse_matmul_wide_subblock(device):
+    """Positive counterpart to test_sparse_matmul_rejects_indivisible_subblock.
+
+    A config with out_subblock_w = out_block_w > 1 is newly legal (Part B) and must
+    actually run and be numerically correct. Choose shapes so per_core_N is a multiple
+    of out_subblock_w:
+        n = 1024, tile_w = 32  -> Nt = ceil(1024/32) = 32
+        core grid 4x4 = 16 cores -> per_core_N = 32 // 16 = 2
+        out_subblock_w = out_block_w = 2  ->  per_core_N (2) % out_block_w (2) == 0
+                                              out_block_w (2) % out_subblock_w (2) == 0
+    so in1_num_subblocks = out_block_w / out_subblock_w = 1 (non-zero, no deadlock).
+    """
+    in0, in1, sparsity, nnz, _pc, dims = _make_sparse_inputs(device, n=1024)
+    m, k, n, num_experts, tile_h, tile_w = dims
+
+    core_x, core_y = 4, 4
+    per_core_N = int(math.ceil(n / tile_w)) // (core_x * core_y)
+    assert per_core_N == 2, f"expected per_core_N=2, got {per_core_N}"
+    out_subblock_w = 2
+    assert per_core_N % out_subblock_w == 0
+
+    wide_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=out_subblock_w,
+        per_core_M=m // tile_h,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    output_t = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=nnz,
+        is_input_a_sparse=False,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=ttnn.Tile([tile_h, tile_w]),
+        program_config=wide_pc,
+    )
+    output_tensor = ttnn.to_torch(output_t)
+
+    # Reference from the actual (dequantized) device inputs; sparsity is all-ones.
+    in0_ref = ttnn.to_torch(in0).float()
+    in1_ref = ttnn.to_torch(in1).float()
+    b, s = in0_ref.shape[0], in0_ref.shape[1]
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        pt_out = torch.matmul(in0_ref[b_i, s_i, :, :], in1_ref[0, e_i, :, :])
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.008 * k,
+            rtol=6.313 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
+
+
+def test_sparse_matmul_rejects_zero_out_block_w(device, expect_error):
+    """out_block_w must be non-zero.
+
+    A zero width satisfies out_block_w % out_subblock_w == 0, so without an explicit
+    non-zero check it reaches per_core_N % out_block_w and faults the host with a
+    divide-by-zero instead of raising the guard's TT_FATAL.
+    """
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, _, tile_h, tile_w = dims
+
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=pc.out_block_h,
+        out_block_w=0,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "out_block_w and out_block_h must be non-zero"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
+def test_sparse_matmul_rejects_indivisible_per_core_M(device, expect_error):
+    """per_core_M must be divisible by out_block_h.
+
+    The program factory computes in0_num_blocks_y = per_core_M / out_block_h, so a
+    non-divisible height is silently truncated and leaves output rows uncomputed.
+    """
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device, m=64)
+    _, _, _, _, tile_h, tile_w = dims
+
+    # per_core_M = 64 // 32 = 2, which is not divisible by out_block_h = 3.
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=3,
+        out_block_w=pc.out_block_w,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "must be divisible by out_block_h"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )

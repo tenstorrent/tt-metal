@@ -349,6 +349,31 @@ def test_gather_tile_interleaved_to_sharded_no_spec(memory_layout, dtype, device
     )
 
 
+def test_gather_specless_sharded_output_grid_shrinks_height(device):
+    """Specless HEIGHT_SHARDED out via generate_transpose_shard_spec: tensor_h=128, shard_h=32 → 4 populated cores."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= 4:
+        pytest.skip("Device grid too small to observe shrink (need > 4 cores)")
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.randn((1, 1, 128, 128), dtype=torch.bfloat16)
+    idx = torch.randint(0, 128, (1, 1, 128, 64), dtype=torch.int64)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    ttnn_idx = ttnn.from_torch(
+        idx, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.gather(ttnn_in, -1, index=ttnn_idx, memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 4, f"Expected 4 populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(4, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+    ref = torch.gather(x, -1, idx)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(ref, got)
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Group C: RM — interleaved single-core + multi-core + sharded in/out, bf16 + f32.
 # ────────────────────────────────────────────────────────────────────────────────
@@ -498,10 +523,11 @@ def test_gather_rm_sharded_in_sharded_no_spec_out(device):
 # ────────────────────────────────────────────────────────────────────────────────
 
 
-# NoC-aligned shapes only. W=97 deferred pending the cross-op helper fix in #47299.
+# shape_32x97 is the sub-NoC-aligned stick case that regressed on the pages_per_row helper (#47299).
 _IRREGULAR_SHAPES = [
     pytest.param((1, 1, 65, 96), (1, 1, 65, 48), id="shape_65x96"),
     pytest.param((1, 1, 33, 64), (1, 1, 33, 32), id="shape_33x64"),
+    pytest.param((1, 1, 32, 97), (1, 1, 32, 49), id="shape_32x97"),
 ]
 
 
@@ -532,7 +558,7 @@ def test_gather_irregular_shapes_interleaved(input_shape, index_shape, layout, d
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "RM"])
 def test_gather_irregular_shapes_sharded(input_shape, index_shape, shard_factory, layout, device):
-    """2 shapes × 3 shard layouts × 2 element layouts; RM B/W-sharded routes via composite arm."""
+    """3 shapes × 3 shard layouts × 2 element layouts; RM B/W-sharded routes via composite arm."""
     # block_sharded helper has no num_cores arg.
     if shard_factory is _block_sharded:
         in_mc = shard_factory(input_shape, device, layout=layout)
@@ -549,6 +575,44 @@ def test_gather_irregular_shapes_sharded(input_shape, index_shape, shard_factory
         idx_mc,
         L1_INTERLEAVED,
         ttnn.bfloat16,
+        device,
+    )
+
+
+# f32 regression for the newly-native RM HEIGHT-sh sub-NoC-aligned stick (#47299).
+def test_gather_rm_height_sub_noc_aligned_stick_float32(device):
+    input_shape, index_shape = (1, 1, 32, 97), (1, 1, 32, 49)
+    in_mc = _height_sharded(input_shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    idx_mc = _height_sharded(index_shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _run_gather(
+        input_shape,
+        index_shape,
+        -1,
+        ttnn.ROW_MAJOR_LAYOUT,
+        in_mc,
+        idx_mc,
+        L1_INTERLEAVED,
+        ttnn.float32,
+        device,
+    )
+
+
+# WIDTH-sh split-branch lock-down: pages_per_row = 4 (W=128, shard_W=32) exercises
+# sharded_src_id = src_id * pages_per_row + offset / page_size under the new div_up formula.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+def test_gather_rm_width_sharded_split_branch_stride(dtype, device):
+    input_shape, index_shape = (1, 1, 32, 128), (1, 1, 32, 64)
+    in_mc = _width_sharded(input_shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    idx_mc = _width_sharded(index_shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _run_gather(
+        input_shape,
+        index_shape,
+        -1,
+        ttnn.ROW_MAJOR_LAYOUT,
+        in_mc,
+        idx_mc,
+        L1_INTERLEAVED,
+        dtype,
         device,
     )
 

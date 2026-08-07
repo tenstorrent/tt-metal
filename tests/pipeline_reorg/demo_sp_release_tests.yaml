@@ -75,12 +75,12 @@
   owner_id: U0ACLAM77PS # Kosta Grujcic
   team: models
 
-- name: "(bh loudbox) GLM-5.1 Prefill modules"
+- name: "(bh loudbox) GLM-5.2 Prefill modules"
   cmd: |
-    # GLM-5.1 counterparts to the Kimi lines above. GLM's MLA is DSA/sparse (no absorbed-MLA analog), so
+    # GLM-5.2 counterparts to the Kimi lines above. GLM's MLA is DSA/sparse (no absorbed-MLA analog), so
     # it's its own stage with its own MLA ref cache; no EXPECT_NUM_TESTS since _sparse_cases emits a
     # box-dependent seq count.
-    DS_SPARSE_FABRIC=fabric2d GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 2x4 and fabric2d" -vvv --tb=short
+    DS_SPARSE_FABRIC=fabric2d GLM52_MLA_REF_CACHE=/tmp/glm_5_2_mla_ref_cache pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and 2x4 and fabric2d" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-glm-256 and not pad50" -vvv --tb=short --timeout=1800
   model: deepseek_prefill
   skus:
@@ -230,7 +230,7 @@
   skus:
     bh_galaxy:
       timeout: 15
-  owner_id: U081GCJ8NDN # Nour Ardo
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
 
 # ============================================================================
@@ -245,7 +245,7 @@
   skus:
     wh_galaxy_perf:
       timeout: 20
-  owner_id: U03FJB5TM5Y
+  owner_id: U06UEFWB4P9
   team: models
 
 - name: Galaxy DiT Wan2.2 model perf tests
@@ -256,7 +256,7 @@
   skus:
     wh_galaxy_perf:
       timeout: 25
-  owner_id: U03FJB5TM5Y
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
   arch: wormhole_b0
   save-perf-data: true
@@ -268,41 +268,5 @@
   skus:
     wh_galaxy_perf:
       timeout: 40
-  owner_id: U03FJB5TM5Y
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
-
-# ============================================================================
-# Wan 2.2 Tests (T3K)
-# ============================================================================
-
-- name: t3k_wan2.2_tests_demo
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan22
-
-- name: t3k_DiT_Wan2.2_model_perf_tests
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan22
-  model-type: DiT
-  save-perf-data: true
-
-- name: t3k_wan2.2_tests_integration
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan2.2

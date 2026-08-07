@@ -262,8 +262,8 @@ class QwenImagePipeline(PipelineAPIMixin):
             for mgr in self._ccl_managers
         ]
         self._tracers = [Tracer(self._traced_step, device=device, prep_run=False) for device in self._submesh_devices]
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(self._checkpoint_name, subfolder="scheduler")
-        self._solvers = [EulerSolver() for _ in self._submesh_devices]
+        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(self._checkpoint_name, subfolder="scheduler")
+        self._solvers = [EulerSolver(scheduler=scheduler) for _ in self._submesh_devices]
         self._transformers_loaded = False
 
         # initialize text encoder. This will load the weights
@@ -442,14 +442,10 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("preparing timesteps...")
 
-        self._scheduler.set_timesteps(
-            sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
-            mu=_calculate_shift(latents_sequence_length, self._scheduler),
-        )
-        sigmas = self._scheduler.sigmas.tolist()
+        mu = _calculate_shift(latents_sequence_length, self._solvers[0].scheduler)
         for solver in self._solvers:
-            solver.set_schedule(sigmas)
-        timesteps = self._scheduler.timesteps
+            solver.set_schedule(sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps), mu=mu)
+        timesteps = self._solvers[0].timesteps
 
         logger.info("preparing latents...")
 
