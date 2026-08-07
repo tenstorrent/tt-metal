@@ -2106,3 +2106,200 @@ def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request)
         logger.info(f"[stress] SURVIVED {n_replays} replays in {time.time() - t0:.1f}s")
     finally:
         ttnn.release_trace(mesh_device, tid)
+
+
+# ── Test 11: repeated full-context prefill (server soak) ─────────────────────
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
+def test_prefill_long_context_repeated(mesh_device, context_len, reset_seeds, request):
+    """Run a full ``context_len`` prefill N times back-to-back from a single capture.
+
+    This is the shape a prefill server actually runs: warm and capture once at startup,
+    then serve request after request by replaying, with nothing reinitialized in between.
+    A single run can pass while state quietly leaks across runs — the ring deadlock fixed
+    in docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md behaved exactly
+    like that, surviving one 64-chunk prefill and dying part-way through a later one — so
+    the interesting failures only appear on repetition.
+
+    Correctness here does not need a CPU reference, which is fortunate because 256k has
+    none. Every iteration consumes byte-identical tokens, so every iteration must produce
+    byte-identical output: iteration i's final chunk is compared against iteration 0's.
+    Anything that carries over between runs — a semaphore count, a stale cache row, a
+    counter that did not reset — shows up as divergence from the first run rather than as
+    a hang, which is a far more informative failure.
+
+    GEMMA4_REPEAT_RUNS sets the count (default 10). At 256k that is 640 trace replays.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+    from models.demos.gemma4.tt.attention import ring_prefill
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    n_runs = int(os.environ.get("GEMMA4_REPEAT_RUNS", "10"))
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    assert context_len % chunk == 0, f"context {context_len} must be a multiple of chunk {chunk}"
+
+    model_path = _model_path()
+    n_chunks = context_len // chunk
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+    tokens_all, _tok, _plen = cpu_ref.build_token_sequence(model_path, chunk, context_len, model_args.vocab_size)
+
+    host_input = _host_tensor(
+        mesh_device,
+        tokens_all[:, :chunk].contiguous(),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_positions = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    model.set_prefill_rope_positions(device_positions)
+    model._ring_metadata_external = True
+
+    def _stage(chunk_idx):
+        """Per-chunk host work. Mirrors test_prefill_long_context_traced exactly."""
+        chunk_start = chunk_idx * chunk
+        staged = _host_tensor(
+            mesh_device,
+            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(staged, device_input)
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        pos_host = _host_tensor(
+            mesh_device,
+            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
+        return chunk_start
+
+    def _forward(chunk_start):
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            return model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+
+    # Warm and capture ONCE, as a server would at startup. Chunk 0 shares the ring graph,
+    # so a single trace serves the whole prefill; capture at a chunk that has a predecessor
+    # because the halo layout is built host-side at create time.
+    cap_idx = 1
+    t0 = time.time()
+    out = _forward(_stage(cap_idx))
+    ttnn.synchronize_device(mesh_device)
+    out.deallocate(True)
+    warmup_s = time.time() - t0
+
+    t0 = time.time()
+    cap_start = _stage(cap_idx)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_ring = _forward(cap_start)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    capture_s = time.time() - t0
+    logger.info(
+        f"[repeat] ctx={context_len} warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s; "
+        f"now {n_runs} back-to-back prefills of {n_chunks} chunks ({n_runs * n_chunks} replays)"
+    )
+
+    baseline = None
+    per_run = []
+    try:
+        for run in range(n_runs):
+            ring_prefill.reset_ring_attention_calls()
+            device_s = 0.0
+            t_run = time.time()
+            for chunk_idx in range(n_chunks):
+                chunk_start = _stage(chunk_idx)
+                t_c = time.time()
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                device_s += time.time() - t_c
+            wall_s = time.time() - t_run
+
+            # Only the final chunk is read back — the state a decode host would receive.
+            final = _cp_gather_torch(out_ring, mesh_device, mesh_config)
+            assert torch.isfinite(final).all(), f"run {run}: final chunk has non-finite values"
+            if baseline is None:
+                baseline = final.clone()
+                pcc = 1.0
+            else:
+                _p, pcc = compare_tensors(final, baseline, pcc_threshold=0.0)
+                pcc = float(pcc)
+            per_run.append((device_s, wall_s, pcc))
+            logger.info(
+                f"[repeat] run {run + 1}/{n_runs}: device={device_s:.1f}s "
+                f"({context_len / device_s:.0f} tok/s) wall={wall_s:.1f}s "
+                f"vs_run0_PCC={pcc:.6f} std={float(final.std()):.4f}"
+            )
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+
+    devs = [d for d, _w, _p in per_run]
+    pccs = [p for _d, _w, p in per_run[1:]]
+    logger.info(
+        f"[repeat] ctx={context_len} over {n_runs} runs: device min={min(devs):.1f}s "
+        f"max={max(devs):.1f}s mean={sum(devs) / len(devs):.1f}s "
+        f"({context_len / (sum(devs) / len(devs)):.0f} tok/s mean)"
+        + (f" | vs_run0 PCC min={min(pccs):.6f}" if pccs else "")
+    )
+
+    # Determinism. Identical input must give identical output; a drop here means state
+    # crossed a run boundary. Not 1.0 exactly because the readback path is not bit-exact
+    # in principle, but anything real shows up far below this.
+    if pccs:
+        assert min(pccs) >= 0.9999, (
+            f"run-to-run output diverged (min PCC {min(pccs):.6f} vs run 0) — some state "
+            f"carried across prefills; per-run: {', '.join(f'{p:.6f}' for p in pccs)}"
+        )
+
+    # Every chunk after the first must still read history through the ring, on every layer.
+    # Counted during staging, so this reflects the last run only.
+    expected_ring = (n_chunks - 1) * len(model.layers)
+    assert ring_prefill.ring_attention_calls() in (0, expected_ring), (
+        f"unexpected ring read count {ring_prefill.ring_attention_calls()}; replays run no "
+        f"Python so 0 is normal, {expected_ring} would mean an eager fallback"
+    )
+
+    # Throughput must not degrade across runs: a slow creep is how a resource leak shows
+    # up before it becomes a hang.
+    if len(devs) > 2:
+        assert max(devs[1:]) <= 1.5 * min(devs[1:]), (
+            f"per-run device time drifted across runs ({', '.join(f'{d:.1f}s' for d in devs)}) — "
+            f"suspect a leak accumulating between prefills"
+        )
