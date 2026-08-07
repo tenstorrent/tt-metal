@@ -2391,3 +2391,39 @@ dispatch rather than on a dedicated DRAM core. Neither changes bytes shipped.
 faults are four repeating near-zero IOVAs. A per-path address register that is stale or zeroed on the
 DRAM-core path only would produce exactly this. **Next: correlate fault timestamps against wedge times,
 then compare the DMA setup of the two paths.**
+
+## §N+23 — Tensix does not wedge UNDER STRESS either: 0/400 vs DRISC 4/200 (p ~ 0.02)
+
+Extends §N+22 to the below-knee regime. Delay 50 is genuinely stressed and matched to DRISC's:
+**21,252 producer stalls, max occupancy 511/512** (vs 0 stalls / 430 occ at delay 125).
+
+| condition | n | WEDGE | TEARDOWN | CLEAN |
+|---|---|---|---|---|
+| Tensix @125 (unstressed) | 200 | 0 | 1 | 199 |
+| Tensix @50 (stressed) | 200 | **0** | 2 | 198 |
+| **Tensix total** | **400** | **0** | 3 | 397 |
+| DRISC @125 | 200 | **4** | 3 | 193 |
+
+**Fisher 4/200 vs 0/400: p ~ 0.02.** Significant on today's data alone, without pooling §N+11's
+exit-code-scored runs. Note the knee itself was re-measured today and sits between delay 100 and 50
+(0 stalls at 100, ~21,260 at 50) -- NOT the historically recorded 125, so delay 125 was an unstressed
+condition and delay 50 is the real back-pressure test.
+
+**TEARDOWN hits Tensix at both delays** (1 and 2 per 200) -- same order as DRISC's 3/200. Teardown is
+not drainer-specific and does not track stress. Only the WEDGE is DRISC-only.
+
+**Conclusion: the wedge is a property of the DRISC egress path, not of load, not of the drainer's
+staging, and not of egress volume.** All confounds are closed:
+- egress matched at delay 125 within 0.2% (frames 7,841 vs 7,857; pages 1,293,765 vs 1,296,405;
+  words identical at 11,002,970; busy sweeps 72 both)
+- staging identical (`7 slots x 10560 B` = 73,920 B) on both core types
+- stress covered on both sides of the knee
+- grid identical (110 cores, 550 lanes, 5.5M markers)
+
+This is now the strongest claim in the file and it converges with the IOMMU lead (§N+21 C): a DRAM
+core's DMA path to host memory differs from a worker's, and the faults are four repeating near-zero
+IOVAs -- the signature of an address register that only the DRAM-core path leaves stale or zeroed.
+
+**Next, in order:** (1) correlate `AMD-Vi` fault timestamps against wedge times from the harness CSVs;
+(2) get the actual IOVA of the CQ region and of the D2H socket buffer and see which sits near zero;
+(3) diff the DMA setup between the DRAM-core and worker egress paths.
