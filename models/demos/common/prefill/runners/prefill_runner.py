@@ -504,6 +504,13 @@ def run_request_loop(
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
     decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
+    # record_chunk() is host bookkeeping keyed on this chunk's slot/start/end, which the traced path never
+    # reads back. Fail here rather than skip the call: a driver that is never fed migrates nothing and the
+    # run still reports green.
+    assert migration_driver is None or decode_meta, (
+        "interleaved migration needs the host-side chunk metadata, which the traced path consumes "
+        "on-device; run untraced or disable interleaved migration"
+    )
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
