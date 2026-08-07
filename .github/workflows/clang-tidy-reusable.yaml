@@ -334,22 +334,15 @@ jobs:
           python3 "$REPORT" "$FIXES_DIR" --format list --repo-root "$(pwd)"
           python3 "$REPORT" "$FIXES_DIR" --format summary-md --repo-root "$(pwd)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Apply clang-tidy fixes to working tree
-        # success() so a genuine build failure (partial YAMLs) doesn't post misleading fixes.
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && success() }}
-        run: |
-          FIXES_DIR=".build/clang-tidy/fixes"
-          if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
-            if command -v clang-apply-replacements-20 &>/dev/null; then
-              clang-apply-replacements-20 "$FIXES_DIR"
-            else
-              clang-apply-replacements "$FIXES_DIR"
-            fi
-          else
-            echo "No fix files found in $FIXES_DIR — nothing to suggest"
-          fi
-
       - name: Post inline clang-tidy suggestions on PR
+        # success() so a genuine build failure (partial YAMLs) doesn't post misleading comments.
+        # Reports every violation straight from the export-fixes YAML via rdjson, not a
+        # `clang-apply-replacements` + `git diff` round-trip: a violation with no
+        # machine-applicable fix (e.g. clang-diagnostic-error compile errors, which carry no
+        # Replacements) produces an empty diff, so the old diff-based reviewdog reporter had
+        # nothing to parse and silently posted zero PR comments even though the job failed
+        # correctly. rdjson reports the diagnostic regardless, and still renders a one-click
+        # "suggested change" for violations that do have a single unambiguous Replacement.
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && success() }}
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
@@ -357,14 +350,15 @@ jobs:
           # /tmp is noexec (--tmpfs /tmp). Install reviewdog to /usr/local/bin instead.
           curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh \
             | sh -s -- -b /usr/local/bin v0.21.0
-          git diff | reviewdog \
-            -f diff \
-            -name clang-tidy \
-            -reporter github-pr-review \
-            -filter-mode diff_context \
-            -level warning \
-            -fail-level none \
-            -fail-on-error false
+          uv pip install --quiet PyYAML
+          python3 .github/scripts/clang_tidy_report.py ".build/clang-tidy/fixes" --format rdjson --repo-root "$(pwd)" \
+            | reviewdog \
+              -f=rdjson \
+              -name clang-tidy \
+              -reporter github-pr-review \
+              -filter-mode diff_context \
+              -level warning \
+              -fail-level none
 
       - name: Fail on clang-tidy violations
         # !cancelled() so it still gates when posting steps are skipped (non-PR runs).
