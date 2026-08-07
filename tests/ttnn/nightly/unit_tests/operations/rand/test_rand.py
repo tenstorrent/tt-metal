@@ -496,6 +496,113 @@ def _replicate_placements(mesh_shape):
     return [ttnn.PlacementReplicate() for _ in range(len(mesh_shape))]
 
 
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+def test_rand_mesh_shape_override_reshape(mesh_device):
+    """A logical 1x4 distribution must map to the four physical devices in row-major order."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Need at least 4 devices")
+
+    seed = 77
+    shard_shape = (256, 256)
+    distribution_shape = ttnn.MeshShape(1, 4)
+    expected_mesh_coords = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    sharded_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)],
+        mesh_shape_override=distribution_shape,
+    )
+    replicated_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+        mesh_shape_override=distribution_shape,
+    )
+
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    sharded = ttnn.rand(
+        (shard_shape[0] * 4, shard_shape[1]),
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=sharded_mapper,
+    )
+    cache_entries = mesh_device.num_program_cache_entries()
+    replicated = ttnn.rand(
+        shard_shape,
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=replicated_mapper,
+    )
+    sharded_again = ttnn.rand(
+        (shard_shape[0] * 4, shard_shape[1]),
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=sharded_mapper,
+    )
+
+    assert mesh_device.num_program_cache_entries() == cache_entries
+    for tensor in (sharded, replicated, sharded_again):
+        topology = tensor.tensor_topology()
+        assert tuple(topology.distribution_shape()) == (1, 4)
+        assert [tuple(coord) for coord in topology.mesh_coords()] == expected_mesh_coords
+
+    sharded_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded)]
+    replicated_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(replicated)]
+    sharded_again_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_again)]
+
+    assert len(sharded_data) == 4
+    assert len(replicated_data) == len(sharded_again_data) == 4
+    composed = ttnn.to_torch(sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+    assert torch.equal(composed, torch.cat(sharded_data, dim=0))
+    for i in range(4):
+        assert torch.equal(sharded_data[i], sharded_again_data[i])
+        assert torch.equal(replicated_data[0], replicated_data[i])
+        for j in range(i + 1, 4):
+            assert not torch.equal(
+                sharded_data[i], sharded_data[j]
+            ), f"Logical shards {i} and {j} received the same random stream"
+
+    mesh_device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+def test_rand_mesh_shape_override_submesh(mesh_device):
+    """A smaller logical distribution must expose and dispatch only on its mapped devices."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Need at least 4 devices")
+
+    mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)],
+        mesh_shape_override=ttnn.MeshShape(1, 2),
+    )
+    kwargs = {
+        "shape": (512, 256),
+        "device": mesh_device,
+        "dtype": ttnn.float32,
+        "seed": 91,
+        "mesh_mapper": mapper,
+    }
+
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+    tensor = ttnn.rand(**kwargs)
+    cache_entries = mesh_device.num_program_cache_entries()
+    tensor_again = ttnn.rand(**kwargs)
+
+    assert mesh_device.num_program_cache_entries() == cache_entries
+    assert tuple(tensor.tensor_topology().distribution_shape()) == (1, 2)
+    assert [tuple(coord) for coord in tensor.tensor_topology().mesh_coords()] == [(0, 0), (0, 1)]
+
+    shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+    shards_again = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor_again)]
+    assert len(shards) == len(shards_again) == 2
+    assert not torch.equal(shards[0], shards[1])
+    assert all(torch.equal(lhs, rhs) for lhs, rhs in zip(shards, shards_again))
+
+    mesh_device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],

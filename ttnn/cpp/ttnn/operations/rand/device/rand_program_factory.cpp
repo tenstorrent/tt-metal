@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <ctime>
 #include <limits>
+#include <memory>
 #include <random>
 
 #include <tt-metalium/work_split.hpp>
@@ -51,18 +53,29 @@ RandWorkSplit compute_rand_work_split(
         split_work_to_cores(grid, units_to_divide);
     auto cores = grid_to_cores(num_cores, grid.x, grid.y);
 
-    const ttnn::MeshCoordinate mesh_coordinate =
+    const ttnn::MeshCoordinate physical_mesh_coordinate =
         mesh_dispatch_coordinate.value_or(ttnn::MeshCoordinate::zero_coordinate(attrs.device->shape().dims()));
+    ttnn::MeshCoordinate distribution_coordinate = physical_mesh_coordinate;
+    const tt::tt_metal::distributed::MeshShape* distribution_shape = std::addressof(attrs.device->shape());
+    if (attrs.tensor_topology.has_value()) {
+        auto tensor_coord = attrs.tensor_topology->get_tensor_coord(physical_mesh_coordinate);
+        TT_FATAL(
+            tensor_coord.has_value(),
+            "Rand: physical mesh coordinate {} is not present in the tensor topology",
+            physical_mesh_coordinate);
+        distribution_coordinate = std::move(*tensor_coord);
+        distribution_shape = std::addressof(attrs.tensor_topology->distribution_shape());
+    }
+
     std::uint32_t device_seed_offset = 0;
     const auto& shard_mask = attrs.mesh_dim_is_sharded;
     if (!shard_mask.empty()) {
-        const auto& mesh_shape = attrs.device->shape();
         size_t shard_linear_idx = 0;
         size_t shard_stride = 1;
         for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
             if (shard_mask[i]) {
-                shard_linear_idx += mesh_coordinate[i] * shard_stride;
-                shard_stride *= mesh_shape[i];
+                shard_linear_idx += distribution_coordinate[i] * shard_stride;
+                shard_stride *= (*distribution_shape)[i];
             }
         }
         device_seed_offset = static_cast<std::uint32_t>(shard_linear_idx) * static_cast<std::uint32_t>(cores.size());
@@ -118,6 +131,13 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (operation_attributes.restricted_mesh_coords.has_value() &&
+        (!mesh_dispatch_coordinate.has_value() ||
+         std::ranges::find(*operation_attributes.restricted_mesh_coords, *mesh_dispatch_coordinate) ==
+             operation_attributes.restricted_mesh_coords->end())) {
+        return {};
+    }
+
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
     const auto& all_cores = ws.all_cores;
     const auto num_cores_total = ws.cores.size();
