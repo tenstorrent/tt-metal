@@ -32,13 +32,13 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
 // MeshBuffer host↔device transfer for a unit mesh (coord (0, 0)). Prefer these over
 // detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
 template <typename DType>
-inline void WriteToBuffer(const distributed::MeshBuffer& mesh_buffer, const std::vector<DType>& host_buffer) {
-    detail::WriteToBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
+inline void WriteToBuffer(const distributed::MeshBuffer& unit_mesh_buffer, const std::vector<DType>& host_buffer) {
+    detail::WriteToBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 template <typename DType>
-inline void ReadFromBuffer(const distributed::MeshBuffer& mesh_buffer, std::vector<DType>& host_buffer) {
-    detail::ReadFromBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
+inline void ReadFromBuffer(const distributed::MeshBuffer& unit_mesh_buffer, std::vector<DType>& host_buffer) {
+    detail::ReadFromBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 inline bool WriteToL1(
