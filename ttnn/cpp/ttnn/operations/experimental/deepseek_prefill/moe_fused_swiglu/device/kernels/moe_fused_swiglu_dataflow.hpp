@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
 // moe_fused_swiglu — the transport vocabulary shared by the READER (NoC0) and the WRITER (NoC1).
@@ -115,25 +115,24 @@ FORCE_INLINE void read_wd_rows(
 // ---------------------------------------------------------------------------
 //: Unicast MY slice of one accumulator into every column peer's landing CB, then signal each.
 //:
-//: THE ADDRESS PROXY. Every core has the identical CB layout and the landing CBs are pushed WHOLE,
-//: so this core's own `get_write_ptr(dst_cb)` IS the destination address on every peer — no
-//: negotiation. That only holds while every push returns the write pointer to the CB base, which
-//: is why the landing CBs are never pushed partially.
+//: `scatter_payload()` uses this core's CB cursor as the remote address proxy. That is valid only
+//: when the logical landing capacity is also the physical capacity, so every whole logical push
+//: returns every core to the same base. A phase-aliased landing CB can have a larger physical LCM
+//: capacity; its caller must use `scatter_payload_to()` with a block-indexed physical address.
 //:
 //: The barrier before the signals is the data-before-signal proof and is load-bearing. The atomic
 //: barrier after them is not local flow control; it is dropped only by measurement, and that
 //: measurement said null.
-FORCE_INLINE void scatter_leg(
+FORCE_INLINE void scatter_payload_to(
     uint32_t rt_peers,
     uint32_t src_cb,
-    uint32_t dst_cb,
-    uint32_t sem_data,
+    uint32_t dst,
     uint32_t workers,
     uint32_t slice_tiles,
     uint32_t my_row,
     uint32_t tile_bytes) {
     const uint32_t src = get_read_ptr(src_cb);
-    const uint32_t dst = get_write_ptr(dst_cb) + my_row * slice_tiles * tile_bytes;
+    dst += my_row * slice_tiles * tile_bytes;
     const uint32_t bytes = slice_tiles * tile_bytes;
     for (uint32_t i = 0; i < workers; ++i) {
         const Peer p = peer_at(rt_peers, i);
@@ -143,12 +142,42 @@ FORCE_INLINE void scatter_leg(
         noc_async_write(src + i * bytes, get_noc_addr(p.x, p.y, dst), bytes);
     }
     noc_async_write_barrier();
+}
+
+FORCE_INLINE void scatter_payload(
+    uint32_t rt_peers,
+    uint32_t src_cb,
+    uint32_t dst_cb,
+    uint32_t workers,
+    uint32_t slice_tiles,
+    uint32_t my_row,
+    uint32_t tile_bytes) {
+    scatter_payload_to(rt_peers, src_cb, get_write_ptr(dst_cb), workers, slice_tiles, my_row, tile_bytes);
+}
+
+//: Publish one completion per destination after its payload has landed.  This is separate from
+//: `scatter_payload` so the reader and writer can retain concurrent up/gate transfers on the two
+//: NoCs while one RISC emits a single readiness notification only after both legs are complete.
+FORCE_INLINE void scatter_signal(uint32_t rt_peers, uint32_t sem_data, uint32_t workers) {
     const uint32_t sem = static_cast<uint32_t>(get_semaphore(sem_data));
     for (uint32_t i = 0; i < workers; ++i) {
         const Peer p = peer_at(rt_peers, i);
         noc_semaphore_inc(get_noc_addr(p.x, p.y, sem), 1);
     }
     noc_async_atomic_barrier();
+}
+
+FORCE_INLINE void scatter_leg(
+    uint32_t rt_peers,
+    uint32_t src_cb,
+    uint32_t dst_cb,
+    uint32_t sem_data,
+    uint32_t workers,
+    uint32_t slice_tiles,
+    uint32_t my_row,
+    uint32_t tile_bytes) {
+    scatter_payload(rt_peers, src_cb, dst_cb, workers, slice_tiles, my_row, tile_bytes);
+    scatter_signal(rt_peers, sem_data, workers);
 }
 
 }  // namespace moe_fused_swiglu

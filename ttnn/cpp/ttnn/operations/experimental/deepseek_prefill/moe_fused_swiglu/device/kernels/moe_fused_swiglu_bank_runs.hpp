@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
 // moe_fused_swiglu — coalesced weight DRAM runs, shared by the reader and the writer.

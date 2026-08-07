@@ -55,6 +55,13 @@ WD_AHEAD = 1
 #: eight M=1, K=HID_T matmuls instead of eleven M=8, K=HN_PAD accumulating matmuls.
 WD_MROW_ROUNDS = True
 
+#: Large-M phase-2 schedule: pair the eight token rows into two independent four-row multicast
+#: groups. Each group partitions output emb across 44 cores, halving h fan-out. The extra resident
+#: W_down width is paid once per dispatch, so only dispatches with this many complete M blocks use
+#: it; the kernel also requires m_t to be an exact M_BLOCK multiple so no tail changes ownership.
+WD_MGROUPS = False
+WD_MGROUP_MIN_BLOCKS = 4
+
 #: Cross-M-block weight residency: every weight read is a pure function of this core's
 #: kstart/hstart/jstart with no M-block index, so b > 0 re-reads bytes already in the CB slot.
 #: gate/up -9.36 %, W_down a further -2.04 %.
@@ -72,6 +79,17 @@ XPRIO = True
 #: How many rounds' senders an h receiver acks in one reserve. THE round-cost lever; clamped to
 #: DEPTH_H - 1 below.
 HACK_AHEAD = 2
+
+#: Whole full-M h rounds sent by the writer on NoC1.  A bit at row r transfers ownership of that
+#: round's self-copy, linked payload+flag multicast, flush and local flag reset as one unit.  The
+#: 5/3 split reflects NoC1's measured ~1.37x cost; override with e.g. 0xAA for a 4/4 experiment.
+H_ROUND_NOC1_MASK = int(os.environ.get("MOE_H_ROUND_NOC1_MASK", "0"), 0) & ((1 << M_BLOCK) - 1)
+
+#: Experimental reduce-scatter completion protocol. Gate and up still travel concurrently on
+#: separate RISC-Vs/NoCs and retain separate CB owners; after both payload barriers, the writer
+#: emits one atomic completion per destination instead of one per leg.  This isolates the atomic
+#: fan-in cost without imposing the merged-buffer layout and single-NoC serialization of full G.
+SCATTER_ONE_SIGNAL = os.environ.get("MOE_SCATTER_ONE_SIGNAL", "1") not in ("0", "false", "False")
 
 #: Eighths of every phase-2 W_down K-block read by the WRITER on NOC_1 instead of the reader's
 #: NOC_0. A real interior optimum: -4.7 / -2.6 / -1.1 % at 3.
@@ -128,12 +146,19 @@ CB_UP_ACC = 16
 CB_GATE_SILU = 17  # SiLU(sum(gate)) on this worker's slice
 CB_H_LOCAL = 18  # column root: this column's assembled h block, awaiting its all-gather round
 CB_OUT_INTERM = 19  # phase-2 packer-L1 accumulation region
+CB_MAILBOX_WRITER = 20  # independent writer-ready FIFO over CB_X_STAGE's 64-byte allocation
+CB_MAILBOX_COMPUTE = 21  # independent compute-ready FIFO over CB_X_STAGE's 64-byte allocation
+MAILBOX_CB_ALIAS = (CB_X_STAGE, CB_MAILBOX_WRITER, CB_MAILBOX_COMPUTE)
 
 # These three BFP8 views are live in strict phase order: reduce landing -> finished local h slice
 # -> final output. They share one physical allocation when the caller's output is BFP8. The
 # reader/writer phase-free semaphore below is the necessary cross-block edge: without it, a peer
 # could write block b+1's gather payload while block b's output DMA still reads the same SRAM.
 PHASE_CB_ALIAS = (CB_GATHER_GATE, CB_H_SLICE, CB_OUT_TILES)
+# The SiLU result is consumed completely by the phase-1 multiply before phase 2 starts.  The
+# W_down partial is likewise empty again before the next block enters phase 1, so these two BF16
+# views can share one physical allocation while retaining independent CB FIFO state.
+PHASE_BF16_ALIAS = (CB_GATE_SILU, CB_OUT_INTERM)
 
 # --------------------------------------------------------------------------------------------
 # Semaphores. All but one are MONOTONE — never reset within a dispatch, always compared with
@@ -272,6 +297,7 @@ class Blocking:
         l1_budget: int = 0,
         out_tile: int = 0,
         enable_phase_alias: bool = True,
+        x_is_rm: bool = True,
     ):
         if kgroups < 2:
             raise ValueError(
@@ -315,6 +341,21 @@ class Blocking:
         # phase-2 CB reserves in EC_MAX-wide units, so its page count must be a multiple of it.
         self.ec_sizes, self.ec_starts = split(self.emb_t, self.num_cores)
         self.ec_max = max(self.ec_sizes)
+        self.mgroup_rows = M_BLOCK // 2
+        self.mgroup_cores = self.hgroups * self.mgroup_rows
+        self.ec_group_sizes, self.ec_group_starts = split(self.emb_t, self.mgroup_cores)
+        self.ec_group_max = max(self.ec_group_sizes)
+        self.wd_mgroups = bool(
+            WD_MGROUPS
+            and self.wd_mrow_rounds
+            and M_BLOCK % 2 == 0
+            and self.kgroups == M_BLOCK
+            and self.ec_group_max <= DEST_AUTO_LIMIT_TILES
+        )
+        # One physical resident W_down layout serves both runtime ownership modes. The reader
+        # chooses which jstart/ec payload to place in its first columns; the row stride is the
+        # larger grouped width in either mode.
+        self.wd_ec_max = self.ec_group_max if self.wd_mgroups else self.ec_max
 
         # `down` sub-block height: largest power of two still inside DEST, capped by the knob and
         # by M_BLOCK. Power of two so min(h, m_eff) divides m_eff for every runtime m_eff.
@@ -339,7 +380,8 @@ class Blocking:
         self.depth_x = DEPTH_X if self.max_m_blocks > 1 else 1
         self.depth_w = 1 if W_RESIDENT else DEPTH_W
         self.wd_ahead = max(1, min(WD_AHEAD, hgroups))
-        self.hack_ahead = max(1, min(HACK_AHEAD, DEPTH_H - 1))
+        self.depth_h = DEPTH_H
+        self.hack_ahead = max(1, min(HACK_AHEAD, self.depth_h - 1))
 
         # W_down residency wants the CB to hold the WHOLE phase-2 K stream, which is LINEAR IN N
         # and in the weight dtype: `hgroups * hn_pad * ec_max` tiles. At N 2048 / bfp4 that is
@@ -350,9 +392,32 @@ class Blocking:
         self.x_stick = x_stick or bfp8_tile
         self.out_tile = out_tile or bfp8_tile
         self.enable_phase_alias = enable_phase_alias
+        self.x_is_rm = x_is_rm
         self.l1_budget = l1_budget or L1_CB_BUDGET
         self.wd_resident = WD_RESIDENT
         self.depth_wd = self._choose_depth_wd()
+        # The two-group schedule cuts each h multicast from eight rounds over 88 cores to four
+        # rounds over 44 cores.  If its doubled W_down shard misses L1, first spend one h slot:
+        # 2 * HID_T remains a legal producer/consumer window for the shorter grouped schedule and
+        # saves 64 BFP8 tiles here.  Ordinary programs keep the measured DEPTH_H=3 configuration.
+        if (
+            self.wd_mgroups
+            and self.depth_h > 2
+            and self.l1_bytes(True, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget
+        ):
+            self.depth_h = 2
+            self.hack_ahead = max(1, min(HACK_AHEAD, self.depth_h - 1))
+        # The grouped layout is optional and is the first feature dropped when its duplicated
+        # W_down shard does not fit. Recompute the ordinary width before testing the base mrow
+        # schedule or residency.
+        if (
+            self.wd_mgroups
+            and self.l1_bytes(True, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget
+        ):
+            self.wd_mgroups = False
+            self.wd_ec_max = self.ec_max
+            self.depth_h = DEPTH_H
+            self.hack_ahead = max(1, min(HACK_AHEAD, self.depth_h - 1))
         # The eight-row schedule needs both the complete resident W_down shard and its larger H
         # row buffers.  If that combination does not fit, drop the experiment first and retry the
         # established resident layout before sacrificing residency for every M-block.
@@ -376,6 +441,30 @@ class Blocking:
         self.wd_packed = bool(self.balanced_hn and self.wd_resident)
         if self.balanced_hn and not self.wd_packed:
             self.wd_mrow_rounds = False
+        if not (self.wd_mrow_rounds and self.wd_resident):
+            self.wd_mgroups = False
+            self.wd_ec_max = self.ec_max
+        # A BF16 row-major prefetch needs only cb_x_in: one injector row per core is read during
+        # block b, then tilized after block b's compute releases the sole resident-x slot.  The
+        # old path reserved block b+1's complete tiled slot before phase 2; at depth 1 that reserve
+        # formed a cycle with compute and hung exactly at the second M-block.  The reader now
+        # delays that reserve, so large-hidden programs may reclaim the otherwise idle second slot.
+        # Keep two slots whenever they fit (and for tiled input, whose prefetch lands directly in
+        # cb_x_tiles); this is a pressure fallback, not a new default schedule.
+        if (
+            self.x_is_rm
+            and self.depth_x > 1
+            and self.l1_bytes(self.x_is_rm, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget
+        ):
+            self.depth_x = 1
+        # Two h slots are the smallest useful producer/consumer window.  Spend the measured third
+        # slot only when it fits; N=3072 on 11x8 needs this last fallback after reclaiming x.
+        if (
+            self.depth_h > 2
+            and self.l1_bytes(self.x_is_rm, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget
+        ):
+            self.depth_h = 2
+            self.hack_ahead = max(1, min(HACK_AHEAD, self.depth_h - 1))
         # The W_down NoC split needs BOTH: `depth_wd == hgroups` for the writer's address
         # derivation (K-block r at a fixed slot), and RESIDENCY, which is what confines every
         # W_down DRAM read to b == 0 where all slots are free from kernel start. Without residency
@@ -526,15 +615,21 @@ class Blocking:
         b8, b16, w, out = self.bfp8_tile, self.bf16_tile, self.w_tile, (out_tile or self.bfp8_tile)
         gu = M_BLOCK * self.hn_pad
         h_fast = self.hid_t if self.wd_mrow_rounds else gu
-        outb = M_BLOCK * self.ec_max
+        outb = max(M_BLOCK * self.ec_max, self.mgroup_rows * self.ec_group_max if self.wd_mgroups else 0)
+        # Full blocks bypass the BF16 partial spill on the mrow path. The ordinary path can reach
+        # at most M_BLOCK/2 rows, so do not reserve an unused full-M intermediate; this funds the
+        # wider resident W_down shard without shrinking cb_h's legal divisor lattice.
+        out_interm = (M_BLOCK // 2 if self.wd_mrow_rounds else M_BLOCK) * self.ec_max
         return [
             (CB_X_IN, XSTICK_ROWS * TILE if x_is_rm else 1, self.x_stick, "x_in"),
             (CB_X_TILES, self.depth_x * M_BLOCK * self.kr_pad, b8, "bfp8"),
             (CB_X_STAGE, 1, 64, "u32"),
+            (CB_MAILBOX_WRITER, 1, 64, "u32"),
+            (CB_MAILBOX_COMPUTE, 1, 64, "u32"),
             (CB_W_GATE, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
             (CB_W_UP, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
-            (CB_W_DOWN, self.depth_wd * self.hn_pad * self.ec_max, w, "weight"),
-            (CB_H, DEPTH_H * h_fast, b8, "bfp8"),
+            (CB_W_DOWN, self.depth_wd * self.hn_pad * self.wd_ec_max, w, "weight"),
+            (CB_H, self.depth_h * h_fast, b8, "bfp8"),
             (CB_IDX_SCRATCH, 1, idx_page, "u32"),
             (CB_COUNTS_SCRATCH, 1, counts_page, "u32"),
             (CB_GATHER_GATE, self.gather_pages, b8, "bfp8"),
@@ -547,7 +642,7 @@ class Blocking:
             (CB_UP_ACC, gu, b8, "bfp8"),
             (CB_GATE_SILU, self.slice_pages, b16, "bf16"),
             (CB_H_LOCAL, max(gu, h_fast), b8, "bfp8"),
-            (CB_OUT_INTERM, outb, b16, "bf16"),
+            (CB_OUT_INTERM, out_interm, b16, "bf16"),
         ]
 
     def phase_cb_alias(self, out_tile: int = 0) -> bool:
@@ -561,10 +656,16 @@ class Blocking:
             return False
         by_index = {entry[0]: entry for entry in self.cb_layout(True, out_tile)}
         entries = [by_index[index] for index in PHASE_CB_ALIAS]
-        shared_pages = 1
-        for _, pages, _, _ in entries:
-            shared_pages = lcm(shared_pages, pages)
+        shared_pages = self.phase_cb_alias_pages(out_tile)
         return shared_pages < sum(entry[1] for entry in entries)
+
+    def phase_cb_alias_pages(self, out_tile: int = 0) -> int:
+        """Physical page capacity of the BFP8 phase alias, before its profitability check."""
+        by_index = {entry[0]: entry for entry in self.cb_layout(True, out_tile)}
+        shared_pages = 1
+        for index in PHASE_CB_ALIAS:
+            shared_pages = lcm(shared_pages, by_index[index][1])
+        return shared_pages
 
     def cb_allocations(
         self,
@@ -584,18 +685,42 @@ class Blocking:
         """
         layout = self.cb_layout(x_is_rm, out_tile, idx_page, counts_page)
         by_index = {entry[0]: entry for entry in layout}
-        alias = PHASE_CB_ALIAS if enable_phase_alias and self.phase_cb_alias(out_tile) else ()
-        alias_entries = tuple(by_index[index] for index in alias)
-        alias_pages = 1
-        for _, pages, _, _ in alias_entries:
-            alias_pages = lcm(alias_pages, pages)
+        aliases = [MAILBOX_CB_ALIAS]
+        if enable_phase_alias:
+            if self.phase_cb_alias(out_tile):
+                aliases.append(PHASE_CB_ALIAS)
+            # Phase-disjointness is necessary but not sufficient: for capacities such as 18 and
+            # 24 (hidden=3072), the 72-page LCM is larger than two separate allocations.  Never let
+            # an alias consume more L1 than the views it replaces.
+            bf16_entries = tuple(by_index[index] for index in PHASE_BF16_ALIAS)
+            bf16_alias_pages = 1
+            for _, capacity, _, _ in bf16_entries:
+                bf16_alias_pages = lcm(bf16_alias_pages, capacity)
+            if bf16_alias_pages < sum(entry[1] for entry in bf16_entries):
+                aliases.append(PHASE_BF16_ALIAS)
+
+        alias_by_index = {}
+        alias_allocations = {}
+        for alias in aliases:
+            entries = tuple(by_index[index] for index in alias)
+            page_bytes = entries[0][2]
+            if any(entry[2] != page_bytes for entry in entries):
+                raise ValueError(f"moe_fused_swiglu: aliased CB views have unequal page sizes: {entries}")
+            pages = 1
+            for _, capacity, _, _ in entries:
+                pages = lcm(pages, capacity)
+            alias_allocations[alias[0]] = (pages * page_bytes, entries)
+            for index in alias:
+                if index in alias_by_index:
+                    raise ValueError(f"moe_fused_swiglu: CB {index} occurs in more than one alias group")
+                alias_by_index[index] = alias[0]
 
         allocations = []
         for entry in layout:
             index, pages, page, _ = entry
-            if alias and index == alias[0]:
-                allocations.append((alias_pages * page, alias_entries))
-            elif index not in alias:
+            if index in alias_allocations:
+                allocations.append(alias_allocations[index])
+            elif index not in alias_by_index:
                 allocations.append((pages * page, (entry,)))
         return allocations
 
@@ -611,5 +736,6 @@ class Blocking:
             f"kr_pad {self.kr_pad}, hn_pad {self.hn_pad} (floor "
             f"{(self.hid_t + self.hgroups - 1) // self.hgroups}), gu_chunks {self.gu_chunks}, "
             f"ec_max {self.ec_max}, depth_wd {self.depth_wd}, wd_split {self.wd_split}, "
-            f"wd_mrow {self.wd_mrow_rounds and self.wd_resident}"
+            f"wd_mrow {self.wd_mrow_rounds and self.wd_resident}, wd_mgroups {self.wd_mgroups}, "
+            f"wd_ec_max {self.wd_ec_max}"
         )

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
 // moe_fused_swiglu — COMPUTE.
@@ -49,6 +49,8 @@ constexpr uint32_t M_BLOCK = CT(M_BLOCK);
 constexpr uint32_t KR_PAD = CT(KR_PAD);
 constexpr uint32_t HN_PAD = CT(HN_PAD);
 constexpr uint32_t EC_MAX = CT(EC_MAX);  // phase-2 N stride (uniform CB increment)
+constexpr uint32_t WD_EC_MAX = CT(WD_EC_MAX);
+constexpr uint32_t EC_GROUP_MAX = CT(EC_GROUP_MAX);
 constexpr uint32_t HGROUPS = CT(HGROUPS);
 constexpr uint32_t KGROUPS = CT(KGROUPS);  // column height == contributor count
 constexpr uint32_t HID_T = CT(HID_T);
@@ -66,6 +68,9 @@ constexpr uint32_t DEPTH_X = CT(DEPTH_X);
 // gate/up in1 sub-block WIDTH in hidden tiles — a sub-division of one chunk.
 constexpr uint32_t HN_BLOCK = CT(HN_BLOCK);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
+constexpr uint32_t WD_MGROUPS = CT(WD_MGROUPS);
+constexpr uint32_t WD_MGROUP_MIN_BLOCKS = CT(WD_MGROUP_MIN_BLOCKS);
+constexpr uint32_t MGROUP_ROWS = M_BLOCK / 2;
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
 constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 // The hidden-axis chunk the gate/up weight stream is published and consumed in, so the matmul on
@@ -80,6 +85,7 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
 constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
+constexpr uint32_t cb_mailbox_compute = CT(CB_MAILBOX_COMPUTE);
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_up = CT(CB_W_UP);
 constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
@@ -202,33 +208,56 @@ struct HnSteps {
 
 struct PackedWdOffset {
     ALWI uint32_t operator()(uint32_t block) const {
-        return moe_fused_swiglu::hidden_block_start(block, HID_T, HGROUPS, HN_PAD) * EC_MAX;
+        return moe_fused_swiglu::hidden_block_start(block, HID_T, HGROUPS, HN_PAD) * WD_EC_MAX;
     }
 };
 
 void kernel_main() {
-    const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
+    (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr = get_arg_val<uint32_t>(1);
     const uint32_t hn = get_arg_val<uint32_t>(2);
     const uint32_t ec = get_arg_val<uint32_t>(3);
-    const uint32_t my_col = get_arg_val<uint32_t>(4);  // grid column == this core's x-injection slot
-    const uint32_t my_row = get_arg_val<uint32_t>(5);  // row in the column == which scatter slice I own
+    const uint32_t ec_group = get_arg_val<uint32_t>(4);
+    const uint32_t my_col = get_arg_val<uint32_t>(5);  // grid column == this core's x-injection slot
+    const uint32_t my_row = get_arg_val<uint32_t>(6);  // row in the column == which scatter slice I own
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
     // SiLU rides the packer thread of the root's final reduce add; the helpers never issue this.
     ActivationInitHelper<KernelActivation::SILU>::init();
 
-    // Device-resident token count. All three TRISCs spin here independently so the M-block trip
-    // count is thread-uniform (see the file header). A plain fence stands in for
-    // `invalidate_l1_cache()` — identical on Blackhole, but that helper is dataflow-only.
-    const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC, [] {
-        asm volatile("fence" ::: "memory");
-    });
-    const uint32_t m_t = mb.m_t;
-    const uint32_t m_blocks = mb.m_blocks;
+    CircularBuffer x_ready(cb_x_ready);
+    CircularBuffer mailbox_compute(cb_mailbox_compute);
+    // UNPACK waits on the reader's program-local mailbox publication, then
+    // broadcasts the two scalar loop bounds to MATH and PACK through the
+    // hardware inter-TRISC mailbox. A CB wait is UNPACK-only, so the explicit
+    // broadcast is what keeps all three threads on the same trip count.
+    uint32_t m_t = 0;
+    uint32_t m_blocks = 0;
+    UNPACK(({
+        mailbox_compute.wait_front(1);
+        const uint32_t mailbox_addr = get_local_cb_interface(cb_mailbox_compute).fifo_rd_ptr << 4;
+        const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC, [] {
+            asm volatile("fence" ::: "memory");
+        });
+        m_t = mb.m_t;
+        m_blocks = mb.m_blocks;
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_t);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_blocks);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_t);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_blocks);
+        mailbox_compute.pop_front(1);
+    }));
+    MATH(({
+        m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+        m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+    }));
+    PACK(({
+        m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+        m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+    }));
+    const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
 
     CircularBuffer x_buf(cb_x_tiles);
-    CircularBuffer x_ready(cb_x_ready);
     CircularBuffer wg_buf(cb_w_gate);
     CircularBuffer wu_buf(cb_w_up);
     CircularBuffer wd_buf(cb_w_down);
@@ -258,7 +287,10 @@ void kernel_main() {
         const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t x_slot_tiles = m_eff * KR_PAD;
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
-        const uint32_t out_block_tiles = m_eff * EC_MAX;
+        const uint32_t down_ec = wd_mgroup ? ec_group : ec;
+        const uint32_t down_rows = wd_mgroup ? MGROUP_ROWS : m_eff;
+        const uint32_t out_ec_max = wd_mgroup ? EC_GROUP_MAX : EC_MAX;
+        const uint32_t out_block_tiles = down_rows * out_ec_max;
 
         // PAGE ACCOUNTING vs ARITHMETIC. Everything above is a PAGE count and stays on `m_eff`,
         // because those are what must divide M_BLOCK and agree across cores without communication.
@@ -493,13 +525,13 @@ void kernel_main() {
                 // The reader publishes the complete resident W_down shard once, while cb_h carries
                 // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
                 // result never leaves DEST for an intermediate BF16 accumulation spill.
-                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * EC_MAX;
+                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
                 wd_buf.wait_front(WD_RESIDENT_TILES);
                 reconfig_data_format(cb_w_down, cb_h);
                 pack_reconfig_data_format(cb_out_tiles);
-                mm_block_init_short(cb_h, cb_w_down, false, ec, 1, HID_T);
-                const MatmulBlockShape row_shape = MatmulBlockShape::of(1, 1, 1, ec, HID_T, 1);
-                for (uint32_t r = 0; r < KGROUPS; ++r) {
+                mm_block_init_short(cb_h, cb_w_down, false, down_ec, 1, HID_T);
+                const MatmulBlockShape row_shape = MatmulBlockShape::of(1, 1, 1, down_ec, HID_T, 1);
+                for (uint32_t r = 0; r < down_rows; ++r) {
                     matmul_block<
                         /*transpose=*/false,
                         /*packer_l1_acc=*/true,
@@ -525,16 +557,22 @@ void kernel_main() {
                         row_shape,
                         {},
                         {},
-                        /*in1_per_core_w=*/EC_MAX,
-                        /*out_row_width=*/EC_MAX,
+                        /*in1_per_core_w=*/WD_EC_MAX,
+                        /*out_row_width=*/out_ec_max,
                         {},
                         {},
                         {},
                         {},
-                        /*out_col_offset=*/r * EC_MAX);
+                        /*out_col_offset=*/0);
+                    // The full output allocation was reserved before the loop, but publishing
+                    // this completed row advances the CB write pointer to row r+1 and lets the
+                    // writer issue row r while compute works on the next W_down matmul.
+                    out_tiles_buf.push_back(out_ec_max);
                 }
-                h_buf.wait_front(HID_T);
-                h_buf.pop_front(HID_T);  // payload-free alignment slot from the reader
+                if (!wd_mgroup) {
+                    h_buf.wait_front(HID_T);
+                    h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
+                }
                 wd_buf.pop_front(WD_RESIDENT_TILES);
             } else if constexpr (WD_PACKED) {
                 // Balanced hidden slices live contiguously in the resident W_down payload while
@@ -542,7 +580,7 @@ void kernel_main() {
                 // Keep the read pointer at the CB base, wait cumulatively for each published
                 // block, and address its packed rows explicitly. This path is only used by a
                 // short tail; full M blocks take the one-shot K=HID_T row schedule above.
-                constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
+                constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
                 constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * WD_BLOCK_TILES;
                 auto wait_packed_wd = [&](uint32_t block, uint32_t, bool) {
                     wd_buf.wait_front((block + 1) * WD_BLOCK_TILES);
@@ -570,7 +608,7 @@ void kernel_main() {
                     shape_dn,
                     {},
                     wait_packed_wd,
-                    /*in1_per_core_w=*/EC_MAX,
+                    /*in1_per_core_w=*/WD_EC_MAX,
                     /*out_row_width=*/EC_MAX,
                     {},
                     HnSteps{},
@@ -601,12 +639,14 @@ void kernel_main() {
                     shape_dn,
                     {},
                     {},
-                    /*in1_per_core_w=*/EC_MAX,
+                    /*in1_per_core_w=*/WD_EC_MAX,
                     /*out_row_width=*/EC_MAX,
                     {},
                     HnSteps{});
             }
-            out_tiles_buf.push_back(out_block_tiles);
+            if (!wd_mrow) {
+                out_tiles_buf.push_back(out_block_tiles);
+            }
             // Leave a known packer state for the next M-block's gate/up path.
             pack_reconfig_l1_acc(0);
         }

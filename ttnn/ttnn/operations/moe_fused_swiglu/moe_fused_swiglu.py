@@ -20,11 +20,9 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
     TILE,
     WEIGHT_DTYPES,
-    create_program_descriptor,
-    make_mailbox,
     weight_memory_configs,
     worker_grid,
 )
@@ -33,20 +31,23 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import
 # ---------------------------------------------------------------------------
 # Precision default — ONE exported definition; `None` resolves through it.
 # ---------------------------------------------------------------------------
-def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
+def default_compute_kernel_config() -> ttnn.DeviceComputeKernelConfig:
     """LoFi + approx SFPU + fp16 DEST.
 
     bfp4 weights carry ~4 mantissa bits, so higher fidelity buys nothing and costs FPU passes;
     fp32 DEST would halve DEST capacity (DEST_AUTO_LIMIT 8 -> 4) for no accuracy gain.
     `dst_full_sync_en=False` is load-bearing: the Blackhole fast tilize path requires half sync.
     """
-    cfg = ttnn.ComputeConfigDescriptor()
-    cfg.math_fidelity = ttnn.MathFidelity.LoFi
-    cfg.math_approx_mode = True
-    cfg.fp32_dest_acc_en = False
-    cfg.dst_full_sync_en = False
-    cfg.bfp8_pack_precise = True
-    return cfg
+    # DeviceComputeKernelConfig is the abstract base exposed to Python; the
+    # concrete configuration class retains its historical Wormhole name and is
+    # also the configuration type used on Blackhole.
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,11 @@ def validate(
             raise ValueError(f"moe_fused_swiglu: {name} must be uint32 ROW_MAJOR, got dtype {t.dtype}")
         if t.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError(f"moe_fused_swiglu: {name} must be uint32 ROW_MAJOR, got layout {t.layout}")
+        shape = list(t.shape)
+        if not (len(shape) == 1 or (len(shape) == 2 and int(shape[0]) == 1)):
+            raise ValueError(f"moe_fused_swiglu: {name} must be 1-D or (1, N), got shape {shape}")
+        if int(shape[-1]) == 0:
+            raise ValueError(f"moe_fused_swiglu: {name} must not be empty")
 
     num_local = int(global_expert_idx_table.shape[-1])
     if not isinstance(local_expert_id, int) or local_expert_id < 0 or local_expert_id >= num_local:
@@ -291,7 +297,7 @@ def moe_fused_swiglu(
     input_m_tiles: int = None,
     dtype: ttnn.DataType = None,
     memory_config: ttnn.MemoryConfig = None,
-    compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig = None,
     core_grid=None,
     output: ttnn.Tensor = None,
     expert_region_offsets: ttnn.Tensor = None,
@@ -328,15 +334,30 @@ def moe_fused_swiglu(
         input_m_tiles=input_m_tiles,
     )
 
-    device = input_tensor.device()
     capacity = int(input_tensor.shape[-2])
-    emb = int(input_tensor.shape[-1])
 
-    out_dtype = dtype if dtype is not None else ttnn.bfloat8_b
+    out_dtype = (
+        output.dtype if output is not None and dtype is None else (dtype if dtype is not None else ttnn.bfloat8_b)
+    )
     if out_dtype not in (ttnn.bfloat8_b, ttnn.bfloat16):
         raise ValueError(f"moe_fused_swiglu: output dtype {out_dtype!r} must be bfloat8_b or bfloat16")
-    out_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out_memory_config = (
+        output.memory_config()
+        if output is not None and memory_config is None
+        else (memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG)
+    )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    # Compatibility for callers of the former ProgramDescriptor implementation.
+    # The standard C++ operation takes DeviceComputeKernelConfig; copy the
+    # hardware-relevant fields from the old descriptor when one is supplied.
+    if isinstance(cfg, ttnn.ComputeConfigDescriptor):
+        cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=cfg.math_fidelity,
+            math_approx_mode=cfg.math_approx_mode,
+            fp32_dest_acc_en=cfg.fp32_dest_acc_en,
+            packer_l1_acc=False,
+            dst_full_sync_en=cfg.dst_full_sync_en,
+        )
     m_t_max = input_m_tiles if input_m_tiles is not None else capacity // TILE
     if m_t_max < 1 or m_t_max > capacity // TILE:
         raise ValueError(f"moe_fused_swiglu: input_m_tiles {m_t_max} out of range [1, {capacity // TILE}]")
@@ -359,54 +380,23 @@ def moe_fused_swiglu(
                 "moe_fused_swiglu: output must not alias input_tensor — the reader prefetches the "
                 "NEXT M-block's x rows with no ordering against this block's write-back"
             )
-        output_tensor = output
-    else:
-        output_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, capacity, emb]),
-            out_dtype,
-            ttnn.TILE_LAYOUT,
-            device,
-            out_memory_config,
-        )
+    if core_grid is not None and not hasattr(core_grid, "x"):
+        core_grid = ttnn.CoreCoord(int(core_grid[0]), int(core_grid[1]))
 
-    # Sized over the FULL device grid, not the op's (possibly clamped) core_grid, and that is
-    # load-bearing: the mailbox is an L1-INTERLEAVED buffer, so page i lives in bank i and every
-    # core reads its own page at the shared base address. Allocating only `hgroups * kgroups`
-    # pages leaves the banks past that count with no page, and a worker core mapped to one of them
-    # spins on a magic that is never written. Measured: hangs every dispatch at core_grid=11x8 on
-    # an 11x10 device, with compute stuck in tilize and the writer on SEM_XSTAGED.
-    grid = device.compute_with_storage_grid_size()
-    mailbox = make_mailbox(device, int(grid.x) * int(grid.y))
-
-    descriptor = create_program_descriptor(
+    return ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
         input_tensor,
         w_gate,
         w_up,
         w_down,
         counts,
         global_expert_idx_table,
-        output_tensor,
-        mailbox,
-        local_expert_id=local_expert_id,
+        local_expert_id,
         input_m_tiles=m_t_max,
+        dtype=out_dtype,
+        memory_config=out_memory_config,
         compute_kernel_config=cfg,
         core_grid=core_grid,
+        output=output,
         expert_region_offsets=expert_region_offsets,
         read_x_at_offset=read_x_at_offset,
     )
-
-    io_tensors = [
-        input_tensor,
-        w_gate,
-        w_up,
-        w_down,
-        counts,
-        global_expert_idx_table,
-        mailbox,
-        output_tensor,
-    ]
-    if expert_region_offsets is not None:
-        io_tensors.append(expert_region_offsets)
-
-    ttnn.generic_op(io_tensors, descriptor)
-    return output_tensor

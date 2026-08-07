@@ -1,6 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""moe_fused_swiglu — the program descriptor.
+"""Legacy generic-op descriptor retained for optimization-history tooling.
+
+The public operation no longer imports or executes this module.  Its production program factory,
+runtime-argument override, validation, and cache identity are implemented by the standard C++ op
+under ``ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu``.  New callers
+should import placement helpers from ``moe_fused_swiglu_helpers``.
+
+The implementation below is kept only because older knob/probe modules directly monkeypatch the
+generic descriptor while comparing historical kernels.  It is not a second runtime path for
+``moe_fused_swiglu``.
 
 Realises the blocking model of ``op_design.md`` §1 on an HGROUPS x KGROUPS worker grid:
 
@@ -10,7 +19,7 @@ Realises the blocking model of ``op_design.md`` §1 on an HGROUPS x KGROUPS work
   * **Kh** (hidden, ``down`` contraction)-> sequential per core, ``HGROUPS`` K-blocks
   * **M**  (tokens)                      -> sequential outer loop; the only RUNTIME extent
 
-This module assembles the program. `moe_fused_swiglu_geometry.py` decides what to assemble —
+This legacy module assembles the historical generic program. `moe_fused_swiglu_geometry.py` decides what to assemble —
 every block factor, buffer depth and tuning constant lives there, with the measurement that set
 it recorded in `perf_experiments/DESIGN_NOTES.md`.
 """
@@ -29,7 +38,9 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_geometry import (  # noqa
     TILE,
 )
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+KERNEL_DIR = (
+    Path(__file__).parents[3] / "cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels"
+)
 
 #: Weight dtypes the op can stream. All three weights must share one; the CB format and the tile
 #: stride both come from it.
@@ -50,6 +61,8 @@ KERNEL_CT_ORDER = {
         "KR_PAD",
         "HN_PAD",
         "EC_MAX",
+        "WD_EC_MAX",
+        "EC_GROUP_MAX",
         "M_BLOCK",
         "HGROUPS",
         "KGROUPS",
@@ -64,6 +77,8 @@ KERNEL_CT_ORDER = {
         "SEM_HROW_FREE",
         "SEM_PHASE_FREE",
         "PHASE_CB_ALIAS",
+        "H_ROUND_NOC1_MASK",
+        "SCATTER_ONE_SIGNAL",
         "X_PAGE",
         "X_SLICE",
         "COUNTS_PAGE",
@@ -76,10 +91,13 @@ KERNEL_CT_ORDER = {
         "W_RESIDENT",
         "WD_RESIDENT",
         "WD_MROW_ROUNDS",
+        "WD_MGROUPS",
+        "WD_MGROUP_MIN_BLOCKS",
         "GU_CHUNKS",
         "XPRIO",
         "HACK_AHEAD",
         "DEPTH_H",
+        "DEPTH_X",
         "WD_SPLIT",
         "WG_SHARD_W",
         "WD_SHARD_W",
@@ -99,6 +117,8 @@ KERNEL_CT_ORDER = {
         "CB_GATHER_GATE",
         "CB_GATHER_UP",
         "CB_UP_ACC",
+        "CB_MAILBOX_COMPUTE",
+        "CB_MAILBOX_WRITER",
     ),
     "writer": (
         "EMB_T",
@@ -106,13 +126,18 @@ KERNEL_CT_ORDER = {
         "KR_PAD",
         "HN_PAD",
         "EC_MAX",
+        "WD_EC_MAX",
+        "EC_GROUP_MAX",
         "M_BLOCK",
         "HGROUPS",
         "KGROUPS",
+        "NUM_CORES",
         "SEM_GO",
         "SEM_DATA",
         "SEM_HSLICE",
         "SEM_XSTAGED",
+        "SEM_H_RDY_BASE",
+        "SEM_H_FREE",
         "SEM_WDSPLIT",
         "SEM_PHASE_FREE",
         "SEM_HROW_FREE",
@@ -127,9 +152,16 @@ KERNEL_CT_ORDER = {
         "GU_CHUNKS",
         "XPRIO",
         "WD_MROW_ROUNDS",
+        "WD_MGROUPS",
+        "WD_MGROUP_MIN_BLOCKS",
+        "DEPTH_H",
+        "H_ROUND_NOC1_MASK",
+        "SCATTER_ONE_SIGNAL",
         "WD_SPLIT",
         "WG_SHARD_W",
         "WD_SHARD_W",
+        "GATHER_PAGES",
+        "PHASE_ALIAS_PAGES",
         "DIRECT_WRITE",
         "OUT_M_T",
         "CB_W_UP",
@@ -141,12 +173,16 @@ KERNEL_CT_ORDER = {
         "CB_GATHER_UP",
         "CB_H_SLICE",
         "CB_H_LOCAL",
+        "CB_H",
+        "CB_MAILBOX_WRITER",
     ),
     "compute": (
         "M_BLOCK",
         "KR_PAD",
         "HN_PAD",
         "EC_MAX",
+        "WD_EC_MAX",
+        "EC_GROUP_MAX",
         "HGROUPS",
         "KGROUPS",
         "HID_T",
@@ -160,6 +196,8 @@ KERNEL_CT_ORDER = {
         "HN_BLOCK",
         "WD_RESIDENT",
         "WD_MROW_ROUNDS",
+        "WD_MGROUPS",
+        "WD_MGROUP_MIN_BLOCKS",
         "GU_CHUNKS",
         "ELTWISE_BLK",
         "DEST_LIMIT",
@@ -167,6 +205,7 @@ KERNEL_CT_ORDER = {
         "CB_X_IN",
         "CB_X_TILES",
         "CB_X_STAGE",
+        "CB_MAILBOX_COMPUTE",
         "CB_W_GATE",
         "CB_W_UP",
         "CB_W_DOWN",
@@ -201,6 +240,8 @@ KERNEL_RT_SCALARS = {
         "HN",
         "EC",
         "JSTART",
+        "EC_GROUP",
+        "JSTART_GROUP",
         "MY_COL",
         "MY_ROW",
         # `start` (= expert_region_offsets). LAST in the scalar block, so RT_PEERS and every
@@ -218,11 +259,13 @@ KERNEL_RT_SCALARS = {
         "HN",
         "EC",
         "JSTART",
+        "EC_GROUP",
+        "JSTART_GROUP",
         "MY_COL",
         "MY_ROW",
         "ROOT_ROW",
     ),
-    "compute": ("MAILBOX", "KR", "HN", "EC", "MY_COL", "MY_ROW"),
+    "compute": ("MAILBOX", "KR", "HN", "EC", "EC_GROUP", "MY_COL", "MY_ROW"),
 }
 
 
@@ -230,23 +273,26 @@ KERNEL_RT_SCALARS = {
 # Public helpers
 # --------------------------------------------------------------------------------------------
 def worker_grid(device, core_grid=None):
-    """The (HGROUPS, KGROUPS) this op will use — the ONE definition, shared by
-    `create_program_descriptor` and by `weight_memory_configs`, so a caller's shard width cannot
-    drift from the op's own hidden split.
+    """The ``(HGROUPS, KGROUPS)`` used by the C++ op and weight-placement helper.
 
-    `core_grid` is a (x, y) pair or a ttnn.CoreCoord; it is CLAMPED to the device grid rather than
-    trusted. The op runs on a full rectangle anchored at (0, 0) — every collective's multicast rect
-    derives from that — so a harvested or non-contiguous CoreRangeSet is not expressible here.
+    ``core_grid`` is a ``(x, y)`` pair or ``ttnn.CoreCoord``. By default the complete
+    compute-with-storage grid is used. Explicit requests select a rectangular prefix anchored at
+    ``(0, 0)`` and are rejected only when they exceed the device.
     """
     grid = device.compute_with_storage_grid_size()
-    hgroups, kgroups = int(grid.x), int(grid.y)
+    max_hgroups, max_kgroups = int(grid.x), int(grid.y)
+    hgroups, kgroups = max_hgroups, max_kgroups
     if core_grid is not None:
         gx, gy = (
             (int(core_grid.x), int(core_grid.y)) if hasattr(core_grid, "x") else (int(core_grid[0]), int(core_grid[1]))
         )
         if gx < 1 or gy < 1:
             raise ValueError(f"moe_fused_swiglu: core_grid must be positive, got {gx}x{gy}")
-        hgroups, kgroups = min(gx, hgroups), min(gy, kgroups)
+        if gx > max_hgroups or gy > max_kgroups:
+            raise ValueError(
+                f"moe_fused_swiglu: requested grid {gx}x{gy} exceeds device grid " f"{int(grid.x)}x{int(grid.y)}"
+            )
+        hgroups, kgroups = gx, gy
     return hgroups, kgroups
 
 
@@ -305,7 +351,7 @@ def weight_memory_configs(device, emb, hidden, core_grid=None, shard_height_tile
             ),
         )
 
-    return mc(blk.hn_pad), mc(blk.ec_max)
+    return mc(blk.hn_pad), mc(blk.wd_ec_max)
 
 
 def make_mailbox(device, num_cores):
@@ -385,7 +431,9 @@ def create_program_descriptor(
     x_is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     bfp8_tile = ttnn.tile_size(ttnn.bfloat8_b)
     requested_out_tile = ttnn.tile_size(output_tensor.dtype)
-    enable_phase_alias = output_tensor.dtype == ttnn.bfloat8_b and not geo.ABLATE
+    # The BF16 phase-scratch alias is valid for either output dtype.  The output/gather alias has
+    # the additional same-page-size predicate in Blocking.phase_cb_alias().
+    enable_phase_alias = not geo.ABLATE
     kr_pad_probe = -(-(emb // TILE) // kgroups)
     blk = Blocking(
         hgroups,
@@ -400,6 +448,7 @@ def create_program_descriptor(
         l1_budget=int(ttnn._ttnn.device.get_max_worker_l1_unreserved_size()) - geo.L1_CB_RESERVE,
         out_tile=requested_out_tile,
         enable_phase_alias=enable_phase_alias,
+        x_is_rm=x_is_rm,
     )
     idx_page = max(int(global_expert_idx_table.buffer_aligned_page_size()), ttnn.get_dram_alignment())
     counts_page = max(int(counts.buffer_aligned_page_size()), ttnn.get_dram_alignment())
@@ -418,7 +467,7 @@ def create_program_descriptor(
     # that ONE page must hold either vector. Equal by validation; the max is the belt.
     counts_page = max(counts_page, start_page)
     phase_cb_alias = enable_phase_alias and blk.phase_cb_alias(requested_out_tile)
-    need = blk.l1_bytes(x_is_rm, requested_out_tile, enable_phase_alias=phase_cb_alias)
+    need = blk.l1_bytes(x_is_rm, requested_out_tile, enable_phase_alias=enable_phase_alias)
     if need > blk.l1_budget:
         raise RuntimeError(
             f"moe_fused_swiglu: needs {need} B of L1 per core, device has {blk.l1_budget} B.\n"
@@ -479,11 +528,48 @@ def create_program_descriptor(
             noc=ttnn.NOC.NOC_0, handshake=handshake, data_ready=flag, rotating_sender=True, base_sem_id=geo.SEM_H_BASE
         ),
     )
+    # Writer-owned whole h rounds use the same full rectangle on NoC1.  This helper contributes
+    # only the authoritative NoC1 corner ordering; the NoC0 helper remains the sole semaphore owner.
+    h_mcast_noc1 = ttnn.Mcast2D(
+        device,
+        all_cores,
+        ttnn.CoreCoord(0, 0),
+        ttnn.McastConfig(
+            noc=ttnn.NOC.NOC_1, handshake=False, data_ready=flag, rotating_sender=True, base_sem_id=geo.SEM_H_BASE
+        ),
+    )
     if x_mcast.num_senders() != hgroups or h_mcast.num_senders() != num_cores:
         raise RuntimeError(
             f"moe_fused_swiglu: mcast sender counts {x_mcast.num_senders()}/{h_mcast.num_senders()} "
             f"do not match the {hgroups}x{kgroups} grid"
         )
+
+    # Runtime-selectable large-M phase 2 uses two disjoint 11x4 rectangles. The existing h helper
+    # still owns the semaphores and full-grid sender-coordinate table used by the ordinary path;
+    # these helper instances are only the authoritative NOC-ordered rectangle-corner encoder.
+    # Their first four rotating runtime words are uniform over a group and no semaphore they would
+    # own is installed in the program.
+    h_group_rect_args = []
+    if blk.wd_mgroups:
+        for y0 in (0, blk.mgroup_rows):
+            group_cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(hgroups - 1, y0 + blk.mgroup_rows - 1))]
+            )
+            group_mcast = ttnn.Mcast2D(
+                device,
+                group_cores,
+                ttnn.CoreCoord(0, y0),
+                ttnn.McastConfig(
+                    noc=ttnn.NOC.NOC_0,
+                    handshake=False,
+                    data_ready=flag,
+                    rotating_sender=True,
+                    base_sem_id=geo.SEM_H_BASE,
+                ),
+            )
+            h_group_rect_args.append(list(group_mcast.runtime_args(ttnn.CoreCoord(0, y0)))[:4])
+    else:
+        h_group_rect_args = [[0, 0, 0, 0] for _ in range((kgroups + blk.mgroup_rows - 1) // blk.mgroup_rows)]
 
     # ---- circular buffers --------------------------------------------------------------
     # The slice accumulators are bf16, NOT bfp8, and that is a measured CORRECTNESS choice: the
@@ -505,7 +591,7 @@ def create_program_descriptor(
             out_tile,
             idx_page,
             counts_page,
-            enable_phase_alias=phase_cb_alias,
+            enable_phase_alias=enable_phase_alias,
         )
     ]
 
@@ -516,6 +602,8 @@ def create_program_descriptor(
         "KR_PAD": blk.kr_pad,
         "HN_PAD": blk.hn_pad,
         "EC_MAX": blk.ec_max,
+        "WD_EC_MAX": blk.wd_ec_max,
+        "EC_GROUP_MAX": blk.ec_group_max,
         "M_BLOCK": geo.M_BLOCK,
         "HGROUPS": hgroups,
         "KGROUPS": kgroups,
@@ -529,13 +617,18 @@ def create_program_descriptor(
         # while the shrunk CB no longer holds block r in slot r — stale weights, silently.
         "WD_RESIDENT": int(blk.wd_resident),
         "WD_MROW_ROUNDS": int(blk.wd_mrow_rounds and blk.wd_resident),
+        "WD_MGROUPS": int(blk.wd_mgroups),
+        "WD_MGROUP_MIN_BLOCKS": geo.WD_MGROUP_MIN_BLOCKS,
         "GU_CHUNKS": blk.gu_chunks,
         "XPRIO": int(geo.XPRIO),
         "WD_SPLIT": blk.wd_split,
         "WG_SHARD_W": wg_shard_w,
         "WD_SHARD_W": wd_shard_w,
         "GATHER_PAGES": blk.gather_pages,
+        "PHASE_ALIAS_PAGES": blk.phase_cb_alias_pages(requested_out_tile) if phase_cb_alias else 0,
         "PHASE_CB_ALIAS": int(phase_cb_alias),
+        "H_ROUND_NOC1_MASK": geo.H_ROUND_NOC1_MASK,
+        "SCATTER_ONE_SIGNAL": int(geo.SCATTER_ONE_SIGNAL),
         "W_TILE_BYTES": w_tile,
         "BFP8_TILE": bfp8_tile,
         "OUT_TILE_BYTES": out_tile,
@@ -548,7 +641,7 @@ def create_program_descriptor(
         "SEM_WDSPLIT": geo.SEM_WDSPLIT,
         "SEM_PHASE_FREE": geo.SEM_PHASE_FREE,
         "SEM_HROW_FREE": geo.SEM_HROW_FREE,
-        "DEPTH_H": geo.DEPTH_H,
+        "DEPTH_H": blk.depth_h,
         "DEPTH_X": blk.depth_x,
         "HACK_AHEAD": blk.hack_ahead,
         "WD_AHEAD": blk.wd_ahead,
@@ -598,6 +691,8 @@ def create_program_descriptor(
             kr, kstart = blk.kr_sizes[y], blk.kr_starts[y]
             hn, hstart = blk.hn_sizes[x], blk.hn_starts[x]
             ec, jstart = blk.ec_sizes[i], blk.ec_starts[i]
+            gi = (y % blk.mgroup_rows) * hgroups + x
+            ec_group, jstart_group = blk.ec_group_sizes[gi], blk.ec_group_starts[gi]
 
             args = [
                 mailbox_addr,
@@ -612,6 +707,8 @@ def create_program_descriptor(
                 hn,
                 ec,
                 jstart,
+                ec_group,
+                jstart_group,
                 x,
                 y,
                 start_tensor.buffer_address(),
@@ -623,6 +720,7 @@ def create_program_descriptor(
                 args.extend(_virt(device, x, r))
             args.extend(x_mcast.runtime_args(core))
             args.extend(h_mcast.runtime_args(core))
+            args.extend(h_group_rect_args[y // blk.mgroup_rows])
             reader_rt[x][y] = args
 
             wargs = [
@@ -636,6 +734,8 @@ def create_program_descriptor(
                 hn,
                 ec,
                 jstart,
+                ec_group,
+                jstart_group,
                 x,
                 y,
                 x % kgroups,
@@ -645,9 +745,10 @@ def create_program_descriptor(
             wargs.extend(_virt(device, y, y))
             for r in range(kgroups):
                 wargs.extend(_virt(device, x, r))
+            wargs.extend(list(h_mcast_noc1.runtime_args(core))[:4])
             writer_rt[x][y] = wargs
 
-            compute_rt[x][y] = [mailbox_addr, kr, hn, ec, x, y]
+            compute_rt[x][y] = [mailbox_addr, kr, hn, ec, ec_group, x, y]
 
     # ---- defines: the ablation hook, plus the h-mcast posted switch -----------------------------
     dm_defines = [("ABLATE_" + a.upper(), "1") for a in _ablations(geo.ABLATE, geo.DM_ABLATIONS)]
