@@ -70,7 +70,12 @@ def _patch(m, monkeypatch, *, sigs, seq, ladder_result=(4, [], "measured")):
 
 def _size(m, monkeypatch, **kw):
     calls = _patch(m, monkeypatch, **kw)
-    cov, facts = m._coverage_layers(Path("/repo"), {}, "0", "n.py::t", None, depth_knob={"TT_PERF_LAYERS": "2"})
+    cov_dict, facts = m._coverage_layers(Path("/repo"), {}, "0", "n.py::t", None, depth_knob={"TT_PERF_LAYERS": "2"})
+    # Extract the single int when there is exactly one stack (compat with Task 3 dict return).
+    if isinstance(cov_dict, dict) and len(cov_dict) == 1:
+        cov = next(iter(cov_dict.values()))
+    else:
+        cov = cov_dict
     return cov, facts, calls
 
 

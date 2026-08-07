@@ -1097,11 +1097,38 @@ def _block_start_positions(seq):
     return [i for i, t in enumerate(seq or []) if t == anchor], "inferred"
 
 
+def _parse_signpost_payload(raw: str):
+    """Parse the payload after 'PERF_BLOCK_SIGNPOST:'.
+
+    Supports two formats:
+      - Old (single-stack): '5'               -> ("stack0", 5)
+      - New (multi-stack):  'stack0:5'         -> ("stack0", 5)
+                            'stack1:12'        -> ("stack1", 12)
+
+    Returns (stack_id: str, block_idx: int) or None on malformed input.
+    """
+    raw = raw.strip()
+    if raw.startswith("stack"):
+        colon = raw.find(":", 5)  # find ':' after 'stack'
+        if colon == -1:
+            return None
+        stack_id = raw[:colon]
+        idx_str = raw[colon + 1 :]
+        if not idx_str.isdigit():
+            return None
+        return stack_id, int(idx_str)
+    # Old format: plain integer
+    if raw.isdigit():
+        return "stack0", int(raw)
+    return None
+
+
 def _first_block_map(seq):
-    """{op: the block it FIRST appears in}, plus how the blocks were located.
+    """Per-stack map of {stack_id: {op: the block it FIRST appears in}}, plus source.
 
     READ THE SIGNPOST'S OWN INDEX. _tag_stack stamps each block with its position in the stack and
-    the probe emits it as "PERF_BLOCK_SIGNPOST:<i>", which is a layer index -- the same unit as
+    the probe emits it as "PERF_BLOCK_SIGNPOST:<i>" (single-stack) or
+    "PERF_BLOCK_SIGNPOST:stack{si}:<i>" (multi-stack), which is a layer index -- the same unit as
     TT_PERF_LAYERS, the knob this feeds. Counting signposts instead gives an ORDINAL, and the two
     agree only when the model is entered exactly once: a perf test that prefills and then decodes
     enters all 48 layers twice, so the ordinal runs 0..95 and decode's layer 0 reads as block 48. On
@@ -1112,33 +1139,39 @@ def _first_block_map(seq):
     authoritative and the position in the sequence is not.
 
     The ordinal path stays for sequences with no signposts (source "inferred"), where counting block
-    starts is the only information there is.
+    starts is the only information there is.  In that case the result is wrapped under "stack0" for
+    consistency: {"stack0": {op: block}}.
     """
     starts, source = _block_start_positions(seq)
-    fb: dict = {}
     if source == "signposts":
-        cur = 0
+        # Per-stack maps: {stack_id: {op: first_block_idx}}
+        per_stack: dict = {}
+        cur_stack = "stack0"
+        cur_block = 0
         for tok in seq or []:
             if not isinstance(tok, str):
                 continue
             if tok.startswith(_SIGNPOST_TOKEN):
-                raw = tok[len(_SIGNPOST_TOKEN) :].strip()
-                # A malformed payload must not reset the walk to block 0 -- that would attribute the
-                # whole rest of the stack to the shallowest window and shrink coverage to nothing.
-                if raw.isdigit():
-                    cur = int(raw)
+                raw = tok[len(_SIGNPOST_TOKEN) :]
+                parsed = _parse_signpost_payload(raw)
+                # A malformed payload must not reset the walk to block 0 -- that would attribute
+                # the whole rest of the stack to the shallowest window and shrink coverage to nothing.
+                if parsed is not None:
+                    cur_stack, cur_block = parsed
                 continue
-            fb.setdefault(tok, cur)
-        return fb, source
+            per_stack.setdefault(cur_stack, {}).setdefault(tok, cur_block)
+        return per_stack, source
 
     import bisect
 
+    fb: dict = {}
     for i, tok in enumerate(seq or []):
         if not isinstance(tok, str) or tok.startswith(_SIGNPOST_TOKEN):
             continue
         b = bisect.bisect_right(starts, i) - 1 if starts else 0
         fb.setdefault(tok, max(b, 0))
-    return fb, source
+    # Wrap in single-stack dict for consistent return type
+    return {"stack0": fb} if fb else {}, source
 
 
 def _bridge_depth_env(
@@ -1572,44 +1605,40 @@ def _coverage_layers(
         # expensive one first and the free one only as its fallback was backwards.
         _signpost = None
         if _signposts_usable(seq):
-            first_block, _ = _first_block_map(seq)
-            deepest = max(first_block.values()) if first_block else 0
-            # THE DEPTH THE OPS ACTUALLY REQUIRE, not a ceiling inherited from a deleted algorithm.
-            # This was `min(..., 16)`, and 16 was the last rung of the 2/4/8/16 ladder that a568d9dcba
-            # replaced with this signpost path; the docstring later called it "the marker limit"
-            # although nothing computes a marker capacity, and drain_sizing.py already prevents
-            # overflow by tuning TT_PERF_FLUSH_EVERY. The cost was silent: on gemma-3-12b-it the
-            # window was reported as 16 with "54 op-type(s) still absent at max depth", and the TRUE
-            # depth -- computed right here as deepest + 1 -- was thrown away before anyone could read
-            # it. A window that omits 54 op types cannot find a bottleneck living in one of them.
-            _cov = _cap_cov_depth(max(deepest + 1, 2), model_name or config_ref)
-            # VERIFY BEFORE BELIEVING. The ladder earns its number by running the model at each rung;
-            # this path derives one from a single probe, so the two free cross-checks against the
-            # model's own declared depth are all that stand between a wrong window and a run labelled
-            # with it. Falling back to the ladder is the recovery, never an exception.
+            per_stack_map, _ = _first_block_map(seq)
+            # Compute per-stack coverage depth. per_stack_map is {stack_id: {op: block_idx}}.
+            # For single-stack models this is {"stack0": {...}}.
+            _per_stack_cov: dict = {}
+            _per_stack_deep: dict = {}
             _declared = _declared_depth(_model_root_from_node(repo_root, node), model_name or config_ref)
-            _ok, _why = _validate_signpost_window(_cov, facts.get("full_blocks") or 0, _declared)
-            if not _ok:
-                print(f"  [optimize/cc] signpost window REJECTED: {_why}; falling back to the ladder")
-            elif _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, _cov, facts["full_signal"]):
-                # The cap reached nothing. Reporting a window here would label a FULL-MODEL profile as
-                # an N-layer one, which is what put "96 layers" on a 48-layer gemma3 run and left its
-                # before/after eager readings incomparable. The ladder path has refused this since it
-                # was written; the path almost every model takes did not.
-                print(
-                    f"  [optimize/cc] depth knob is INERT on the signpost path: capping to {_cov} left the "
-                    f"work signal unchanged, so the cap never reached the builder. Profiling FULL depth."
-                )
-                _coverage_cache_put(repo_root, node, case, 0)
-                # NOT a failure: the cap was applied and measured to change nothing, so the model
-                # builds every layer whatever it is asked. Profiling full depth is the right outcome.
-                facts["no_window"] = "knob_inert"
-                return None, facts
-            else:
-                _signpost = (_cov, sorted(op for op, b in first_block.items() if b >= _cov))
+            _signpost_ok = True
+            for _sid, _fb in per_stack_map.items():
+                _deepest = max(_fb.values()) if _fb else 0
+                _cov_s = _cap_cov_depth(max(_deepest + 1, 2), model_name or config_ref)
+                _ok, _why = _validate_signpost_window(_cov_s, facts.get("full_blocks") or 0, _declared)
+                if not _ok:
+                    print(f"  [optimize/cc] signpost window REJECTED ({_sid}): {_why}; falling back to the ladder")
+                    _signpost_ok = False
+                    break
+                _per_stack_cov[_sid] = _cov_s
+                _per_stack_deep[_sid] = sorted(op for op, b in _fb.items() if b >= _cov_s)
+            if _signpost_ok and _per_stack_cov:
+                _cov_max = max(_per_stack_cov.values())
+                if _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, _cov_max, facts["full_signal"]):
+                    print(
+                        f"  [optimize/cc] depth knob is INERT on the signpost path: capping to {_cov_max} left the "
+                        f"work signal unchanged, so the cap never reached the builder. Profiling FULL depth."
+                    )
+                    _coverage_cache_put(repo_root, node, case, 0)
+                    facts["no_window"] = "knob_inert"
+                    return None, facts
+                else:
+                    _signpost = (_per_stack_cov, _per_stack_deep)
         if _signpost is not None:
-            _cov, deep = _signpost
+            _cov_dict, _deep_dict = _signpost
             blk_source = "signposts"
+            # Flatten deep ops across stacks for facts/reporting
+            deep = sorted({op for ops in _deep_dict.values() for op in ops})
         else:
             measured = _measure_cov(
                 repo_root,
@@ -1623,16 +1652,23 @@ def _coverage_layers(
                 full_signal=facts["full_signal"],
             )
             if measured is not None:
-                _cov, deep, blk_source = measured
+                _cov_scalar, deep, blk_source = measured
             else:
                 deep = []
-                _cov = 2
+                _cov_scalar = 2
                 blk_source = "unverified-floor"
+            _cov_dict = {"stack0": _cov_scalar}
         facts["deep_ops"] = deep
         tail = f"; {len(deep)} op-type(s) still absent at max depth (present in full model, un-timed)" if deep else ""
-        print(f"  [optimize/cc] coverage ({blk_source}): {len(sigs)} distinct op(s) -> TT_PERF_LAYERS={_cov}{tail}")
-        _coverage_cache_put(repo_root, node, case, _cov)
-        return _cov, facts
+        _cov_repr = _cov_dict if len(_cov_dict) > 1 else next(iter(_cov_dict.values()))
+        print(
+            f"  [optimize/cc] coverage ({blk_source}): {len(sigs)} distinct op(s) -> TT_PERF_LAYERS={_cov_repr}{tail}"
+        )
+        # Cache stores the maximum depth across stacks (an int); the full per-stack dict is
+        # reconstructed on the live path and not preserved in the on-disk cache.
+        _cache_val = max(_cov_dict.values()) if isinstance(_cov_repr, dict) else _cov_repr
+        _coverage_cache_put(repo_root, node, case, _cache_val)
+        return _cov_dict, facts
     k, n_kinds = _config_layer_kinds(config_ref or model_name)
     if k is not None:
         _cov = min(k, 16)
@@ -1641,9 +1677,7 @@ def _coverage_layers(
             f"appears at layer {k - 1} -> TT_PERF_LAYERS={_cov}"
         )
         _coverage_cache_put(repo_root, node, case, _cov)
-        return _cov, facts
-    # The k=0 probe enumerated nothing AND no config declares a layer pattern. Genuinely unknown --
-    # full depth is still the safe profile, but a reader should be told this one was not a decision.
+        return {"stack0": _cov}, facts
     facts["no_window"] = "probe_failed"
     return None, facts
 
@@ -3166,6 +3200,12 @@ def optimize_pipeline(
         config_ref=config_ref,
         depth_knob=_depth_knob or None,
     )
+    # _coverage_layers now returns a dict {stack_id: depth} or None.
+    # Compat shim: extract single int when dict has exactly one entry so that
+    # existing _set_depth / _bridge_depth_env calls still receive an int.
+    # Multi-stack wiring (Task 4) will replace this shim.
+    if isinstance(_cov, dict):
+        _cov = next(iter(_cov.values())) if len(_cov) == 1 else _cov
     if _cov:
         from agent.layer_depth import set_depth as _set_depth
 

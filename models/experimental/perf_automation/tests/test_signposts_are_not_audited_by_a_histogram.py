@@ -54,7 +54,8 @@ def test_ten_passes_are_still_fine():
 
 def test_the_block_index_stays_inside_the_stack_however_many_passes():
     seq = _pass(48) + _pass(48) + _pass(48)
-    fb, source = R._first_block_map(seq)
+    per_stack, source = R._first_block_map(seq)
+    fb = per_stack.get("stack0", per_stack)
     assert source == "signposts" and max(fb.values()) <= 47
 
 
@@ -108,5 +109,6 @@ def test_signposts_win_even_when_the_histogram_would_agree():
     merits, not because the two happen to match."""
     seq = _pass(8)
     assert R._block_start_positions(seq)[1] == "signposts"
-    fb, _ = R._first_block_map(seq)
+    per_stack, _ = R._first_block_map(seq)
+    fb = per_stack.get("stack0", per_stack)
     assert fb["Matmul"] == 0

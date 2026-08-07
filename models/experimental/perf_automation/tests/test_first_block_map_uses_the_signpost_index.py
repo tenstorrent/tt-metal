@@ -14,6 +14,10 @@ stamped into the ledger, and the report said "96 layers".
 
 The ordinal path stays for models whose blocks raise no signposts at all (source "inferred"), where
 counting is the only information available.
+
+NOTE (Task 3): _first_block_map now returns {stack_id: {op: block}} for multi-stack support.
+Single-stack sequences (old PERF_BLOCK_SIGNPOST:N format) return {"stack0": {op: block}}.
+Tests below use _s0(fb) to extract the stack0 flat dict for single-stack assertions.
 """
 
 import sys
@@ -37,13 +41,19 @@ def _pass(n_layers, ops_by_layer=None):
     return seq
 
 
+def _s0(per_stack):
+    """Extract the stack0 flat map from a per-stack dict (single-stack helper)."""
+    return per_stack.get("stack0", per_stack)
+
+
 # ---------------------------------------------------------------- the reported bug
 
 
 def test_two_passes_over_48_layers_do_not_report_96_blocks():
     """The gemma3 shape: prefill then decode. 96 signposts, 48 layers."""
     seq = _pass(48) + _pass(48)
-    fb, source = _first_block_map(seq)
+    per_stack, source = _first_block_map(seq)
+    fb = _s0(per_stack)
     assert source == "signposts"
     assert max(fb.values()) <= 47, max(fb.values())
 
@@ -52,14 +62,14 @@ def test_an_op_unique_to_the_second_pass_is_attributed_to_its_real_layer():
     """A decode-only op in layer 3 must read as block 3, not block 51. This is the whole failure:
     the inflated index is what set the coverage window to 96."""
     seq = _pass(48) + _pass(48, {3: ("DecodeOnlyOp",)})
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["DecodeOnlyOp"] == 3, fb["DecodeOnlyOp"]
 
 
 def test_the_resulting_window_is_a_layer_count_not_a_signpost_count():
     """deepest + 1 is what becomes TT_PERF_LAYERS. It must never exceed the model's layer count."""
     seq = _pass(48) + _pass(48) + _pass(48)
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert max(fb.values()) + 1 <= 48
 
 
@@ -69,14 +79,14 @@ def test_the_resulting_window_is_a_layer_count_not_a_signpost_count():
 def test_a_single_pass_is_unaffected():
     """The case that always worked: ordinal and index coincide, so the answer must not move."""
     seq = _pass(16, {9: ("RareOp",)})
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["RareOp"] == 9 and fb["Matmul"] == 0
 
 
 def test_first_appearance_still_wins_over_later_ones():
     """fb records where an op FIRST appears; a later repeat must not overwrite it."""
     seq = _pass(8, {1: ("Shared",), 5: ("Shared",)})
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["Shared"] == 1
 
 
@@ -87,7 +97,7 @@ def test_a_stack_entered_out_of_order_reads_the_index_not_the_order():
     """Nothing guarantees blocks fire in ascending order (a model may run a shared block early). The
     index is authoritative; the position in the sequence is not."""
     seq = [SP % 5, "Matmul", "OpA", SP % 2, "Matmul", "OpB", SP % 9, "Matmul", "OpC"]
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert (fb["OpA"], fb["OpB"], fb["OpC"]) == (5, 2, 9), fb
 
 
@@ -95,7 +105,7 @@ def test_ops_before_the_first_signpost_land_in_block_zero():
     """Embedding-side ops run before any block is entered. They belong to the shallowest window, not
     to whatever block happens to follow them."""
     seq = ["Embedding"] + _pass(4)
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["Embedding"] == 0
 
 
@@ -103,18 +113,18 @@ def test_a_malformed_signpost_does_not_crash_or_reset_the_block():
     """The probe writes these strings; a truncated or non-numeric one must degrade, not throw, and
     must not silently attribute the rest of the stack to block 0."""
     seq = [SP % 3, "Matmul", "OpA", "PERF_BLOCK_SIGNPOST:", "Matmul", "OpB", "PERF_BLOCK_SIGNPOST:xyz", "Matmul", "OpC"]
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["OpA"] == 3 and fb["OpB"] == 3 and fb["OpC"] == 3, fb
 
 
 def test_a_negative_index_is_ignored():
     seq = [SP % 2, "Matmul", "OpA", "PERF_BLOCK_SIGNPOST:-4", "Matmul", "OpB"]
-    fb, _ = _first_block_map(seq)
+    fb = _s0(_first_block_map(seq)[0])
     assert fb["OpB"] == 2, fb
 
 
 def test_non_string_tokens_are_skipped():
-    fb, _ = _first_block_map([SP % 1, "Matmul", None, 7, "OpA", SP % 2, "Matmul"])
+    fb = _s0(_first_block_map([SP % 1, "Matmul", None, 7, "OpA", SP % 2, "Matmul"])[0])
     assert fb["OpA"] == 1
 
 
@@ -132,6 +142,7 @@ def test_a_sequence_with_no_signposts_still_infers_blocks():
     seq = []
     for i in range(4):
         seq += ["Anchor", "Matmul"] + (["Deep"] if i == 3 else [])
-    fb, source = _first_block_map(seq)
+    per_stack, source = _first_block_map(seq)
+    fb = _s0(per_stack)
     assert source == "inferred", source
     assert fb["Deep"] == 3, fb
