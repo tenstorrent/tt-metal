@@ -70,17 +70,26 @@ codegen_worktree_dirs() {
 resolve_worktree_base() {
   local requested="${CODEGEN_BASE_COMMIT:-}"
   if [[ -z "$requested" ]]; then
-    echo "origin/main"
-    return
+    git -C "$REPO_ROOT" rev-parse --verify "origin/main^{commit}" 2>/dev/null || {
+      echo "[worktree] origin/main is not available locally for admission pinning" >&2
+      return 1
+    }
+    return 0
   fi
-  if [[ ! "$requested" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "[worktree] CODEGEN_BASE_COMMIT must be a full 40-character commit SHA" >&2
+  if [[ ! "$requested" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "[worktree] CODEGEN_BASE_COMMIT must be a lowercase 40-character commit SHA" >&2
     return 1
   fi
-  git -C "$REPO_ROOT" rev-parse --verify "${requested}^{commit}" 2>/dev/null || {
+  local resolved
+  resolved="$(git -C "$REPO_ROOT" rev-parse --verify "${requested}^{commit}" 2>/dev/null)" || {
     echo "[worktree] CODEGEN_BASE_COMMIT is not available locally: $requested" >&2
     return 1
   }
+  if [[ "$resolved" != "$requested" ]]; then
+    echo "[worktree] CODEGEN_BASE_COMMIT did not resolve to itself: expected $requested, got $resolved" >&2
+    return 1
+  fi
+  echo "$resolved"
 }
 
 # ── Main functions ───────────────────────────────────────────────────────
@@ -97,7 +106,9 @@ setup_worktree() {
   if [[ -z "${CODEGEN_BASE_COMMIT:-}" ]]; then
     git fetch origin main --quiet 2>/dev/null || true
   fi
-  local base_ref
+  local base_ref base_was_pinned
+  base_was_pinned=false
+  [[ -n "${CODEGEN_BASE_COMMIT:-}" ]] && base_was_pinned=true
   base_ref="$(resolve_worktree_base)"
 
   # Reserve a unique branch + dir under a lock (concurrency-safe).
@@ -124,6 +135,17 @@ setup_worktree() {
 
   echo "[worktree] Creating worktree at $WORKTREE_DIR"
   git worktree add "$WORKTREE_DIR" "$WORKTREE_BRANCH"
+
+  local actual_base
+  actual_base="$(git -C "$WORKTREE_DIR" rev-parse HEAD)"
+  if [[ "$actual_base" != "$base_ref" ]]; then
+    echo "[worktree] base drift after creation: expected $base_ref, got $actual_base" >&2
+    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    git -C "$REPO_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+    flock -u "$lock_fd"
+    exec {lock_fd}>&-
+    return 1
+  fi
 
   flock -u "$lock_fd"
   exec {lock_fd}>&-
@@ -226,6 +248,16 @@ GITIGNORE
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
     fi
   done
+
+  # Keep the admission identity in the existing worktree state store so a later
+  # shell cannot change or unset CODEGEN_BASE_COMMIT and silently select a new
+  # base. Input validation compares these independent setup records to HEAD.
+  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
+    set EXPECTED_BASE_COMMIT "$base_ref"
+  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
+    set SETUP_BASE_COMMIT "$actual_base"
+  python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
+    set BASE_COMMIT_WAS_PINNED "$base_was_pinned" --json
 
   echo "[worktree] Ready: $WORKTREE_DIR"
   echo "[worktree] Branch: $WORKTREE_BRANCH"
