@@ -51,14 +51,19 @@ independently. A request that arrives with every slot busy waits for one to free
 **Live console.** On a terminal the server runs a split view (``demo/tui.py``): a status
 header with uptime, active turns, throughput and the KV block pool, a row per cache slot
 showing who holds it and how fast it is decoding, and under it the log with the time in a
-left column and the message on the right. ``d`` toggles the debug lines (admissions, slot
-assignments, page allocations, prefill lengths, per-user tok/s), ``p`` pauses the scroll,
+left column and the message on the right. The arrow and page keys scroll that log back
+(home for the oldest line, end to follow the newest again), since the live view owns the
+alternate screen and the terminal's own scrollback cannot reach it. ``d`` toggles the
+debug lines (each request's sender, options and messages, admissions, slot assignments,
+page allocations, prefill lengths, per-user tok/s), ``p`` pauses the scroll,
 ``c`` clears it and ``q`` quits. ``--debug`` starts with those lines on and ``--no-tui``
 (or a redirected stdout) falls back to plain logging.
 
 **OpenAI compatibility notes.**
 
-* ``messages`` are OpenAI-shaped ``{role, content}`` dicts. If the incoming
+* ``messages`` are OpenAI-shaped ``{role, content}`` dicts, where ``content`` is
+  either a string or an array of ``{"type": "text", "text": ...}`` parts (this model
+  is text-only, so an image or audio part is refused). If the incoming
   history is a strict extension of the session's stored conversation only the new
   user turn is fed; anything else (a first turn, a foreign client, an edited
   history) rewinds the session and re-prefills from the request, so a client that
@@ -70,6 +75,16 @@ assignments, page allocations, prefill lengths, per-user tok/s), ``p`` pauses th
   carries the reasoning block in the ``reasoning_content`` field, exactly like the
   DeepSeek reasoner API, while ``content`` holds the answer. ``stop`` sequences
   are not supported.
+* Tool calling works the OpenAI way round-trip. ``tools`` on the request are rendered
+  into the system turn so the model knows what it may call; when it calls one it writes
+  a DSML block (DeepSeek Markup Language, the XML-ish ``<｜DSML｜tool_calls>`` form its
+  own encoder defines), which is markup for a tool runner rather than prose and so never
+  appears in ``content``: it comes back as OpenAI ``tool_calls`` with ``finish_reason``
+  ``tool_calls``, streamed as one delta when the block closes. Results are sent back as
+  ordinary ``role: "tool"`` messages; the model has no such role, so they are folded into
+  the next user turn as ``<tool_result>`` blocks the way the checkpoint's encoder does,
+  ordered by the calls that asked for them. The assistant's calls are kept in the
+  session, so the whole loop continues on the warm cache instead of re-prefilling.
 * Errors use the OpenAI envelope ``{"error": {"message", "type", "code"}}``; for
   ``stream=true`` the error arrives as an SSE event before ``[DONE]``.
 
@@ -93,6 +108,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -113,7 +129,11 @@ from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     UserSession,
     open_mesh_device,
 )
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
+    merge_tool_messages,
+    render_message,
+    sort_tool_results_by_call_order,
+)
 from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull
 
@@ -121,6 +141,28 @@ _VENDOR = "tenstorrent"
 _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 _DEFAULT_USER = "default"
+
+# DeepSeek-V4 emits tool calls as DSML (DeepSeek Markup Language), an XML-like block the
+# checkpoint's own encoder defines in ``encoding/encoding_dsv4.py``. Note the delimiter is
+# U+FF5C FULLWIDTH VERTICAL LINE, as in the model's other special tokens, not an ASCII pipe::
+#
+#     <｜DSML｜tool_calls>
+#     <｜DSML｜invoke name="get_weather">
+#     <｜DSML｜parameter name="city" string="true">San Francisco</｜DSML｜parameter>
+#     <｜DSML｜parameter name="days" string="false">5</｜DSML｜parameter>
+#     </｜DSML｜invoke>
+#     </｜DSML｜tool_calls>
+#
+# ``string="true"`` marks a raw string; ``string="false"`` marks a JSON value (number,
+# boolean, array, object). The block follows the answer text, separated by a blank line.
+_DSML = "｜DSML｜"
+_TOOL_CALLS_OPEN = f"<{_DSML}tool_calls>"
+_TOOL_CALLS_CLOSE = f"</{_DSML}tool_calls>"
+_INVOKE_RE = re.compile(rf'<{_DSML}invoke name="(?P<name>[^"]*)">(?P<body>.*?)</{_DSML}invoke>', re.DOTALL)
+_PARAM_RE = re.compile(
+    rf'<{_DSML}parameter name="(?P<name>[^"]*)" string="(?P<string>true|false)">(?P<value>.*?)</{_DSML}parameter>',
+    re.DOTALL,
+)
 
 
 class RequestError(Exception):
@@ -146,6 +188,224 @@ def _error_parts(exc: Exception) -> tuple[int, str, str]:
     if isinstance(exc, PagedCacheFull):
         return 429, f"shared KV-cache pool is full: {exc}", "insufficient_quota"
     return 500, f"internal server error: {exc}", "server_error"
+
+
+def _content_text(content, index: int) -> str:
+    """The text of one message's ``content``.
+
+    OpenAI accepts either a plain string or an array of typed parts, and SDKs emit the
+    array form freely. The parts are concatenated; this model is text-only, so any other
+    part type (an image, audio) is refused rather than silently dropped from the prompt.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise RequestError(400, f"messages[{index}].content must be a string or an array of content parts")
+    text = []
+    for part in content:
+        if isinstance(part, str):
+            text.append(part)
+        elif isinstance(part, dict) and part.get("type", "text") == "text" and isinstance(part.get("text"), str):
+            text.append(part["text"])
+        else:
+            kind = part.get("type", "<no type>") if isinstance(part, dict) else type(part).__name__
+            raise RequestError(
+                400, f"messages[{index}] carries a {kind!r} content part, but this model takes text only"
+            )
+    return "".join(text)
+
+
+def _one_line(text: str) -> str:
+    """``text`` with its whitespace collapsed, so a message logs as a single record.
+
+    Logged whole rather than previewed: the log is what a prompt gets debugged with. The
+    console folds a long record across as many screen lines as it needs, so length here
+    costs readability nothing.
+    """
+    return " ".join(text.split())
+
+
+def _describe_request(completion_id: str, client: str, user_key: str, body: dict) -> str:
+    """A debug rendering of one request: who sent it, the options, and the messages.
+
+    Multi-line on purpose -- the console stamps the first line and indents the rest --
+    and every message is abbreviated, since a full history runs to tens of kilobytes and
+    would push everything else out of the log.
+    """
+    options = {
+        key: body[key]
+        for key in ("model", "stream", "max_tokens", "temperature", "top_p", "thinking", "reasoning_effort")
+        if body.get(key) is not None
+    }
+    messages = body.get("messages") or []
+    total = sum(len(str(m.get("content", ""))) for m in messages)
+    head = (
+        f"{completion_id} from {client} user={user_key!r} "
+        f"{' '.join(f'{k}={v!r}' for k, v in options.items())}\n"
+        f"  {len(messages)} messages, {total} chars"
+    )
+    return "\n".join([head] + [f"    [{m.get('role')}] {_one_line(str(m.get('content', '')))}" for m in messages])
+
+
+_ROLES = ("system", "developer", "user", "assistant", "tool")
+
+
+def _normalized_tool_calls(tool_calls, index: int) -> list[dict]:
+    """A request's echoed ``tool_calls``, in the shape this server also emits."""
+    if not isinstance(tool_calls, list):
+        raise RequestError(400, f"messages[{index}].tool_calls must be an array")
+    out = []
+    for call in tool_calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise RequestError(400, f"messages[{index}].tool_calls entries need a function name")
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):  # some clients send the object rather than its JSON
+            arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
+        out.append(
+            {
+                "id": str(call.get("id") or ""),
+                "type": "function",
+                "function": {"name": function["name"], "arguments": arguments},
+            }
+        )
+    return out
+
+
+def _normalized_tools(tools) -> list[dict]:
+    """The request's ``tools``, checked for the fields the prompt renderer reads."""
+    if not isinstance(tools, list) or not tools:
+        raise RequestError(400, "tools must be a non-empty array")
+    out = []
+    for index, tool in enumerate(tools):
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise RequestError(400, f"tools[{index}] must be an object with a function name")
+        out.append({"type": "function", "function": function})
+    return out
+
+
+def _normalized_messages(messages, tools=None) -> list[dict]:
+    """Validate a request's ``messages`` and put them in the form the renderer wants.
+
+    Two shapes are canonicalised here. OpenAI's ``content`` may be a string or an array
+    of typed parts, and the extra fields a client echoes back with an assistant reply
+    (``refusal``, a null ``tool_calls``) are dropped, since downstream compares whole
+    messages to recognise a continued conversation.
+
+    The model also has no ``tool`` role: it reads results as ``<tool_result>`` blocks
+    inside a user message, so a tool turn is folded in by the checkpoint's own
+    ``merge_tool_messages``. That leaves the last message a user message again, which is
+    what the rest of the server expects.
+    """
+    if not isinstance(messages, list) or not messages:
+        raise RequestError(400, "messages must be a non-empty array")
+    out = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or not isinstance(message.get("role"), str):
+            raise RequestError(400, f"messages[{index}] must be an object with a role")
+        role = message["role"]
+        if role not in _ROLES:
+            raise RequestError(400, f"messages[{index}] has role {role!r}, which this model has no place for")
+        entry = {"role": role, "content": _content_text(message.get("content"), index)}
+        if role == "assistant" and message.get("tool_calls"):
+            entry["tool_calls"] = _normalized_tool_calls(message["tool_calls"], index)
+        if role == "tool":
+            # Carries which call this answers, so several results can be put back in the
+            # order the assistant asked for them.
+            entry["tool_call_id"] = str(message.get("tool_call_id") or "")
+        out.append(entry)
+
+    if out[-1]["role"] not in ("user", "tool"):
+        raise RequestError(
+            400, f"the final message must come from the user or a tool, but its role is {out[-1]['role']!r}"
+        )
+
+    if tools:
+        # The schemas are rendered into the system turn; without one the model is never
+        # told what it may call.
+        system = next((m for m in out if m["role"] == "system"), None)
+        if system is None:
+            system = {"role": "system", "content": ""}
+            out.insert(0, system)
+        system["tools"] = _normalized_tools(tools)
+
+    if any(m["role"] == "tool" for m in out):
+        out = sort_tool_results_by_call_order(merge_tool_messages(out))
+    return out
+
+
+def _conversation_key(message: dict) -> str:
+    """What identifies a message when matching a request against a warm cache.
+
+    ``reasoning_content`` is left out: earlier turns are re-rendered without their
+    thinking anyway (``drop_thinking``), and clients seldom echo it back, so counting it
+    would re-prefill conversations that do in fact continue.
+
+    A user message that is only its own text is also written both ways -- plain
+    ``content``, and the ``content_blocks`` mirror that folding in a tool result gives
+    every user turn. They mean the same thing, so the mirror is dropped: otherwise the
+    first tool result of a session would appear to rewrite all the turns before it and
+    re-prefill the whole conversation.
+    """
+    message = {k: v for k, v in message.items() if k != "reasoning_content"}
+    if message.get("content_blocks") == [{"type": "text", "text": message.get("content", "")}]:
+        del message["content_blocks"]
+    return json.dumps(message, sort_keys=True, default=str)
+
+
+def _continues(messages: list[dict], stored: list[dict]) -> bool:
+    """Whether ``messages`` extends the conversation a slot already holds."""
+    if not stored or len(messages) <= len(stored):
+        return False
+    return [_conversation_key(m) for m in messages[: len(stored)]] == [_conversation_key(m) for m in stored]
+
+
+def _parameter_value(value: str, is_string: bool):
+    """One DSML parameter, decoded by its ``string`` flag.
+
+    A value the model flagged as JSON but did not write as JSON is kept as text: the
+    call is still worth forwarding, and the tool's own validation is a better place to
+    reject it than a 500 from here.
+    """
+    if is_string:
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_tool_calls(block: str) -> list[dict]:
+    """The OpenAI ``tool_calls`` described by a DSML block.
+
+    Deliberately tolerant where the checkpoint's reference parser raises: a serving loop
+    should hand back whatever the model managed to express rather than fail the request
+    over a malformed tag. Both argument forms are read -- the ``parameter`` tags, and the
+    bare JSON object that the model sometimes writes inside ``invoke`` instead.
+    """
+    calls = []
+    for invoke in _INVOKE_RE.finditer(block):
+        parameters = list(_PARAM_RE.finditer(invoke["body"]))
+        arguments: dict = {}
+        if parameters:
+            for parameter in parameters:
+                arguments[parameter["name"]] = _parameter_value(parameter["value"], parameter["string"] == "true")
+        elif invoke["body"].strip():
+            with contextlib.suppress(json.JSONDecodeError):
+                loaded = json.loads(invoke["body"].strip())
+                if isinstance(loaded, dict):
+                    arguments = loaded
+        calls.append(
+            {
+                "id": "call_" + uuid.uuid4().hex[:24],
+                "type": "function",
+                "function": {"name": invoke["name"], "arguments": json.dumps(arguments, ensure_ascii=False)},
+            }
+        )
+    return calls
 
 
 SAMPLER_TOP_K = 64
@@ -188,6 +448,10 @@ class _Streamer:
     think tag is likewise withheld until it resolves, so deltas never carry half a
     tag. The reasoning block and the answer are emitted as tag-free strings, ready
     for the ``reasoning_content`` / ``content`` fields of the OpenAI response.
+
+    A DSML tool-call block is held back the same way and never streamed as content: it
+    is markup addressed to the client's tool runner, not prose for the reader. What it
+    describes is parsed into OpenAI ``tool_calls`` and left on :attr:`tool_calls`.
     """
 
     def __init__(self, tokenizer, on_chunk):
@@ -196,6 +460,7 @@ class _Streamer:
         self.text = ""  # raw decoded reply, tags included, no escapes
         self.reasoning = ""
         self.content = ""
+        self.tool_calls: list[dict] = []
         self._sent_r = 0
         self._sent_c = 0
 
@@ -203,7 +468,7 @@ class _Streamer:
         full = self.tokenizer.decode(token_ids, skip_special_tokens=False).rstrip("\ufffd")
         self.text = full
         held = self._held_back(full)
-        reasoning, content = self._split(full[: len(full) - held])
+        reasoning, content, _ = self._split(full[: len(full) - held])
         # A re-decode can revise the tail (split UTF-8); resync to the common prefix.
         if not reasoning.startswith(self.reasoning):
             self._sent_r = min(self._sent_r, len(os.path.commonprefix([reasoning, self.reasoning])))
@@ -222,7 +487,8 @@ class _Streamer:
 
         Generation is over, so nothing more can complete the tail: it is emitted
         as-is and :attr:`reasoning` / :attr:`content` hold the complete reply."""
-        reasoning, content = self._split(self.text)
+        reasoning, content, tool_block = self._split(self.text)
+        self.tool_calls = _parse_tool_calls(tool_block) if tool_block else []
         if len(reasoning) > self._sent_r:
             self.on_chunk(reasoning[self._sent_r :], "")
             self._sent_r = len(reasoning)
@@ -231,24 +497,40 @@ class _Streamer:
             self._sent_c = len(content)
         self.reasoning, self.content = reasoning, content
 
-    def _split(self, text: str) -> tuple[str, str]:
+    def _split(self, text: str) -> tuple[str, str, str]:
+        """``text`` as (reasoning, answer, tool-call block), each without its tags."""
         start = text.find(_THINK_OPEN)
         if start == -1:
-            return "", text
-        after = text[start + len(_THINK_OPEN) :]
-        end = after.find(_THINK_CLOSE)
-        if end == -1:
-            return after, text[:start]
-        return after[:end], text[:start] + after[end + len(_THINK_CLOSE) :]
+            reasoning, answer = "", text
+        else:
+            after = text[start + len(_THINK_OPEN) :]
+            end = after.find(_THINK_CLOSE)
+            if end == -1:
+                reasoning, answer = after, text[:start]
+            else:
+                reasoning, answer = after[:end], text[:start] + after[end + len(_THINK_CLOSE) :]
+
+        opened = answer.find(_TOOL_CALLS_OPEN)
+        if opened == -1:
+            return reasoning, answer, ""
+        closed = answer.find(_TOOL_CALLS_CLOSE, opened)
+        block = answer[opened : closed + len(_TOOL_CALLS_CLOSE)] if closed != -1 else answer[opened:]
+        # The encoder separates the answer from the block with a blank line, which would
+        # otherwise trail the reply as whitespace.
+        return reasoning, answer[:opened].rstrip("\n"), block
 
     @staticmethod
     def _held_back(text: str) -> int:
-        """Characters at the end that could still turn into a tag once more arrive."""
-        for tag in (_THINK_CLOSE, _THINK_OPEN):
+        """Characters at the end that could still turn into a tag once more arrive.
+
+        The newlines before a tool-call block count: they are the block's separator, and
+        streaming them the moment they arrive would leave a trailing blank line on a
+        reply whose visible text has actually ended."""
+        for tag in (_THINK_CLOSE, _THINK_OPEN, _TOOL_CALLS_OPEN):
             for n in range(len(tag) - 1, 0, -1):
                 if text.endswith(tag[:n]):
-                    return n
-        return 0
+                    return n + len(text[: len(text) - n]) - len(text[: len(text) - n].rstrip("\n"))
+        return len(text) - len(text.rstrip("\n"))
 
 
 class _SlotPool:
@@ -296,20 +578,20 @@ class _SlotPool:
                 slot = self._pick(messages)
                 if slot is not None:
                     break
-                logger.debug(
-                    f"user {user_key!r} waiting for a KV slot: all {len(self._busy)} busy "
-                    f"({', '.join(str(o) for o in self.owner)})"
-                )
+                # logger.debug(
+                #     f"user {user_key!r} waiting for a KV slot: all {len(self._busy)} busy "
+                #     f"({', '.join(str(o) for o in self.owner)})"
+                # )
                 self._cv.wait(timeout=1.0)
             self._busy[slot] = True
             previous, self.owner[slot] = self.owner[slot], user_key
             self._used_at[slot] = time.time()
         waited = time.perf_counter() - t0
-        logger.debug(
-            f"user {user_key!r} -> slot {slot} (sid {self.engine.users[slot].sid}, "
-            f"{self._reason(slot, previous, user_key, messages)}"
-            f"{f', waited {waited:.2f}s' if waited > 0.01 else ''})"
-        )
+        # logger.debug(
+        #     f"user {user_key!r} -> slot {slot} (sid {self.engine.users[slot].sid}, "
+        #     f"{self._reason(slot, previous, user_key, messages)}"
+        #     f"{f', waited {waited:.2f}s' if waited > 0.01 else ''})"
+        # )
         return slot
 
     def reserve(self, slot: int) -> None:
@@ -340,7 +622,7 @@ class _SlotPool:
         best, best_len = None, 0
         for i in free:
             stored = self.engine.users[i].messages
-            if stored and len(messages) > len(stored) and messages[: len(stored)] == stored and len(stored) > best_len:
+            if len(stored) > best_len and _continues(messages, stored):
                 best, best_len = i, len(stored)
         if best is not None:
             return best
@@ -354,7 +636,7 @@ class _SlotPool:
     def _reason(self, slot: int, previous: str | None, user_key: str, messages: list[dict]) -> str:
         user = self.engine.users[slot]
         stored = user.messages
-        if stored and len(messages) > len(stored) and messages[: len(stored)] == stored:
+        if _continues(messages, stored):
             return f"continuing {len(stored)} messages at {user.pos} tokens"
         if not stored:
             return "empty slot"
@@ -411,7 +693,9 @@ class _Turn:
         self.body = body
         self.sampler = sampler
         self.max_tokens = max_tokens
-        self.text = str(body["messages"][-1]["content"])
+        # The turn this request adds. After normalisation it is always a user message,
+        # though it may carry tool results as content blocks rather than plain text.
+        self.message = body["messages"][-1]
 
         self.events: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -640,10 +924,10 @@ class _Scheduler:
             self.server._apply_options(user, turn.body)
             continuing = self.server._sync_messages(user, turn.body["messages"])
             if continuing:
-                user.messages.append({"role": "user", "content": turn.text})
+                user.messages.append(turn.message)
                 turn.ids = self.server._render_ids(user, include_assistant=False)
             else:
-                user.messages = user.messages + [{"role": "user", "content": turn.text}]
+                user.messages = user.messages + [turn.message]
                 user._next_render = 0
                 turn.ids = self.server._render_ids(user, include_assistant=True)
             self._check_capacity(user, turn.ids)
@@ -692,7 +976,7 @@ class _Scheduler:
                 if self._pool_seen.get(name, (None, None))[0] != used
             ]
             if grew and self._pool_seen:
-                logger.debug(f"KV pages allocated: {', '.join(grew)} ({self._pool_summary()})")
+                logger.debug(f"KV pages allocated:  {', '.join(grew)} ({self._pool_summary()})")
             self._pool_seen = usage
 
     def _check_capacity(self, user: UserSession, ids: list[int]) -> None:
@@ -848,6 +1132,10 @@ class _Scheduler:
         assistant: dict = {"role": "assistant", "content": turn.stream.content}
         if turn.stream.reasoning:
             assistant["reasoning_content"] = turn.stream.reasoning
+        if turn.stream.tool_calls:
+            # Kept in OpenAI shape, which is what both the renderer and a client echoing
+            # this turn back use, so the conversation can continue on the warm cache.
+            assistant["tool_calls"] = turn.stream.tool_calls
         user.messages.append(assistant)
         user._next_render = len(user.messages)
         self._retire(turn)
@@ -866,7 +1154,8 @@ class _Scheduler:
                     "completion_tokens": len(turn.generated),
                     "content": turn.stream.content,
                     "reasoning_content": turn.stream.reasoning,
-                    "finish_reason": "length" if turn.hit_cap else "stop",
+                    "tool_calls": turn.stream.tool_calls,
+                    "finish_reason": ("length" if turn.hit_cap else "tool_calls" if turn.stream.tool_calls else "stop"),
                 },
             )
         )
@@ -992,9 +1281,8 @@ class GenerationServer:
         the session so the next turn re-prefills from the request, keeping the
         session in step with whatever the client sends.
         """
-        stored = user.messages
-        if stored and len(messages) > len(stored) and messages[: len(stored)] == stored:
-            user.messages.extend(messages[len(stored) : -1])
+        if _continues(messages, user.messages):
+            user.messages.extend(messages[len(user.messages) : -1])
             return True
         user.reset()
         user.messages = list(messages[:-1])
@@ -1012,12 +1300,8 @@ class GenerationServer:
         Blocks until the reply is complete, but holds nothing except this user's own
         lock: the decode steps run on the scheduler thread, interleaved with the other
         users' turns, and this thread only relays what they produce."""
-        messages = body.get("messages")
-        if not isinstance(messages, list) or not messages:
-            raise RequestError(400, "messages must be a non-empty array")
-        last = messages[-1]
-        if not isinstance(last, dict) or last.get("role") != "user" or not isinstance(last.get("content"), str):
-            raise RequestError(400, "the final message must be a user message with string content")
+        messages = _normalized_messages(body.get("messages"), body.get("tools"))
+        body = {**body, "messages": messages}
 
         max_tokens = body.get("max_tokens")
         if max_tokens is None:
@@ -1170,12 +1454,11 @@ class _Handler(BaseHTTPRequestHandler):
         """Serve one ``/v1/chat/completions`` (``chat=True``) or ``/v1/completions``
         (legacy, ``chat=False``) request, streaming via SSE when ``stream`` is set."""
         if chat:
-            messages = body.get("messages")
-            if not isinstance(messages, list) or not messages:
-                raise RequestError(400, "messages must be a non-empty array")
-            last = messages[-1]
-            if not isinstance(last, dict) or last.get("role") != "user" or not isinstance(last.get("content"), str):
-                raise RequestError(400, "the final message must be a user message with string content")
+            # Validated before a streaming reply commits to a 200 and its SSE header, so
+            # a malformed request still gets a real status code. The result is discarded:
+            # ``generate`` normalises the body itself, and folding tool turns into user
+            # messages is not something to do twice.
+            _normalized_messages(body.get("messages"), body.get("tools"))
             completion_id = "chatcmpl-" + uuid.uuid4().hex
             object_kind, chunk_kind = "chat.completion", "chat.completion.chunk"
         else:
@@ -1190,6 +1473,8 @@ class _Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         model = str(body.get("model") or self.api.model_id)
         user_key = str(body.get("user") or _DEFAULT_USER)
+        client = f"{self.client_address[0]}:{self.client_address[1]}" if self.client_address else "?"
+        logger.debug(_describe_request(completion_id, client, user_key, body))
 
         def frame(delta: dict, finish) -> dict:
             return {
@@ -1239,6 +1524,11 @@ class _Handler(BaseHTTPRequestHandler):
                     pass
                 return
             try:
+                # The calls are known only once the block has closed, so they go out as
+                # one delta rather than being built up piece by piece across chunks.
+                if chat and stats.get("tool_calls"):
+                    calls = [{"index": i, **call} for i, call in enumerate(stats["tool_calls"])]
+                    self._sse_event(frame({"tool_calls": calls}, None))
                 self._sse_event(frame({}, stats["finish_reason"]))
                 self._sse_done()
             except (BrokenPipeError, ConnectionResetError):
@@ -1254,6 +1544,8 @@ class _Handler(BaseHTTPRequestHandler):
             message = {"role": "assistant", "content": stats["content"]}
             if stats["reasoning_content"]:
                 message["reasoning_content"] = stats["reasoning_content"]
+            if stats.get("tool_calls"):
+                message["tool_calls"] = stats["tool_calls"]
             choices = [{"index": 0, "message": message, "finish_reason": stats["finish_reason"]}]
         else:
             choices = [
@@ -1383,15 +1675,15 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--max-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_CONTEXT", "16384")),
+        default=int(os.environ.get("DEEPSEEK_V4_MAX_CONTEXT", "524288")),
         help="tokens (all turns) one user's caches are addressed for; rounded up. The "
-        "model handles 131072, but that much per user costs page-table width and pool "
+        "model handles 524288, but that much per user costs page-table width and pool "
         "blocks for every session, so the default is sized for a busy server",
     )
     p.add_argument(
         "--total-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_TOTAL_CONTEXT", "0")) or None,
+        default=int(os.environ.get("DEEPSEEK_V4_TOTAL_CONTEXT", "2097152")) or None,
         help="total tokens the shared block pool holds across all users "
         "(default: --num-users x --max-context, i.e. every user can fill its context)",
     )
