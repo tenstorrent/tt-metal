@@ -94,8 +94,20 @@ LTX_ONE_STAGE_MESH_PARAMS_DL = [
     for p in LTX_PIPELINE_MESH_PARAMS_DL
 ]
 
-# Two-stages (Pro) drives the same audio vocoder, so it needs the same pool for the same reason.
-LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
+# Two-stages (Pro) drives the same audio vocoder, so it needs the same pool for the same reason,
+# plus a trace region: stage 1 holds one trace per guidance branch (4 at the default scales) at
+# half-res and stage 2 one at full-res, against the distilled pipeline's two. Budget scales with
+# that count — 1.2 GB covers the measured per-trace command streams with headroom.
+_GUIDED_TRACE_POOLS = {"trace_region_size": 1_200_000_000, "l1_small_size": 32768}
+# fabric_router_config (8 KB payload) on the ring: the strided all-gather packs 4 bf16 tiles/packet.
+_LTX_TWO_STAGES_TRACED = {
+    "4x8sp1tp0nl2_ring_is_fsdp0": {**ring_params_8k_req_exact_devices, **_GUIDED_TRACE_POOLS},
+    "4x8sp1tp0nl2_line_is_fsdp0": {**line_params_req_exact_devices, **_GUIDED_TRACE_POOLS},
+}
+LTX_TWO_STAGES_MESH_PARAMS_DL = [
+    _override_base_device_params(p, _LTX_TWO_STAGES_TRACED[p.id], id=p.id) if p.id in _LTX_TWO_STAGES_TRACED else p
+    for p in LTX_ONE_STAGE_MESH_PARAMS_DL
+]
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,7 @@ def test_pipeline_two_stages(
     num_inference_steps = int(os.environ.get("NUM_INFERENCE_STEPS", "30"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
     pipeline = LTXTwoStagesPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
@@ -84,6 +85,7 @@ def test_pipeline_two_stages(
         is_fsdp=is_fsdp,
         distilled_lora_path=distilled_lora,
         run_warmup=run_warmup,
+        traced=traced,
         num_frames=num_frames,
         height=height,
         width=width,

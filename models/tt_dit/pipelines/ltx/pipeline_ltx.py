@@ -80,6 +80,12 @@ class LTXTransformerState:
     def __init__(self) -> None:
         self._tt_video_lat = StateTensor()
         self._tt_audio_lat = StateTensor()
+        # Guidance accumulators: the running combination, and the conditional branch kept aside for
+        # the rescale reference. Held across the step's branch replays, so they must be preallocated.
+        self._tt_video_guid = StateTensor()
+        self._tt_audio_guid = StateTensor()
+        self._tt_video_cond = StateTensor()
+        self._tt_audio_cond = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_video_timestep = StateTensor()
         self._tt_video_ts_pair = StateTensor()
@@ -175,6 +181,47 @@ def euler_step(
 # =============================================================================
 
 
+@dataclass
+class _I2VConditioning:
+    """Frame-0 image conditioning for one denoise stage — the tt analog of the reference
+    LatentState fields written by ``VideoConditionByLatentIndex.apply_to`` (latent_idx=0)."""
+
+    denoise_mask: torch.Tensor | None  # (B, N, 1): 1−strength at cond tokens else 1; None = plain T2V
+    clean_latent: torch.Tensor | None  # (B, N, C): cond tokens at frame-0 else 0
+    n_cond: int  # count of pinned frame-0 tokens
+
+
+@dataclass
+class _Guidance:
+    """MultiModalGuider weights for one denoise stage.
+
+    Each enabled term costs one extra transformer branch per step, so the ``do_*`` predicates
+    below decide how many branches the step actually runs. They mirror the host-guided path's
+    enable conditions exactly — a term whose scale sits at its neutral value contributes nothing
+    and its branch is skipped."""
+
+    video_cfg: float
+    audio_cfg: float
+    video_stg: float
+    audio_stg: float
+    video_modality: float
+    audio_modality: float
+    rescale: float
+    stg_block: int
+
+    @property
+    def do_cfg(self) -> bool:
+        return self.video_cfg > 1.0 or self.audio_cfg > 1.0
+
+    @property
+    def do_stg(self) -> bool:
+        return self.video_stg != 0.0 or self.audio_stg != 0.0
+
+    @property
+    def do_mod(self) -> bool:
+        return self.video_modality != 1.0 or self.audio_modality != 1.0
+
+
 class LTXPipeline:
     """
     LTX-2 text-to-audio-video generation pipeline.
@@ -237,6 +284,8 @@ class LTXPipeline:
         self._trace_state: dict[str, LTXTransformerState] = {}
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+        self._prompt_v_neg = StateTensor()
+        self._prompt_a_neg = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
@@ -333,6 +382,8 @@ class LTXPipeline:
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+        self._prompt_v_neg = StateTensor()
+        self._prompt_a_neg = StateTensor()
 
     @property
     def vae_decoder(self):
@@ -861,6 +912,583 @@ class LTXPipeline:
         sp_factor = self.parallel_config.sequence_parallel.factor
         divisor = ttnn.TILE_SIZE * sp_factor
         return ((n_real + divisor - 1) // divisor) * divisor
+
+    def _prepare_stage_statics(
+        self, state, *, latent_frames, latent_h, latent_w, video_N, video_N_real, audio_N, audio_N_real, sp_axis
+    ):
+        """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat)."""
+        if state.tt_video_rope_cos is not None:
+            return
+        v_cos, v_sin = prepare_video_rope(
+            latent_frames,
+            latent_h,
+            latent_w,
+            inner_dim=self.inner_dim,
+            num_attention_heads=self.num_attention_heads,
+            theta=self.positional_embedding_theta,
+            max_pos=self.positional_embedding_max_pos,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        a_cos, a_sin = prepare_audio_rope(
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        # Cross-PE required: without it A↔V cross-attention loses positional info and lip sync breaks.
+        (
+            v_xpe_cos,
+            v_xpe_sin,
+            a_xpe_cos,
+            a_xpe_sin,
+            a_xpe_cos_full,
+            a_xpe_sin_full,
+        ) = prepare_av_cross_pe(
+            latent_frames,
+            latent_h,
+            latent_w,
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
+            audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
+        )
+        state._tt_video_rope_cos.update(v_cos, False)
+        state._tt_video_rope_sin.update(v_sin, False)
+        state._tt_audio_rope_cos.update(a_cos, False)
+        state._tt_audio_rope_sin.update(a_sin, False)
+        state._tt_trans_mat.update(self._prepare_trans_mat(), False)
+        state._tt_video_cross_pe_cos.update(v_xpe_cos, False)
+        state._tt_video_cross_pe_sin.update(v_xpe_sin, False)
+        state._tt_audio_cross_pe_cos.update(a_xpe_cos, False)
+        state._tt_audio_cross_pe_sin.update(a_xpe_sin, False)
+        state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, False)
+        state._tt_audio_cross_pe_sin_full.update(a_xpe_sin_full, False)
+        state._tt_audio_attn_mask.update(tt_attn_mask, False)
+        state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
+        state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
+        state._tt_video_padding_mask.update(
+            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
+        )
+        v_mask = torch.ones(1, 1, video_N, self.in_channels)
+        v_mask[:, :, video_N_real:, :] = 0.0
+        a_mask = torch.ones(1, 1, audio_N, self.in_channels)
+        a_mask[:, :, audio_N_real:, :] = 0.0
+        state._tt_video_pad_mask.update(v_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        state._tt_audio_pad_mask.update(a_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+
+    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
+        """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front.
+
+        A ttnn trace bakes absolute tensor addresses; capture-time activations are freed and reused
+        by the next capture, so a held input in another trace's activation region is overwritten on
+        replay. Allocating every held input first keeps them below both traces' activations."""
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
+        video_N_real = latent_frames * latent_h * latent_w
+        video_N = self._sp_pad_len(video_N_real)
+        als = AudioLatentShape.from_video_pixel_shape(
+            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+        )
+        audio_N_real = als.frames
+        audio_N = self._sp_pad_len(audio_N_real)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+
+        state = self._trace_state.setdefault(trace_key, LTXTransformerState())
+        self._prepare_stage_statics(
+            state,
+            latent_frames=latent_frames,
+            latent_h=latent_h,
+            latent_w=latent_w,
+            video_N=video_N,
+            video_N_real=video_N_real,
+            audio_N=audio_N,
+            audio_N_real=audio_N_real,
+            sp_axis=sp_axis,
+        )
+        # Reserve the latent buffers before capture so the trace bakes their addresses.
+        if state.tt_video_lat is None:
+            state._tt_video_lat.update(
+                torch.zeros(1, 1, video_N, self.in_channels),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            state._tt_audio_lat.update(
+                torch.zeros(1, 1, audio_N, self.in_channels),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            # I2V pin buffers (mask + clean frame-0 latent): reserve here so replays can't clobber
+            # them. Allocated for every stage even when unused by t2v — small and harmless. The mask
+            # is per-token width-1 (broadcasts against the 128-ch latent in the pin); clean carries the
+            # real per-channel cond latent, so it stays full width.
+            state._tt_i2v_mask.update(
+                torch.zeros(1, 1, video_N, 1),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            state._tt_i2v_clean.update(
+                torch.zeros(1, 1, video_N, self.in_channels),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            # Guidance accumulators, float32: each branch is scaled by up to (cfg-1)≈2 before being
+            # summed, so bf16 rounding here would land in the guided velocity itself. Unused by the
+            # unguided path, and small next to the latents already reserved above.
+            for buf, n_tok in (
+                (state._tt_video_guid, video_N),
+                (state._tt_video_cond, video_N),
+                (state._tt_audio_guid, audio_N),
+                (state._tt_audio_cond, audio_N),
+            ):
+                buf.update(
+                    torch.zeros(1, 1, n_tok, self.in_channels),
+                    False,
+                    dtype=ttnn.float32,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
+
+    def _sharded_scalar_to_host(self, t: ttnn.Tensor, sp_axis: int) -> float:
+        """Complete a reduction that landed as one partial per device.
+
+        The latent is sequence-sharded, so reducing it yields a partial per device; the mesh's
+        other axis holds replicas, so only ``sp_axis`` is summed. Accumulated in float64 to keep
+        the moment sums exact."""
+        parts = ttnn.to_torch(
+            t,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, 1)
+            ),
+        ).double()
+        return parts[:, :, 0, 0].sum(dim=sp_axis).flatten()[0].item()
+
+    def _masked_std(self, x: ttnn.Tensor, pad_mask: ttnn.Tensor, n_real_elems: int, sp_axis: int) -> float:
+        """Std over the real (unpadded) elements of a sequence-sharded latent (``torch.std``, ddof=1).
+
+        ``pad_mask`` zeroes the SP-padding slots so they move neither moment. Only these two
+        scalars cross to the host per modality per step — the latent itself never leaves the
+        device, which is what the host-guided path pays per branch."""
+        masked = ttnn.multiply(ttnn.typecast(x, ttnn.float32), ttnn.typecast(pad_mask, ttnn.float32))
+        s1 = self._sharded_scalar_to_host(ttnn.sum(masked, keepdim=True), sp_axis)
+        s2 = self._sharded_scalar_to_host(ttnn.sum(ttnn.multiply(masked, masked), keepdim=True), sp_axis)
+        var = (s2 - s1 * s1 / n_real_elems) / (n_real_elems - 1)
+        return math.sqrt(max(var, 0.0))
+
+    @staticmethod
+    def _post_process_latent_tt(
+        denoised: ttnn.Tensor,
+        denoise_mask: ttnn.Tensor,
+        clean_latent: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Blend the denoised estimate toward the clean latent: ``denoised * mask + clean * (1 - mask)``.
+        Mirrors the reference ``post_process_latent``; the caller applies it to the x0 estimate before
+        the Euler step so partial ``image_cond_strength`` integrates like the reference (hard pin at 1.0)."""
+        one_minus = ttnn.subtract(
+            ttnn.full_like(denoise_mask, 1.0, dtype=ttnn.bfloat16),
+            denoise_mask,
+        )
+        return ttnn.add(ttnn.multiply(denoised, denoise_mask), ttnn.multiply(clean_latent, one_minus))
+
+    @staticmethod
+    def _noise_video_latent(
+        base: torch.Tensor,
+        denoise_mask: torch.Tensor | None,
+        sigma: torch.Tensor,
+        seed: int,
+    ) -> torch.Tensor:
+        """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
+
+        ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
+        bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
+        torch.manual_seed(seed)
+        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
+        return noise * scaled_mask + base * (1.0 - scaled_mask)
+
+    def _build_i2v_conditioning(
+        self,
+        image_cond_latent: torch.Tensor | None,
+        image_cond_strength: float,
+        needs_video_ts: bool,
+        B: int,
+        video_N_real: int,
+    ) -> _I2VConditioning:
+        """Build the frame-0 conditioning (per-token denoise mask + clean latent) — tt analog of the
+        reference ``create_initial_state`` + ``VideoConditionByLatentIndex.apply_to``. ``denoise_mask``
+        is None only when the transformer needs no per-token video timestep and no image is staged
+        (the plain-T2V forward-noise path)."""
+        if image_cond_latent is None and not needs_video_ts:
+            return _I2VConditioning(denoise_mask=None, clean_latent=None, n_cond=0)
+        denoise_mask = torch.ones(B, video_N_real, 1)
+        clean_latent = None
+        n_cond = 0
+        if image_cond_latent is not None:
+            cond_tokens = image_cond_latent.float().permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
+            n_cond = cond_tokens.shape[1]
+            assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
+            clean_latent = torch.zeros(B, video_N_real, self.in_channels)
+            clean_latent[:, :n_cond, :] = cond_tokens
+            denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
+            logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
+        return _I2VConditioning(denoise_mask=denoise_mask, clean_latent=clean_latent, n_cond=n_cond)
+
+    def _guided_velocity(
+        self,
+        state: LTXTransformerState,
+        *,
+        guidance: _Guidance,
+        step_kwargs: dict,
+        prompt_pos: tuple[ttnn.Tensor, ttnn.Tensor],
+        prompt_neg: tuple[ttnn.Tensor, ttnn.Tensor],
+        sigma: float,
+        video_N_real: int,
+        audio_N_real: int,
+        sp_axis: int,
+        traced: bool,
+        trace_key: str | None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run the enabled MultiModalGuider branches and fold them into one effective velocity.
+
+        Guidance is defined on the x0 estimate, but ``x0 = latent − sigma·velocity`` is affine in
+        the velocity and every branch shares the same latent, so the entire linear combination
+        carries into velocity space unchanged. Only the rescale needs x0 materialized, since it
+        compares standard deviations.
+
+        Each branch replays its own trace, and a replay overwrites whatever its capture allocated,
+        so a branch result is folded into the preallocated accumulator the moment it returns and is
+        never held across the next replay."""
+        g = guidance
+        C = self.in_channels
+
+        def run(key: str, prompts, *, skip_ca: bool = False, skip_sa: list[int] | None = None):
+            return self.transformer.inner_step(
+                **step_kwargs,
+                video_prompt_1BLP=prompts[0],
+                audio_prompt_1BLP=prompts[1],
+                skip_cross_attn=skip_ca,
+                skip_self_attn_blocks=skip_sa,
+                traced=traced,
+                tracer_trace_key=f"{trace_key}_{key}" if trace_key is not None else None,
+            )
+
+        # The conditional branch carries every enabled term's positive weight; each guidance branch
+        # then subtracts its own. Scales are per modality but the enables are global — one forward
+        # produces both modalities — so a modality sitting at a neutral scale contributes zero.
+        def cond_coeff(cfg: float, stg: float, mod: float) -> float:
+            return (
+                1.0
+                + ((cfg - 1.0) if g.do_cfg else 0.0)
+                + (stg if g.do_stg else 0.0)
+                + ((mod - 1.0) if g.do_mod else 0.0)
+            )
+
+        v_c, a_c = run("cond", prompt_pos)
+        v_c = ttnn.typecast(v_c, ttnn.float32)
+        a_c = ttnn.typecast(a_c, ttnn.float32)
+        state._tt_video_cond.update(v_c, traced)
+        state._tt_audio_cond.update(a_c, traced)
+        state._tt_video_guid.update(ttnn.multiply(v_c, cond_coeff(g.video_cfg, g.video_stg, g.video_modality)), traced)
+        state._tt_audio_guid.update(ttnn.multiply(a_c, cond_coeff(g.audio_cfg, g.audio_stg, g.audio_modality)), traced)
+
+        def fold(key: str, prompts, v_w: float, a_w: float, **branch_kwargs) -> None:
+            v_b, a_b = run(key, prompts, **branch_kwargs)
+            ttnn.add_(state.tt_video_guid, ttnn.multiply(ttnn.typecast(v_b, ttnn.float32), -v_w))
+            ttnn.add_(state.tt_audio_guid, ttnn.multiply(ttnn.typecast(a_b, ttnn.float32), -a_w))
+
+        if g.do_cfg:
+            fold("uncond", prompt_neg, g.video_cfg - 1.0, g.audio_cfg - 1.0)
+        if g.do_stg:
+            fold("stg", prompt_pos, g.video_stg, g.audio_stg, skip_sa=[g.stg_block])
+        if g.do_mod:
+            fold("mod", prompt_pos, g.video_modality - 1.0, g.audio_modality - 1.0, skip_ca=True)
+
+        if g.rescale == 0.0:
+            return state.tt_video_guid, state.tt_audio_guid
+
+        # Rescale toward the conditional branch's spread, then fold the resulting gain back into a
+        # velocity: with x0' = scale·(latent − sigma·v_g), the step's velocity (latent − x0')/sigma
+        # is scale·v_g + ((1 − scale)/sigma)·latent.
+        for lat, cond, guid, pad_mask, n_real in (
+            (state.tt_video_lat, state.tt_video_cond, state.tt_video_guid, state.tt_video_pad_mask, video_N_real),
+            (state.tt_audio_lat, state.tt_audio_cond, state.tt_audio_guid, state.tt_audio_pad_mask, audio_N_real),
+        ):
+            lat_f32 = ttnn.typecast(lat, ttnn.float32)
+            std_c = self._masked_std(ttnn.subtract(lat_f32, ttnn.multiply(cond, sigma)), pad_mask, n_real * C, sp_axis)
+            std_p = self._masked_std(ttnn.subtract(lat_f32, ttnn.multiply(guid, sigma)), pad_mask, n_real * C, sp_axis)
+            # A degenerate guided spread leaves the rescale undefined; pass the combination through.
+            scale = 1.0 if std_p == 0.0 else g.rescale * (std_c / std_p) + (1.0 - g.rescale)
+            ttnn.multiply_(guid, scale)
+            ttnn.add_(guid, ttnn.multiply(lat_f32, (1.0 - scale) / sigma))
+
+        return state.tt_video_guid, state.tt_audio_guid
+
+    def _denoise(
+        self,
+        v_embeds: torch.Tensor,
+        a_embeds: torch.Tensor,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        sigma_values: list[float],
+        seed: int,
+        initial_video_latent: torch.Tensor | None = None,
+        initial_audio_latent: torch.Tensor | None = None,
+        image_cond_latent: torch.Tensor | None = None,
+        image_cond_strength: float = 1.0,
+        guidance: _Guidance | None = None,
+        neg_v_embeds: torch.Tensor | None = None,
+        neg_a_embeds: torch.Tensor | None = None,
+        traced: bool = False,
+        trace_key: str | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B = 1
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
+        video_N_real = latent_frames * latent_h * latent_w
+        # SP padding: round video seq dim up to TILE_SIZE * sp_factor for ring SDPA.
+        video_N = self._sp_pad_len(video_N_real)
+        als = AudioLatentShape.from_video_pixel_shape(
+            VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+        )
+        audio_N_real = als.frames
+        audio_N = self._sp_pad_len(audio_N_real)
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+
+        image_cond = image_cond_latent is not None
+        needs_video_ts = getattr(self.transformer, "image_conditioning", False)
+        i2v = self._build_i2v_conditioning(image_cond_latent, image_cond_strength, needs_video_ts, B, video_N_real)
+
+        logger.info(f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]")
+
+        # Persist buffers only when traced (baked addresses); untraced uses a transient state so
+        # statics rebuild — resolution can differ across generates.
+        state = self._trace_state.setdefault(trace_key, LTXTransformerState()) if traced else LTXTransformerState()
+        self._prepare_stage_statics(
+            state,
+            latent_frames=latent_frames,
+            latent_h=latent_h,
+            latent_w=latent_w,
+            video_N=video_N,
+            video_N_real=video_N_real,
+            audio_N=audio_N,
+            audio_N_real=audio_N_real,
+            sp_axis=sp_axis,
+        )
+
+        prompt_v = self._prepare_prompt(v_embeds)
+        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
+        if traced:
+            self._prompt_v.update(prompt_v, traced)
+            self._prompt_a.update(prompt_a, traced)
+            prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+
+        prompt_v_neg = prompt_a_neg = None
+        if guidance is not None and guidance.do_cfg:
+            assert neg_v_embeds is not None and neg_a_embeds is not None, "CFG needs negative prompt embeds"
+            prompt_v_neg = self._prepare_prompt(neg_v_embeds)
+            prompt_a_neg = bf16_tensor(neg_a_embeds.unsqueeze(0), device=self.mesh_device)
+            if traced:
+                self._prompt_v_neg.update(prompt_v_neg, traced)
+                self._prompt_a_neg.update(prompt_a_neg, traced)
+                prompt_v_neg, prompt_a_neg = self._prompt_v_neg.value, self._prompt_a_neg.value
+
+        sigmas = torch.tensor(sigma_values, dtype=torch.float32)
+
+        # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
+        # the clean cond latent), T2V-S2 (upsampled latent), T2V-S1 (zeros). denoise_mask pins the
+        # conditioning tokens; None ≡ full forward noise. Ends at (B, video_N, C). -----
+        if image_cond:  # I2V: zeros (S1) or upsampled (S2), frame-0 overwritten by the cond latent
+            if initial_video_latent is not None:
+                base_v = initial_video_latent.float()
+                if base_v.dim() == 2:
+                    base_v = base_v.unsqueeze(0)
+                base_v = base_v.clone()
+            else:
+                base_v = torch.zeros(B, video_N_real, self.in_channels)
+            base_v[:, : i2v.n_cond, :] = i2v.clean_latent[:, : i2v.n_cond, :]
+        elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
+            base_v = initial_video_latent.float()
+            assert (
+                base_v.shape[1] == video_N_real
+            ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
+        else:  # T2V S1: pure noise from zeros
+            base_v = torch.zeros(B, video_N_real, self.in_channels)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
+
+        if video_N > video_N_real:
+            video_lat = torch.zeros(B, video_N, self.in_channels)
+            video_lat[:, :video_N_real, :] = video_lat_real
+        else:
+            video_lat = video_lat_real
+
+        # ----- Audio latent init (unchanged: already padded to audio_N) -----
+        if initial_audio_latent is not None:
+            audio_lat = torch.zeros(B, audio_N, self.in_channels)
+            audio_lat[:, :audio_N_real, :] = initial_audio_latent[:, :audio_N_real, :].float()
+            torch.manual_seed(seed + 1)
+            noise_a = torch.randn_like(audio_lat)
+            audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
+        else:
+            torch.manual_seed(seed)
+            # Consume the same RNG draws a video_N-sized randn would, so the audio noise stream
+            # stays independent of video sequence length.
+            _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
+            audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            audio_lat = torch.zeros(B, audio_N, self.in_channels)
+            audio_lat[:, :audio_N_real, :] = audio_lat_real
+
+        num_steps = len(sigma_values) - 1
+
+        # Device-resident loop: inner_step returns SP-sharded velocity, stepped in place by an
+        # on-device Euler. update() copies into the address-baked buffer when traced, else rebinds.
+        state._tt_video_lat.update(
+            video_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+        )
+        state._tt_audio_lat.update(
+            audio_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+        )
+
+        tt_i2v_mask = tt_i2v_clean = None
+        if image_cond:
+            # Mask stays width-1; ttnn broadcasts it against the (…,128) latent in the pin. Padded
+            # tokens keep 1.0 (unpinned).
+            mask_host = torch.ones(1, 1, video_N, 1)
+            mask_host[:, :, :video_N_real, :] = i2v.denoise_mask[0, :, 0].unsqueeze(-1)
+            clean_host = torch.zeros(1, 1, video_N, self.in_channels)
+            clean_host[:, :, :video_N_real, :] = i2v.clean_latent
+            # Copy into the pre-allocated trace-baked buffers so pin inputs keep stable addresses
+            # across replays — never freshly allocated here.
+            state._tt_i2v_mask.update(mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+            state._tt_i2v_clean.update(
+                clean_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+            )
+            tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
+
+        for step_idx in range(num_steps):
+            sigma = sigmas[step_idx].item()
+            sigma_next = sigmas[step_idx + 1].item()
+            state._tt_timestep.update(
+                torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
+            )
+            video_ts_pair_tt = video_pin_mask_tt = None
+            if needs_video_ts:
+                # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
+                # {0,1} pin mask so the transformer blends per token (avoids dense modulation OOM).
+                pinned_scale = (1.0 - image_cond_strength) if (image_cond and i2v.n_cond > 0) else 1.0
+                ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
+                state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
+                pin_mask_host = torch.zeros(1, 1, video_N, 1)
+                if i2v.n_cond > 0:
+                    pin_mask_host[:, :, : i2v.n_cond, :] = 1.0
+                state._tt_video_pin_mask.update(
+                    pin_mask_host,
+                    traced,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
+                video_ts_pair_tt = state.tt_video_ts_pair
+                video_pin_mask_tt = state.tt_video_pin_mask
+            # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
+            # Everything a guidance branch shares; the prompts and the skip flags are what differ.
+            step_kwargs = dict(
+                video_1BNI=state.tt_video_lat,
+                timestep=state.tt_timestep,
+                video_ts_pair=video_ts_pair_tt,
+                video_pin_mask=video_pin_mask_tt,
+                audio_1BNI=state.tt_audio_lat,
+                video_rope_cos=state.tt_video_rope_cos,
+                video_rope_sin=state.tt_video_rope_sin,
+                video_N=video_N_real,
+                trans_mat=state.tt_trans_mat,
+                audio_rope_cos=state.tt_audio_rope_cos,
+                audio_rope_sin=state.tt_audio_rope_sin,
+                audio_N=audio_N,
+                video_cross_pe_cos=state.tt_video_cross_pe_cos,
+                video_cross_pe_sin=state.tt_video_cross_pe_sin,
+                audio_cross_pe_cos=state.tt_audio_cross_pe_cos,
+                audio_cross_pe_sin=state.tt_audio_cross_pe_sin,
+                audio_cross_pe_cos_full=state.tt_audio_cross_pe_cos_full,
+                audio_cross_pe_sin_full=state.tt_audio_cross_pe_sin_full,
+                audio_attn_mask=state.tt_audio_attn_mask,
+                audio_padding_mask=state.tt_audio_padding_mask,
+                audio_padding_mask_full=state.tt_audio_padding_mask_full,
+                video_padding_mask=state.tt_video_padding_mask,
+                gather_output=False,
+            )
+            if guidance is None:
+                v_out, a_out = self.transformer.inner_step(
+                    **step_kwargs,
+                    video_prompt_1BLP=prompt_v,
+                    audio_prompt_1BLP=prompt_a,
+                    traced=traced,
+                    tracer_trace_key=trace_key,
+                )
+            else:
+                v_out, a_out = self._guided_velocity(
+                    state,
+                    guidance=guidance,
+                    step_kwargs=step_kwargs,
+                    prompt_pos=(prompt_v, prompt_a),
+                    prompt_neg=(prompt_v_neg, prompt_a_neg),
+                    sigma=sigma,
+                    video_N_real=video_N_real,
+                    audio_N_real=audio_N_real,
+                    sp_axis=sp_axis,
+                    traced=traced,
+                    trace_key=trace_key,
+                )
+            # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
+            # baked latent address holds across replays.
+            dt = sigma_next - sigma
+            v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
+            ttnn.multiply_(v_vel, state.tt_video_pad_mask)
+            if image_cond:
+                # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
+                # pinned x0 (not overwriting the latent after) tracks the reference under partial
+                # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
+                x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
+                x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
+                v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
+                ttnn.add_(state.tt_video_lat, v_pin)
+            else:
+                ttnn.multiply_(v_vel, dt)
+                ttnn.add_(state.tt_video_lat, v_vel)
+            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
+            a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
+            ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
+            ttnn.multiply_(a_vel, dt)
+            ttnn.add_(state.tt_audio_lat, a_vel)
+            ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
+            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+
+        v_final = LTXTransformerModel.device_to_host(
+            state.tt_video_lat,
+            ccl_manager=self.ccl_manager,
+            parallel_config=self.parallel_config,
+            sp_already_gathered=False,
+            tp_already_gathered=True,
+        ).squeeze(0)
+        a_final = LTXTransformerModel.device_to_host(
+            state.tt_audio_lat,
+            ccl_manager=self.ccl_manager,
+            parallel_config=self.parallel_config,
+            sp_already_gathered=False,
+            tp_already_gathered=True,
+        ).squeeze(0)
+        return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
 
     @staticmethod
     def _apply_modal_guidance(

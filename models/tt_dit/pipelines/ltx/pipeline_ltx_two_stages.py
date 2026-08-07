@@ -21,10 +21,31 @@ from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
-from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
+from .pipeline_ltx import (
+    DEFAULT_NEGATIVE_PROMPT,
+    SPATIAL_COMPRESSION,
+    TEMPORAL_COMPRESSION,
+    LTXPipeline,
+    _Guidance,
+    compute_sigmas,
+    latent_grid,
+)
 
 # Stage-2 distilled sigma schedule (stage 1 renoises the s1 latent at sigmas[0]).
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
+
+# Stage-1 guidance defaults, mirrored by ``generate``'s signature. Warmup compiles the branch set
+# these imply; a caller who neutralizes a scale just skips that branch at runtime.
+STAGE_1_GUIDANCE = _Guidance(
+    video_cfg=3.0,
+    audio_cfg=7.0,
+    video_stg=1.0,
+    audio_stg=1.0,
+    video_modality=3.0,
+    audio_modality=3.0,
+    rescale=0.7,
+    stg_block=28,
+)
 
 
 class LTXTwoStagesPipeline(LTXPipeline):
@@ -76,6 +97,12 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         s1_h, s1_w = height // 2, width // 2
 
+        # Allocate both stages' persistent trace I/O before any capture so all held inputs sit
+        # below every trace's activation region and no replay overwrites another's inputs.
+        if self._traced:
+            self._prealloc_trace_io("s1", num_frames=num_frames, height=s1_h, width=s1_w)
+            self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+
         # I2V: compile the encoder at both stage resolutions before the DiT loads (it is
         # coresident-excluded with the transformer, mirroring the generate() ordering).
         if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
@@ -85,24 +112,27 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         self._prepare_transformer(0)
 
-        # Zeros at the real shapes compile the shape-driven call_av kernels without loading
-        # the encoder, which would coresident-evict the DiT just loaded above.
+        # Zeros at the real shapes compile the shape-driven kernels without loading the encoder,
+        # which would coresident-evict the DiT just loaded above.
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
-        v_n, a_n = v_p, a_p
 
-        logger.info(f"warmup stage 1: {s1_h}x{s1_w}")
-        self.call_av(
-            video_prompt_embeds=v_p,
-            audio_prompt_embeds=a_p,
-            neg_video_prompt_embeds=v_n,
-            neg_audio_prompt_embeds=a_n,
+        # Two steps is enough to compile every guidance branch; the real schedule's leading sigmas
+        # keep warmup on the same branches (a trailing 0.0 exercises the final-step path).
+        s1_sigmas = compute_sigmas(steps=num_inference_steps).tolist()[:num_inference_steps] + [0.0]
+        n_branches = 1 + sum((STAGE_1_GUIDANCE.do_cfg, STAGE_1_GUIDANCE.do_stg, STAGE_1_GUIDANCE.do_mod))
+        logger.info(f"warmup stage 1: {s1_h}x{s1_w}, {n_branches} guidance branches")
+        self._denoise(
+            v_p,
+            a_p,
             num_frames=num_frames,
             height=s1_h,
             width=s1_w,
-            num_inference_steps=num_inference_steps,
+            sigma_values=s1_sigmas,
             seed=0,
-            ge_gamma=0.0,
+            guidance=STAGE_1_GUIDANCE,
+            neg_v_embeds=v_p,
+            neg_a_embeds=a_p,
         )
 
         if not has_s2:
@@ -119,7 +149,6 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._prepare_transformer(1)
 
         s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
-        s2_sigmas_t = torch.tensor(s2_sigmas, dtype=torch.float32)
 
         latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
         full_latent_count = latent_frames * full_lh * full_lw
@@ -129,29 +158,27 @@ class LTXTwoStagesPipeline(LTXPipeline):
         dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
         logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
-        self.call_av(
-            video_prompt_embeds=v_p,
-            audio_prompt_embeds=a_p,
+        self._denoise(
+            v_p,
+            a_p,
             num_frames=num_frames,
             height=height,
             width=width,
-            num_inference_steps=num_inference_steps,
-            video_cfg_scale=1.0,
-            audio_cfg_scale=1.0,
-            video_stg_scale=0.0,
-            audio_stg_scale=0.0,
-            video_modality_scale=1.0,
-            audio_modality_scale=1.0,
-            rescale_scale=0.0,
+            sigma_values=s2_sigmas,
             seed=0,
-            ge_gamma=0.0,
-            sigmas=s2_sigmas_t,
             initial_video_latent=dummy_v_init,
             initial_audio_latent=dummy_a_init,
-            noise_scale=s2_sigmas[0],
         )
         # Compile VAE decode at full-res (only s2 feeds decode in generate).
         self._warmup_decode(num_frames, height, width)
+        if self._traced and self.vae_decoder is not None:
+            self.vae_decoder._vae_traced = True
+
+        # Warm the on-device audio decode eagerly at the real latent shape so the first traced
+        # decode captures on warm state and a deterministic allocator free-list.
+        logger.info("warmup audio decode (on-device, eager)")
+        self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+
         # Re-prime variant 0 so it's resident when the real generate starts stage 1.
         self._prepare_transformer(0)
         logger.info(f"warmup (2-stage) done in {time.time() - t0:.1f}s")
@@ -252,28 +279,33 @@ class LTXTwoStagesPipeline(LTXPipeline):
         # Stage 1: variant 0 (base), half-res, full guidance.
         self._prepare_transformer(0)
         logger.info(f"Stage 1: {s1_h}x{s1_w}, {num_inference_steps} guided steps")
+        assert ge_gamma == 0.0, "gradient estimation is unsupported on the device-resident guided path"
+        guidance = _Guidance(
+            video_cfg=video_cfg_scale,
+            audio_cfg=audio_cfg_scale,
+            video_stg=video_stg_scale,
+            audio_stg=audio_stg_scale,
+            video_modality=video_modality_scale,
+            audio_modality=audio_modality_scale,
+            rescale=rescale_scale,
+            stg_block=stg_block,
+        )
         t0 = time.time()
-        s1_video, s1_audio = self.call_av(
-            video_prompt_embeds=v_p,
-            audio_prompt_embeds=a_p,
-            neg_video_prompt_embeds=v_n,
-            neg_audio_prompt_embeds=a_n,
+        s1_video, s1_audio = self._denoise(
+            v_p,
+            a_p,
             num_frames=num_frames,
             height=s1_h,
             width=s1_w,
-            num_inference_steps=num_inference_steps,
-            video_cfg_scale=video_cfg_scale,
-            audio_cfg_scale=audio_cfg_scale,
-            video_stg_scale=video_stg_scale,
-            audio_stg_scale=audio_stg_scale,
-            video_modality_scale=video_modality_scale,
-            audio_modality_scale=audio_modality_scale,
-            rescale_scale=rescale_scale,
-            stg_block=stg_block,
+            sigma_values=compute_sigmas(steps=num_inference_steps).tolist(),
             seed=seed,
-            ge_gamma=ge_gamma,
+            guidance=guidance,
+            neg_v_embeds=v_n,
+            neg_a_embeds=a_n,
             image_cond_latent=s1_cond_latent,
             image_cond_strength=cond_strength,
+            traced=self._traced,
+            trace_key="s1",
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -295,35 +327,26 @@ class LTXTwoStagesPipeline(LTXPipeline):
         # Stage 2: variant 1 (LoRA-fused), full-res, neutral guidance. Refines
         # upsampled video + renoised stage-1 audio.
         self._prepare_transformer(1)
-        s2_sigmas = torch.tensor(s2_sigma_values, dtype=torch.float32)
         n_s2_steps = len(s2_sigma_values) - 1
         logger.info(
             f"Stage 2: {height}x{width}, {n_s2_steps} distilled refine steps (LoRA strength={distilled_lora_strength})"
         )
         t0 = time.time()
         s2_audio_init = s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio
-        s2_video, s2_audio = self.call_av(
-            video_prompt_embeds=v_p,
-            audio_prompt_embeds=a_p,
+        s2_video, s2_audio = self._denoise(
+            v_p,
+            a_p,
             num_frames=num_frames,
             height=height,
             width=width,
-            num_inference_steps=n_s2_steps,
-            video_cfg_scale=1.0,
-            audio_cfg_scale=1.0,
-            video_stg_scale=0.0,
-            audio_stg_scale=0.0,
-            video_modality_scale=1.0,
-            audio_modality_scale=1.0,
-            rescale_scale=0.0,
+            sigma_values=s2_sigma_values,
             seed=seed,
-            ge_gamma=0.0,
-            sigmas=s2_sigmas,
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s2_audio_init,
-            noise_scale=s2_sigma_values[0],
             image_cond_latent=full_cond_latent,
             image_cond_strength=cond_strength,
+            traced=self._traced,
+            trace_key="s2",
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
