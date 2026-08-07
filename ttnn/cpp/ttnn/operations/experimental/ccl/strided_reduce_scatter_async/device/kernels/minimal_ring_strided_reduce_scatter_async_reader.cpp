@@ -135,8 +135,24 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
-    Semaphore<> mm_op_ready_sem(get_arg_val<uint32_t>(arg_idx++));
+    // Per-core MM progress counters (replaces the old single aggregate semaphore). This is a flat
+    // L1 array of (mm_cores_x * mm_cores_y) uint32 counters, at the same L1 address on every RS
+    // worker core. Each MM core increments its OWN slot (indexed by its row-major core id) as it
+    // completes each output block, with no worker barrier. The reader waits per-tile on the slot of
+    // the specific MM core that produced that tile — so a fast MM core never stalls a slow peer.
+    const uint32_t mm_progress_counters = get_arg_val<uint32_t>(arg_idx++);  // L1 base addr
+    // mm_cores_x = number of MM cores along N. The MM output [M,N] is split into mm_N_full_block_wt-
+    // wide per-core N bands, so mm_cores_x = ceil(N_tiles / N_tiles_per_core).
+    const uint32_t mm_cores_x = (input_tensor_Wt + mm_N_full_block_wt - 1) / mm_N_full_block_wt;
     uint32_t mm_sem_target = 0;
+    {
+        // Zero the counters before any MM increment can arrive. Safe: both kernels launch together
+        // but the MM's first signal is a full output block (~100us) away, while this is a few ns.
+        volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_progress_counters);
+        for (uint32_t i = 0; i < mm_cores_x * mm_cores_y; i++) {
+            c[i] = 0;
+        }
+    }
 #endif
 
 #ifdef FUSE_RS_ADDCMUL
@@ -195,6 +211,11 @@ void kernel_main() {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                // Hoist the (run-invariant) divisions out of the per-tile advance.
+                const auto steps_worker = decompose_tile_advance(
+                    effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
+                const auto steps_advance = decompose_tile_advance(
+                    effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
 #ifdef FUSE_MM_OP_SIGNALER
@@ -204,7 +225,10 @@ void kernel_main() {
                 // signals guarantees all N-full-blocks covering this chunk are ready.
                 const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += sem_increment;
-                mm_op_ready_sem.wait_min(mm_sem_target);
+                // The wait is now PER-TILE on the producing MM core's counter (see the input read
+                // site below), not a single aggregate wait here — so fast MM cores don't stall on
+                // slow peers. mm_sem_target is the block-count threshold; it is identical for every
+                // tile in this chunk, and the same threshold applies per-core.
 #endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
@@ -222,6 +246,13 @@ void kernel_main() {
 
                     const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt);
+#ifdef FUSE_MM_OP_SIGNALER
+                    // Producing MM core-x base for this ring slice. A tile's MM output column is
+                    // slice_N_begin + slice_col, with slice_N_begin = floor(actual_slice_idx*slice_Wt /
+                    // mm_N_full_block_wt)*mm_N_full_block_wt (MM-core aligned). slice_col's sub-block part is
+                    // always < mm_N_full_block_wt, so core-x = slice_N_begin/mm_N_full_block_wt + chunk_piece_idx.
+                    const uint32_t mm_core_x_base = (actual_slice_idx * slice_Wt) / mm_N_full_block_wt;
+#endif
                     // Wait for the neighboring device's writer to signal that it has finished
                     // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
@@ -235,13 +266,17 @@ void kernel_main() {
                         uint32_t tile_row_in_mm_M_unit_block = 0;
                         uint32_t chunk_col_in_tiles = 0;
                         uint32_t mm_core_idx = 0;
+#ifdef FUSE_MM_OP_SIGNALER
+                        // core-x is constant across this chunk piece (one MM N-band); core-y = mm_core_idx varies per
+                        // tile.
+                        const uint32_t mm_core_x = mm_core_x_base + chunk_piece_idx;
+#endif
                         // Get the first tile coordinates for the current chunk piece
                         get_next_tile_coordinates(
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
                             mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
+                            steps_worker,
                             effective_chunk_width_in_tiles,
                             current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -294,6 +329,23 @@ void kernel_main() {
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     const uint32_t input_tile_id = global_tile_idx + batch_offset;
+#ifdef FUSE_MM_OP_SIGNALER
+                                    // Per-tile gate: block until the MM core (row-major id) that produced this
+                                    // tile has completed >= mm_sem_target blocks. The counters are written
+                                    // remotely by the MM and only ever INCREASE, so a plain (un-invalidated)
+                                    // read is a safe lower bound on the true value: if it already shows
+                                    // >= target the data is definitely ready and we skip the invalidate-heavy
+                                    // spin entirely. Only a short read falls through to noc_semaphore_wait_min
+                                    // (which flushes L1). This avoids an L1-cache flush on the common
+                                    // already-satisfied path — ~one per tile across the whole slice.
+                                    const uint32_t mm_core_id = mm_core_idx * mm_cores_x + mm_core_x;
+                                    volatile tt_l1_ptr uint32_t* mm_counter_ptr =
+                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                            mm_progress_counters + mm_core_id * sizeof(uint32_t));
+                                    if (*mm_counter_ptr < mm_sem_target) {
+                                        noc_semaphore_wait_min(mm_counter_ptr, mm_sem_target);
+                                    }
+#endif
                                     noc_obj.async_read(
                                         input_tensor_addrgen,
                                         CoreLocalMem<uint8_t>(l1_write_addr),
@@ -350,8 +402,7 @@ void kernel_main() {
                                     tile_row_in_mm_M_unit_block,
                                     chunk_col_in_tiles,
                                     mm_core_idx,
-                                    effective_advance_by_tiles,
-                                    effective_subchunk_size,
+                                    steps_advance,
                                     effective_chunk_width_in_tiles,
                                     current_mm_block_ht);
                             }
@@ -377,8 +428,11 @@ void kernel_main() {
         // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
 
 #ifdef FUSE_MM_OP_SIGNALER
-        mm_op_ready_sem.set(0);
-        mm_sem_target = 0;
+        // Per-core signaling: mm_sem_target and the per-core counters are MONOTONIC across batches
+        // (the MM increments each core's counter once per block for the whole run, never resetting),
+        // so there is deliberately no per-batch reset here — resetting would race with the MM still
+        // incrementing. NOTE: multi-batch (B>1) correctness requires the MM to keep its per-core
+        // counters monotonic across batches (it does — the barrier→per-core change preserves this).
 #endif
     }
 
