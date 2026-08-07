@@ -363,6 +363,12 @@ class Qwen36MLP:
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
+        # Prefill passes tuned chunks_per_sync / num_workers_per_link (see tp_common
+        # prefill_ccl_tuning); decode keeps tt_all_reduce's defaults, which its own path was tuned at.
+        _ccl_kw = {}
+        if T > ttnn.TILE_SIZE:
+            _cps, _wpl = tpc.prefill_ccl_tuning()
+            _ccl_kw = {"chunks_per_sync": _cps, "num_workers_per_link": _wpl}
         out = tt_all_reduce(
             partial,
             self.device,
@@ -371,5 +377,6 @@ class Qwen36MLP:
             dim=3,
             topology=args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **_ccl_kw,
         )
         return out
