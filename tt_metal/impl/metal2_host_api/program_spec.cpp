@@ -626,22 +626,16 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
 
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
-    // Handle the mock device case (for cheap unit testing)
-    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
-
-    // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
-    // from the YAML descriptor, and both are available in mock mode.
-    DispatchCoreConfig dispatch_core_config{};
-    uint8_t num_hw_cqs = 1;
+    // Derive the grid from the dispatch config the device was actually opened with. This is the same
+    // source Device::compute_with_storage_grid_size() reads, and therefore the same grid that program
+    // factories size their WorkUnitSpecs from. Assuming a default (WORKER) config here instead
+    // under-reports the grid on any device opened with ETH dispatch -- on WH nebula_x2, 8x7 against a
+    // real 8x8 -- and rejects legal specs. dispatch_core_manager is initialized for mock devices too,
+    // so mock needs no special case.
+    auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+    const DispatchCoreConfig dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
+    const uint8_t num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     constexpr ChipId chip_id = 0;
-
-    // But, best get the real dispatch_core_config and num_hw_cqs
-    // (Makes no difference now, but hardbaking that assumption could be brittle)
-    if (!is_mock) {
-        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
-        dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
-        num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
-    }
 
     // The compute_grid already accounts for the dispatch row/col
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
