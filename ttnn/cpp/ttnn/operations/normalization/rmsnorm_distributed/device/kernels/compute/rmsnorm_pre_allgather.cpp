@@ -16,6 +16,7 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+#include "experimental/kernel_args.h"
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
@@ -28,68 +29,72 @@ ALWI void REL() {
     tile_regs_release();
 }
 
+// The statistics pass reads either the raw input or the fused a + b result, depending on whether a
+// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
+// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
+#ifdef FUSE_PRE_ADD
+constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
+#else
+constexpr auto dfb_inp_id = dfb::in0;  // just a
+#endif
+
 void kernel_main() {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    const auto NCHt = get_arg(args::NCHt);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto blk = get_arg(args::blk);
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce_id = tt::CBIndex::c_1;
+#ifdef FUSE_PRE_ADD
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
+#else
+    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
+#endif
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
-
-    constexpr uint32_t cb_x2_id = tt::CBIndex::c_6;   // x**2
-    constexpr uint32_t cb_res_id = tt::CBIndex::c_5;  // residual b (unused when !FUSE_PRE_ADD)
-    constexpr uint32_t cb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0_id;  // fused a + b, or just a
-
-    if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(cb_in0_id, cb_res_id, cb_inp_id);
-    } else {
-        binary_op_init_common(cb_inp_id, cb_reduce_id, cb_x2_id);
-    }
-
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_res(cb_res_id);
-    CircularBuffer cb_inp(cb_inp_id);
-    CircularBuffer cb_x2(cb_x2_id);
-    CircularBuffer cb_reduce(cb_reduce_id);
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_x2(dfb::x2);
+    DataflowBuffer dfb_reduce(dfb::reduce);
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_res(dfb::res);  // residual b
+#endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
+#ifdef FUSE_PRE_ADD
+        pre_add::one_row<true>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+#endif
 
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp_id, cb_inp_id);
-        pack_reconfig_data_format(cb_x2_id);
-        mul_tiles_init(cb_inp_id, cb_inp_id);
+        reconfig_data_format(dfb_inp_id, dfb_inp_id);
+        pack_reconfig_data_format(dfb::x2);
+        mul_init(dfb_inp_id, dfb_inp_id);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_inp.wait_front(wt + blk);  // cumulative wait
-            cb_x2.reserve_back(blk);
+            dfb_inp.wait_front(wt + blk);  // cumulative wait
+            dfb_x2.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp_id, cb_inp_id, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2_id, wt + wtr);
+                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
+                pack_tile(wtr, dfb::x2, wt + wtr);
             }
             REL();
-            cb_x2.push_back(blk);
+            dfb_x2.push_back(blk);
         }
 
         /*
          * sum(x**2)
          */
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
-            cb_x2_id,
-            cb_reduce_id,
-            cb_out,
+            dfb::x2,
+            dfb::reduce,
+            dfb::out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_inp.pop_front(Wt);
+        dfb_inp.pop_front(Wt);
     }
-    cb_reduce.pop_front(1);
+    dfb_reduce.pop_front(1);
 }

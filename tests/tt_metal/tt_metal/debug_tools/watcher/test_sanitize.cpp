@@ -64,6 +64,7 @@ enum watcher_features_t {
     SanitizeNOCWriteWithStateBadCoord,
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
+    SanitizeNOCInvalidTxnId,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -132,6 +133,10 @@ void RunTestOnCore(
     if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
         (!is_quasar || is_eth_core)) {
         GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
+    }
+    // Invalid txn-id sanitization is exercised via the Metal 2.0 Noc API on TENSIX only.
+    if (feature == SanitizeNOCInvalidTxnId && is_eth_core) {
+        GTEST_SKIP() << "Invalid txn-id sanitize test is TENSIX-only";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -289,7 +294,8 @@ void RunTestOnCore(
                       "mcast_dst_end_y",
                       "use_write_with_state",
                       "use_inline_dw_write_from_state",
-                      "use_inline_dw_write_with_state"}},
+                      "use_inline_dw_write_with_state",
+                      "invalid_txn_id"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -328,6 +334,11 @@ void RunTestOnCore(
     bool use_write_with_state = false;
     bool use_inline_dw_write_from_state = false;
     bool use_inline_dw_write_with_state = false;
+    // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
+    // leaving user kernels [0,7].
+    const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
+    const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
+    uint32_t invalid_txn_id = 0;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -423,6 +434,7 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             use_inline_dw_write_with_state = true;
             break;
+        case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -448,7 +460,8 @@ void RunTestOnCore(
         mcast_dst_end_y,
         use_write_with_state,
         use_inline_dw_write_from_state,
-        use_inline_dw_write_with_state};
+        use_inline_dw_write_with_state,
+        invalid_txn_id};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -478,7 +491,8 @@ void RunTestOnCore(
                  {"mcast_dst_end_y", mcast_dst_end_y},
                  {"use_write_with_state", use_write_with_state},
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
-                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}),
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
+                 {"invalid_txn_id", invalid_txn_id}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -726,6 +740,20 @@ void RunTestOnCore(
                 mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeNOCInvalidTxnId: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} used invalid NoC transaction id {} "
+                "(exceeds max {}).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                k_invalid_txn_id,
+                k_max_user_txn_id);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -901,6 +929,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteDram);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInvalidTxnId) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInvalidTxnId);
         },
         this->devices_[0]);
 }

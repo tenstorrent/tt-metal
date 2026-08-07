@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -44,6 +46,32 @@ struct KernelCrtaLayout {
     uint32_t vararg_section_offset = 0;
 };
 
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+// Dispatch type for named runtime args — determines which device-side accessor to use.
+enum class RuntimeArgDispatch : uint8_t {
+    COMMON,   // get_common_arg_val (shared across all cores)
+    PER_CORE  // get_arg_val (unique per core)
+};
+
+// Entry in the named runtime arg namespace map.
+// length == 1: emits constexpr Arg (scalar).
+// length > 1:  emits constexpr ArrayArg (array of contiguous slots).
+struct NamedRuntimeArgEntry {
+    std::string field;
+    uint32_t index;
+    uint32_t length = 1;
+    RuntimeArgDispatch dispatch;
+};
+
+// Namespace → [entries] map for named runtime arg header generation.
+using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntimeArgEntry>>;
+
+// Namespace → [(field, value)] map for named compile-time arg header generation.
+using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
+////////////////////////////////////////////////////////////
+
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
 // (eg, API specified settings)
@@ -65,12 +93,12 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
 
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    //  - DFB accessors
-    //  - Semaphore accessors
-    //  - Tensor accessors
-    virtual void process_dataflow_buffer_local_accessor_handles(
+    //  - DFB bindings
+    //  - Semaphore bindings
+    //  - Tensor bindings
+    virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
-    virtual void process_semaphore_local_accessor_handles(
+    virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
@@ -92,7 +120,7 @@ public:
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
-    //  - size_bytes: the scratchpad's per-node size, emitted as the accessor's compile-time size
+    //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
@@ -117,6 +145,15 @@ public:
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
 
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Called to process named runtime arg namespaces for generated header (blaze_rt_args:: namespace).
+    // Default no-op so Kernel subclasses that don't use named args compile unchanged.
+    virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}
+    // Called to process named compile-time arg namespaces for generated header (blaze_ct_args:: namespace).
+    virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const {}
+    ////////////////////////////////////////////////////////////
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

@@ -4,52 +4,54 @@
 
 #include "api/compute/bcast.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
-    uint32_t has_input_grad = get_arg_val<uint32_t>(0);
-    uint32_t has_other_grad = get_arg_val<uint32_t>(1);
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(2);
+    uint32_t has_input_grad = get_arg(args::has_input_grad);
+    uint32_t has_other_grad = get_arg(args::has_other_grad);
+    uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
 
-    DataflowBuffer dfb_c0(tt::CBIndex::c_0);
-    DataflowBuffer dfb_c1(tt::CBIndex::c_1);
-    DataflowBuffer dfb_c2(tt::CBIndex::c_2);
-    DataflowBuffer dfb_c16(tt::CBIndex::c_16);
-    DataflowBuffer dfb_c17(tt::CBIndex::c_17);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_in2(dfb::in2);
+    DataflowBuffer dfb_out0(dfb::out0);
+    DataflowBuffer dfb_out1(dfb::out1);
 
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
-    dfb_c0.wait_front(onetile);
+    compute_kernel_hw_startup(dfb::in2, dfb::in0, dfb::out0);
+    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(dfb::in2, dfb::in0);
+    dfb_in0.wait_front(onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
-            dfb_c2.wait_front(onetile);
+            dfb_in2.wait_front(onetile);
 
             tile_regs_acquire();
-            mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, 0, 0, 0);
+            mul_tiles_bcast<BroadcastType::SCALAR>(dfb::in2, dfb::in0, 0, 0, 0);
             tile_regs_commit();
 
-            dfb_c2.pop_front(onetile);
+            dfb_in2.pop_front(onetile);
 
             tile_regs_wait();
-            pack_tile(0, tt::CBIndex::c_16);
+            pack_tile(0, dfb::out0);
             tile_regs_release();
 
-            dfb_c16.push_back(onetile);
+            dfb_out0.push_back(onetile);
         }
 
         if (has_other_grad) {
-            dfb_c1.wait_front(onetile);
+            dfb_in1.wait_front(onetile);
 
             tile_regs_acquire();
-            mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_1, tt::CBIndex::c_0, 0, 0, 0);
+            mul_tiles_bcast<BroadcastType::SCALAR>(dfb::in1, dfb::in0, 0, 0, 0);
             tile_regs_commit();
 
-            dfb_c1.pop_front(onetile);
+            dfb_in1.pop_front(onetile);
 
             tile_regs_wait();
-            pack_tile(0, tt::CBIndex::c_17);
+            pack_tile(0, dfb::out1);
             tile_regs_release();
 
-            dfb_c17.push_back(onetile);
+            dfb_out1.push_back(onetile);
         }
     }
 }

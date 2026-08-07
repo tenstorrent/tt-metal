@@ -18,7 +18,7 @@ Usage:
         --labels baseline optimized fused --output-dir ./plots
 
 Expected log format:
-    Step lines from nano_gpt (C++) or train_nanogpt.py (Python), e.g.:
+    Step lines from nano_gpt (C++) or train.py (Python), e.g.:
         "Step: 1, Loss: 11.0234375, Time: 703.14 ms, ..."
 """
 

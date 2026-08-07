@@ -59,6 +59,10 @@ class TtPrefillRuntimeConfig:
     # is_first_rank gates the embedding + token input, is_last_rank marks the final stage. The defaults
     # make a single-rank runtime own the whole model.
     first_layer_idx: int = 0
+    # Explicit global layer indices to build, overriding the contiguous run. Profiling only: lets a
+    # 2-layer run cover one dense and one sparse layer ([0, 3]) instead of the four it takes to reach
+    # the first sparse one. Requires a complete tilized weight cache.
+    layer_indices: Optional[list] = None
     is_first_rank: bool = True
     is_last_rank: bool = True
     # Emb-axis sharding of the cross-rank D2D hidden state (must match the runner's D2D_MAPPER_CONFIG and
@@ -88,6 +92,13 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
+        # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
+        # past the per-user cache stride and silently corrupts another slot.
+        assert config.layer_indices is None or len(config.layer_indices) == config.num_layers, (
+            f"layer_indices has {len(config.layer_indices)} entries but num_layers is "
+            f"{config.num_layers}; they size the model and the KV cache respectively and must match"
+        )
 
         self.model_built = False
         self.compiled = False
@@ -137,6 +148,7 @@ class TtPrefillRuntime:
             ep_seq_len_per_chip=self.config.chunk_size // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
             first_layer_idx=self.config.first_layer_idx,
+            layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
         )
@@ -220,11 +232,11 @@ class TtPrefillRuntime:
         )
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """Embed the SP-sharded token tensor into the bf16 hidden state each layer consumes. The
-        embedding weight is replicated across the mesh, so each chip embeds its own seq shard (rows) with
-        the full embedding dim (cols); this reproduces ``prepare_inputs_prefill``'s SP embedding starting
-        from an already-on-device token tensor. bf16 (not bf8) keeps the residual stream's dynamic range."""
-        x = ttnn.embedding(tokens, self.model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
+        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] — full hidden, TP-replicated (the
+        residual-stream contract); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden
+        by default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
+        x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x

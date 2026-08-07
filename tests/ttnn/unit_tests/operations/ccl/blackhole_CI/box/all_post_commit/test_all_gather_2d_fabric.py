@@ -7,12 +7,11 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize("ag_output_shape", [[1, 1, 128, 128]])
+@pytest.mark.parametrize("ag_output_shape", [[1, 1, 128, 256]])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
@@ -46,10 +45,9 @@ def test_all_gather_2d_fabric(
     num_iters,
     function_level_defaults,
 ):
-    # On bh-quietbox (4,1 mesh), reshape mesh_device to match its default Mesh Graph Descriptor device_topology
-    # to prevent hang
-    if bh_2d_mesh_device.shape == ttnn.MeshShape(4, 1):
-        bh_2d_mesh_device.reshape(ttnn.MeshShape(2, 2))
+    # Reshape mesh_device to match its default MeshGraphDescriptor device_topology to prevent hang
+    system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+    bh_2d_mesh_device.reshape(system_mesh_desc.local_shape())
 
     run_all_gather_impl(
         bh_2d_mesh_device,
@@ -61,5 +59,31 @@ def test_all_gather_2d_fabric(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        allowed_pcc=0.9999,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}],
+    indirect=True,
+)
+def test_all_gather_async_fabric_2d_folded_line(mesh_device):
+    """A logical four-device line folded onto QB's physical 2D cycle."""
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape=[1, 1, 128, 128],
+        dim=3,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=2,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=1,
+        enable_trace=False,
+        cluster_axis=1,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        all_gather_function=ttnn.experimental.all_gather_async,
     )

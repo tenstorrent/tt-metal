@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device_io import read_from_device, write_words_to_device
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
     QUASAR_DATA_FORMAT_ENUM_VALUES,
@@ -39,13 +40,14 @@ from helpers.format_config import (
 )
 from helpers.logger import logger
 from helpers.utils import TILE_BG_RESULT, format_tile_row
-from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
+from ttexalens.tt_exalens_lib import parse_elf
 
 # hostdev/device_print_structures.h: DevicePrintStringInfo is four uint32_t
-# on 32-bit ELFs, and four uint64_t on 64-bit ELFs (Rocket cores on Quasar).
+# where pointers are 4 bytes wide, and four uint64_t where they are 8 (Rocket
+# cores on Quasar). Keyed on pointer size in bytes, as ElfFile reports it.
 _STRING_INFO_LAYOUT: dict[int, tuple[int, str]] = {
-    32: (16, "<IIII"),
-    64: (32, "<QQQQ"),
+    4: (16, "<IIII"),
+    8: (32, "<QQQQ"),
 }
 
 
@@ -342,21 +344,16 @@ class ElfStrings:
         try:
             elf = parse_elf(elf_path, require_debug_symbols=False)
             self._parsed_elf = elf
-            self.pointer_size = elf.elf.elfclass // 8
+            self.pointer_size = elf.get_pointer_size()
             self.type_table = _type_table_for(self.pointer_size)
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
-                elf.elf.elfclass
+                self.pointer_size
             ]
-            sections = (
-                elf.sections
-                if isinstance(elf.sections, dict)
-                else {s.name: s for s in elf.sections}
-            )
-            strings = sections.get(".device_print_strings")
+            strings = elf.get_section_by_name(".device_print_strings")
             if strings is not None:
                 self._strings_addr = strings.address
                 self._strings_data = bytes(strings.data)
-            info = sections.get(".device_print_strings_info")
+            info = elf.get_section_by_name(".device_print_strings_info")
             if info is not None:
                 self._info_addr = info.address
                 self._info_data = bytes(info.data)
@@ -379,7 +376,10 @@ class ElfStrings:
             try:
                 die = self._parsed_elf.find_die_by_name(enum_name)
                 if die is not None:
-                    result = [(int(c.value), c.name) for c in die.iter_children()]
+                    result = [
+                        (int(c.get_constant_value()), c.name)
+                        for c in die.iter_children()
+                    ]
             except Exception:
                 result = None
         self._enum_cache[enum_name] = result
