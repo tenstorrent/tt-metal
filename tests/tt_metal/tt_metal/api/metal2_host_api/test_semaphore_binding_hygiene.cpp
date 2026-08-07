@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -104,7 +105,8 @@ std::string strip_comments(const std::string& text) {
             out += text[i];
             continue;
         }
-        if (text[i] == '\'') {
+        // Not after an alnum: 1'000 is a digit separator, not a char literal.
+        if (text[i] == '\'' && (out.empty() || !std::isalnum(static_cast<unsigned char>(out.back())))) {
             in_char = true;
             out += text[i];
             continue;
@@ -237,6 +239,8 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         {"comment_start_in_string",
          "void kernel_main() { const char* s = \"/*\"; noc_semaphore_set(ptr, 5); }",
          true},
+        // A digit separator is not a char-literal opener.
+        {"digit_separator", "void kernel_main() { uint32_t n = 1'000; noc_semaphore_set(p, n); }", true},
         // A declared binding: the managed accessor only, no raw primitive in kernel source.
         {"clean_declared", "void kernel_main() {\n    Semaphore s(sem::counter);\n    s.up(1);\n}", false},
         // Prose mentioning the patterns must NOT be flagged (line and block comments).
