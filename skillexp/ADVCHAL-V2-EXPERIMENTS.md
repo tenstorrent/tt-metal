@@ -157,7 +157,7 @@ advisor's advice is *neutral* (within the noise floor), not a missed win. There 
 **Bonus finding.** The first process of the session recorded a noise floor of **11.838 µs**; the
 identical configuration in a later process recorded **0.196 µs** — a **60× difference** from JIT-cache
 warmth *between processes*, which the per-process warm-up cannot remove. Any cell whose control was the
-first thing it ran carries an inflated floor. See [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §8 D4.
+first thing it ran carries an inflated floor. See [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) §8 D4.
 
 ---
 

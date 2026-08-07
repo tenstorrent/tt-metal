@@ -2,7 +2,7 @@
 
 The per-op follows-advice work in [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md)
 covered **one** cell. This does the corpus. The unit is the *chain* — the group of ops the stage actually
-measures and ships (see §3.24 of [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) for what `chain` means).
+measures and ships (see §3.24 of [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) for what `chain` means).
 
 > ⚠ **Corrected after this file was first written.** The `advised_cores` field every row below was compared
 > against is **wrong on 58.3 % of advised ops** — `reconcile.py` parses `cores=` out of `report.json`, which

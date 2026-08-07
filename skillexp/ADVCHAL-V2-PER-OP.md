@@ -458,7 +458,7 @@ one. All three swept it, all three measured a win — and only two shipped it:
 > vetoed, while RoPE-only was bitwise identical (PCC 1.0) and shipped. No other cell in the corpus used a bar
 > tighter than 0.995, phi **A** passed its own differential oracle at 0.9999987790 (which would also have failed
 > FN's bar), and phi FN's own shipped real-weight test passes at PCC 0.998902. See
-> [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §3.3 and [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md).
+> [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) §3.3 and [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md).
 
 So phi arm FN remains the clearest missed opportunity in the experiment — but the cause is a **stage defect,
 not a bounded sweep**. The sweep did what the skill asks; the oracle contract is what discarded the win. Its

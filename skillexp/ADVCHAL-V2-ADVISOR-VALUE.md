@@ -298,4 +298,4 @@ here is measured, but "the advisor is not needed for this class" is a claim abou
 corpus — the starved-reduction pattern happened to dominate. A corpus where boundary conversions dominated
 would score it differently, and §5's untested classes could change the picture again.
 
-⁽*⁾ **Updated 2026-08-07: reachable is now 21,368 µs and the share 64 %.** phi FN's reachable component grew from 3,466 to 4,609 µs once the rope was implemented as the advisor actually advised it rather than as the cell shipped it — 0.807535 → 0.663507 ms/layer × 32 layers. See [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3.11 and §3.27.
+⁽*⁾ **Updated 2026-08-07: reachable is now 21,368 µs and the share 64 %.** phi FN's reachable component grew from 3,466 to 4,609 µs once the rope was implemented as the advisor actually advised it rather than as the cell shipped it — 0.807535 → 0.663507 ms/layer × 32 layers. See [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §3.11 and §3.27.

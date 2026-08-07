@@ -46,7 +46,7 @@ The two columns that matter are on the right. **Δ by kind** splits the per-kind
 generated before that tag landed, so the 14 rows above it come from the tags and this row comes from the cell's
 own session log. Re-running the generator will fold it in and supersede this note. Everything else about the cell
 — shipped `advisor_concat_projection`, the 88-core norm regression that kept it default-off, the GQA hard wall —
-is in [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §3.6.
+is in [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) §3.6.
 
 **Complete is not the same as tagged.** Two cells finished their optimization work and passed the gate, but
 carry no `done` tag. Their measurements are as real as any other cell's -- same harness, same non-overlap rule,

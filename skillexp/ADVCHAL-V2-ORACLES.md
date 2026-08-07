@@ -4,7 +4,7 @@ Stage 02b lets a measured win ship only if a **correctness oracle** also passes.
 oracle each cell actually built, the bar it held itself to, and the PCC it achieved.
 
 It exists because **the oracle was not comparable across cells, and in one cell it decided the
-published outcome.** Read [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §5 for the consequence.
+published outcome.** Read [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) §5 for the consequence.
 
 ## Two different oracles were built under one name
 

@@ -84,7 +84,7 @@ the floor decides `feasibility.verdict`, this silently changes what a cell is al
 
 ## I6. Where a stage under-specifies, cells will differ — and one of them will be right
 
-Thirteen situations recurred across cells and were handled differently ([`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §7).
+Thirteen situations recurred across cells and were handled differently ([`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §7).
 In most of them one handling measurably beat the others. That is not a discipline problem; it is a
 specification problem, and each divergence is a cheap place to encode the better handling once.
 
