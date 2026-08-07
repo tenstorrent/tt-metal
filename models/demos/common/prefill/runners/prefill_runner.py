@@ -1300,31 +1300,29 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     if single_rank and enable_layer_ack:
         # Single-rank ack: both transports end at the SAME scheduler counter channel, so the scheduler
-        # sees an identical stream either way. Which one carries it depends on trace:
-        #   untraced -> D2H. The ack is a device op writing one record into a FIFO, and the
-        #     LayerAckService reader thread bumps the channel per record — nothing calls back into host
-        #     code mid-forward, so the forward needs no per-layer device sync.
-        #   traced   -> the host callback (set_layer_ack_channel). The D2H ack cannot be captured: its
-        #     record is the per-chunk socket metadata tensor, whose address changes every chunk, so a
-        #     capture would bake in a stale address (TtPrefillRuntime.prefill_chunk asserts this). The
-        #     controller instead splits the trace at each ack point.
+        # sees an identical stream either way. D2H carries it traced and untraced — the ack is a device op
+        # writing one record into a FIFO, and the LayerAckService reader thread bumps the channel per
+        # record, so nothing calls back into host code mid-forward and the forward needs no per-layer
+        # device sync. Traced, the op is recorded inside the capture, so the service is registered up
+        # front (set_d2h_ack_service) instead of passed per chunk, and the reader starts only after the
+        # capture's warm records are drained below.
         _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
+        )
+        layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
         if runtime.config.use_trace:
-            runtime.set_layer_ack_channel(ack_channel)
+            runtime.set_d2h_ack_service(d2h_service)
             logger.info(
-                f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer "
-                "(host callback — traced run, D2H is not capturable)"
+                f"[migration] LayerAck channel ready at {ack_shm_name}; D2H ack registered for capture "
+                "(reader starts after the trace warm records are drained)"
             )
         else:
-            d2h_service = ttnn.D2HStreamService(
-                mesh_device,
-                global_spec=None,
-                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
-                worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
-            )
-            layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
             layer_ack_service.start()
             logger.info(
                 f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per "
@@ -1420,6 +1418,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # No-op if already captured. See _serve_standalone / TtPrefillRuntime.capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
+        # The capture's warm forward compiles the D2H ack programs by running them, so real records are
+        # already sitting in the FIFO. Drain them here — before the reader thread starts — or the
+        # scheduler sees a phantom chunk's worth of layer acks and migrates a slot that was never filled.
+        n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
+        for _ in range(n_warm):
+            d2h_service.read_metadata()
+        if n_warm:
+            logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
+        if layer_ack_service is not None:
+            layer_ack_service.start()
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
