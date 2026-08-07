@@ -59,7 +59,7 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_scores_fp32, cb_bias_fp32, cb_biased_scores);
+    compute_kernel_hw_startup(cb_scores_fp32, cb_bias_fp32, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         // Upcast the raw (possibly bf16) logits and bias to fp32 so the rest of the gate runs entirely
