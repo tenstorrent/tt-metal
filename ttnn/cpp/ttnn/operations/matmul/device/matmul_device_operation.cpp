@@ -11,6 +11,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
+#include "ttnn/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
@@ -109,6 +110,51 @@ void validate_matmul_bfloat4_tile_dims(
             "BFLOAT4_B matmul requires in1 tile width >= {} (got {})",
             bfloat4_min_tile_height,
             in1_tile.get_width());
+    }
+}
+
+// Tiny Tile Constraints: runs after the program config is chosen. Rejects tiny-tile
+// combos that hang or deadlock on specific paths. See #42927.
+void validate_matmul_tiny_tile_constraints(
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const bool uses_tiny_outer_tile = (in0_tile.get_height() != TILE_HEIGHT || in1_tile.get_width() != TILE_WIDTH);
+    if (!uses_tiny_outer_tile) {
+        return;
+    }
+
+    // Transposed in1 with narrow tile width (16) is not supported by the LLK matmul
+    // path: llk_math_matmul has no addr_mod handling for 32x16 transposed tiles.
+    // Without this check the kernel hangs (CB producer/consumer deadlock). See #42927.
+    const bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+    if (in1_transpose_tile && in1_tile.get_width() == 16) {
+        TT_FATAL(
+            false,
+            "matmul does not support transposed in1 with tile width 16 (in1 tile is {}x{} with transpose). "
+            "Use tile width 32 for transposed in1, or disable transpose_tile.",
+            in1_tile.get_height(),
+            in1_tile.get_width());
+    }
+
+    // Bfp compressed in1 dtypes (BFLOAT8_B, BFLOAT4_B) on the 2D/1D mcast paths hang for
+    // tile_h < 16 — the LLK unpack/pack path for Bfp faces is not yet validated below
+    // face_height 16 on these factories. The MatmulMultiCoreReuseProgramConfig path does
+    // support smaller tile_h with Bfp dtypes, so this check is scoped to the mcast configs.
+    // See #42927. This is a "not currently supported" throw, not a permanent fatal — it
+    // should be removed when the underlying kernel limitation is resolved.
+    const bool in1_is_bfp =
+        (input_tensor_b.dtype() == DataType::BFLOAT8_B) || (input_tensor_b.dtype() == DataType::BFLOAT4_B);
+    const bool is_mcast_config =
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+    if (in1_is_bfp && is_mcast_config && in0_tile.get_height() < 16) {
+        TT_THROW(
+            "matmul tiny-tile combo with in1 dtype {} and tile_h {} is not currently supported on the "
+            "mcast program config path (requires tile_h >= 16); see issue #42927",
+            input_tensor_b.dtype(),
+            in0_tile.get_height());
     }
 }
 
@@ -317,15 +363,14 @@ void validate_matmul_input_count(
     }
 }
 
-// Bias Shape: runs only when a bias is present. Checks the bias is a single tile-row,
-// N-wide, batch-1, tilized row vector whose tile size and width line up with the
-// matmul output.
 void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
+    const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape,
-    const ttnn::Shape& b_shape_padded) {
+    const ttnn::Shape& b_shape_padded,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     if (!optional_bias.has_value()) {
         return;
     }
@@ -343,12 +388,20 @@ void validate_matmul_bias_shape(
     const auto& bias_shape_padded = bias.padded_shape();
     uint32_t bias_batch_size = get_batch_size(bias_shape);
     TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size must be 1, got {}", bias_batch_size);
+    // MatmulMultiCoreReuseProgramConfig fuses a full per-batch [M, N] bias block, so its height must
+    // cover exactly M; every other config indexes a single bias tile-row.
+    const bool is_reuse_config =
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseProgramConfig>(chosen_program_config);
+    const uint32_t Mt = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    const uint32_t expected_bias_height = (is_reuse_config ? Mt : 1) * in0_tile.get_height();
     TT_FATAL(
-        bias_shape_padded[-2] == in0_tile.get_height(),
-        "Unsupported bias shape: padded second last dimension of bias, "
-        "{}, not equal to tile height, {}",
+        bias_shape_padded[-2] == expected_bias_height,
+        "Unsupported bias shape: padded second last dimension of bias, {}, not equal to expected bias height, "
+        "{} (tile height {} x {} bias tile-row(s))",
         bias_shape_padded[-2],
-        in0_tile.get_height());
+        expected_bias_height,
+        in0_tile.get_height(),
+        is_reuse_config ? Mt : 1);
     TT_FATAL(
         bias_shape_padded[-1] == b_shape_padded[-1],
         "Unsupported bias shape: padded last dimension of bias, {}, not "
@@ -363,6 +416,20 @@ void validate_matmul_bias_shape(
         "dimension, {}.",
         bias_shape[-1],
         b_shape[-1]);
+
+    // Fused bias with a narrow in1 tile (width 16) and full-height in0 (32) is not supported
+    // by the broadcast-row bias kernel path. Without this check the kernel hangs. See #42927.
+    if (in0_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == 16) {
+        const bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+        if (!in1_transpose_tile) {
+            TT_FATAL(
+                false,
+                "matmul fused bias does not support 32x16 narrow in1 tile (in0 tile height={}, in1 tile width={}). "
+                "Use tile width 32 when bias is fused, or apply bias as a post-process add.",
+                in0_tile.get_height(),
+                in1_tile.get_width());
+        }
+    }
 }
 
 // Untilize Output: untilize_out means "give me row-major output." Allowed only with an
@@ -820,30 +887,6 @@ void validate_matmul_reuse_sharded_output_block_divisibility(
         chosen_program_config);
 }
 
-// Bias Support: checks bias support by config. Reuse rejects bias; other configs allow it.
-void validate_matmul_bias(
-    const std::optional<const Tensor>& optional_bias,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    // Determine which program configs support bias.
-    bool config_supports_bias = false;
-    std::visit(
-        [&config_supports_bias](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            // MatmulMultiCoreReuseProgramConfig has no bias kernel path and the wrapper
-            // does not post-process bias for it. All other configs either support bias in
-            // the kernel or have it handled by get_post_process_bias() in matmul.cpp.
-            // gather_in0 on 1D multicast rejects bias separately in its dedicated check.
-            config_supports_bias =
-                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
-        },
-        chosen_program_config);
-
-    TT_FATAL(
-        !optional_bias.has_value() || config_supports_bias,
-        "Bias is not supported for this matmul program config: {}",
-        ttsl::get_active_type_name_in_variant(chosen_program_config));
-}
-
 // Helper: cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
 // These catch silent-hang configs where the matmul reads more in1 pages than the prefetcher
 // pushes (e.g. activation K padded past weight K). Gated by the caller on the DRAM-sender path
@@ -989,6 +1032,47 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         per_recv_N_tiles,
         weight_N_tiles,
         ring_size);
+}
+
+void validate_dram_sender_global_cb_mcast_in0_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "mcast_in0 global_cb requires programmable DRAM senders");
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast_in0 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+
+    // The receiver-contiguous weight ↔ matmul cross-checks (DRAM NdShardSpec, one full-K × per_core_N
+    // shard per receiver, num_shards == receiver_count, K % in0_block_w == 0, per_core_N == per-receiver
+    // N, stream_in1 == false) are owned by the shared prefetcher helper. Call it rather than re-deriving
+    // them here, so the recv-contig contract lives in one place.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
+
+    // GCB-window guards specific to this op: the mcast reader streams K-blocks through a two-page
+    // remote-CB window, so the GCB must be an exact multiple of the in1 K-block page and hold >= 2 pages.
+    const uint32_t in1_block_size_bytes =
+        program_config.in0_block_w * program_config.per_core_N *
+        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    TT_FATAL(
+        gcb.size() % in1_block_size_bytes == 0,
+        "mcast_in0 global_cb size {} must be a multiple of its in1 K-block page size {}",
+        gcb.size(),
+        in1_block_size_bytes);
+    TT_FATAL(
+        gcb.size() >= 2 * in1_block_size_bytes,
+        "mcast_in0 global_cb requires a two-page streaming window: size {} must be at least {}",
+        gcb.size(),
+        2 * in1_block_size_bytes);
 }
 
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
@@ -1164,6 +1248,18 @@ void validate_matmul_dram_sharded_config(
     const tt::tt_metal::Tile& in0_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& program_config) {
     const auto config_name = ttsl::get_type_name(program_config);
+
+    // The DRAM-sharded mcast path is not yet validated for tile_h < 16 — it hangs for
+    // all tile_h in {1,2,4,8} regardless of dtype or tile_w. Only tile_h in {16, 32} is
+    // currently supported on this path. See #42927.
+    if (in0_tile.get_height() < 16) {
+        TT_THROW(
+            "{}: matmul tiny-tile with tile_h {} is not currently supported on the DRAM-sharded mcast "
+            "program config path (requires tile_h >= 16); see issue #42927",
+            config_name,
+            in0_tile.get_height());
+    }
+
     TT_FATAL(
         input_tensor_a.is_sharded(), "{}: Input tensor A must be sharded for DRAM sharded program config", config_name);
     TT_FATAL(
@@ -1659,6 +1755,26 @@ void validate_matmul_mcast1d_config(
         "{}: Matmul1D does not support mcast_in0 and gather_in0 at the "
         "same time.",
         config_name);
+    TT_FATAL(
+        program_config.gather_in0 || !program_config.stream_in1,
+        "{}: stream_in1 is the gather_in0 ring-rotation mode and requires gather_in0=true",
+        config_name);
+
+    if (attributes.global_cb.has_value() && !program_config.gather_in0) {
+        TT_FATAL(
+            program_config.mcast_in0,
+            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
+            config_name);
+        validate_dram_sender_global_cb_mcast_in0_geometry(
+            attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        TT_FATAL(
+            program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
+            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "activation batch size={}",
+            config_name,
+            program_config.fuse_batch,
+            get_batch_size(a_shape_padded));
+    }
 
     // Gather in0 specific validation
     if (program_config.gather_in0) {
@@ -1759,7 +1875,9 @@ void validate_matmul_mcast1d_config(
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
         check_tensor_in_grid(input_tensor_a, device_grid_1d);
-        check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        if (!attributes.global_cb.has_value()) {
+            check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        }
     }
     if (program_config.mcast_in0 || program_config.gather_in0) {
         if (input_tensor_a.is_sharded()) {
@@ -2011,7 +2129,7 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(
-        [](const auto& c) -> program_factory_t {
+        [&operation_attributes](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
                 return MatmulMultiCoreProgramFactory{};
@@ -2020,8 +2138,10 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
-                if (c.gather_in0) {
+                // gather_in0 (create_descriptor not yet supported) and any GCB-backed config
+                // (ProgramDescriptor cannot attach an experimental GlobalCircularBuffer) use the legacy
+                // MeshWorkload builder.
+                if (c.gather_in0 || operation_attributes.global_cb.has_value()) {
                     return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
                 }
                 return MatmulMultiCoreReuseMcast1DProgramFactory{};
@@ -2090,9 +2210,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     // ---- universal checks, part 2: need the chosen program config ----
     // Config-based shared validators (each self-filters by config via std::visit).
+    validate_matmul_tiny_tile_constraints(input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
-    validate_matmul_bias(optional_bias, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_reuse_sharded_output_block_divisibility(
@@ -2113,7 +2233,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes, input_tensor_a, input_tensor_b, a_shape, b_shape, chosen_program_config);
     validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
-    validate_matmul_bias_shape(optional_bias, in0_tile, in1_tile, b_shape, b_shape_padded);
+    validate_matmul_bias_shape(
+        optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
     validate_matmul_untilize_out(attributes, chosen_program_config);
 
     // ---- per-config validation: one std::visit over the chosen program config ----
@@ -2316,7 +2437,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         }
                     }
                     // support for multi-tensor output
-                    const ttnn::TensorSpec tensor_spec(
+                    const tt::tt_metal::TensorSpec tensor_spec(
                         output_shape,
                         tt::tt_metal::TensorLayout(
                             attributes.output_dtype.value(),
@@ -2324,7 +2445,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                                     : tt::tt_metal::PageConfig(output_layout, output_tile),
                             mem_config));
 
-                    std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
+                    std::vector<tt::tt_metal::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
@@ -2365,7 +2486,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2389,7 +2510,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     // Use the user-provided shard spec directly
                     auto mem_config = attributes.output_mem_config;
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2439,7 +2560,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2485,7 +2606,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2512,7 +2633,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             chosen_program_config);
     }
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             attributes.output_dtype.value(),
@@ -2546,7 +2667,7 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
     return output_tensors;
 }
 
-ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulDeviceOperation::compute_descriptor_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     const auto& input_tensors = args.input_tensors;
     const auto& input_tensor_a = input_tensors.at(0);

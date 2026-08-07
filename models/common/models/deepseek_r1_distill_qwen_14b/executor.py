@@ -62,8 +62,13 @@ class EagerDeepSeekR1Qwen14BExecutor:
 class TracedDeepSeekR1Qwen14BExecutor:
     """Traced path; same surface as ``EagerDeepSeekR1Qwen14BExecutor``."""
 
-    def __init__(self, model: DeepSeekR1Qwen14B, mesh_device: ttnn.MeshDevice):
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_ds_r1_executor_named_modules)
+    def __init__(self, model: DeepSeekR1Qwen14B, mesh_device: ttnn.MeshDevice, ondevice_decode_loop: bool = False):
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_ds_r1_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+        )
 
     @property
     def model(self) -> DeepSeekR1Qwen14B:

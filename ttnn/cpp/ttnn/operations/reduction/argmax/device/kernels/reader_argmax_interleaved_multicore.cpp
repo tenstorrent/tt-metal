@@ -374,17 +374,21 @@ void kernel_main() {
                 }
 
                 if (num_cores1 > 0) {
-                    start_sem.set_multicast(
-                        noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
+                    start_sem.set_multicast(noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
                 }
 
                 noc.async_write_barrier();
             }
         }
 
-        // Wait to start
+        // Wait to start.  Use wait_min (>=) rather than exact-match: in the
+        // reduce_all path there is no per-iteration done_sem back-pressure (it is
+        // lifted out of this loop), so the reduce core free-runs and can advance
+        // start_sem past (k+1) before a lagging worker samples it.  An exact-match
+        // wait(k+1) would then never observe k+1 and deadlock; start_sem is
+        // monotonically increasing, so wait_min(k+1) is correct for both paths.
         if (k > 0) {
-            start_sem.wait(k + 1);
+            start_sem.wait_min(k + 1);
         }
 
         find_argmax_for_core<reduce_all, src_cb_addr_data_format>(

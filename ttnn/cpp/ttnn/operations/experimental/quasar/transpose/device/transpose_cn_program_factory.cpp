@@ -95,12 +95,12 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = INPUT,
         .spec = input_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = OUTPUT,
         .spec = output_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
 
     // Defines (CN_RM define preserved verbatim).
@@ -133,7 +133,8 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer KernelSpec.
@@ -157,7 +158,8 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels.push_back(std::move(reader));
@@ -187,8 +189,6 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
 
     KernelRunArgs reader_run{.kernel = CN_READER};
     KernelRunArgs writer_run{.kernel = CN_WRITER};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
 
     for (uint32_t i = 0, num_pages_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -204,29 +204,29 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
         uint32_t n = curr_c % N;
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"N", N},
-                    {"C", C},
-                    {"HtWt", HtWt},
-                    {"batch_step", batch_step},
-                    {"channel_step", channel_step},
-                    {"num_pages", num_pages_per_core},
-                    {"start_id", start_tile},
-                    {"hw", hw},
-                    {"n", n},
-                },
-        });
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_pages_per_core},
-                    {"start_id", num_pages_read},
-                },
-        });
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"N", N},
+                {"C", C},
+                {"HtWt", HtWt},
+                {"batch_step", batch_step},
+                {"channel_step", channel_step},
+                {"num_pages", num_pages_per_core},
+                {"start_id", start_tile},
+                {"hw", hw},
+                {"n", n},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", num_pages_per_core},
+                {"start_id", num_pages_read},
+            });
 
         num_pages_read += num_pages_per_core;
     }

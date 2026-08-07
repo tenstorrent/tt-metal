@@ -182,7 +182,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                      "num_output_tiles",
                      "MtNt"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -204,7 +205,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group tile-count CTA ----
@@ -287,30 +289,30 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"Mt", Mt},
-                    {"Kt", Kt},
-                    {"Nt", Nt},
-                    {"MtKt", MtKt},
-                    {"KtNt", KtNt},
-                    {"batch", B},
-                    {"bcast_B", uint32_t(bcast_batch)},
-                    {"output_tile_start_id", num_tiles_written},
-                    {"num_output_tiles", num_output_tiles_per_core},
-                    {"MtNt", MtNt},
-                },
-        });
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_output_tiles_per_core},
-                    {"start_id", num_tiles_written},
-                },
-        });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"Mt", Mt},
+                {"Kt", Kt},
+                {"Nt", Nt},
+                {"MtKt", MtKt},
+                {"KtNt", KtNt},
+                {"batch", B},
+                {"bcast_B", uint32_t(bcast_batch)},
+                {"output_tile_start_id", num_tiles_written},
+                {"num_output_tiles", num_output_tiles_per_core},
+                {"MtNt", MtNt},
+            });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", num_output_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
         num_tiles_written += num_output_tiles_per_core;
     }
 

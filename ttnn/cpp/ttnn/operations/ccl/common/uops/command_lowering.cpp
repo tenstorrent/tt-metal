@@ -86,9 +86,7 @@ void validate_lowered_noc_commands(const ttnn::ccl::cmd::HostCclCommandNocTransf
 }
 
 ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_commands(
-    const ttnn::ccl::cmd::CclHostLowLevelWorkerCommand& command,
-    const tt::tt_metal::Tensor& tensor,
-    size_t packet_size_bytes) {
+    const ttnn::ccl::cmd::CclHostLowLevelWorkerCommand& command, const ttnn::Tensor& tensor, size_t packet_size_bytes) {
     using namespace tt::tt_metal::address_generators;
     using namespace tt::tt_metal;
 
@@ -212,9 +210,10 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
 
 std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> tensor_slice_commands_to_noc_commands(
     const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>& command_stream,
-    const tt::tt_metal::Tensor& tensor,
+    const ttnn::Tensor& tensor,
     size_t packet_size_bytes) {
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> lowered_command_stream;
+    lowered_command_stream.reserve(command_stream.size());
     for (const auto& command : command_stream) {
         switch (command.command_code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR: [[fallthrough]];

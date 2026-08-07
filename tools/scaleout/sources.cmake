@@ -53,3 +53,5 @@ set(GENERATE_MGD_LIB_SRCS generate_mgd/generate_mgd.cpp)
 set(GENERATE_MGD_SRCS generate_mgd/generate_mgd_main.cpp)
 
 set(GENERATE_RANK_BINDINGS_SRCS src/generate_rank_bindings.cpp)
+
+set(RUN_MPI_STRESS_TEST_SRCS validation/run_mpi_stress_test.cpp)

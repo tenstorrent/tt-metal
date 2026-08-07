@@ -19,7 +19,7 @@ namespace ttnn::prim::qsr {
 struct TilizeDeviceOperation {
     using operation_attributes_t = ttnn::prim::qsr::TilizeParams;
     using tensor_args_t = ttnn::prim::qsr::TilizeInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         TilizeMultiCoreDefaultProgramFactory,
@@ -43,7 +43,6 @@ ttnn::Tensor tilize(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids);

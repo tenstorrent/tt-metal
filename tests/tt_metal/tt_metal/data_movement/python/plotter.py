@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 import itertools
+import os
+
+import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from loguru import logger  # type: ignore
+from matplotlib.gridspec import GridSpec
 
 from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
@@ -52,6 +53,10 @@ class Plotter:
             # For direct write tests, use one plot (1x1 grid)
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 1
+        if "Quasar Cache Write" in test_name:
+            # Two panels: duration vs size and bandwidth vs size (one line per write mode)
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 2
         return config
 
     def get_bandwidth_mode(self, test_id):
@@ -160,6 +165,9 @@ class Plotter:
                 # For NOC API Latency tests, plot cycles per transaction
                 self.plot_transaction_size_vs_cycles_per_transaction(axes[0], plot_data[test_id])
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
+            elif "Quasar Cache Write" in test_name:
+                self.plot_quasar_cache_write_duration(axes[0], plot_data[test_id])
+                self.plot_quasar_cache_write_bandwidth(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(
@@ -280,6 +288,49 @@ class Plotter:
             xbase=2,
             yscale="log",
             ybase=10,
+        )
+
+    # Quasar Cache Write: Total Data Size vs amortized per-write Duration (one line per mode).
+    # The timed zone repeats the write num_transactions (=iteration count) times, so the
+    # per-write duration is duration_cycles / num_transactions.
+    def plot_quasar_cache_write_duration(self, ax, data):
+        per_iter_data = {}
+        for riscv, runs in data.items():
+            new_runs = []
+            for run in runs:
+                r = run.copy()
+                iters = run.get("num_transactions", 1) or 1
+                r["per_iter_duration"] = run["duration_cycles"] / iters
+                new_runs.append(r)
+            per_iter_data[riscv] = new_runs
+        self._plot_series(
+            ax=ax,
+            data=per_iter_data,
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="per_iter_duration",
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Write Duration (amortized)",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Duration per write (cycles)",
+            xscale="log",
+            xbase=2,
+        )
+
+    # Quasar Cache Write: Total Data Size vs Bandwidth (bytes/cycle, one line per write mode)
+    def plot_quasar_cache_write_bandwidth(self, ax, data):
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="bandwidth",  # num_transactions * size / duration = per-iteration bytes/cycle
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Bandwidth",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Bandwidth (bytes/cycle)",
+            xscale="log",
+            xbase=2,
         )
 
     # Packet Sizes: Transaction Size vs Bandwidth

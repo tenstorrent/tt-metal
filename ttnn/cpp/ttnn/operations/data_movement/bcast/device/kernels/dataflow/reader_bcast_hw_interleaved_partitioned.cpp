@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -29,44 +29,44 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
     const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
     const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
 
 #ifndef IN0_SHARDED
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 #else
-    cb_in0.reserve_back(num_tiles);
-    cb_in0.push_back(num_tiles);
+    dfb_in0.reserve_back(num_tiles);
+    dfb_in0.push_back(num_tiles);
 #endif
 
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
 #ifdef BCAST_SCALAR
-    cb_in1.reserve_back(onetile);
-    noc.async_read(s1, cb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
+    dfb_in1.reserve_back(onetile);
+    noc.async_read(s1, dfb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    cb_in1.push_back(onetile);
+    dfb_in1.push_back(onetile);
 #endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;
 
 #ifndef IN0_SHARDED
-        cb_in0.reserve_back(onetile);
-        noc.async_read(s0, cb_in0, tile_bytes_0, {.page_id = curr_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(s0, dfb_in0, tile_bytes_0, {.page_id = curr_id, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
 #endif
 
         curr_id_from_base++;
 
 #ifndef BCAST_SCALAR
-        cb_in1.reserve_back(onetile);
-        noc.async_read(s1, cb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        dfb_in1.reserve_back(onetile);
+        noc.async_read(s1, dfb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in1.push_back(onetile);
+        dfb_in1.push_back(onetile);
 
         if (curr_id_from_base == HtWt) {
             bcast_id++;

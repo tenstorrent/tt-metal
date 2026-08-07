@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -41,15 +41,15 @@ void kernel_main() {
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
     }
 
-    CircularBuffer cb_in(cb_id_in);
+    DataflowBuffer dfb_in(cb_id_in);
     Noc noc;
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
     // FIX RM CONCAT WIDTH
     for (uint32_t i = 0; i < num_pages; ++i) {
-        cb_in.reserve_back(ublock_size_pages);
-        uint32_t l1_write_addr = cb_in.get_write_ptr();
+        dfb_in.reserve_back(ublock_size_pages);
+        uint32_t l1_write_addr = dfb_in.get_write_ptr();
 #ifdef WIDTH_CONCAT
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
@@ -87,6 +87,6 @@ void kernel_main() {
         }
 #endif
         noc.async_read_barrier();
-        cb_in.push_back(ublock_size_pages);
+        dfb_in.push_back(ublock_size_pages);
     }
 }

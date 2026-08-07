@@ -57,7 +57,7 @@
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
@@ -824,6 +824,15 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init.
  */
 ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+
+/**
+ * UInt16 values in 32-bit DEST: move cleaned values into the packer-visible high half (SFPSTORE mode 9).
+ * No-op unless the compute kernel was built with TOPK_UINT16_FP32_DEST. Must run on MATH while DEST is
+ * still acquired (before tile_regs_commit / pack_tile). See #50215.
+ */
+ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
+    MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
+}
 
 #ifndef ARCH_QUASAR  // BH/WH-only ops below
 

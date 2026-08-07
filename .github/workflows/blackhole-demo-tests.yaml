@@ -88,7 +88,7 @@ on:
 
 jobs:
   generate-model-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -166,7 +166,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:

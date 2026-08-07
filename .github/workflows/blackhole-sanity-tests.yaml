@@ -150,7 +150,9 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      # In-place wheel is cp310; only valid for 22.04 tests. 24.04 (cp312) needs the manylinux wheel.
+      build-inplace-wheel: ${{ (inputs.platform || 'Ubuntu 22.04') == 'Ubuntu 22.04' }}
+      build-wheel: ${{ (inputs.platform || 'Ubuntu 22.04') != 'Ubuntu 22.04' }}
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
@@ -222,7 +224,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-sanity-tests-impl.yaml
     with:
-      enabled-skus: "bh_quietbox_2,bh_p300,bh_quietbox_2_iommu"
+      enabled-skus: "bh_quietbox_2,bh_p300"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

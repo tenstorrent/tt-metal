@@ -18,4 +18,6 @@ set(TEST_CABLING_DESCRIPTOR_MGD_GENERATION_SRCS test_cabling_descriptor_mgd_gene
 
 set(TEST_HOST_ID_ASSIGNMENT_SRCS test_host_id_assignment.cpp)
 
+set(TEST_INSTANCE_FILTER_SRCS test_instance_filter.cpp)
+
 set(TEST_GENERATE_RANK_BINDINGS_SRCS test_generate_rank_bindings.cpp)

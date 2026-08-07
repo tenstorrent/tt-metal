@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compile_time_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -62,14 +63,14 @@ void kernel_main() {
         reader_offset += conv_act_size_w_padded;
     }
 
-    experimental::CB act_cb(cb_id_act);
-    experimental::CB sharded_act_cb(cb_id_sharded_act);
-    experimental::CB reader_indices_cb(cb_reader_indices);
+    DataflowBuffer act_dfb(cb_id_act);
+    DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
+    DataflowBuffer reader_indices_dfb(cb_reader_indices);
     Noc noc;
 
     // LOOP TO FILL READER INDICES
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());
 
     uint32_t reader_idx = 0;
 
@@ -81,7 +82,7 @@ void kernel_main() {
 
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
+    uint32_t act_l1_read_addr = sharded_act_dfb.get_read_ptr();
 
     if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -92,8 +93,8 @@ void kernel_main() {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
-            act_cb.reserve_back(act_block_num_tiles);
-            uint32_t l1_write_addr_act = act_cb.get_write_ptr();
+            act_dfb.reserve_back(act_block_num_tiles);
+            uint32_t l1_write_addr_act = act_dfb.get_write_ptr();
             uint32_t reader_offset = act_l1_read_addr + (reader_offsets[reader_offset_idx] * conv_act_c_read_bytes);
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
@@ -114,7 +115,7 @@ void kernel_main() {
                 }
             }
             noc.async_read_barrier();
-            act_cb.push_back(act_block_num_tiles);
+            act_dfb.push_back(act_block_num_tiles);
 
             reader_offset_idx += window_inner;
         }

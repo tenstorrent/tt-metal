@@ -23,7 +23,7 @@ using namespace test_utils;
 
 namespace unit_tests::dm::all_from_all {
 
-constexpr uint32_t START_ID = 310;
+constexpr uint32_t START_ID = 320;
 
 // Test Config (i.e. test parameters)
 struct AllFromAllConfig {
@@ -120,7 +120,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
         {"mst_l1_addr", (uint32_t)mst_l1_base_address},
         {"sub_l1_addr", (uint32_t)sub_l1_base_address},
         {"num_subordinates", (uint32_t)num_subordinates},
-        {"num_vc", (uint32_t)test_config.num_virtual_channels}};
+        {"num_vc", (uint32_t)test_config.num_virtual_channels},
+        {"mst_grid_size_x", (uint32_t)test_config.mst_grid_size.x},
+        {"mst_grid_size_y", (uint32_t)test_config.mst_grid_size.y},
+        {"sub_grid_size_x", (uint32_t)test_config.sub_grid_size.x},
+        {"sub_grid_size_y", (uint32_t)test_config.sub_grid_size.y}};
 
     const uint32_t num_coord_varargs = (uint32_t)(num_subordinates * 2);
 
@@ -158,11 +162,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        requestor_run_params.runtime_arg_values.push_back(
-            {.node = mst_logical_core,
-             .args = {
-                 {"num_of_transactions", (uint32_t)test_config.num_of_transactions_per_subordinate},
-                 {"bytes_per_transaction", (uint32_t)bytes_per_transaction}}});
+        AddRuntimeArgsForNode(
+            requestor_run_params.runtime_arg_values,
+            mst_logical_core,
+            {
+                {"num_of_transactions", (uint32_t)test_config.num_of_transactions_per_subordinate},
+                {"bytes_per_transaction", (uint32_t)bytes_per_transaction},
+            });
         requestor_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
     }
     run_params.kernel_run_args.push_back(requestor_run_params);
@@ -412,23 +418,67 @@ void custom_test(
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
+void grid_packet_sizes_test(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord sub_start_coord,
+    CoreCoord mst_grid_size,
+    CoreCoord sub_grid_size) {
+    NOC noc_id = NOC::NOC_1;
+
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t max_transactions_per_subordinate = 256;
+    uint32_t max_reservable_pages_per_transaction =
+        mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE ? 1024 : 2048;
+
+    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+        max_transactions_per_subordinate = 1;
+        max_reservable_pages_per_transaction = 1;
+    }
+
+    for (uint32_t num_of_transactions_per_subordinate = 1;
+         num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
+         num_of_transactions_per_subordinate *= 16) {
+        for (uint32_t pages_reservable_per_transaction = 1;
+             pages_reservable_per_transaction <= max_reservable_pages_per_transaction;
+             pages_reservable_per_transaction *= 2) {
+            if (pages_reservable_per_transaction > max_reservable_pages) {
+                continue;
+            }
+
+            AllFromAllConfig test_config = {
+                .test_id = test_case_id,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = mst_grid_size,
+                .sub_grid_size = sub_grid_size,
+                .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
+                .pages_reservable_per_transaction = pages_reservable_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = noc_id,
+            };
+
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
 }  // namespace unit_tests::dm::all_from_all
 
 /* =============================================================  /
 /  ========== TEST CASES FOR ALL-TO-ALL DATA MOVEMENT ==========  /
 /  ============================================================= */
 
-/*
-TO-DO:
-    - Implement a test case that shuffles through several grid sizes to test grids of different sizes
-*/
-
 /* ======== DIRECTED IDEAL ======== */
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
-    uint32_t test_case_id = 310;
+    uint32_t test_case_id = 320;
 
     /* Parameters */
 
@@ -448,7 +498,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
-    uint32_t test_case_id = 311;
+    uint32_t test_case_id = 321;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -463,7 +513,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
-    uint32_t test_case_id = 312;
+    uint32_t test_case_id = 322;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -478,7 +528,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedI
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
-    uint32_t test_case_id = 313;
+    uint32_t test_case_id = 323;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -493,7 +543,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedI
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
-    uint32_t test_case_id = 314;
+    uint32_t test_case_id = 324;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -508,7 +558,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedI
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
-    uint32_t test_case_id = 315;
+    uint32_t test_case_id = 325;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -523,7 +573,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedI
 
 /* ======== 2x2 to 2x2 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
-    uint32_t test_case_id = 316;
+    uint32_t test_case_id = 326;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -540,14 +590,14 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedI
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_case_id = 317;
+    uint32_t test_case_id = 327;
 
     unit_tests::dm::all_from_all::virtual_channels_test(get_mesh_device(), test_case_id);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_case_id = 318;
+    uint32_t test_case_id = 328;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
@@ -578,7 +628,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
 
-    uint32_t test_case_id = 319;
+    uint32_t test_case_id = 329;
 
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord sub_start_coord = {0, 0};
@@ -599,7 +649,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal_2_0) {
-    uint32_t test_id = 320;
+    uint32_t test_id = 330;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -664,23 +714,68 @@ void all_from_all_grid_directed_ideal_2_0(
 }  // namespace
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 333, {0, 0}, {4, 4}, {2, 2}, {1, 1});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 331, {0, 0}, {4, 4}, {2, 2}, {1, 1});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 334, {0, 0}, {0, 0}, {4, 4}, {1, 1});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 332, {0, 0}, {0, 0}, {4, 4}, {1, 1});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 335, {0, 0}, {4, 4}, {1, 1}, {2, 2});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 333, {0, 0}, {4, 4}, {1, 1}, {2, 2});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 336, {0, 0}, {0, 0}, {1, 1}, {4, 4});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 334, {0, 0}, {0, 0}, {1, 1}, {4, 4});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 337, {0, 0}, {0, 0}, {2, 2}, {2, 2});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 335, {0, 0}, {0, 0}, {2, 2}, {2, 2});
+}
+
+/* ======== GRID + PACKET SIZE SWEEP ======== */
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllGridSweepPacketSizes2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_device(0);
+    auto grid = device->compute_with_storage_grid_size();
+
+    uint32_t test_case_id = 336;
+
+    struct GridConfig {
+        CoreCoord mst_grid;
+        CoreCoord sub_grid;
+    };
+
+    CoreCoord full = {grid.x, grid.y};
+
+    std::vector<GridConfig> grid_configs = {
+        // Symmetric
+        {{2, 2}, {2, 2}},
+        {{4, 4}, {4, 4}},
+        {full, full},
+        // Asymmetric
+        {{2, 2}, {1, 1}},
+        {{4, 4}, {2, 2}},
+        {{2, 2}, {4, 4}},
+        {{4, 4}, {1, 1}},
+        {full, {4, 4}},
+        {{4, 4}, full},
+    };
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    for (const auto& gc : grid_configs) {
+        uint32_t required_x = std::max(mst_start_coord.x + gc.mst_grid.x, sub_start_coord.x + gc.sub_grid.x);
+        uint32_t required_y = std::max(mst_start_coord.y + gc.mst_grid.y, sub_start_coord.y + gc.sub_grid.y);
+        if (grid.x < required_x || grid.y < required_y) {
+            continue;
+        }
+
+        unit_tests::dm::all_from_all::grid_packet_sizes_test(
+            mesh_device, test_case_id, mst_start_coord, sub_start_coord, gc.mst_grid, gc.sub_grid);
+    }
 }
 
 }  // namespace tt::tt_metal

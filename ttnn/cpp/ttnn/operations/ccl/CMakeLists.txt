@@ -15,13 +15,17 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    broadcast/device/kernels/*
-    common/kernels/*
-    kernel_common/*
-    kernels/*
-    all_to_all_combine/device/kernels/*
-    all_to_all_dispatch/device/kernels/*
-    reduce_to_root/device/kernels/*
+    all_gather/device/kernels/*.cpp
+    all_gather/device/kernels/*.hpp
+    broadcast/device/kernels/*.cpp
+    common/kernels/*.cpp
+    common/kernels/*.hpp
+    kernel_common/*.hpp
+    kernels/*.cpp
+    kernels/*.hpp
+    all_to_all_combine/device/kernels/*.cpp
+    all_to_all_dispatch/device/kernels/*.cpp
+    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl
@@ -73,6 +77,9 @@ target_sources(
             all_gather/all_gather.hpp
             all_gather/all_gather_nanobind.hpp
             all_gather/device/all_gather_device_operation.hpp
+            all_gather/device/all_gather_device_operation_types.hpp
+            all_gather/device/all_gather_multicast_factory.hpp
+            all_gather/device/all_gather_unicast_factory.hpp
             # all_reduce/
             all_reduce/all_reduce.hpp
             all_reduce/all_reduce_nanobind.hpp

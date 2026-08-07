@@ -8,6 +8,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
@@ -70,6 +71,7 @@ def test_perf_unpack_transpose(
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
             UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
+            LOOP_FACTOR(32),
         ],
         variant_stimuli=StimuliConfig(
             None,

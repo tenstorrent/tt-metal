@@ -411,7 +411,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Reader/Writer kernel (reads in1, writes output) ----
@@ -458,7 +459,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ComputeHardwareConfig compute_hw_config =
@@ -582,23 +584,23 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
 
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"in0_tensor_start_tile_id", in0_start_tile_id},
-                    {"batch", num_output_blocks_per_core},
-                },
-        });
-        reader_writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"in1_tensor_start_tile_id", in1_start_tile_id},
-                    {"batch", num_output_blocks_per_core},
-                    {"out_tensor_start_tile_id", out_start_tile_id},
-                },
-        });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_writer_rtas = reader_writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"in0_tensor_start_tile_id", in0_start_tile_id},
+                {"batch", num_output_blocks_per_core},
+            });
+        AddRuntimeArgsForNode(
+            reader_writer_rtas,
+            core,
+            {
+                {"in1_tensor_start_tile_id", in1_start_tile_id},
+                {"batch", num_output_blocks_per_core},
+                {"out_tensor_start_tile_id", out_start_tile_id},
+            });
 
         num_blocks_written += num_output_blocks_per_core;
     }

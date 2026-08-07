@@ -72,7 +72,10 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
+    const auto kernelMeta = detail::collect_kernel_meta(program, device);
+    computeKernels.reserve(kernelMeta.size());
+    datamovementKernels.reserve(kernelMeta.size());
+    for (const auto& kernel : kernelMeta) {
         auto processor_class = kernel.processor_class;
         if (processor_class == HalProcessorClassType::COMPUTE) {
             auto fidelityStr = enchantum::to_string(kernel.math_fidelity.value());

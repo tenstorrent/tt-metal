@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
@@ -21,8 +21,8 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_id_in, cb_id_out);
     transpose_init(cb_id_in);
 
-    CircularBuffer cb_in(cb_id_in);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_in(cb_id_in);
+    DataflowBuffer dfb_out(cb_id_out);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
@@ -31,8 +31,8 @@ void kernel_main() {
     uint32_t tile_idx = 0;
     uint32_t tile_idx_N = 0;
 
-    cb_in.wait_front(NHtWt);
-    cb_out.reserve_back(NHtWt);
+    dfb_in.wait_front(NHtWt);
+    dfb_out.reserve_back(NHtWt);
     for (uint32_t n = 0; n < N; ++n) {
         tile_idx = tile_idx_N;
         for (uint32_t w = 0; w < Wt; ++w) {
@@ -49,6 +49,6 @@ void kernel_main() {
         }
         tile_idx_N += HtWt;
     }
-    cb_out.push_back(NHtWt);
-    cb_in.pop_front(NHtWt);
+    dfb_out.push_back(NHtWt);
+    dfb_in.pop_front(NHtWt);
 }

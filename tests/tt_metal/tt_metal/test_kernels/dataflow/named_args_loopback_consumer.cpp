@@ -17,6 +17,9 @@
 // See the producer source for the XOR-cancellation verification trick.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -31,6 +34,8 @@ void kernel_main() {
     // entry survives round-trip. A wrong offset in either kernel breaks the cancellation.
     const uint32_t vararg_xor = get_vararg(0) ^ get_vararg(1) ^ get_common_vararg(0);
 
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
     DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
@@ -38,9 +43,8 @@ void kernel_main() {
         // Unfold the producer's XOR by applying our (equal) sum to the same word.
         volatile tt_l1_ptr uint32_t* dfb_read_ptr = (volatile tt_l1_ptr uint32_t*)buf.get_read_ptr();
         dfb_read_ptr[0] ^= vararg_xor;
-        uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-        noc_async_write(buf.get_read_ptr(), dst_noc_addr, entry_size);
-        noc_async_write_barrier();
+        noc.async_write(buf, dram_dst, entry_size, {}, {.bank_id = bank_id, .addr = dst_addr});
+        noc.async_write_barrier();
         buf.pop_front(1);
         dst_addr += entry_size;
     }

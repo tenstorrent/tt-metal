@@ -85,7 +85,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
@@ -97,7 +97,7 @@ while IFS= read -r FILE; do
         # LLK engine submodule's pytest suite. Must come before the generic
         # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
         # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
-        # (e.g. metalium-smoke-tests) keep firing for these changes.
+        # (e.g. runtime-smoke-tests) keep firing for these changes.
         tests/tt_metal/tt_metal/llk/**)
             LLK_UNIT_TESTS_CHANGED=true
             TTMETALIUM_TESTS_CHANGED=true

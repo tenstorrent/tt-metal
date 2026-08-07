@@ -37,19 +37,19 @@
 // The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
-//   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
+//   // (Host code declares "my_dfb_name" as the DFB accessor name for this kernel.)
 //   // In the kernel code:
 //   DataflowBuffer my_dfb(dfb::my_dfb_name);
 //
-// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
+// Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
+struct DFBBindingToken {
+    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // DFBAccessor is backed by a compile-time ID (an implicit CTA).
+    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
     // Implicit conversion to uint32_t:
-    // This lets a Metal 2.0 kernel pass a DFBAccessor directly to Gen1 (WH/BH) LLK
+    // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
     // compute APIs that expect a raw CB id.
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
@@ -69,9 +69,9 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(static_cast<uint16_t>(accessor)) {}
+    DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
+    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -81,6 +81,62 @@ public:
     uint32_t get_stride_size() const;
     // Returns the total number of entries that can be stored in the DFB
     uint32_t get_total_num_entries() const;
+    // Total L1 backing for the global ring (num_entries * entry_size), in bytes.
+    uint32_t get_total_size_bytes() const;
+
+    // --- Quasar (tt-2xx) depth / L1 extent queries ---------------------------------
+    //
+    // A logical DFB on Quasar may use multiple hardware tile counters (TCs) on one RISC
+    // (round-robin via tc_idx over tc_slots[0..num_tcs_to_rr-1]). Each TC has its own
+    // base_addr and ring extent (limit on DM; ring_size on TRISC). These getters expose
+    // three measurement scopes; see also DFB L1 layout diagrams (STRIDED vs ALL).
+    //
+    //  (1) get_total_*     — entire DFB: num_entries credits, num_entries * entry_size L1.
+    //
+    //  (2) get_local_*     — active TC only (tc_slots[tc_idx]):
+    //        get_local_num_entries()  HW credit depth (buf_capacity) for this TC.
+    //        get_local_size_bytes()   linear address interval [base, limit) / ring_size
+    //                                 for this TC alone.
+    //
+    //      local_size_bytes is ONE contiguous L1 interval, but the entries *owned* by this
+    //      TC are often NOT adjacent inside it — tile counters can have discontiguous L1:
+    //
+    //      STRIDED (e.g. 4Sx1S: stride_in_entries = num_producers):
+    //        Global ring is interleaved: physical slot (e, p) = e*P + p.
+    //        Each TC walks its column with stride_size (= entry_size * P):
+    //
+    //          L1:  [P0@e0][P1@e0][P2@e0][P3@e0][P0@e1][P1@e1]...
+    //          TC0:  ^              ^              ^         (every P-th entry)
+    //
+    //        TC0's [base0, limit0) spans the full linear ring byte length, but its owned
+    //        tiles sit P-1 foreign slots apart — discontiguous within that interval.
+    //
+    //      ALL (e.g. 4Sx1A: stride_in_entries = 1):
+    //        Each TC owns a contiguous block of capacity entries; bases step by
+    //        capacity * entry_size:
+    //
+    //          L1:  [ TC0: cap entries ][ TC1: cap entries ][ TC2: ... ][ TC3: ... ]
+    //
+    //        Here each TC's owned tiles ARE contiguous within its local interval.
+    //
+    //  (3) get_ring_span_* — bounding box across ALL TC slots on this RISC:
+    //        Contiguous L1 from tc_slots[0].base through the end of the last TC ring
+    //        (limit[last] - base[0] on DM; base[last] + ring_size[last] - base[0] on TRISC).
+    //        get_ring_span_num_entries() = ring_span_bytes / entry_size (address slots in
+    //        that bounding interval, not per-TC owned entry count).
+    //
+    //        ring_span is the minimal contiguous L1 interval covering every TC window.
+    //        In STRIDED layouts TC bases are staggered by entry_size with overlapping
+    //        windows; in ALL layouts TC blocks are disjoint and packed. Neither layout
+    //        guarantees that every byte in ring_span belongs to one TC's owned entries
+    //        (STRIDED: foreign interleaved slots; ALL: only the active TC's block is
+    //        "yours" at a given time during round-robin).
+    //
+    // On tt-1xx (WH/BH) there is no per-TC view; all four getters alias get_total_*.
+    uint32_t get_local_num_entries() const;
+    uint32_t get_local_size_bytes() const;
+    uint32_t get_ring_span_bytes() const;
+    uint32_t get_ring_span_num_entries() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -233,8 +289,17 @@ public:
     void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
 #endif
 
+    // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
+    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+
+#ifndef ARCH_QUASAR
+    // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
+    // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
+    void evil_set_write_ptr(uint32_t addr);
+    void evil_set_read_ptr(uint32_t addr);
+#endif
 
     [[nodiscard]] auto scoped_lock() {
         // TODO: Register with the debugger to track the lock
@@ -258,7 +323,7 @@ private:
     void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
-    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
 
     uint32_t prepare_implicit_read();
     void commit_implicit_read();
@@ -270,6 +335,10 @@ private:
 
     void release_scoped_lock() {
         // TODO: Unregister with the debugger
+    }
+
+    constexpr uint32_t address_units_to_bytes(uint32_t units) const {
+        return units << cb_addr_shift;
     }
 
     uint16_t logical_dfb_id_;

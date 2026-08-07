@@ -255,6 +255,19 @@ target_link_libraries(
 )
 
 if(ENABLE_DISTRIBUTED)
+    # MPI stress test: ring-based sendrecv packet validation across all ranks
+    add_executable(run_mpi_stress_test)
+    target_sources(run_mpi_stress_test PRIVATE ${RUN_MPI_STRESS_TEST_SRCS})
+
+    set_target_properties(
+        run_mpi_stress_test
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${Metalium_BINARY_DIR}/tools/scaleout
+    )
+
+    target_link_libraries(run_mpi_stress_test PRIVATE OpenMPI::MPI)
+
     # Generate rank bindings tool
     add_executable(generate_rank_bindings)
     target_sources(generate_rank_bindings PRIVATE ${GENERATE_RANK_BINDINGS_SRCS})
@@ -311,7 +324,7 @@ if(ENABLE_DISTRIBUTED)
                 COMPONENT metalium-runtime
         )
 
-        # PGDs used by generate_rank_bindings find_and_load_pgd() (default + arch/cluster-specific under
+        # PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
         # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
         file(
             GLOB _generate_rank_bindings_pgd_files

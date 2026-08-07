@@ -103,7 +103,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -121,7 +122,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             {{"float32_dtype", static_cast<uint32_t>(float32_dtype)}, {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
     };
-    writer.hw_config = ttnn::create_writer_datamovement_config(device->arch());
+    writer.hw_config =
+        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
 
     // ---- Compute kernels (full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
@@ -134,10 +136,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
         if (fp32_dest_acc_en) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };
@@ -180,10 +179,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
     const auto& cores = corerange_to_cores(available_grid);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     Table<NodeCoord, AdvancedKernelRunArgs::Varargs> writer_varargs;
     uint32_t max_varargs = 0;
 
@@ -223,17 +220,26 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         // Writer named RTAs (the legacy fixed prefix, minus the dropped buffer address).
         // start_stick_id (legacy row_start_id at the core's start) is filled in by the
         // fixup loop below.
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
-                {"padded_X_size", padded_row_size_bytes}, {"start_stick_id", 0u}, {"n_block_reps", n_block_reps}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"padded_X_size", padded_row_size_bytes},
+                {"start_stick_id", 0u},
+                {"n_block_reps", n_block_reps},
+            });
 
         writer_varargs.emplace(core, std::move(writer_tail));
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", num_tiles_per_core}, {"start_id", tile_start_id}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", tile_start_id},
+            });
 
         tile_start_id += num_tiles_per_core;
     }
@@ -245,7 +251,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         uint32_t rsid = 0;
         for (uint32_t i = 0; i < ncores; ++i) {
             const std::vector<BlockRep>& assignment = core_assignments.at(i);
-            writer_node_args[i].args["start_stick_id"] = rsid;
+            writer_node_args["start_stick_id"][cores[i]] = rsid;
             for (const auto& el : assignment) {
                 rsid += el.data_row_count();
             }

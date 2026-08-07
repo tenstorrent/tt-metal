@@ -13,7 +13,7 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels halo/device/kernels/*)
+file(GLOB_RECURSE kernels halo/device/kernels/*.cpp)
 target_sources(
     ttnn_op_sliding_window
     PUBLIC

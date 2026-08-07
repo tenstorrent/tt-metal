@@ -26,6 +26,6 @@ struct tensor_args_t {
 };
 
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::optimizers::sgd::device

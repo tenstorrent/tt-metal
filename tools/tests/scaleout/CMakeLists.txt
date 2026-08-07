@@ -117,6 +117,24 @@ target_link_libraries(
 # Make sure protobuf files are generated before compiling host_id assignment tests
 add_dependencies(test_host_id_assignment scaleout_generated_protos)
 
+# Test for opt-in include/exclude instance filtering
+add_executable(test_instance_filter)
+target_sources(test_instance_filter PRIVATE ${TEST_INSTANCE_FILTER_SRCS})
+
+target_include_directories(test_instance_filter SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_instance_filter
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+# Make sure protobuf files are generated before compiling instance filter tests
+add_dependencies(test_instance_filter scaleout_generated_protos)
+
 add_executable(test_generate_rank_bindings)
 target_sources(test_generate_rank_bindings PRIVATE ${TEST_GENERATE_RANK_BINDINGS_SRCS})
 
