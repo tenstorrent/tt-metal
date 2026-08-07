@@ -512,10 +512,6 @@ constexpr bool wants_exit_barrier(PerfRunType run_type)
 #ifndef LLK_PERF_EXIT_BARRIER
 #define LLK_PERF_EXIT_BARRIER (-1)
 #endif
-// 0 = TRISC0 arms, 2 = pack arms. (1 = measured thread: deadlocks, see above.)
-#ifndef LLK_PERF_ARM_ON
-#define LLK_PERF_ARM_ON 2
-#endif
 
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
