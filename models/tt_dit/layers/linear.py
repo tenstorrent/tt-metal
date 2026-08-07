@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -140,6 +140,7 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        chunk_sizes=None,
     ):
         super().__init__()
 
@@ -162,6 +163,8 @@ class ColParallelLinear(Module):
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
         self.chunks = chunks
+        # Per-chunk output widths in ELEMENTS (global, pre-TP-shard); None => uniform N/chunks.
+        self.chunk_sizes = chunk_sizes
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -217,6 +220,49 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
+    def _forward_fabric_agmm(self, x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype) -> ttnn.Tensor:
+        """Optimized fabric-bound TP all-gather-matmul via strided_all_gather_minimal_matmul_async.
+
+        The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
+        run on the rows starting at ``fabric_cfg.ag_core_grid_offset`` (disjoint region). Returns the
+        single (chunks==1) matmul output; the op's first output is the gathered-K scratch.
+        """
+        mesh_axis = parallel_config.tensor_parallel.mesh_axis
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=fabric_cfg.M_block_size,
+            K_block_size=fabric_cfg.K_block_size,
+            N_block_size=fabric_cfg.N_block_size,
+            subblock_h=fabric_cfg.subblock_h,
+            subblock_w=fabric_cfg.subblock_w,
+            compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
+        )
+        ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
+        ag_global_semaphores = self.ccl_manager.get_strided_ag_mm_semaphore(mesh_axis, fabric_cfg.num_workers_per_link)
+        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+            x,
+            weight,
+            persistent_output_buffer=ag_persistent_buffer,
+            dim=3,
+            multi_device_global_semaphore=ag_global_semaphores,
+            strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
+            num_links=self.ccl_manager.num_links,
+            memory_config_ag=dram,
+            topology=self.ccl_manager.topology,
+            cluster_axis=mesh_axis,
+            bias=self.bias.data if self.bias is not None else None,
+            fused_activation=self.fused_activation_fn,
+            config=matmul_config,
+            memory_config_mm=dram,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            num_workers_per_link=fabric_cfg.num_workers_per_link,
+            num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
+            read_local_slice_from_input=True,
+            chunks=1,
+        )
+        # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
+        return _apply_activation_fn(outputs[1], self.activation_fn)
+
     def forward(
         self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
@@ -238,6 +284,14 @@ class ColParallelLinear(Module):
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
+
+            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
+            # Restricted (for now) to the plain chunks==1 / no-swiglu case; other shapes fall
+            # through to the current all_gather_minimal_matmul_async path below.
+            fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
+            if fabric_cfg is not None and self.chunks in (None, 1) and not self.fuse_swiglu:
+                return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
+
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
@@ -264,6 +318,10 @@ class ColParallelLinear(Module):
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
+                # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
+                chunk_sizes=(
+                    [w // parallel_config.tensor_parallel.factor for w in self.chunk_sizes] if self.chunk_sizes else []
+                ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
             )
