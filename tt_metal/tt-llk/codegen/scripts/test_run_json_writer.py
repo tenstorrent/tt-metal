@@ -18,6 +18,7 @@ SCRIPT = Path(__file__).parent / "run_json_writer.py"
 STATE = Path(__file__).parent / "state.py"
 SETUP_WORKTREE = Path(__file__).parent / "setup_worktree.sh"
 ORCHESTRATOR_STEPS = Path(__file__).parent / "issue_solver" / "orchestrator_steps.sh"
+RUN_UTILS = Path(__file__).parent / "issue_solver_run_utils.py"
 RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
 LLK_CONFTEST = Path(__file__).parents[2] / "tests" / "python_tests" / "conftest.py"
 
@@ -1592,6 +1593,47 @@ def test_progress_sequence_and_heartbeat_advance_monotonically(tmp_path):
         assert writer.returncode == 0, stderr or stdout
     final = json.loads((tmp_path / "run.json").read_text())
     assert final["progress_sequence"] == 11
+
+
+def test_runs_jsonl_upserts_are_locked_across_concurrent_finalizers(tmp_path):
+    runs_jsonl = tmp_path / "runs.jsonl"
+    logs = []
+    for run_id in ("run-a", "run-b"):
+        log_dir = tmp_path / run_id
+        log_dir.mkdir()
+        (log_dir / "run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "failed",
+                    "end_time": "now",
+                }
+            )
+        )
+        logs.append(log_dir)
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(RUN_UTILS),
+                "upsert-runs-jsonl",
+                "--log-dir",
+                str(log_dir),
+                "--runs-jsonl",
+                str(runs_jsonl),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for log_dir in logs
+    ]
+    for writer in writers:
+        stdout, stderr = writer.communicate(timeout=10)
+        assert writer.returncode == 0, stderr or stdout
+
+    rows = [json.loads(line) for line in runs_jsonl.read_text().splitlines()]
+    assert {row["run_id"] for row in rows} == {"run-a", "run-b"}
 
 
 def test_init_records_version_when_passed(tmp_path):
