@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
@@ -42,6 +43,13 @@ constexpr uint16_t shared_expert_scale_bf16 = static_cast<uint16_t>(get_compile_
 constexpr uint32_t num_routed_experts = reduction_dim_size - num_shared_experts;
 
 constexpr uint32_t face2_offset = 512;  // face 2 starts 512 elements into tile
+
+// The score prologue below builds exactly one 32x32 tile per expert, and cb_scores is sized for
+// reduction_dim_size such tiles. Only the first TILE_HEIGHT tokens have a slot in that tile: token t
+// lands at element (t - 16) * 16 of face 2, so t >= 32 would run past the expert's tile and, on the
+// last expert, past the end of cb_scores. Host validation rejects num_tokens > 32; clamp the fill
+// loops as well so an out-of-spec build cannot corrupt L1.
+constexpr uint32_t tokens_in_tile = num_tokens < 32 ? num_tokens : 32;
 
 // TensorAccessor CT args, chained:
 //   activation @ 27, scores @ next, expert_indices @ next, expert_mapping @ next.
@@ -201,12 +209,13 @@ void kernel_main() {
     };
 
     // [token][1][s=1][k] -> [k][1][t][s_padded=32]
+    ASSERT(num_tokens <= 32);
     for (uint32_t k = 0; k < reduction_dim_size; ++k) {
         volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
         const bool is_shared_expert = (k >= num_routed_experts);
 
         // Fill Face 0 (rows 0-15, col 0) for tokens t = 0..15
-        for (uint32_t t = 0; t < 16 && t < num_tokens; ++t) {
+        for (uint32_t t = 0; t < 16 && t < tokens_in_tile; ++t) {
             if (is_shared_expert) {
                 expert_tile[t * 16] = shared_expert_scale_bf16;
             } else {
@@ -215,9 +224,9 @@ void kernel_main() {
                 expert_tile[t * 16] = compute_on_axis(t, k) ? score : bf16_zero;
             }
         }
-        // Fill Face 2 (rows 16-31, col 0) for tokens t = 16..num_tokens-1
-        if (num_tokens > 16) {
-            for (uint32_t t = 16; t < num_tokens; ++t) {
+        // Fill Face 2 (rows 16-31, col 0) for tokens t = 16..tokens_in_tile-1
+        if (tokens_in_tile > 16) {
+            for (uint32_t t = 16; t < tokens_in_tile; ++t) {
                 if (is_shared_expert) {
                     expert_tile[face2_offset + (t - 16) * 16] = shared_expert_scale_bf16;
                 } else {
@@ -227,19 +236,19 @@ void kernel_main() {
             }
         }
     }
-    if ((num_tokens < num_tokens_x32) && (num_tokens < 16)) {
+    if ((tokens_in_tile < num_tokens_x32) && (tokens_in_tile < 16)) {
         // Fill remaining Face 0 with BF16 +0.0 (bit pattern 0x0000).
         for (uint32_t k = 0; k < reduction_dim_size; ++k) {
             volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-            for (uint32_t t = num_tokens; t < 16; ++t) {
+            for (uint32_t t = tokens_in_tile; t < 16; ++t) {
                 expert_tile[t * 16] = bf16_zero;
             }
         }
     }
-    if (num_tokens < num_tokens_x32) {
+    if (tokens_in_tile < num_tokens_x32) {
         // Fill remaining Face 2 with BF16 +0.0. Clamp the start to 16 so that the
-        // (t - 16) row offset cannot underflow for num_tokens < 16 cases.
-        const uint32_t face_2_start = num_tokens < 16 ? 16 : num_tokens;
+        // (t - 16) row offset cannot underflow for tokens_in_tile < 16 cases.
+        const uint32_t face_2_start = tokens_in_tile < 16 ? 16 : tokens_in_tile;
         for (uint32_t k = 0; k < reduction_dim_size; ++k) {
             volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
             for (uint32_t t = face_2_start; t < 32; ++t) {
