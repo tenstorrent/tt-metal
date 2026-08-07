@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-05",
+  "last_scan_date": "2026-08-07",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -12,7 +12,8 @@
     "30765286317",
     "30789033630",
     "30227858718",
-    "30737004712"
+    "30737004712",
+    "31197186569"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -24,7 +25,8 @@
     "galaxy-sanity.yaml",
     "single-card-demo-tests.yaml",
     "t3000-demo-tests.yaml",
-    "models-t3-unit-tests.yaml"
+    "models-t3-unit-tests.yaml",
+    "blackhole-sanity-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -98,10 +100,17 @@
       "status": "open-pr-no-validation-run-found",
       "note": "PR #52122 open, mergeable_state behind, 2 codeowner groups pending. No models-t3-unit-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Awaiting codeowner approval/merge.",
       "number": 52122
+    },
+    {
+      "number": 52249,
+      "branch": "silencer/demote-mock-cluster-descriptor-warning",
+      "pattern": "Currently using mock cluster descriptor - warning fires 71x per mock-mode job",
+      "status": "resolved",
+      "note": "Validation run 31047265933 (runtime-unit-tests) completed/failure - unrelated MeshTensorDeviceTest failure, not the mock-cluster-descriptor line. Outcome commented and marked ready for review (2026-08-07)."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes."
+    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed."
   }
 }
