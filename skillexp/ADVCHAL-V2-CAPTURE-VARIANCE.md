@@ -144,6 +144,48 @@ everything was not.**
 coverage has drifted apart. Nothing about it implicates the tt-mlir optimizer, and adding the handlers is
 additive work rather than a design change.
 
+### Can this be fixed mechanically? Partly — and not the part that blocks
+
+`ttnn-jit` lives in **`tt-mlir/tools/ttnn-jit/`** — first commit 2025-09-19, 127 commits, last touched
+2026-07-27. Real upstream tooling, young and still filling in.
+
+**There is already a generic path, and it does not cover these ops.** `supported_ops.py` defines an allowlist of
+**54** ops in six categories (unary 25, binary 16, reduction 4, tm 4, data-movement 3, ccl 3). The TTIR tracer
+routes all 54 through one generic `BaseOpHandler`; the direct-TTNN tracer wants a handler each and stubs the rest
+via `_unhandled`, which raises with an actionable message. **Auto-generating those 54 for the emit tracer is
+straightforward** — the shape rule is fixed per category — **but none of the ops that block this corpus are among
+them.** `sparse_matmul`, `rotary_embedding_hf`, `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`,
+`recurrent_state_update` are all outside the allowlist, in the tracers' own hand-written tables.
+
+**And the dialect cannot supply the missing piece.** A tracer must *compute* an output shape. `TTNN_SparseMatmulOp`
+has `hasVerifier = 1` and `outs AnyRankedTensor` — it **checks** shapes rather than **inferring** them, and
+`TTNN_RotaryEmbeddingHfOp` and `TTNN_PagedFusedUpdateCacheOp` declare neither. So a generator cannot read result
+shapes off `TTNNOps.td` for these; the relationship exists only in verifier code.
+
+**What is cheap is reconciling the two tracers**, because each already holds handlers the other lacks:
+
+| direction | count | ops |
+|---|---|---|
+| **interception has, emit lacks** | 3 | `sparse_matmul`, `paged_update_cache`, `paged_fill_cache` |
+| **emit has, interception lacks** | 13 | `arange`, `clamp`, `concat`, `embedding`, `matmul`, `pad`, `permute`, `repeat`, `rotary_embedding`, **`rotary_embedding_hf`**, `scaled_dot_product_attention_decode`, `transpose`, `zeros` |
+| in **neither** | — | `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`, `recurrent_state_update` |
+
+*(Counts from a regex over the handler tables, so treat as indicative; the specific ops named were each checked
+individually.)*
+
+Three consequences worth acting on:
+
+1. **Porting `sparse_matmul` into the emit tracer is a one-handler change** — the shape logic already exists,
+   hand-written, in `interception_tracer._sparse_matmul_handler`. That alone unblocks the MoE captures.
+2. **The documented fallback is stale advice.** `--tracer interception` is offered "for ops not yet handled by
+   the direct-TTNN tracer", but interception lacks 13 handlers the default has — including `rotary_embedding_hf`,
+   `concat`, `permute`, `embedding` and `matmul`. It cannot trace a modern decoder, which is why switching to it
+   failed *earlier* than the default did.
+3. **Only the third group is new work.** `paged_fused_update_cache` and friends need per-op shape logic written
+   once; everything else is a port or a generator.
+
+
+
 ### And the measurement: transcription does not cost coverage
 
 Untraced share per cell/kind, against what the capture did:
