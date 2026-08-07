@@ -249,7 +249,7 @@ def test_rand_tiles_have_iid_dispersion_and_low_lane_correlation(device):
 
     assert (
         torch.unique(tiles.reshape(-1, 32 * 32), dim=0).shape[0] == tiles.shape[0]
-    ), "different cores emitted duplicate RNG streams"
+    ), "generated RNG tiles were not unique"
 
 
 @pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
@@ -333,6 +333,16 @@ def test_rand_all_ones_seed_does_not_lock_prng(device):
     # left in the all-ones lock state. A locked state can produce at most one
     # constant value per lane, independent of how lanes map into tile rows.
     assert torch.unique(data).numel() > 32
+
+
+def test_rand_decorrelates_neighboring_core_seeds(device):
+    """Neighboring host seeds must not collapse to the same per-core RNG stream."""
+    output = ttnn.to_torch(ttnn.rand((64, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFE)).reshape(2, 32, 32)
+
+    # Two tiles run on two cores with host seeds 0xFFFFFFFE and 0xFFFFFFFF.
+    # rand_init remaps the all-ones lock state, so omitting the work-range
+    # stream ID would make both cores start from the same effective seed.
+    assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate random tiles"
 
 
 def test_rand_fp32_uses_both_mantissa_parities(device):

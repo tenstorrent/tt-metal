@@ -37,8 +37,9 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
 }
 
 /**
- * Initializes the random generator. A unique stream_id decorrelates related
- * per-core seeds while preserving deterministic output for a given pair.
+ * Initializes the random generator with seed + stream_id * 0x9E3779B9 modulo
+ * 2^32. Distinct stream IDs domain-separate related deterministic work ranges;
+ * stream_id=0 preserves the previous one-argument behavior.
  */
 ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
     constexpr uint32_t stream_seed_multiplier = 0x9E3779B9U;

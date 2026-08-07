@@ -158,8 +158,9 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     compute_desc.compile_time_args = {output_cb_id};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number outside the inclusive bounds
+        // Retain generated values in FP32 until packing so reduced destination
+        // precision cannot cross the validated inclusive bounds.
+        .fp32_dest_acc_en = true,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
