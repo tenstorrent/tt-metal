@@ -26,9 +26,6 @@ using RoutingTable =
 class RoutingTableGenerator {
 public:
     explicit RoutingTableGenerator(const TopologyMapper& topology_mapper);
-    // Table generation reads only the logical mesh graph, so it needs no cluster, discovery or
-    // logical-to-physical mapping. The graph must outlive this generator.
-    explicit RoutingTableGenerator(const MeshGraph& mesh_graph);
     ~RoutingTableGenerator();  // out of line: express_rings_ holds an incomplete type
 
     void dump_to_yaml();
