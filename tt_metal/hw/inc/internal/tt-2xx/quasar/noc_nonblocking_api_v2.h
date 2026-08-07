@@ -46,7 +46,7 @@ constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 // NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
 constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
 constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
-constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 1;
 constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
 constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
@@ -1541,9 +1541,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // Same as above, but with src_noc_addr giving the source NOC address separately.
@@ -1575,9 +1576,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // clang-format off
