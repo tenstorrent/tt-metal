@@ -271,7 +271,7 @@ Tensor group_norm(
 
     const auto arch = input_tensor.device()->arch();
 
-    // Interleaved (non-sharded) ROW_MAJOR is Wormhole-only, it regresses on Blackhole; see #52279.
+    // Interleaved (non-sharded) ROW_MAJOR is Wormhole-only: it is a perf regression on Blackhole; see #52279.
     if (!input_tensor.is_sharded() && arch != tt::ARCH::WORMHOLE_B0) {
         TT_FATAL(
             input_tensor.layout() == Layout::TILE,

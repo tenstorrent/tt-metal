@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
@@ -61,44 +61,6 @@ GROUP_NORM_DRAM_SHAPES = [
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
 
-# Legacy ROW_MAJOR shapes, PR #49501.
-GROUP_NORM_ROW_MAJOR_SHAPES = [
-    # Model shapes that should benefit
-    # (N,    C,    H,    W,     g, nob, cy, cx)
-    (1, 512, 128, 128, 32, 1, 8, 8),
-    (1, 512, 64, 64, 32, 1, 8, 8),
-    (1, 256, 256, 256, 32, 8, 8, 8),
-    (1, 128, 1, 512, 32, 1, 8, 8),
-    # Model shapes that should avoid regression due to fallback
-    (1, 1152, 128, 128, 32, 2, 8, 4),
-    (1, 1920, 16, 16, 32, 1, 4, 4),
-    (1, 1536, 8, 8, 32, 1, 2, 8),
-    (1, 480, 1, 64, 8, 1, 1, 1),
-    # Model shapes that should stay unaffected
-    (1, 256, 256, 256, 32, 4, 8, 8),
-    (1, 512, 256, 256, 32, 4, 8, 8),
-    (1, 256, 1024, 1024, 32, 48, 8, 8),
-    (1, 128, 1, 262144, 32, 64, 8, 4),
-    # Synthetic grid-utilization
-    (1, 512, 1, 1024, 32, 2, 1, 8),
-    (1, 512, 1, 2048, 32, 2, 2, 8),
-    (1, 512, 1, 3072, 32, 2, 3, 8),
-    (1, 512, 1, 4096, 32, 2, 4, 8),
-    (1, 512, 1, 5120, 32, 2, 5, 8),
-    (1, 512, 1, 6144, 32, 2, 6, 8),
-    (1, 512, 1, 7168, 32, 2, 7, 8),
-    (1, 512, 1, 8192, 32, 2, 8, 8),
-    # Synthetic batch-imbalance
-    (8, 768, 1, 512, 32, 2, 8, 8),
-    (9, 768, 1, 512, 32, 2, 8, 8),
-    (10, 768, 1, 512, 32, 2, 8, 8),
-    (16, 768, 1, 512, 32, 2, 8, 8),
-    (17, 768, 1, 512, 32, 2, 8, 8),
-    # Synthetic that should take fused path
-    (1, 768, 1, 512, 32, 2, 8, 8),
-    (2, 768, 1, 512, 32, 2, 8, 8),
-    (8, 768, 1, 512, 32, 2, 8, 8),
-]
 
 GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
@@ -398,6 +360,38 @@ def test_group_norm_DRAM(
         use_input_mask=True,
         perf_test_mode=perf_test_mode,
         specify_grid=specify_grid,
+    )
+
+
+# Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
+# lives in nightly. Tests across all three layout combinations that involve ROW_MAJOR.
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_smoke(device, input_layout, output_layout):
+    # Issue #26594: N=1, C=480, H=1, W=64, num_groups=8 on a 1x1 grid.
+    run_group_norm_DRAM(
+        device,
+        1,
+        480,
+        1,
+        64,
+        8,
+        1,
+        1,
+        1,
+        "legacy",
+        use_input_mask=True,
+        input_layout=input_layout,
+        output_layout=output_layout,
     )
 
 
