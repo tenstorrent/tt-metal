@@ -368,17 +368,12 @@ def _skip_bh_unless_fp32(formats, dest_acc):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
-# Approximate exp overshoots the golden by a systematic ~5.7% (peak 6.75%) once its
-# argument passes ~8 -- measured on Wormhole, the smallest output that breaches the
-# default 5% rtol is exactly exp(8.00) = 2976, and 0.6% of elements in an affected tile
-# breach it. This is a property of the approximation, not of the stimuli.
-#
-# Whether a given combination trips the 5% bar is marginal, and two things decide it:
-# the domain its output format selects (high=16, or 10 when a Float16 output narrows
-# it) and whether a 16-bit dst rounds golden and result back together -- dest_acc=Yes
-# keeps an fp32 dst and exposes the full error. Hence Float32->Float16_b failing only
-# at dest_acc=Yes. Listed exhaustively rather than by predicate so that a combination
-# drifting in or out of tolerance shows up as a change here.
+# Approximate exp overshoots the golden by ~5.7% (peak 6.75%) once its argument passes ~8,
+# breaching the default 5% rtol -- a property of the approximation, not of the stimuli
+# (measured on Wormhole). Membership is marginal, set by the domain the output format
+# selects and by whether a 16-bit dst rounds golden and result back together: dest_acc=Yes
+# keeps an fp32 dst and exposes the full error. Listed exhaustively rather than by
+# predicate so a combination drifting in or out of tolerance shows up as a diff here.
 _APPROX_EXP_ACCURACY_XFAIL = {
     (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.No),
     (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -549,9 +544,6 @@ def test_eltwise_unary_sfpu_int(
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
     )
-
-
-# Unary SFPU ops that require per-op input domains
 
 
 @parametrize(
