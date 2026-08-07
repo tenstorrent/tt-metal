@@ -2384,24 +2384,35 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     the measured 60-layer body tells you how much is layer cost and how much is
     everything else.
 
-    Traced and replayed ``GEMMA4_PERF_ITERS`` times (default 20), because a single pass
-    at this size is a few milliseconds and dominated by noise. Setup is a few seconds:
-    one layer from cache, no HuggingFace reference (that is test_prefill_layer's job).
+    Warms up with ``GEMMA4_PERF_WARMUP_ITERS`` replays (default 5) and then measures
+    EXACTLY ONE, bracketed by signposts named for the layer type. One replay in the
+    profiled region is what makes the report directly readable as per-layer: N replays
+    would make tt-perf-report aggregate N invocations of every op, and would multiply
+    the trace size by N (20 replays produced a 293 MB trace with 25M zones).
+
+    Setup is a few seconds: one layer from cache, no HuggingFace reference (that is
+    test_prefill_layer's job).
 
     Nothing is asserted about absolute time — a perf number pinned in an assert becomes
     a flaky test on a shared machine. It asserts only that the layer stays finite and
-    that the replays are self-consistent, and prints the numbers.
+    non-degenerate, prints the numbers, and warns if the measured run falls outside the
+    spread of the warm replays, which is the honest error bar on a single sample.
 
-    For a device-op breakdown of the measured region (signposted, so the warmup and
-    capture are excluded):
+    Device-op breakdown of just the measured replay:
 
         TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
           python -m tracy -p -r -v -m pytest \\
           models/demos/gemma4/demo/text_demo_prefill.py::test_prefill_layer_perf -k sliding
+
+        tt-perf-report --start-signpost gemma4-layer-sliding-start \\
+                       --end-signpost   gemma4-layer-sliding-stop  REPORT.csv
     """
     chunk = LONG_CONTEXT_CHUNK
     _guard_chunk(request, chunk)
-    iters = int(os.environ.get("GEMMA4_PERF_ITERS", "20"))
+    # Warm replays are NOT profiled; exactly one replay sits between the signposts. A
+    # profiled region containing N replays makes tt-perf-report aggregate N invocations
+    # of every op, so the per-op table stops being per-layer, and the trace grows by N.
+    warm_iters = int(os.environ.get("GEMMA4_PERF_WARMUP_ITERS", "5"))
 
     tt_layer, forward, host_input, mesh_config, layer_idx = _build_perf_layer(mesh_device, layer_type, chunk)
     logger.info(f"[layer_perf] {layer_type} layer_idx={layer_idx} chunk={chunk} iters={iters}")
@@ -2424,21 +2435,33 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     ttnn.synchronize_device(mesh_device)
     capture_s = time.time() - t0
 
-    try:
-        # Warm replay: the first one can still pay one-off dispatch setup.
-        ttnn.copy_host_to_device_tensor(host_input, device_input)
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
+    # Signpost names are unique per layer type so a trace containing both cases (or an
+    # unrelated op) can be sliced to exactly this one:
+    #   tt-perf-report --start-signpost gemma4-layer-<type>-start \
+    #                  --end-signpost   gemma4-layer-<type>-stop  REPORT.csv
+    tag = "sliding" if layer_type == "sliding_attention" else "global"
+    sp_start, sp_stop = f"gemma4-layer-{tag}-start", f"gemma4-layer-{tag}-stop"
 
-        per_iter = []
-        signpost("start")
-        for _ in range(iters):
+    try:
+        # Warm replays, deliberately outside the signposts: the first replay still pays
+        # one-off dispatch setup, and a few more settle clocks and caches.
+        warm = []
+        for _ in range(warm_iters):
             ttnn.copy_host_to_device_tensor(host_input, device_input)
             t_i = time.time()
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
-            per_iter.append(time.time() - t_i)
-        signpost("stop")
+            warm.append(time.time() - t_i)
+
+        # THE measured run: exactly one replay between the signposts, so the profiled
+        # region holds one invocation of each op and the report is directly per-layer.
+        ttnn.copy_host_to_device_tensor(host_input, device_input)
+        signpost(sp_start)
+        t_i = time.time()
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        measured_s = time.time() - t_i
+        signpost(sp_stop)
 
         hidden = _cp_gather_torch(out, mesh_device, mesh_config)
     finally:
@@ -2447,18 +2470,23 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     assert torch.isfinite(hidden).all(), f"{layer_type} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_type} layer output is degenerate"
 
-    mean_s = sum(per_iter) / len(per_iter)
-    best_s = min(per_iter)
+    best_warm = min(warm) if warm else measured_s
     logger.info(
         f"[layer_perf] {layer_type} chunk={chunk} compile={compile_s:.1f}s capture={capture_s:.1f}s | "
-        f"mean={mean_s * 1000:.2f}ms best={best_s * 1000:.2f}ms worst={max(per_iter) * 1000:.2f}ms "
-        f"| {chunk / mean_s:.0f} tok/s (mean) {chunk / best_s:.0f} tok/s (best)"
+        f"warm x{len(warm)}: best={best_warm * 1000:.2f}ms worst={max(warm) * 1000:.2f}ms | "
+        f"MEASURED={measured_s * 1000:.2f}ms ({chunk / measured_s:.0f} tok/s)"
     )
-    # Best-case is the cleanest signal when iterating: it is the least contaminated by
-    # other activity on the machine. Whole-model estimate uses it for the same reason.
+    logger.info(f"[layer_perf] profiled region: --start-signpost {sp_start} --end-signpost {sp_stop}")
+    # The warm spread is the honest error bar on the single measured run; if the measured
+    # value sits outside it, the machine was busy and the number should not be trusted.
+    if warm and not (min(warm) * 0.8 <= measured_s <= max(warm) * 1.25):
+        logger.warning(
+            f"[layer_perf] measured {measured_s * 1000:.2f}ms is outside the warm spread "
+            f"[{min(warm) * 1000:.2f}, {max(warm) * 1000:.2f}]ms — treat it as noisy and re-run"
+        )
     n_sliding, n_global = 50, 10
     share = n_sliding if layer_type == "sliding_attention" else n_global
     logger.info(
-        f"[layer_perf] {layer_type} x{share} layers = {share * best_s * 1000:.0f}ms of a 60-layer chunk "
-        f"(best-case, excludes embedding/head and inter-layer CCL not in this graph)"
+        f"[layer_perf] {layer_type} x{share} layers = {share * measured_s * 1000:.0f}ms of a 60-layer chunk "
+        f"(excludes embedding/head and inter-layer CCL not in this graph)"
     )
