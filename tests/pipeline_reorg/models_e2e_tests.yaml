@@ -586,12 +586,14 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # 3 min = 1.9 min measured (run 31106916424) + ~15%. NOTE that run reported
-    # "3 skipped" -- every test in pipeline_tests is currently disabled via #45992 --
-    # so this reflects collection overhead only, NOT real execution. Re-measure and
-    # raise this once #45992 re-enables the tests.
+    # Back to the legacy 10 min now that this PR re-enables the three pipeline_tests
+    # (#45992). The earlier 3 min was measured against a run where all three were
+    # skipped, so it only covered collection overhead. Re-measure once the job is green:
+    # the last run that actually executed them (26865834917, before they were disabled)
+    # spent ~87 s in test_end2end plus ~4 s in the two vision tests, but it failed
+    # partway, so that is a lower bound not a measurement.
     bh_quietbox_2:
-      timeout: 3
+      timeout: 10
       tier: 2
   owner_id: U08GEGWHQJF # Adam Roberge
   team: models
