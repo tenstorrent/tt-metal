@@ -290,7 +290,6 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t num_shards_c,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
-    uint32_t memory_used,
     const Layout& output_layout,
     bool config_tensor_in_dram) {
     using namespace tt::tt_metal;
@@ -982,10 +981,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     }
     desc.kernels.push_back(std::move(compute_desc));
 
-    // Validate local and global CB sizes separately to prevent two errors from cancelling out.
-    // Note: local CBs are non-globally-allocated (computed by the program); global CBs are
-    // tensor-backed (sharded onto an existing buffer). We compute these directly from the
-    // descriptor's CBs rather than from a Program object since we no longer create one here.
+    // Local CBs are non-globally-allocated (computed by the program); we compute the total directly
+    // from the descriptor's CBs rather than from a Program object since we no longer create one here.
     uint32_t actual_local_cb_size = 0;
     for (const auto& cb : desc.cbs) {
         if (cb.buffer == nullptr) {
@@ -993,23 +990,15 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         }
     }
 
-    uint32_t post_allocate_size =
-        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t actual_global_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
-
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
-    bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
+    bool is_graph_capture_no_dispatch_mode =
+        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes == 0;
     TT_FATAL(
         actual_local_cb_size == cb_sizes.local_cb_total() || is_graph_capture_no_dispatch_mode,
         "Local CB size mismatch: actual {} != expected {}",
         actual_local_cb_size,
         cb_sizes.local_cb_total());
-    TT_FATAL(
-        actual_global_cb_size == cb_sizes.global_cb_total() || is_graph_capture_no_dispatch_mode,
-        "Global CB size mismatch: actual {} != expected {}",
-        actual_global_cb_size,
-        cb_sizes.global_cb_total());
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
@@ -1267,7 +1256,6 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
         setup.num_shards_c,
         compute_kernel_config,
         divisor_override,
-        op_attr.memory_used,
         output_layout,
         op_attr.config_tensor_in_dram);
     auto ranges = tensor_coords.ranges();

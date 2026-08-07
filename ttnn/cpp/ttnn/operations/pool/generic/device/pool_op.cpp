@@ -165,25 +165,6 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
-ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto input_mem_config = tensor.input_tensor_.memory_config();
-    auto in_dtype = tensor.input_tensor_.dtype();
-    auto out_dtype = op_attr.output_dtype_;
-    return tt::tt_metal::operation::hash_operation<Pool2D>(
-        op_attr.sliding_window_config_.get_hash(),
-        op_attr.pool_type_,
-        op_attr.output_layout_,
-        op_attr.memory_config_,
-        op_attr.compute_kernel_config_,
-        op_attr.divisor_override_,
-        op_attr.count_include_pad_,
-        op_attr.return_indices_,
-        op_attr.config_tensor_in_dram,
-        input_mem_config,
-        in_dtype,
-        out_dtype);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor, const tensor_return_value_t& outputs) {
     const auto& input = tensor.input_tensor_;
@@ -233,7 +214,6 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used,
     bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
     return ttnn::device_operation::launch<OperationType>(
@@ -247,7 +227,6 @@ std::vector<ttnn::Tensor> pool2d(
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used,
             .config_tensor_in_dram = config_tensor_in_dram},
         OperationType::tensor_args_t{input_tensor});
 }

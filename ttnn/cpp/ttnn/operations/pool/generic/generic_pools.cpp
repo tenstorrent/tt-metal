@@ -355,11 +355,6 @@ static std::vector<Tensor> pool2d_L1(
         haloed_tensor = ttnn::move(haloed_tensor);
     }
 
-    // NOLINTBEGIN(bugprone-use-after-move)
-    const uint32_t pre_allocate_size =
-        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    // NOLINTEND(bugprone-use-after-move)
-
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
         haloed_tensor,
@@ -372,7 +367,6 @@ static std::vector<Tensor> pool2d_L1(
         count_include_pad,
         divisor_override,
         return_indices,
-        pre_allocate_size,
         config_tensor_in_dram);
 
     // format and return the result

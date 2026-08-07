@@ -34,7 +34,6 @@ struct Pool2D {
         bool count_include_pad_{};
         std::optional<int32_t> divisor_override_;
         bool return_indices_{};
-        uint32_t memory_used{};
         bool config_tensor_in_dram{};
     };
 
@@ -65,7 +64,6 @@ struct Pool2D {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
@@ -84,6 +82,5 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used,
     bool config_tensor_in_dram);
 }  // namespace ttnn::prim
