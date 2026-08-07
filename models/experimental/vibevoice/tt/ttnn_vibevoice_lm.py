@@ -54,7 +54,7 @@ _QKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 
 # bfloat8_b for the SwiGLU FFN weights (gate/up 1536x8960, down 8960x1536) — the large,
-# DRAM-bound decode matmuls, where bf8b halves the weight read. Attention (wq/wkv/wo) stays bf16
+# DRAM-bound decode matmuls, where bf8b halves the weight read. Attention (wqkv/wo) stays bf16
 # (small, latency-bound weights). Not bit-exact vs bf16.
 _FFN_WEIGHT_DTYPE = ttnn.bfloat8_b
 
@@ -899,11 +899,6 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Q + fused KV projections.  wq keeps the swept decode progcfg (S==1); wk|wv are
-        # one matmul (wkv) so nlp_create_qkv_heads can take ``input_kv`` and skip the
-        # runtime Q|K|V concat (byte-identical vs separate K/V + concat).  wkv uses its
-        # own decode progcfg + width-sharded L1 out (S==1); bias-add below returns DRAM
-        # for NlpCreateHeads.
         # Fused wqkv projection (generic path: prefill S>1 and eager S==1) → auto progcfg; byte-identical.
         qkv = ttnn.linear(
             x,
@@ -1146,8 +1141,8 @@ class TTVibeVoiceLM:
         """Full transformer layer with pre-norm residuals."""
         lw = self.w.layers[layer_idx]
 
-        # Pre-norm + attention.  Decode (S==1): emit attn-norm into L1 so wq/wkv read
-        # in0 from L1 (byte-identical memory placement; pairs with _WKV_DECODE_*).
+        # Pre-norm + attention.  Decode (S==1): emit attn-norm into L1 so the fused wqkv
+        # reads in0 from L1 (byte-identical memory placement).
         S = x.shape[2]
         x_norm = ttnn.rms_norm(
             x,
@@ -1479,9 +1474,9 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Batched weight-bound projections — read wq/wkv once for both rows.
-        # Fused wqkv matmul (deployed CFG-b2 decode), split by nlp_create_qkv_heads.  Byte-identical
-        # vs separate wq + wkv (same column values, same split); saves one launch + one bias-add/layer.
+        # Batched weight-bound projection — fused wqkv read once for both CFG rows (deployed CFG-b2
+        # decode), split by nlp_create_qkv_heads.  Byte-identical vs separate wq + wkv (same column
+        # values, same split); saves one launch + one bias-add/layer.
         qkv = ttnn.linear(
             x,
             layer_w.wqkv,
