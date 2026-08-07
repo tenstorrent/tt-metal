@@ -232,14 +232,6 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     return a_set.intersects(b_set);
 }
 
-// Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope
-// baked into the kernel, with contradiction FATALs (Phase-2 auto-path baking).
-//   AUTO            -> LOCAL_NONATOMIC for now (inert; the auto classifier that picks
-//                      EXTERNAL from reach arrives with the decidability ABI, S4).
-//   EXTERNAL        -> EXTERNAL.
-//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only if the semaphore lives on exactly one node
-//                      (a cached-alias AMO must never race a NoC atomic).
-//   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit legacy escape hatch).
 // Defaulted lookup of a semaphore's binder census (an unbound sem has no entry => all-zero counts).
 const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
     const CollectedSpecData& collected, const SemaphoreSpecName& name) {
@@ -276,6 +268,25 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
            all_binders_are_dm(binders);
 }
 
+// Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope baked into
+// every kernel that binds it. This is the authoritative decision; contradictions FATAL here.
+//
+//   EXTERNAL        -> EXTERNAL (pass-through).
+//   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit escape hatch; caller is asserting single-writer).
+//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only after five FATALs: Gen2 arch, a single-node
+//                      semaphore, at most one binder kernel, no other cached-binder kernel on the
+//                      node, and every binder a data-movement kernel on that same node. Each guards a
+//                      way the cached pool would SPLIT the semaphore or hang, not merely lose atomicity.
+//   AUTO            -> the cheapest CORRECT mechanism, from the who-touches census:
+//                        Gen1 (Wormhole/Blackhole)            -> LOCAL_NONATOMIC, always. Gen1 keeps its
+//                                                                historical behaviour exactly; this
+//                                                                feature addresses a Gen2-only problem.
+//                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
+//                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
+//                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
+//                      Two hazards are MECHANISM-INDEPENDENT and FATAL here rather than being papered
+//                      over: >=2 concurrent CONSUME instances, and a SET racing another writer.
+//                      (Both are Gen2-only today, because the Gen1 arm returns before reaching them.)
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
@@ -291,7 +302,8 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED, which is a Gen2 (Quasar) mechanism: the "
                 "cached-only semaphore pool, its cache aliases and its seeding do not exist on Gen1 "
                 "(Wormhole/Blackhole), where the kernel would not even link. Use SemaphoreScope::EXTERNAL "
-                "(or AUTO, which resolves to EXTERNAL on Gen1).",
+                "to get an atomic semaphore here. (AUTO will NOT do it for you: on Gen1 AUTO preserves "
+                "the historical plain non-atomic RMW, so ask for EXTERNAL explicitly.)",
                 sem.unique_id);
             TT_FATAL(
                 num_nodes == 1,
@@ -393,10 +405,8 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 sem.unique_id,
                 binders.writer_instance_count);
 
-            // Prefer the cached fast path only when it is PROVABLY safe. All of:
-            //   - Gen2 (Quasar): the pool, its cached/uncached aliases and the injected seeding are all
-            //     ARCH_QUASAR-only, and Gen1 DM cores have no usable 32-bit AMO (Wormhole would not even
-            //     link). On Gen1 fall through to EXTERNAL, which is correct everywhere.
+            // Prefer the cached fast path only when it is PROVABLY safe. cached_geometry_ok() carries
+            // the structural half of that proof:
             //   - the semaphore is a single L1 cell, and every binder (writers AND readers) lives on
             //     that node: the pool is per-core, so a binder elsewhere would address its own node's
             //     copy and the semaphore would split.
@@ -404,13 +414,17 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             //     binding kernel's entry, and that seed is an unsynchronised destructive store, so a
             //     second binder kernel (even an OBSERVE-only reader) could reset a live counter. One
             //     kernel is also the case the fast path exists for: its own threads synchronising.
-            // Anything unproven => EXTERNAL.
-            const bool binders_confined_to_sem_node =
-                sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores();
+            //   - every binder is a data-movement kernel: the pool lives in the DM cache domain.
+            // The remaining conjuncts are checked here:
             //   - no other kernel on this node binds a cached semaphore: the injected seeder
             //     rendezvouses on ONE node-wide barrier slot, so two co-resident cached-binder kernels
             //     would mix rendezvous groups (hang, or a seed landing after an increment).
-            (void)binders_confined_to_sem_node;  // folded into cached_geometry_ok()
+            //   - Gen2 (Quasar): the pool, its cache aliases and the injected seeding are all
+            //     ARCH_QUASAR-only, and Gen1 DM cores have no usable 32-bit AMO. This conjunct is
+            //     redundant with the Gen1 early return at the top of this arm and is kept deliberately:
+            //     it is the guard that must not be forgotten if that early return is ever relaxed.
+            // Anything unproven => EXTERNAL, which is correct wherever it is selected (Gen2 only, since
+            // Gen1 returned LOCAL_NONATOMIC above).
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
@@ -3405,7 +3419,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // into every kernel that binds this semaphore. For AUTO this consults the who-touches census
         // (single-writer single-node -> cheap LOCAL_NONATOMIC; multi-writer confined to one node on
         // Gen2 with a single binder kernel -> the cached pool; otherwise atomic EXTERNAL). The pick is
-        // arch-sensitive: on Gen1 the cached tier is unavailable and AUTO falls through to EXTERNAL. Contradictions/honesty violations already FATALed in ValidateProgramSpec.
+        // arch-sensitive: on Gen1 AUTO resolves to LOCAL_NONATOMIC unconditionally, preserving the
+        // historical non-atomic RMW (a Gen1 caller who wants atomicity must force EXTERNAL).
+        // Contradictions/honesty violations already FATALed in ValidateProgramSpec.
         semaphore_name_to_scope[semaphore_name] =
             ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
     }

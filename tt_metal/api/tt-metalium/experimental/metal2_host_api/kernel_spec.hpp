@@ -174,6 +174,18 @@ struct KernelSpec {
         // the non-atomic LOCAL_NONATOMIC path. It pushes AUTO toward an ATOMIC mechanism (the cached
         // pool when the semaphore is provably confined to one node with a single binder kernel, else
         // EXTERNAL). Mark OBSERVE to opt a read-only binding out of the writer census.
+        //
+        // TRUST BOUNDARY: this label is BELIEVED, not verified. The emitted sem:: token carries only
+        // {id, scope}, so nothing stops a kernel from calling up()/down()/set() on a binding declared
+        // OBSERVE, and the hygiene lint cannot see it either (it reads kernel source; the label lives
+        // here, in host code). A false OBSERVE therefore silently forfeits the atomic mechanism and
+        // leaves the semaphore on the legacy non-atomic RMW -- i.e. it costs you the guarantee this
+        // feature exists to provide. It is bounded: a false label can never select DM_LOCAL_CACHED
+        // (a lying sole binder gives writer_instance_count == 0 -> LOCAL_NONATOMIC; a second binder
+        // fails cached_geometry_ok's one-kernel rule -> EXTERNAL), and readers still count toward the
+        // cached geometry check, so mislabelling cannot shrink the binder set. Enforcing this at
+        // compile time -- by carrying the access mode in the token and static_asserting the mutators --
+        // is tracked as a follow-up. Until then: only write OBSERVE when the kernel truly only reads.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
