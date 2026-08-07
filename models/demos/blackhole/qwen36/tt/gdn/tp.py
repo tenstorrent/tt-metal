@@ -6,6 +6,7 @@ Recurrence is per value-head (no cross-device comms inside); all-reduce after ro
 Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm uses raw weight
 (no +1) + SiLU(z) gate — distinct from QK/layer norms.
 """
+
 import os
 
 import torch
@@ -26,6 +27,14 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 
 _apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 from models.tt_transformers.tt.ccl import tt_all_reduce
+
+# Wormhole prefill conv1d: replace the K-1 carry concat with a native-pad big conv plus a small
+# patch conv. Implemented and verified BIT-EXACT (test_gdn_conv1d_splice_bitexact, 9/9 cases,
+# max|diff| == 0.0), but measured NET NEUTRAL in the real layer -- the patch conv costs ~160us on one
+# core no matter how few rows it emits, which eats the 205us concat saving. Full measurements are in
+# _conv1d_prefill, right after the conv call -- including why the MAC FIR patch does not rescue it.
+# Flip to True to re-test if slice_write or the patch step ever get cheaper.
+_SPLICE_CARRY = False
 
 
 def _softplus_add(a, bias):
@@ -241,7 +250,9 @@ class TPGatedDeltaNet:
         self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and tpc.is_blackhole()
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded).
-        self._out_colpar_prefill = "out_colpar" in tw
+        # BH only. The column-parallel arm puts `gated` in L1; on Wormhole that clashes with the
+        # out-proj matmul CBs in the full layer (see forward_prefill) -- WH keeps the DRAM path.
+        self._out_colpar_prefill = "out_colpar" in tw and tpc.is_blackhole()
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -365,31 +376,48 @@ class TPGatedDeltaNet:
         out_memory_config: decode result placement (default DRAM; L1 keeps it resident)."""
         if not self._dram_sharded:
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=out_memory_config)
+        _kpass1 = getattr(self.args, "gdn_qkvzab_prefill_progcfg", None)
         return tpc.sharded_decode_matmul(
             x,
             weight,
             self.cfg,
             decode_progcfg,
             self.args.act_shard_hidden,
-            # NOTE: this matmul is the layer's worst FPU utilization (2,151us at 36.6% of peak, output
-            # subblock 1x1) because the folded [qkv|z|a|b] width is 6176 = 193 tiles and 193 is PRIME:
-            # _get_out_subblock_w needs per_core_N % w == 0 for some w in 2..4, and 8 columns give
-            # per_core_N=25, so both out_subblock_w AND (via _safe_half_out_block_w) out_block_w
-            # collapse to 1. MEASURED: routing this through the subblock-maximizing
-            # create_prefill_mlp_matmul_program_config picks 7 columns -> per_core_N=28 -> subblock 1x4,
-            # out_block_w=4, and is SLOWER (2,263us): losing 8 of 64 cores costs more than the wider
-            # subblock wins — which also says this matmul is not actually subblock-limited.
-            # out_block_w is closed too: 25's only divisors are 1/5/25, so _safe_half_out_block_w
-            # already picks the best available (5). Dropping halve_out_block to reach out_block_w=25
-            # (one K pass instead of five) overflows L1 — "circular buffers ... grow to 1683136 B which
-            # is beyond max L1 size of 1499136 B" — which is exactly why halve_out_block exists on WH.
-            # There is no middle value. The only lever left is making the width a non-prime tile count
-            # (pad 193 -> 224 tiles => per_core_N=28, subblock 1x4, out_block_w=4, all 64 cores) at
-            # ~16% more matmul FLOPs; NOT done because the folded width also sizes the DRAM-sharded
-            # weight memcfg, both decode progcfgs and the weight cache key — not a local change.
-            self.args.prefill_progcfg,
+            # PREFILL BLOCKING. This used to be the layer's worst matmul (2,151us at 36.6% of peak,
+            # output subblock 1x1): the folded [qkv|z|a|b] width is 6176 = 193 tiles, 193 is PRIME, so
+            # at 8 columns per_core_N=25 whose only divisors are 1/5/25. Under COMPUTE_HIFI2 the output
+            # subblock is capped at 4, which 25 does not divide, so out_subblock_w collapsed to 1 and
+            # (out_block_w being a multiple of it) _safe_half_out_block_w could only reach 5 — five K
+            # passes, each re-reading the 16MB DRAM-resident in0. out_block_w=25 (one pass) overflowed
+            # L1: "circular buffers ... grow to 1683136 B which is beyond max L1 size of 1499136 B".
+            #
+            # Both of those limits come from fp32_dest_acc_en, not from the shape. Off, the subblock
+            # ceiling rises 4 -> 8 (so 25 -> out_subblock_w=5) and the intermediate CB halves (so
+            # out_block_w=25 fits). Hence the pair below: the one-K-pass progcfg AND the matching
+            # no-fp32-acc compute config, prefill only — decode keeps self.cfg. They are coupled and
+            # must be passed together; the progcfg's blocking is illegal with fp32 dest acc on.
+            #
+            # MEASURED, device kernel duration, N150, M=2048 K=4096 (tests/perf/test_gdn_inproj_sweep.py
+            # sweeps ~200 points across blocking x compute cfg x N padding x grid width):
+            #     N=6912  sub_w=3 blk_w=9   fp32_acc ON   3 passes  1493us   <- previous config
+            #     N=6176  sub_w=5 blk_w=25  fp32_acc OFF  1 pass    1255us   -16.0%
+            # This also let the 6176 -> 6912 pad be reverted (see gdn_qkvzab_pad_tiles in
+            # model_config.py), so the shape is back to 11.9% fewer FLOPs as well. Costs PCC
+            # 0.99997 -> 0.99992 vs an fp32 reference.
+            #
+            # Also measured and rejected: routing this through the subblock-maximizing
+            # create_prefill_mlp_matmul_program_config picks 7 columns -> per_core_N=28, and even with
+            # one K pass that is slower (1,309us) — losing 8 of 64 cores costs more than the wider
+            # subblock wins. Moving the output to L1 is impossible at this blocking: the full
+            # per_core_N-wide CBs leave no room ("statically allocated circular buffers clash with L1
+            # buffers ... L1 buffer allocated at 684032, static CB region ends at 939200").
+            #
+            # gdn_qkvzab_prefill_progcfg is None on Blackhole (it takes the fused AGMM path instead),
+            # so fall back to the shared factory + self.cfg there.
+            _kpass1 or self.args.prefill_progcfg,
             self.args.dim,
             decode_out_memory_config=out_memory_config,
+            prefill_compute_cfg=tpc.COMPUTE_HIFI2_NO_FP32_ACC if _kpass1 is not None else None,
         )
 
     def _conv1d_native_fits_l1(self, T):
@@ -427,7 +455,7 @@ class TPGatedDeltaNet:
         grid = self.mesh.compute_with_storage_grid_size()
         return -(-T // tpc.TILE_SIZE) <= grid.x * grid.y
 
-    def _conv1d_prefill(self, qkv, T, conv_state):
+    def _conv1d_prefill(self, qkv, T, conv_state, _force_splice=False):
         """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
 
         Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
@@ -469,10 +497,29 @@ class TPGatedDeltaNet:
         # carry costs more than the 210us concat: it also halves the conv's input-side parallelism.
         # Removing both together is possible but needs an op-level splice -- see the note at the end
         # of this function.
-        _native_pad = conv_state is None and not tpc.is_blackhole()
+        # CARRY SPLICE (Wormhole, currently OFF -- see the measured negative result after the conv
+        # call below). When on, the big conv takes the native-pad form even when there IS a carry,
+        # and the K-1 output rows the carry would have changed are patched afterwards by a second tiny
+        # conv. That buys BOTH wins above at once -- no 205us full-tensor concat, and _conv_len = T so
+        # the conv gets all 64 cores instead of 33. See the splice block after the conv call for the
+        # correctness argument and the measurements. _force_concat is for
+        # test_gdn_conv1d_splice_bitexact, which runs both forms in one process and compares.
+        # _force_splice turns the splice on regardless of _SPLICE_CARRY so that test keeps covering it.
+        # T > TILE_SIZE is a correctness guard, not an optimization gate: at T <= TILE_SIZE the
+        # [0:TILE) head slice below covers the WHOLE of qkv_rm, and a full-coverage ttnn.slice returns
+        # an ALIAS rather than a copy -- deallocating it then frees the big conv's own input
+        # ("Tensor is not allocated", caught by test_gdn_conv1d_splice_bitexact at T=32). Falling back
+        # to the concat form there costs nothing: the splice exists to kill a full-tensor concat and
+        # restore the 64-core grid, and at T <= 32 the concat is one tile and the grid is not the
+        # bottleneck. Prefill chunks are 128 tokens, so production never takes this branch anyway.
+        _splice = (
+            (_SPLICE_CARRY or _force_splice) and conv_state is not None and not tpc.is_blackhole() and T > tpc.TILE_SIZE
+        )
+        _native_pad = (conv_state is None or _splice) and not tpc.is_blackhole()
         _conv_len = T if _native_pad else Lin
         _conv_pad = [K - 1, 0] if _native_pad else 0
         _prep_pad = (0, 0, K - 1, 0) if _native_pad else (0, 0)
+        _xfix = None  # splice input; stays None on Blackhole and on the from-scratch/concat paths
         if tpc.is_blackhole():
             # ---- Blackhole: the validated TILE prologue, byte-for-byte unchanged. ----
             # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
@@ -504,6 +551,18 @@ class TPGatedDeltaNet:
             # Only K-1 rows, so tilizing the carry back is ~12us, not a full-tensor relayout.
             new_state = ttnn.slice(qkv_rm, (0, T - (K - 1), 0), (1, T, C))
             new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+            # Splice: build the fix conv's input HERE, while qkv_rm and conv_state are both certainly
+            # alive. Doing it after the big conv would race the `deallocate(xin)` below, which frees
+            # qkv_rm on the production path (qkv arrives TILE, so qkv_rm is a fresh tensor).
+            # [carry | qkv[0:TILE]] = (K-1)+TILE rows -> the conv emits (K-1)+TILE-K+1 = TILE rows,
+            # every one of them seeing the real carry. Measured 5us vs the 205us full-tensor concat.
+            if _splice:
+                _cs_rm = ttnn.to_layout(conv_state, _rm, memory_config=_dram)
+                _head = ttnn.slice(qkv_rm, (0, 0, 0), (1, tpc.TILE_SIZE, C), memory_config=_dram)
+                _xfix = ttnn.concat([_cs_rm, _head], dim=1, memory_config=_dram)
+                ttnn.deallocate(_head)
+                if _cs_rm is not conv_state:
+                    ttnn.deallocate(_cs_rm)
             if _native_pad:
                 # No concat at all: ttnn.conv1d applies the K-1 causal zero pad itself (padding
                 # [left, right] = [K-1, 0]). VERIFIED bit-identical to the concat form at T=2048.
@@ -627,49 +686,58 @@ class TPGatedDeltaNet:
         # cached weight would be prepared for the wrong geometry on whichever form ran second.
         if self._conv1d_wprep is None:
             self._conv1d_wprep = {}
-        _wkey = (_conv_len, _prep_pad)
-        if _wkey not in self._conv1d_wprep:
-            self._conv1d_wprep[_wkey] = ttnn.prepare_conv_weights(
-                weight_tensor=self.tw["conv_w1d"],
-                input_memory_config=_dram,
-                input_layout=ttnn.ROW_MAJOR_LAYOUT,
-                weights_format="OIHW",
+
+        def _conv(x, clen, cpad, ppad):
+            """One depthwise conv1d over a clen-row ROW_MAJOR input. Weight prep cached by geometry."""
+            wkey = (clen, ppad)
+            if wkey not in self._conv1d_wprep:
+                self._conv1d_wprep[wkey] = ttnn.prepare_conv_weights(
+                    weight_tensor=self.tw["conv_w1d"],
+                    input_memory_config=_dram,
+                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    weights_format="OIHW",
+                    in_channels=C,
+                    out_channels=C,
+                    batch_size=1,
+                    input_height=1,
+                    input_width=clen,
+                    kernel_size=(1, K),
+                    stride=(1, 1),
+                    padding=ppad,
+                    dilation=(1, 1),
+                    has_bias=False,
+                    groups=C,
+                    device=dev,
+                    input_dtype=ttnn.bfloat16,
+                    conv_config=conv_cfg,
+                    compute_config=cc,
+                )
+            return ttnn.conv1d(
+                input_tensor=x,
+                weight_tensor=self._conv1d_wprep[wkey],
+                device=dev,
                 in_channels=C,
                 out_channels=C,
                 batch_size=1,
-                input_height=1,
-                input_width=_conv_len,
-                kernel_size=(1, K),
-                stride=(1, 1),
-                padding=_prep_pad,
-                dilation=(1, 1),
-                has_bias=False,
+                input_length=clen,
+                kernel_size=K,
+                stride=1,
+                padding=cpad,
+                dilation=1,
                 groups=C,
-                device=dev,
-                input_dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat16,
                 conv_config=conv_cfg,
                 compute_config=cc,
+                # L1_FULL slice: keep the conv in L1 instead of DRAM-width-slicing. The DRAM-slice path does
+                # host reads that begin_trace_capture rejects (see uniad); L1_FULL is trace-safe (as UNet).
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
+                return_output_dim=False,
+                return_weights_and_bias=False,
             )
-        out = ttnn.conv1d(
-            input_tensor=xin,
-            weight_tensor=self._conv1d_wprep[_wkey],
-            device=dev,
-            in_channels=C,
-            out_channels=C,
-            batch_size=1,
-            input_length=_conv_len,
-            kernel_size=K,
-            stride=1,
-            padding=_conv_pad,
-            dilation=1,
-            groups=C,
-            dtype=ttnn.bfloat16,
-            conv_config=conv_cfg,
-            compute_config=cc,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            return_output_dim=False,
-            return_weights_and_bias=False,
-        )
+        # Carry splice (big native-pad conv + a TILE-sized fix conv spliced in with slice_write):
+        # IMPLEMENTED and VERIFIED BIT-EXACT -- test_gdn_conv1d_splice_bitexact, 9 cases, max|diff| 0.0
+        # -- but OFF. It saves the 205us concat and loses more on the extra conv program. Do not redo.
+        out = _conv(xin, _conv_len, _conv_pad, _prep_pad)
         # xin aliases qkv when the caller handed over ROW_MAJOR qkv and _native_pad skipped the
         # concat; freeing it would free forward_prefill's qkv out from under its own deallocate().
         if not _xin_aliases_qkv:
@@ -681,6 +749,25 @@ class TPGatedDeltaNet:
             out = ttnn.silu(out, memory_config=out.memory_config())
             ttnn.deallocate(_pre_silu)
             out = ttnn.sharded_to_interleaved(out, _dram)
+            if _xfix is not None:
+                # Patch the K-1 carry-dependent rows (see the splice note above). Runs on the
+                # ROW_MAJOR interleaved `out`, which is exactly what slice_write requires, and before
+                # the to_layout(TILE) so no extra relayout is introduced.
+                _fix = _conv(
+                    ttnn.reshape(_xfix, (1, (K - 1) + tpc.TILE_SIZE, 1, C)), (K - 1) + tpc.TILE_SIZE, 0, (0, 0)
+                )
+                ttnn.deallocate(_xfix)
+                _fix_pre = _fix
+                _fix = ttnn.silu(_fix, memory_config=_fix.memory_config())
+                ttnn.deallocate(_fix_pre)
+                out = ttnn.experimental.slice_write(
+                    ttnn.reshape(_fix, (1, 1, tpc.TILE_SIZE, C)),
+                    ttnn.reshape(out, (1, 1, T, C)),
+                    [0, 0, 0, 0],
+                    [1, 1, tpc.TILE_SIZE, C],
+                    [1, 1, 1, 1],  # step is positional-required in this build, not defaulted
+                )
+                ttnn.deallocate(_fix)
             out = ttnn.reshape(out, (1, T, C))
             out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
             return out, new_state
@@ -764,8 +851,16 @@ class TPGatedDeltaNet:
                 qkv = ttnn.untilize_with_unpadding(qkvzab, (0, S - 1, qz - 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             else:
                 qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
-            # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
+            # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (8MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
+            # RE-TESTED after the in-proj rework freed 3MB of qkvzab (z in L1 measures 65.1us vs 92.7us
+            # in isolation, tests/perf/test_gdn_conv1d_sweep.py) and it STILL does not fit: forcing
+            # _z_mc = L1 passes test_gdn_tp and test_prefill but fails the full layer with "statically
+            # allocated circular buffers in program 84 clash with L1 buffers ... L1 buffer allocated at
+            # 793472 and static circular buffer region ends at 892160". z is 8MB = 128KB/core and stays
+            # live across the scan kernel, which is exactly the collision this line already avoided.
+            # Note which tests caught it: only test_profile_single_layer_prefill, because it is the only
+            # one where attention + MLP + GDN contend for L1 in one layer.
             _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
             z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=_z_mc)
             # a,b end mid-tile; slicing straight from qkvzab untilizes the full 4120-wide tensor.
@@ -896,18 +991,36 @@ class TPGatedDeltaNet:
             )
         ttnn.deallocate(qkv)
 
-        # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
+        # q/k/v: L1 on Wormhole. beta/g stay DRAM.
+        #
+        # The note this replaces said "q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes
+        # it". That was true, and it went stale when the in-proj rework dropped the 6912 pad: qkvzab is
+        # 3MB smaller, which is enough headroom for q+k+v (4+4+8MB = 256KB/core total).
+        # MEASURED in the real layer (Tracy, T=2048, N300 — perf14 -> perf16):
+        #     q  47 -> 34us     k  59 -> 33us     v  94 -> 65us      = -68us/layer
+        # matching the isolated sweep (192 -> 132us).
+        #
+        # z is NOT included and must not be: same experiment, z in L1 fails the full layer with a
+        # scan-kernel CB clash (see the _z_mc note in _project_qkvzab). q/k/v are consumed by the chunk
+        # kernel's reader; z is multiplied in at the very end, so it stays live strictly longer.
+        #
+        # If you widen this, gate it on test_profile_single_layer_prefill, NOT on test_gdn_tp or
+        # test_prefill -- both of those passed with z in L1 and only the full layer caught the clash.
+        # Wormhole only: Blackhole's placement was tuned separately and is left byte-identical.
         kd = self.key_dim_tp
+        _qkv_mc = None if tpc.is_blackhole() else ttnn.L1_MEMORY_CONFIG
         if self._gdn_flat_qkv:
             # Flat q/k/v: adapter splits heads inside untilize
-            q = ttnn.slice(conv, (0, 0, 0), (1, T, kd))
-            k = ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd))
-            v = ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp))
+            q = ttnn.slice(conv, (0, 0, 0), (1, T, kd), memory_config=_qkv_mc)
+            k = ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd), memory_config=_qkv_mc)
+            v = ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp), memory_config=_qkv_mc)
             _qkv_head_dims = (Nk, Dk, Nv, Dv)
         else:
-            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
-            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
-            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd), memory_config=_qkv_mc), (1, T, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd), memory_config=_qkv_mc), (1, T, Nk, Dk))
+            v = ttnn.reshape(
+                ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp), memory_config=_qkv_mc), (1, T, Nv, Dv)
+            )
             _qkv_head_dims = None
         ttnn.deallocate(conv)
         # GQA late-expand: adapter L2-norms at Nk, expands to Nv after
@@ -1017,7 +1130,11 @@ class TPGatedDeltaNet:
         # QWEN35_GDN_OUT_FP32=1 forces the old fp32 path back on Wormhole.
         if not tpc.is_blackhole() and o.dtype == ttnn.float32 and os.environ.get("QWEN35_GDN_OUT_FP32") != "1":
             _o_fp32 = o
-            o = ttnn.typecast(o, ttnn.bfloat16)
+            # L1 destination: the cast reads 16MB of fp32 and writes 8MB of bf16, and writing that to
+            # L1 instead of DRAM measured 127 -> 93us in the real layer (reproduced twice; the isolated
+            # sweep in tests/perf/test_gdn_tail_sweep.py says 124.5 -> 92.0us). rms_norm consumes it
+            # immediately, so it is short-lived.
+            o = ttnn.typecast(o, ttnn.bfloat16, memory_config=_L1)
             ttnn.deallocate(_o_fp32)
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
@@ -1034,7 +1151,11 @@ class TPGatedDeltaNet:
             # fragment L1 and tip the native conv1d past its ~2% L1 headroom on some calls but not
             # others — the "clash with L1 buffers" that made _gdn_conv1d unshippable on WH.
             _n_pre = n
-            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_norm_mc)
+            # L1 rather than _norm_mc (DRAM at T=2048): 89 -> 67us in the real layer, reproduced.
+            # Note this is the head-flatten OUTPUT only. The rms_norm above deliberately keeps
+            # _norm_mc: L1 measured SLOWER for it (100.8 -> 106.6us), so the conservative fp32-based
+            # threshold that lands it in DRAM at T=2048 is already the right call.
+            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
             ttnn.deallocate(_n_pre)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
@@ -1063,6 +1184,11 @@ class TPGatedDeltaNet:
             if return_state:
                 return out, captured[0], captured[1]
             return out
+        # gated stays DRAM. L1 measured 262.3 -> 217.7us in ISOLATION and still fails the full layer:
+        # "statically allocated circular buffers clash with L1 buffers ... L1 buffer allocated at 949120".
+        # gated is 8MB and feeds the out-proj matmul, which runs one K pass and so spends nearly all of
+        # L1 on CBs -- the same collision that rules out an L1 in-proj output. Tested individually: the
+        # typecast and head-concat above pass the full layer, this one does not.
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
