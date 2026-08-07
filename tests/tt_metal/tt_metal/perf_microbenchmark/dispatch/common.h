@@ -958,7 +958,6 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
-static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
     return tt::tt_metal::detail::sd_cq_prefetch_core(device);
 }
@@ -987,8 +986,8 @@ inline tt_metal::DataMovementProcessor dispatch_dm() {
     return tt::tt_metal::detail::dispatch_dm_processor();
 }
 
-inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map(const tt_metal::IDevice* device) {
-    return tt_metal::MetalContext::instance().dispatch_mem_map(sd_cq_kernel_core_type(device));
+inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
+    return tt_metal::MetalContext::instance().dispatch_mem_map();
 }
 
 inline tt_metal::KernelHandle create_sd_cq_kernel(
@@ -1014,9 +1013,9 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
                 .is_legacy_kernel = true});
     }
     if (device->arch() == tt::ARCH::QUASAR) {
-        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): the experimental API
-        // auto-assigns DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching the
-        // legacy behavior. dm_processor is not used here.
+        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): CreateKernel skips
+        // reserved DM0/DM1 and auto-assigns free user DMs (prefetch first -> DM2, …).
+        // dm_processor is not used here.
         return tt::tt_metal::experimental::quasar::CreateKernel(
             program,
             kernel_path,
@@ -1073,6 +1072,15 @@ inline bool is_quasar_cq_dram_backed() {
     return !rtoptions.is_dram_backed_cq_specified() || rtoptions.get_dram_backed_cq();
 }
 
+struct CompletionQueuePtrToggle {
+    uint32_t ptr_16B = 0;
+    uint32_t toggle = 0;
+};
+
+inline CompletionQueuePtrToggle split_ptr_toggle(uint32_t ptr_and_toggle) {
+    return {ptr_and_toggle & 0x7fffffffu, ptr_and_toggle >> 31};
+}
+
 // Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
 // sets quasar_simulator_variant_ before gtest's SetUp() reads it.
 template <class FDFixture>
@@ -1116,13 +1124,7 @@ protected:
     // Test Config defaults
     DispatchTestConfig cfg_;
 
-    void SetUp() override {
-        if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        tt_metal::GenericMeshDeviceFixture::SetUp();
-
-        // Setup Config
+    virtual DispatchPayloadGenerator::Config payload_generator_config() const {
         DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = cfg_.use_coherent_data;
         pgcfg.perf_test = cfg_.perf_test;
@@ -1132,8 +1134,17 @@ protected:
         // Handle Seeding
         std::random_device rd;
         pgcfg.seed = rd();
+        return pgcfg;
+    }
+
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        tt_metal::GenericMeshDeviceFixture::SetUp();
 
         // Initialize Generator
+        const DispatchPayloadGenerator::Config pgcfg = payload_generator_config();
         payload_generator_ = std::make_unique<DispatchPayloadGenerator>(pgcfg);
         log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
 
@@ -1214,12 +1225,12 @@ protected:
         const auto start = std::chrono::steady_clock::now();
         uint32_t avail = 0;
         while (avail < total_expected_cq_payload) {
-            const uint32_t completion_queue_write_ptr_and_toggle =
-                mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition);
-            const uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
-            const uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
+            const auto [completion_q_write_ptr_16B, completion_q_write_toggle] =
+                split_ptr_toggle(mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition));
+            const uint32_t completion_q_write_ptr = completion_q_write_ptr_16B << 4;
             const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
             const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
+            const uint32_t completion_q_base = mgr_->get_issue_queue_limit(fdcq_->id());
             const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
 
             if (completion_q_write_toggle == completion_q_read_toggle) {
@@ -1227,7 +1238,7 @@ protected:
                             ? completion_q_write_ptr - completion_q_read_ptr
                             : 0u;
             } else {
-                avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
+                avail = (limit - completion_q_read_ptr) + (completion_q_write_ptr - completion_q_base);
             }
 
             if (timeout_ms > 0 && !Common::is_quasar_sim()) {
@@ -1583,7 +1594,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
         {"UPSTREAM_CB_SEM_ID", "0"},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE)},
-        {"CMDDAT_Q_BLOCKS", std::to_string(SD_PREFETCH_CMDDAT_BLOCKS)},
         {"DISPATCH_S_BUFFER_BASE", "0"},
         {"MY_DISPATCH_S_CB_SEM_ID", "0"},
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", "0"},

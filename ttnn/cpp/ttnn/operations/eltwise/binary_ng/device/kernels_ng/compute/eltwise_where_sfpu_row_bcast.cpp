@@ -47,13 +47,15 @@ void kernel_main() {
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT
 
+    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_dfb_in0.wait_front(num_tiles_per_cycle);
         exp_dfb_in1.wait_front(num_tiles_per_cycle);
 
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);

@@ -25,25 +25,25 @@ namespace tt::tt_metal {
 // undefined behavior and usage of these functions should be avoided.
 //
 // T is the logical encode / pad element type.
-// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t.
+// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t, int8_t.
 
 /**
  * Same as HostTensor::from_span, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as HostTensor::from_vector, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as HostTensor::from_vector, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as to_tensor_spec, but the padded values are filled with **pad_value**.

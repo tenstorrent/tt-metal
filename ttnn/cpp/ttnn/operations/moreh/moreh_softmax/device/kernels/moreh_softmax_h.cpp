@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr int dst1 = 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);
@@ -74,7 +74,7 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(dfb_in0_obj, dfb_max_obj);
+            sub_bcast_rows_init_with_dt(dfb_in0_obj, dfb_max_obj);
             sub_tiles_bcast<BroadcastType::ROW>(cb_in0, cb_max, h, 0, dst0);
             tile_regs_commit();
 
@@ -163,7 +163,7 @@ void kernel_main() {
 #ifdef LOG
             // x - max - log(sum)
             tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(dfb_x_m_max_obj, dfb_recipsumexps_obj);
+            sub_bcast_rows_init_with_dt(dfb_x_m_max_obj, dfb_recipsumexps_obj);
             sub_tiles_bcast<BroadcastType::ROW>(cb_x_m_max, cb_recipsumexps, h, 0, dst0);
             tile_regs_commit();
 
@@ -173,7 +173,7 @@ void kernel_main() {
 #else
             // exp(x - max) / psum
             tile_regs_acquire();
-            mul_bcast_rows_init_short_with_dt(dfb_exps_obj, dfb_recipsumexps_obj);
+            mul_bcast_rows_init_with_dt(dfb_exps_obj, dfb_recipsumexps_obj);
             mul_tiles_bcast_rows(cb_exps, cb_recipsumexps, h, 0, dst0);
             tile_regs_commit();
 

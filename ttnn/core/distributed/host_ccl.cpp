@@ -15,8 +15,8 @@
 #include <ttnn/tensor/tensor.hpp>
 
 #include "tt_stl/span.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 
 namespace ttnn::distributed::host_ccl {
 
@@ -94,7 +94,8 @@ Tensor all_gather(const Tensor& tensor) {
                     local_shard->view_bytes(), tt::tt_metal::distributed::multihost::Rank(*lowest_rank_with_shard));
                 all_gather_buffer.emplace_shard(coord, [&local_shard]() { return *local_shard; });
             } else {
-                HostBuffer buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor.tensor_spec());
+                auto scratch = tt::tt_metal::HostTensor::allocate_for_overwrite(tensor.tensor_spec());
+                HostBuffer buffer = *scratch.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
                 ctx->broadcast(
                     buffer.view_bytes(), tt::tt_metal::distributed::multihost::Rank(*lowest_rank_with_shard));
                 all_gather_buffer.emplace_shard(coord, [&buffer]() { return std::move(buffer); });
