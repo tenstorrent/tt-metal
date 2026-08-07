@@ -121,7 +121,7 @@ assert not missing, (
     "this ttnn build's "
     + ", ".join(missing)
     + " does not accept sliding_window_size, which the sliding-window layers require.\n"
-    "  No released ttnn wheel supports it on the chunked op — see serve_vllm.md '§1 ttnn'."
+    "  No released ttnn wheel supports it on the chunked op — see README.md 'Serving'."
 )
 print("  ttnn SDPA sliding_window_size: present on all three entry points")
 
