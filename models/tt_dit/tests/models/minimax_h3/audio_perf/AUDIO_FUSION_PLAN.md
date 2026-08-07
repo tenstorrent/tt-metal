@@ -80,7 +80,39 @@ left, and they are a small share.
 What Step 1 does leave behind is a validated technique the kernel should use internally, and the
 knob to tune it (`MINIMAX_H3_AUDIO_FOLD_TARGET`, default 256).
 
-**Step 2 — fuse the band.** The real kernel.
+**Step 2 — fuse the band.** The real kernel. **Re-scoped by measurement; read this first.**
+
+Four things were measured before building it. One confirms the premise, three narrow what the kernel
+has to be.
+
+*The premise holds: arithmetic is free* (`compute_intensity.py`). At identical element counts,
+`sin` -- a transcendental -- is **cheaper than `add`** (0.537 vs 2.860 ms), and the same elements cost
+**11.6x** more at C=8 (331 212 rows) than at C=224 (11 829 rows). Cost tracks rows and op count, not
+FLOPs, so a fused op will not pay for the extra arithmetic it does. This was flagged below as the
+first thing to check and had never actually been measured.
+
+*But the price list was wrong.* Sizing the win as (ops removed) x 142 us averages over ops that differ
+by 20x. By time rather than count (PROFILE_2026_08_06.txt): **Concat 285.3 ms / 20.4 %** is the largest
+single line item, all convolution (Conv3d + Conv2d) is only 292 ms / 21 %, and data movement totals
+~900 ms of the ~1400 ms stage. Removing a convolution is nearly worthless; removing scaffolding is
+where the 4-5x lives.
+
+*Merging convolutions is confirmed worthless* (`branch_batch.py`). Batching the 3 parallel AMP branches
+as one grouped conv -- called "nearly free, and it wins twice" below -- measures **0.94-1.11x**, and is
+lossy at C >= 64 because `groups=3` misses the depthwise SFPU path. Those convs cost 2.8-4.2 ms each,
+~20x the average, so they are past the flat-cost regime and merging saves dispatch only.
+
+*Op-level rearrangement from Python is exhausted.* Re-measured under today's conditions (exact conv1d,
+zero MAC fallbacks, wider fold), the existing algebraic fusion `MINIMAX_H3_AUDIO_FUSE_BAND=1` is
+**1.131 s against 1.105 s, i.e. 2.4 % slower**, accuracy identical. It halves the rows each convolution
+reads but doubles the convolution count and still concats to interleave the phases; with cost dominated
+by dispatch and rows, those cancel. `_zero_pad_t` concat -> `ttnn.pad` is the same story: 2.2x on the op
+(`tpad_bench.py`), exactly 0 % end to end.
+
+**So the kernel must be a real device op** that runs up2 -> snake -> down2 without materialising
+intermediates, so the Halo/Slice/Concat/Untilize scaffolding is never issued. Rearranging which ttnn
+ops are called, in any combination, has now been measured four ways and moves nothing.
+
 
 One op per `Activation1d` band, implementing the decomposition already proven exact in
 `audio_resample.py::Activation1d._forward_fused` (rel_rmse 8.5e-08 against the literal form,
