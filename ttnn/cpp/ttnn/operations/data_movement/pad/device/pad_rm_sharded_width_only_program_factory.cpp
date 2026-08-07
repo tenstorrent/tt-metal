@@ -36,8 +36,6 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice* device = input_tensor.device();
-
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = input_shard_spec.shape[0];
@@ -49,10 +47,11 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    // CBs must only be placed on cores this program actually uses (the input/output shard
+    // grids). Covering the full compute grid would multicast CB configs onto cores that may
+    // belong to another sub-device (e.g. DRAM-prefetcher sender cores on Galaxy), corrupting
+    // whatever that sub-device has loaded at the worker kernel-config addresses.
+    CoreRangeSet cb_cores = input_shard_spec.grid.merge(all_cores_padded);
 
     Buffer* input_buffer = input_tensor.buffer();
     Buffer* output_buffer = output.buffer();
@@ -66,7 +65,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
         // patches the CB address on cache hits via cb.buffer.
         CBDescriptor cb_input;
         cb_input.total_size = shard_height_unpadded * unpadded_stick_bytes;
-        cb_input.core_ranges = total_cores;
+        cb_input.core_ranges = cb_cores;
         cb_input.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(input_shard_cb_index),
             .data_format = input_cb_data_format,
@@ -82,7 +81,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
         // Sharded output CB — globally allocated to the output buffer.
         CBDescriptor cb_output;
         cb_output.total_size = shard_height_padded * padded_stick_bytes;
-        cb_output.core_ranges = total_cores;
+        cb_output.core_ranges = cb_cores;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_shard_cb_index),
             .data_format = output_cb_data_format,
@@ -97,7 +96,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     uint32_t pad_val_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = padded_stick_bytes,
-        .core_ranges = total_cores,
+        .core_ranges = cb_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(pad_val_cb_index),
             .data_format = pad_val_cb_data_format,

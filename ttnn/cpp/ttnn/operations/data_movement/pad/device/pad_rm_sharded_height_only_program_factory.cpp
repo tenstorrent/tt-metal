@@ -225,8 +225,6 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    IDevice* device = a.device();
-
     // input shard spec
     auto shard_spec_unpadded = a.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
@@ -264,10 +262,11 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    // CBs must only be placed on cores this program actually uses (the input/output shard
+    // grids). Covering the full compute grid would multicast CB configs onto cores that may
+    // belong to another sub-device (e.g. DRAM-prefetcher sender cores on Galaxy), corrupting
+    // whatever that sub-device has loaded at the worker kernel-config addresses.
+    CoreRangeSet cb_cores = all_cores_unpadded.merge(all_cores_padded);
 
     Buffer* src_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -280,7 +279,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     {
         CBDescriptor cb_src0;
         cb_src0.total_size = shard_height_unpadded * stick_size_unpadded;
-        cb_src0.core_ranges = total_cores;
+        cb_src0.core_ranges = cb_cores;
         cb_src0.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
@@ -295,7 +294,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     {
         CBDescriptor cb_output;
         cb_output.total_size = shard_height_padded * stick_size_padded;
-        cb_output.core_ranges = total_cores;
+        cb_output.core_ranges = cb_cores;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = dst_cb_data_format,
@@ -310,7 +309,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     uint32_t src1_cb_index = 1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = stick_size_padded,
-        .core_ranges = total_cores,
+        .core_ranges = cb_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = cb_data_format,

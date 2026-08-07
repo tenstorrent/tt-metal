@@ -204,21 +204,40 @@ class TtLlamaMLP(LightweightModule):
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=1,
             )
-            w3_out_reduced = self.tt_ccl.matmul_reduce_scatter_async(
-                x,
-                self.w3,
-                program_config=pc_1_3,
-                memory_config_mm=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-                memory_config_rs=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-                compute_kernel_config=mm_ckc,
-                dtype=ttnn.bfloat8_b,
-                global_cb=self.prefetcher_setup.global_circular_buffer,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                cluster_axis=1,
-            )
+            if os.environ.get("QWEN_FUSED_FF1_ONLY") == "1":
+                # Diagnostic (token-2 dispatch deadlock narrowing): fuse ONLY FF1, run FF3 through the
+                # unfused ring-matmul -> DRAM -> line_reduce_scatter path. One fused call per layer
+                # instead of two: if the hang moves proportionally later, the failure is a per-fused-call
+                # accounting leak; if it stays at the same token, it is per-program-structure.
+                # (w3_out_reduced produced by the post-branch line_reduce_scatter is intentionally not
+                # deallocated in the fused path's guard below — acceptable leak for this diagnostic.)
+                w3_out = ttnn.linear(
+                    x,
+                    self.w3,
+                    program_config=pc_1_3,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                    compute_kernel_config=mm_ckc,
+                    dtype=ttnn.bfloat8_b,
+                    global_cb=self.prefetcher_setup.global_circular_buffer,
+                    sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+                )
+                w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                w3_out_reduced = self.tt_ccl.matmul_reduce_scatter_async(
+                    x,
+                    self.w3,
+                    program_config=pc_1_3,
+                    memory_config_mm=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                    memory_config_rs=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                    compute_kernel_config=mm_ckc,
+                    dtype=ttnn.bfloat8_b,
+                    global_cb=self.prefetcher_setup.global_circular_buffer,
+                    sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+                    num_links=self.model_config["GALAXY_NUM_LINKS"],
+                    cluster_axis=1,
+                )
+                w3_out = None  # already reduce-scattered; skip the post-branch line_reduce_scatter
             ttnn.deallocate(x)
-            w3_out = None  # already reduce-scattered; skip the post-branch line_reduce_scatter
             if os.environ.get("QWEN_DBG_FUSED_SYNC") == "1":
                 # Diagnostic: drain the worker sub-device after the fused ops to test whether the
                 # token-2 deadlock is an async overlap hazard (fused RS not fully ordered before the

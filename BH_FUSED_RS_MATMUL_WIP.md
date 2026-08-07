@@ -3,7 +3,7 @@
 Status doc for resuming later. Branch: `mgiermakowski/bh-fused-test`
 (branched from `mgiermakowski/bh-qwen-prefetcher`, which is the working prefetcher-only baseline).
 
-Last updated: 2026-08-05.
+Last updated: 2026-08-07 (deadlock FIXED — see "FIXED" section; e2e demo validation in progress).
 
 ---
 
@@ -20,12 +20,12 @@ fused matmul + reduce-scatter op for the MLP FF1/FF3, for maximum decode perf.
 ## TL;DR of current state
 
 - The fused op is integrated (MLP FF1/FF3), compiles, and is **numerically correct**:
-  decode PCC **0.9978 / 0.9979** for tokens 0 and 1, matching the unfused baseline (~0.9975).
-- It **deadlocks on the 3rd decode token (token index 2)**, every run, deterministically.
-- The deadlock is **not** in the fused op's own kernels — it is in a *downstream* op (a
-  `ttnn.slice` reader, or a standard `all_gather`) running on cores the fused ring matmul used.
-  The fused op leaves persistent L1 / circular-buffer / semaphore state that corrupts a later op,
-  and it accumulates until it deadlocks on iteration 3.
+  decode PCC **~0.9977** per token, matching the unfused baseline (~0.9975).
+- The former token-2 deadlock is **FIXED** (2026-08-07): it was NOT the fused op — `ttnn.pad`'s
+  row-major sharded program factories placed CBs on the full device grid, and dispatch multicast
+  the CB config onto the prefetcher sender column, corrupting the cached DramPrefetcher kernel
+  text. See the "FIXED" section near the bottom for the full story.
+- `test_qwen_decoder.py` passes all 10 decode iterations with prefetcher + fused op enabled.
 
 ## How to reproduce
 
@@ -191,7 +191,143 @@ tokens 0/1: the counter was still consistent at those wait points.
 Probe script: `/home/mgiermak/probe_dispatch_wait.py` (run under the broker while hung).
 Artifacts: `/home/mgiermak/triage_fused_hang.txt` (4 MB), `/home/mgiermak/qwen_fused_hang3.log`.
 
-## Suggested next steps
+## BREAKTHROUGH 2 (2026-08-07): the dispatch deficit is a SYMPTOM — token-1's DramPrefetcher never exits
+
+Fresh repro + three new frozen-mesh probes (`probe_worker_mailboxes.py`, `probe_gcb_credits.py`,
+fixed `probe_dispatch_wait.py`) overturned the "one worker program loses its 100 done-signals"
+reading:
+
+1. **Worker launch-mailbox dump (all 130 tensix cores, device 0)**: every one of the 100 worker
+   sub-device cores is `DONE` at `launch_msg_rd_ptr=2`, uniformly. `host_assigned_id` in the launch
+   ring == the ttnn op id (`fetch_and_increment_device_operation_id`), which lets us map slots to
+   ops: the decoder test dispatches 53 ops/token, prefetchers are op 3 (token 0), 56 (token 1),
+   109 (token 2). Workers consumed ALL 106 worker programs of tokens 0-1 (stream 49 = 10600 = 106
+   x 100, exactly). No worker program lost any dones.
+2. **Prefetcher (col-0) mailboxes**: slot 0 (op 3, token-0 prefetcher) consumed -> token 0 drained
+   cleanly. The cores are in `GO` at rd_ptr=1 — **still running op 56, token-1's
+   DramPrefetcherOperation** — with token-2's op 109 launch message pre-written at slot 2, its GO
+   forever queued in dispatch_s behind op 56's completion (gos are fully serialized per sub-device:
+   each go's `wait_count` = expected-workers-completed *before* that program).
+3. **Global-CB credits (scanned config page @0xa9200, counters @0xa9240)**: perfectly balanced —
+   every sender (0,0)-(0,7) shows `pages_sent == pages_acked == 216832` for all 3 receivers, and
+   216832 = 2 x 108416 = exactly two tokens' worth. **The prefetcher is NOT starved by the fused op
+   under-consuming weights**: token-1's streaming completed and was fully acked.
+
+So the failure chain is: token-1 `DramPrefetcherOperation` finishes streaming but **never exits its
+kernels** (core stays GO) -> token-2's prefetcher go can't be sent (dispatch_s serialized) ->
+dispatcher's config-buffer wait for a token-2 worker program (stream 49 target 10700; some devices
+10800) never satisfies -> mesh-wide stall. The worker-side "deficit" was just the not-yet-sent go.
+
+Where can the writer/reader pair be stuck AFTER all pushes are acked? The exit path is:
+`remote_cb_sender_barrier` (polls the exact L1 words the probe read as equal -> should pass) ->
+`update_remote_cb_config_in_l1` -> `noc_async_atomic_barrier` -> writer pushes `sync_cb` ->
+reader's final `cb_wait_front(sync_cb)` (reader_dram.cpp:114) -> exit. The old triage found the
+reader parked at that final sync wait, i.e. the WRITER never delivered the exit credit — despite
+balanced remote credits. Current suspicion is therefore in the writer's post-stream sequence or
+the reader/writer local-CB handshake state across cached re-runs, possibly corrupted by something
+the fused-op program does to shared L1 state on the *receiver* columns (the prefetcher's
+`update_remote_cb_config_in_l1` persists GCB pointers for the next program; the fused matmul does
+the same from the receiver side).
+
+Why the baseline doesn't hang: identical prefetcher, identical worker consumption totals — the
+only delta is the fused matmul+RS program structure. Token 0 (program-cache miss) drains; the hang
+requires the cached-run token 1. A triage callstack of the sender cores' BRISC (writer_l1) +
+NCRISC (reader_dram) on the frozen mesh is queued (run script now includes a parallel tt-triage
+pass) to pin the exact parked line.
+
+Probe artifacts: `/home/mgiermak/mailbox_probe4.log` (+5), `/home/mgiermak/gcb_credits_probe5.log`,
+`/home/mgiermak/dispatch_probe5.log`, `/home/mgiermak/inspector_fused_hang5/`.
+
+## ROOT CAUSE FOUND (2026-08-07, evening): kernel-TEXT CORRUPTION on the prefetcher sender cores
+
+New probes (`probe_reader_pc.py`, `probe_sync_cb.py`) on the frozen mesh nailed the mechanism:
+
+1. **The writer_l1 BRISC finished cleanly** (parked in firmware `wait_ncrisc_trisc`, PC moving) and
+   **delivered the exit credit**: the reader-writer sync CB (stream 3) shows
+   `pages_received=1, pages_acked=0` on every sender core. No credit bug.
+2. **The reader_dram NCRISC is HARD-FROZEN at PC 0xbad4** (identical, non-moving, on all 8 senders
+   of every device).
+3. From the launch mailbox, op 56's kernel config base is 0xad80 with NCRISC text offset +0x940 →
+   **reader text loads at L1 [0xb6c0, 0xbb78)**. Byte-diffing L1 against the cached
+   `reader_dram/.../ncrisc.elf.xip.elf` shows **68 corrupted words at L1 [0xb9c0, 0xbad0)**
+   (ELF VMA 0x6450-0x655c) — exactly the code for the tail of the block loop, the final barrier,
+   and the `cb_wait_front/cb_pop_front(sync_cb)` exit handshake. The frozen PC (VMA 0x6564) sits
+   just past the corrupted region: the reader streamed all 3600 blocks fine (local CB counters
+   3600/3600), then walked into clobbered instructions and died before consuming the exit credit.
+4. **The corrupting payload is a kernel-config CB TABLE**, not data: 17 four-word records with
+   entries {CB0: addr 0xa0680, 8 KB, 32 pages of 256 B}, {CB1: addr 0x1b380 (= L1 unreserved base),
+   256 B, 1 page}, {CB16: addr 0xa3fc0, 8 KB, 32 pages of 256 B}, rest zero.
+5. **The same 68 words appear at the SAME address 0xb9c0 on worker core (4,0)** (a fabric-mux core
+   of the fused program), where they are LEGITIMATE program config. Ring matmul cores (1-3,0) and
+   RS writer cores (6,0)/(9,0) have different content there. So a kernel-config multicast for some
+   worker program's kernel group is ALSO being sent to logical cores (0,0)-(0,7) — the prefetcher
+   senders — where 0xb9c0 lands inside op 56's kernel text.
+6. Why only token 2: config-ring layout luck. Op 3 (token 0) text sat at [0xa8c0, 0xadd8) — the
+   0xb9c0 write missed it. Op 56 (token 1, cached re-dispatch) text at [0xb6c0, 0xbb78) — hit.
+
+Suspicious detail: (0,0)-(0,7) is EXACTLY what `choose_worker_cores(8 workers, sub-device 0)`
+returns — and sub-device 0 is the PREFETCHER sub-device. I.e. some CCL helper inside the fused op
+(or an op it pulls in) is choosing cores with a defaulted `sub_device_id` (`get_sub_device_ids().at(0)`)
+and creating CBs there. Kernels get sub-device validation; CBs do not, so this slips through and
+dispatch happily multicasts the CB config onto foreign cores.
+
+A temporary host-side debug log (`TT_DBG_COL0_CB=1`, in `ProgramImpl::add_circular_buffer_`) is in
+place to identify the exact program; map its id via inspector `kernels.yaml`.
+
+## FIXED (2026-08-07, night): the offender was `ttnn.pad` (row-major sharded factories), not the fused op
+
+The `TT_DBG_COL0_CB` hunt (with C++ backtrace) caught it immediately. Two per-token programs
+created CBs on the FULL 12x10 grid `[0-0 - 11-9]`, i.e. including prefetcher sender column 0:
+
+```
+COL0-CB: program=320 range=[0-0 - 11-9] total_size=8192 globally_allocated=true   <- input shard CB
+COL0-CB: program=320 range=[0-0 - 11-9] total_size=8192 globally_allocated=true   <- output shard CB
+COL0-CB: program=320 range=[0-0 - 11-9] total_size=256  globally_allocated=false  <- pad-value stick CB
+backtrace: ... PadDeviceOperation ... pad_impl ... invoke_rm ... ttnn::to_layout ...
+```
+
+That is EXACTLY the corrupting CB table found at 0xb9c0 (CB0 8 KB / CB1 256 B / CB16 8 KB).
+The call chain is `ttnn.to_layout` → `ttnn::pad` (row-major sharded path) in the per-token
+host input prep (rot-mat / page-table massaging), NOT the fused op. It was always there; the
+fused op only changed the config-ring layout so token-1's prefetcher reader text happened to
+land under the stray 0xb9c0 write (see "why only token 2" above).
+
+Root bug: `pad_rm_sharded_height_only_program_factory.cpp` and
+`pad_rm_sharded_width_only_program_factory.cpp` placed all three CBs on
+`CoreRange({0,0}, compute_with_storage_grid_size - 1)` (the whole device grid) while their
+kernels only run on the shard grids. Dispatch multicasts CB configs to every CB core — including
+column 0, which belongs to the *prefetcher sub-device* whose kernel-config ring uses the same
+addresses for kernel TEXT. CBs get no sub-device validation, so this silently corrupted the
+cached DramPrefetcher `reader_dram` kernel.
+
+Fix (both factories): place CBs only on `input_shard_grid.merge(output_shard_grid)`.
+
+Validation: `test_qwen_decoder.py` with `QWEN_BH_PREFETCHER=1 QWEN_BH_FUSED_ASYNC_RS_MATMUL=1`
+now passes **all 10 decode iterations**, PCC ~0.9977 each token. No more token-2 deadlock.
+The temporary `TT_DBG_COL0_CB` instrumentation has been removed.
+
+## E2E results with the fix (2026-08-07, night)
+
+Full demo (`text_qwen_demo.py -k batch-32 --max_generated_tokens 64`, prefetcher + fused):
+- **PASSED**, all 64 decode iterations, no hang.
+- **47.82 tok/s/user average** (1530 tok/s throughput, 20.91 ms/iter) vs **45.98 t/s/u** for the
+  unfused control run on the same build — **+4% decode perf** from the fused op
+  (vs the older 44.8 t/s/u baseline number: +6.7%).
+
+Accuracy (`test_qwen_accuracy.py`, 511 teacher-forced tokens):
+- fused:   Top-1 **27.2%**, Top-5 34%
+- unfused: Top-1 **27.4%**, Top-5 34% (same build, same flags minus fusion)
+- => The fused op does NOT regress accuracy — it exactly matches the unfused prefetcher path.
+
+**Open issue (pre-existing, NOT caused by the fused op):** the prefetcher decode path
+(`QWEN_BH_PREFETCHER=1 QWEN_BH_UNFUSED_CCL=1`) scores ~27% Top-1 on this accuracy test,
+uniformly from the first token window (20-43% per 100-token window; no drift over time), and demo
+text is garbled. The 96%-Top-1 runs from July were on the non-prefetcher e2e branch. Wrong tokens
+repeat a small set of junk vocab entries (脏, _CAMERA, satu, 漂) which smells like corrupted logits
+for specific vocab shards (lm_head gather / fast_reduce_nc path?). Needs its own investigation on
+the prefetcher baseline branch, independent of this fused-op work.
+
+## Suggested next steps (2026-08-06 list — items 1-2 RESOLVED by Breakthrough 2)
 
 1. Identify the missing program slot. Only ~3 worker programs run between token-1's PCC readback
    (which waited successfully) and the stuck op 57 (two Embeddings + possibly a reshard) — but if
