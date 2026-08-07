@@ -90,21 +90,29 @@ void kernel_main() {
 
                         if (pair_id == processing_pair_id) {
                             if constexpr (is_row_major) {
-                                tilize_init(rm_input_value_cb_id, 2, input_tensor_cb_id);
-                                rm_input_value_dfb.wait_front(2 * TILE_H);
-                                input_tensor_dfb.reserve_back(2);
-                                tilize_block(rm_input_value_cb_id, 2, input_tensor_cb_id);
-                                input_tensor_dfb.push_back(2);
-                                rm_input_value_dfb.pop_front(2 * TILE_H);
+                                // Each CB holds TILE_H one-tile-wide row pages for tile i,
+                                // followed by TILE_H pages for tile j. Tilize one tile at a
+                                // time (block_ct_dim=1) so the unpacker's row stride matches
+                                // the single-tile-wide page layout.
+                                tilize_init(rm_input_value_cb_id, 1, input_tensor_cb_id);
+                                for (uint32_t t = 0; t < 2; ++t) {
+                                    rm_input_value_dfb.wait_front(TILE_H);
+                                    input_tensor_dfb.reserve_back(1);
+                                    tilize_block(rm_input_value_cb_id, 1, input_tensor_cb_id);
+                                    input_tensor_dfb.push_back(1);
+                                    rm_input_value_dfb.pop_front(TILE_H);
+                                }
                                 tilize_uninit(rm_input_value_cb_id, input_tensor_cb_id);
                                 binary_op_init_common(rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_cb_id);
 
-                                tilize_init(rm_input_index_cb_id, 2, index_tensor_cb_id);
-                                rm_input_index_dfb.wait_front(2 * TILE_H);
-                                index_tensor_dfb.reserve_back(2);
-                                tilize_block(rm_input_index_cb_id, 2, index_tensor_cb_id);
-                                index_tensor_dfb.push_back(2);
-                                rm_input_index_dfb.pop_front(2 * TILE_H);
+                                tilize_init(rm_input_index_cb_id, 1, index_tensor_cb_id);
+                                for (uint32_t t = 0; t < 2; ++t) {
+                                    rm_input_index_dfb.wait_front(TILE_H);
+                                    index_tensor_dfb.reserve_back(1);
+                                    tilize_block(rm_input_index_cb_id, 1, index_tensor_cb_id);
+                                    index_tensor_dfb.push_back(1);
+                                    rm_input_index_dfb.pop_front(TILE_H);
+                                }
                                 tilize_uninit(rm_input_index_cb_id, index_tensor_cb_id);
                                 binary_op_init_common(
                                     input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
@@ -267,24 +275,33 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                // 2 tiles arranged 1-wide × 2-tall; block_ct_dim=1, block_rt_dim=2
-                                // → produces 2*TILE_H RM output rows, each 1 tile wide.
+                                // Reconfig packer to the value-output CB format before value
+                                // untilize: the preceding index pack_tile leaves the packer in
+                                // uint32 format, and pack_untilize_init alone does not fully
+                                // reset that state.
+                                binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
+                                // Untilize tiles one at a time so each tile is written into its own
+                                // TILE_H output pages (block_rt_dim>1 would stall both pointers).
                                 pack_untilize_init<1>(input_tensor_output_cb_id, rm_output_value_cb_id);
                                 input_tensor_output_dfb.wait_front(2);
-                                rm_output_value_dfb.reserve_back(2 * TILE_H);
-                                pack_untilize_block<1>(input_tensor_output_cb_id, 2, rm_output_value_cb_id);
-                                input_tensor_output_dfb.pop_front(2);
-                                rm_output_value_dfb.push_back(2 * TILE_H);
+                                for (uint32_t t = 0; t < 2; ++t) {
+                                    rm_output_value_dfb.reserve_back(TILE_H);
+                                    pack_untilize_block<1>(input_tensor_output_cb_id, 1, rm_output_value_cb_id);
+                                    rm_output_value_dfb.push_back(TILE_H);
+                                    input_tensor_output_dfb.pop_front(1);
+                                }
                                 pack_untilize_uninit(rm_output_value_cb_id);
                                 binary_op_init_common(
-                                    rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
+                                    rm_input_index_cb_id, rm_input_index_cb_id, rm_output_index_cb_id);
 
                                 pack_untilize_init<1>(index_tensor_output_cb_id, rm_output_index_cb_id);
                                 index_tensor_output_dfb.wait_front(2);
-                                rm_output_index_dfb.reserve_back(2 * TILE_H);
-                                pack_untilize_block<1>(index_tensor_output_cb_id, 2, rm_output_index_cb_id);
-                                index_tensor_output_dfb.pop_front(2);
-                                rm_output_index_dfb.push_back(2 * TILE_H);
+                                for (uint32_t t = 0; t < 2; ++t) {
+                                    rm_output_index_dfb.reserve_back(TILE_H);
+                                    pack_untilize_block<1>(index_tensor_output_cb_id, 1, rm_output_index_cb_id);
+                                    rm_output_index_dfb.push_back(TILE_H);
+                                    index_tensor_output_dfb.pop_front(1);
+                                }
                                 pack_untilize_uninit(rm_output_index_cb_id);
                                 // Reset compute state for the next pair's tilize.
                                 binary_op_init_common(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
