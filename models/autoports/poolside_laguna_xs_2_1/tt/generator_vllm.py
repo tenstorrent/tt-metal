@@ -84,8 +84,7 @@ class LagunaForCausalLM:
     # execution paths (suffix-chunk read vs cold pipelined / local-bf16 prefill), the non-bit-exactness
     # inherent to prefix caching on quantized HW (the GPU norm), not a context error. This is ACCEPTED
     # non-determinism (partial-hit runs are not bit-reproducible) — see the determinism contract in
-    # README.md (item 1.3) and doc/vllm_integration/prefix_cache_status.md. Set
-    # TT_LAGUNA_PREFIX_CACHE=0 to force the cold path (bit-reproducible, no cache reuse).
+    # README.md (item 1.3). Set TT_LAGUNA_PREFIX_CACHE=0 to force the cold path (bit-reproducible, no reuse).
     _PREFIX_CACHE_ENABLED = os.environ.get("TT_LAGUNA_PREFIX_CACHE", "1") == "1"
     model_capabilities = {
         "supports_prefix_caching": _PREFIX_CACHE_ENABLED,

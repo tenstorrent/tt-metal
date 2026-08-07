@@ -24,7 +24,7 @@ import torch
 import ttnn
 
 MODEL_DIR = Path("/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1")
-REF = MODEL_DIR / "readiness_aime24_chat.refpt"
+REF = MODEL_DIR / "tests" / "reference_outputs" / "readiness_aime24_chat.refpt"
 
 
 def _open_mesh():
@@ -256,8 +256,7 @@ if __name__ == "__main__":
         "--outdir",
         type=str,
         default="doc/full_model",
-        help="Artifact output dir relative to the model dir (autoreg/prefill_autoreg write here). "
-        "Default doc/full_model preserves stage-05; pass doc/optimized_full_model for the BFP8 stage.",
+        help="Artifact output dir relative to the model dir (autoreg/prefill_autoreg write here).",
     )
     a = ap.parse_args()
     {

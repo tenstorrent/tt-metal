@@ -10,8 +10,7 @@ Two tiers:
     ground-truth greedy sequence is the M-orbit of the prompt; the test asserts
     spec-decode output == plain-greedy output token-for-token (the correctness
     contract) and that acceptance is non-trivial (ngram hits on the periodic orbit).
-  * DEVICE (skipped unless LAGUNA_SPEC_DEVICE=1): drives the real Laguna generator
-    (see the standalone driver in doc/vllm_integration/scripts/spec_decode_driver.py).
+  * DEVICE (skipped unless LAGUNA_SPEC_DEVICE=1): drives the real Laguna generator.
 """
 
 import os

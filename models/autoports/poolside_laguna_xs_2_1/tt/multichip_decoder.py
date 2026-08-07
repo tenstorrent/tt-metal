@@ -10,7 +10,7 @@ optimized helper (precision policy, packed-QKV split, RMSNorm, RoPE, SDPA config
 DRAM-sharded matmul helper, and the sparse-expert program configs). Only weight placement
 (mesh sharding at load time) and the collectives the scheme needs are added here.
 
-Scheme (see ``doc/multichip_decoder/work_log.md`` for the full mesh plan + shape table):
+Scheme:
   * Residual stream is **replicated** (BF16). Both RMSNorms see the full hidden and are
     exact locally — no distributed norm needed.
   * Attention: WQKV column-parallel (packed, reordered so device d owns Q heads
@@ -53,7 +53,20 @@ from .optimized_decoder import (
 
 
 class MultichipDecoder(OptimizedDecoder):
+    """Multichip TTNN decoder for Laguna-XS-2.1 (Blackhole p300c ×4, 1×4 mesh): TP=4 attention/dense +
+    EP=4 routed MoE, replicated BF16 residual, exactly two ring ``all_reduce``s per layer (comm-optimal for
+    this small hidden H=2048).
+
+    ``PACK_GATE_UP`` (default True) enables the decode gate/up matmul-packing optimization: the two
+    same-input gate/up projections (routed-expert MoE, dense MLP, shared expert) are concatenated at load
+    into one wide weight so a single matmul replaces two dispatches (decode is dispatch/latency-bound). PCC
+    is preserved exactly (SiLU is applied after the on-device split), so it is a pure device-time win
+    (measured ~−5.4% layer decode). Set ``PACK_GATE_UP=False`` for the unpacked baseline (A/B evidence).
+    Previously this lived in a separate ``OptimizedMultichipDecoder`` subclass; folded in here as a flag.
+    """
+
     # Inherited runtime chunk knobs (MOE_PREFILL_CHUNK, PIPE_CHUNK, PREFILL_SDPA_CHUNK).
+    PACK_GATE_UP = True
 
     def __init__(self, cfg, weights, cos_table, sin_table, mesh_device, policy, meta):
         super().__init__(cfg, weights, cos_table, sin_table, mesh_device, policy, meta)
@@ -280,7 +293,44 @@ class MultichipDecoder(OptimizedDecoder):
             "local_experts": local_experts,
             "num_links": 2,
         }
-        return cls(cfg, w, cos_2d, sin_2d, dev, policy, meta)
+        dec = cls(cfg, w, cos_2d, sin_2d, dev, policy, meta)
+        if cls.PACK_GATE_UP:
+            dec._pack_gate_up()
+        return dec
+
+    def _pack_gate_up(self):
+        """Concat the same-input gate/up weights (interleaved + DRAM-width-sharded ``_ds`` copies) into one
+        packed weight and free the separate copies. Pure on-device concat/reshard of the already-loaded
+        (and disk-cached) tensors, so it inherits the weight cache. The packed copies are intentionally NOT
+        separately disk-cached: they are cheap to derive on device, and the ttnn tensor cache cannot
+        round-trip the ``_ds`` copy's custom width-sharded memory_config anyway."""
+        w = self.w
+        dram_cores = self.meta["dram_cores"]
+        H = self.cfg.hidden
+
+        def pack_dram_pair(gk, uk, out, n_local):
+            """Concat two DRAM-width-sharded gate/up weights (interleaved + _ds copies) into one
+            [H, 2*n_local] weight; rebuild the DRAM shard spec for the doubled width; free originals."""
+            il = ttnn.concat([w[gk], w[uk]], dim=-1)  # [H, 2*n_local] interleaved DRAM
+            ds = ttnn.to_memory_config(il, _dram_weight_memcfg(H, 2 * n_local, dram_cores))
+            w[out] = il
+            w[out + "_ds"] = ds
+            for k in (gk, uk):
+                ttnn.deallocate(w[k])
+                ttnn.deallocate(w[k + "_ds"])
+                del w[k]
+                del w[k + "_ds"]
+
+        if self.cfg.is_moe:
+            # routed experts: interleaved BFP4 [1,64,H,512] each -> [1,64,H,1024]
+            w["exp_gate_up"] = ttnn.concat([w["exp_gate"], w["exp_up"]], dim=-1)
+            ttnn.deallocate(w["exp_gate"])
+            ttnn.deallocate(w["exp_up"])
+            del w["exp_gate"]
+            del w["exp_up"]
+            pack_dram_pair("sh_gate", "sh_up", "sh_gate_up", self.cfg.shared_intermediate)
+        else:
+            pack_dram_pair("mlp_gate", "mlp_up", "mlp_gate_up", self.cfg.intermediate)
 
     # ---- KV cache / page table (replicated init; each device holds its own local KV heads) ---- #
     def alloc_kv_cache(self, max_users, max_seq_len, block_size=32, dtype=None):
@@ -318,6 +368,72 @@ class MultichipDecoder(OptimizedDecoder):
 
     # ---- MoE (Expert Parallel) --------------------------------------------- #
     def _moe(self, ln_flat, m, sharded):
+        """Routed-expert MoE (EP=4). With PACK_GATE_UP, one packed gate+up sparse_matmul (split + SwiGLU on
+        device); else the unpacked two-matmul baseline (``_moe_separate``). Both end in a ring all_reduce."""
+        if not self.PACK_GATE_UP:
+            return self._moe_separate(ln_flat, m, sharded)
+        cfg = self.cfg
+        LE = self.local_experts
+        H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
+        T = ln_flat.shape[2]
+        logits = ttnn.linear(ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router)
+        scores = ttnn.sigmoid(logits)
+        sel = ttnn.add(scores, self.w["e_bias"])
+        _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
+        wsel = ttnn.gather(scores, dim=3, index=idx)
+        if cfg.norm_topk_prob:
+            wsel = ttnn.div(wsel, ttnn.sum(wsel, dim=3, keepdim=True))
+        if cfg.routed_scaling != 1.0:
+            wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+        dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
+        dense_local = ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
+        union = ttnn.sum(dense_local, dim=2, keepdim=True)
+        sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
+        a = ttnn.reshape(ln_flat, (1, 1, T, H))
+        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG
+        otile = ttnn.Tile([TILE, TILE])
+        gu_pc = _sparse_pc(2 * I, T, H)  # packed gate+up, N = 2*I
+        gu = ttnn.sparse_matmul(
+            a,
+            self.w["exp_gate_up"],
+            sparsity=sparsity,
+            program_config=gu_pc,
+            compute_kernel_config=self._ck_moe,
+            memory_config=moe_mem,
+            output_tile=otile,
+        )
+        gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+        gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
+        up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
+        glu = ttnn.mul(ttnn.silu(gate_o), up_o)
+        dn_pc = _sparse_pc(H, T, I)
+        down_o = ttnn.sparse_matmul(
+            glu,
+            self.w["exp_down"],
+            sparsity=sparsity,
+            is_input_a_sparse=True,
+            program_config=dn_pc,
+            compute_kernel_config=self._ck_moe,
+            memory_config=moe_mem,
+            output_tile=otile,
+        )
+        wv = ttnn.reshape(dense_local, (1, T, LE))
+        wv = ttnn.permute(wv, (0, 2, 1))
+        wv = ttnn.reshape(wv, (1, LE, T, 1))
+        weighted = ttnn.mul(down_o, wv)  # [1, LE, T, H]
+        if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
+            (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
+            )
+            routed_local = ttnn.reshape(reduced, (1, 1, T, H))
+        else:
+            routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
+        combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)
+
+    # ---- MoE baseline (unpacked gate/up: two separate sparse_matmuls) ------ #
+    def _moe_separate(self, ln_flat, m, sharded):
         cfg = self.cfg
         GE, LE = self.global_experts, self.local_experts
         H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
@@ -382,6 +498,29 @@ class MultichipDecoder(OptimizedDecoder):
         shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
         combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
         return self._reduce(combined)  # all_reduce -> total routed + shared (replicated)
+
+    # ---- dense / shared SwiGLU MLP: one packed gate+up matmul, split, SwiGLU (else unpacked base) ---- #
+    def _glu_mlp(self, x, key, H, I, ck, sharded):
+        if not self.PACK_GATE_UP:
+            return super()._glu_mlp(x, key, H, I, ck, sharded)
+        guk, dk = {"mlp": ("mlp_gate_up", "mlp_down"), "sh": ("sh_gate_up", "sh_down")}[key]
+        w = self.w
+        if sharded and self.use_dram_sharded:
+            gu = self._dram_mm(x, w[guk], w[guk + "_ds"], H, 2 * I, ck)  # [.,.,M,2I] width-sharded
+            gu = ttnn.sharded_to_interleaved(gu, ttnn.L1_MEMORY_CONFIG)
+            shp = list(gu.shape)
+            g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
+            u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
+            gg = ttnn.mul(ttnn.silu(g), u)
+            out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
+            return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+        # prefill: interleaved packed gate+up linear, split, SwiGLU, down
+        gu = ttnn.linear(x, w[guk], compute_kernel_config=ck)  # [.,seq,2I]
+        shp = list(gu.shape)
+        g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
+        u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
+        gg = ttnn.mul(ttnn.silu(g), u)
+        return ttnn.linear(gg, w[dk], compute_kernel_config=ck)
 
     # ---- dense/shared MLP: gate/up column, down row -> caller reduces ------ #
     def _mlp(self, ln, T, sharded):
@@ -552,7 +691,7 @@ class MultichipDecoder(OptimizedDecoder):
             # Stage 2 fix: accuracy-safe fast NORMAL-decode config — k_chunk=64 (not 128) keeps the
             # max_cores=16 parallel-KV-scan long-context speed but drops the k128 last-partial-chunk masking
             # that was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at low non-aligned cur_pos).
-            # See tt/optimized_decoder.py + STATUS.md (decode SDPA program config).
+            # See tt/optimized_decoder.py (decode SDPA program config).
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
             sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(

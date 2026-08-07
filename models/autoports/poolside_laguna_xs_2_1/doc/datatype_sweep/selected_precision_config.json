@@ -12,7 +12,7 @@
     "top100": 1.0,
     "reference": "AIME24[0] chat-template, 192 prompt + 100 gen, top-100 (readiness_aime24_chat.refpt)"
   },
-  "consumed_by": "LagunaModel.from_pretrained loads this file's 'policy' block by default via load_selected_precision_policy() (TT_LAGUNA_PRECISION_CONFIG env overrides the path); build_generator and the future vLLM adapter therefore construct exactly this weight/activation/CCL/KV/compute-fidelity policy. Consumption is proved field-by-field in doc/datatype_sweep/post_selection.json (propagation_built_vs_selected == this policy, propagation_ok true).",
+  "consumed_by": "LagunaModel.from_pretrained loads this file's 'policy' block by default via load_selected_precision_policy() (TT_LAGUNA_PRECISION_CONFIG env overrides the path); build_generator and the vLLM adapter therefore construct exactly this weight/activation/CCL/KV/compute-fidelity policy. Consumption is verified field-by-field (built policy == this policy).",
   "policy": {
     "attn_qkv": "bfp8",
     "attn_o": "bfp8",

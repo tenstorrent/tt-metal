@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Full autoregressive TTNN model for poolside/Laguna-XS-2.1 (Blackhole p300c ×4, 1×4 mesh).
 
-Assembles the completed optimized multichip decoder (``tt/optimized_multichip_decoder.py``,
-``OptimizedMultichipDecoder`` — TP=4 attention/dense + EP=4 routed MoE, replicated BF16 residual,
-2 ring ``all_reduce``/layer, BFP8 local KV cache, packed gate+up) into the whole 40-layer
-autoregressive path: token embedding, the layer stack, final RMSNorm, and the LM head.
+Assembles the multichip decoder (``tt/multichip_decoder.py``, ``MultichipDecoder`` — TP=4
+attention/dense + EP=4 routed MoE, replicated BF16 residual, 2 ring ``all_reduce``/layer, BFP8 local
+KV cache, packed gate+up via ``PACK_GATE_UP``) into the whole 40-layer autoregressive path: token
+embedding, the layer stack, final RMSNorm, and the LM head.
 
 Design contract carried forward from the decoder stage (do NOT weaken):
   * **Inter-layer residual is replicated BF16** ``[1,seq,H]`` (prefill) / ``[1,1,B,H]`` (decode),
@@ -33,8 +33,8 @@ import torch
 
 import ttnn
 
+from .multichip_decoder import MultichipDecoder
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
-from .optimized_multichip_decoder import OptimizedMultichipDecoder
 
 MODEL_ID = "poolside/Laguna-XS-2.1"
 
@@ -114,7 +114,7 @@ class LagunaModel:
 
     def __init__(self, hf_config, layers, embed_w, norm_w, lm_head_w, lm_head_ds, meta, mesh_device):
         self.hf_config = hf_config
-        self.layers = layers  # list[OptimizedMultichipDecoder]
+        self.layers = layers  # list[MultichipDecoder]
         self.embed_w = embed_w  # [vocab, H] ROW_MAJOR bf16, replicated
         self.norm_w = norm_w  # [1,1,1,H] bf16, replicated
         self.lm_head_w = lm_head_w  # [H, V/D] bf16, mesh-sharded on dim1 (vocab)
@@ -183,7 +183,7 @@ class LagunaModel:
             from transformers import AutoConfig
 
             hf_config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-        decoder_cls = decoder_cls or OptimizedMultichipDecoder
+        decoder_cls = decoder_cls or MultichipDecoder
 
         total = hf_config.num_hidden_layers
         if isinstance(num_layers, (list, tuple)):

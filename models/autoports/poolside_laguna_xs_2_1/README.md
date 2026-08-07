@@ -38,7 +38,7 @@ in `tt/generator_vllm.py`): the model never accepts a context it cannot serve. S
   token. Cause: the suffix read (one chunked-SDPA call from `chunk_start_idx=K`) accumulates in a
   different floating-point order than the cold path (pipelined multi-chunk / local-bf16 prefill). This
   is the same non-determinism prefix caching exhibits on GPUs, inherent to quantized hardware — **not a
-  correctness bug**. Details: `doc/vllm_integration/STATUS.md`.
+  correctness bug**.
 - **Consequence for agentic coding:** with prefix caching on, a failed trajectory may not be
   bit-reproducible and a pass@1 figure may not be independently re-derivable token-for-token.
 - **Bit-reproducible mode:** set **`TT_LAGUNA_PREFIX_CACHE=0`** to force every request onto the cold
@@ -65,7 +65,7 @@ python -m models.common.readiness_check.run_vllm_server \
 ```
 
 Supported concurrency target is **8** (`--max-num-seqs 8`); conc 32 collapses (TTFT into hundreds of
-seconds). Recorded evidence + the cap rationale: `doc/vllm_integration/STATUS.md`.
+seconds).
 
 > **Warmup / prefill note (item 1.1):** every prefill program shape is compiled *before* the decode
 > trace is captured. `warmup_model_prefill` warms the full power-of-two bucket ladder up to the servable
@@ -81,10 +81,12 @@ seconds). Recorded evidence + the cap rationale: `doc/vllm_integration/STATUS.md
 - `tests/test_optimized_decoder.py`, `tests/test_multichip_decoder.py` — layer PCC ≥ 0.995 vs HF.
 - `tests/full_model_checks.py` — prefill top-1/5/100 vs the AIME24 reference.
 
-## Status docs
+## Docs
 
-**`doc/vllm_integration/STATUS.md`** is the single canonical status record (implemented / current numbers /
-caveats / blockers / how-to-serve). Also: `doc/context_contract.json` (machine-readable capability),
-`doc/vllm_integration/smoke_test.md` (runbook), `resource_utilization_plan.md` (optimization backlog),
-`sweep_vllm.tsv` (served-ISL evidence), and the serving-latency + agent-benchmark HTML report
-(https://claude.ai/code/artifact/aa902432-303a-43ee-b387-56dcd6bab3b3).
+- **`doc/vllm_integration/serve_forkfree.md`** — the canonical serve runbook for the fork-free stack (stock
+  vLLM 0.24.0 + public `vllm-tt-plugin` + `vllm_ext`); one-time env build + per-run launch. Scripts:
+  `doc/vllm_integration/scripts/setup_forkfree.sh` (env) and `serve_forkfree.sh` (launch/teardown).
+- **`vllm_ext/README.md`** — the fork-free tt-metal delta (EXTRA_MODELS_DIR bundle + poolside_v1 tool-parser
+  override) and why plugin > fork.
+- **`doc/context_contract.json`** — machine-readable capability contract.
+- **`doc/vllm_integration/pool_agent_getting_started.md`** — running the `pool` coding agent against the endpoint.

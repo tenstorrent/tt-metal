@@ -590,7 +590,7 @@ class OptimizedDecoder(LightweightModule):
         # (2026-08-03, full_model_checks teacher, weight-cache off): k64 teacher top1 = 0.95 (top5/100 = 1.00)
         # vs k128's 0.58 — see doc/vllm_integration/decode_config_sweep/.
         # Set TT_LAGUNA_DECODE_SDPA_PC=0 to fall back to the ttnn default decode (k32+exp_approx, max_cores=1,
-        # accurate but slow @long-ctx). See STATUS.md (decode SDPA program config) + decode_config_sweep/.
+        # accurate but slow @long-ctx).
         self._decode_use_sdpa_pc = os.environ.get("TT_LAGUNA_DECODE_SDPA_PC", "1") == "1"
         # DEFAULT ON (validated bit-identical greedy tokens vs baseline @B=1 AND @B=32, @4k+128k): fuse MoE
         # expert-combine reduction (ttnn.sum(dim=1) → deepseek_moe_fast_reduce_nc). TT_LAGUNA_FUSED_REDUCE=0 reverts.

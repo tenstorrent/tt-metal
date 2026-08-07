@@ -31,10 +31,14 @@ import ttnn
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_reference as R
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
 from models.autoports.poolside_laguna_xs_2_1.tt.multichip_decoder import MultichipDecoder
-from models.autoports.poolside_laguna_xs_2_1.tt.optimized_multichip_decoder import OptimizedMultichipDecoder
 
-# Same suite validates either class; set LAGUNA_MC_CLASS=optimized for the optimized-multichip path.
-_DECODER_CLS = OptimizedMultichipDecoder if os.environ.get("LAGUNA_MC_CLASS") == "optimized" else MultichipDecoder
+
+# Same suite validates the packed and unpacked gate/up paths of MultichipDecoder (the gate+up packing
+# formerly lived in a separate OptimizedMultichipDecoder subclass, now a PACK_GATE_UP flag). Default =
+# unpacked baseline; set LAGUNA_MC_CLASS=optimized to exercise the packed path.
+class _DECODER_CLS(MultichipDecoder):
+    PACK_GATE_UP = os.environ.get("LAGUNA_MC_CLASS") == "optimized"
+
 
 PCC_BAR = 0.995
 HIDDEN = 2048
