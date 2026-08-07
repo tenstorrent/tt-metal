@@ -267,6 +267,22 @@
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
+- id: bh-lb-kimi-k3-attn-res
+  name: bh_lb_Kimi_K3_ATTN_RES
+  model-name: kimi_k3
+  # AttnRes shards the hidden axis over TP and reduces its read statistics across it, so
+  # the reduction only exists at tp > 1 — a single-card SKU would run a green arm over a
+  # computation the model never executes. bh_loudbox is the smallest box carrying Galaxy's
+  # TP factor of 4. Every case is parametrized at (2,4) and (8,4); the (8,4) half skips
+  # here on chip count and is covered on Galaxy. 640 rows per chip is prefill's own shape.
+  cmd: |
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_kimi_k3_attn_res.py -vvv --tb=short
+  skus:
+    bh_loudbox:
+      timeout: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+
 - id: bh-qb2-deepseek-d2d-socket-sync
   name: bh_qb2_DeepSeek_D2D_SOCKET_SYNC
   model-name: deepseek_prefill

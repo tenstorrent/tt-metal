@@ -22,10 +22,9 @@ No single-device arm. `tp_factor == 1` makes `_reduce_stats` the identity, so a 
 file exists to gate is the reduction, and that arm has none.
 
 `mesh_device` skips a placement asking for more chips than the host has, so this file
-is inert rather than failing on a runner that cannot hold it. That includes every SKU
-L2 nightly currently schedules for Blackhole (`bh_p100`, `bh_p150b_civ2`,
-`bh_p150b_civ2_viommu`, `sim_blackhole` — all one card); reaching it in CI needs a
-multi-card Blackhole SKU such as `bh_loudbox`.
+is inert rather than failing on a runner that cannot hold it — single-card Blackhole
+SKUs collect it and skip both arms. CI runs it on `bh_loudbox`, where `(2, 4)` gates
+and `(8, 4)` skips on chip count.
 """
 
 import pytest
