@@ -59,6 +59,7 @@ set(UNIT_TESTS_API_SOURCES
     test_kernel_compile_cache.cpp
     test_kernel_creation.cpp
     test_offline_kernel_compile.cpp
+    test_quasar_att.cpp
     test_memory_pin.cpp
     test_noc.cpp
     test_blaze_named_args_hashing.cpp
