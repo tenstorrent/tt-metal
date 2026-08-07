@@ -2732,7 +2732,7 @@ void sdpa_ring_v2(
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
             bool is_first = is_this_first_work_iter_for_q && (KV_chunks_processed == 1);
-            boll is_last_k_of_last_ring_iter = is_this_last_work_iter_for_q && is_last_k;
+            bool is_last_k_of_last_ring_iter = is_this_last_work_iter_for_q && is_last_k;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
