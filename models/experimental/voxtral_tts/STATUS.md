@@ -3644,6 +3644,42 @@ is nothing downstream to collect it. Recorded because "prefill is cheap, spend p
 a good idea that anyone would have again, and the reason it fails is two op-level dtype
 constraints that are invisible until you call `step()`.
 
+**BUILT AND TESTED ANYWAY** (`prefill_f32_act.py`), with the `ttnn.typecast` at the cache boundary
+that clears both asserts. It runs — prefill and decode — and it confirms the prediction above
+rather than overturning it:
+
+| arm | prefill PCC | rel | PCC(h) step 0 | 1 | 2 | 3 |
+|---|---|---|---|---|---|---|
+| bf16 (ships) | 0.999894 | 0.70% | 0.999894 | 0.999799 | **0.999874** | 0.999905 |
+| fp32 activations | 0.999954 | **0.29%** | **0.999954** | 0.999812 | 0.999833 | 0.999916 |
+
+**The gain is real at step 0 and gone by step 1** — after that the difference flips sign (fp32 is
+*worse* at step 2) at ±0.00004, which is noise. Both arms attend over a bf16 prompt cache, so
+there is nothing to carry it forward. Warm cost confirmed at **+0.06 ms/frame** (0.055→0.077 s at
+P=200, 0.072→0.101 s at P=357); the 3.62 s seen on a first call is one-off JIT of the fp32 kernels.
+
+**WHAT AN fp32 CACHE WOULD COST, since that is where a precision gain would actually land** — it
+feeds *every* frame's attention, unlike prefill's `h`. `sdpa_decode` rejects fp32 so it cannot be
+timed, but cache bytes double identically whether you double the dtype or the position, so bf16 at
+2P is a faithful bandwidth proxy:
+
+| position | cache MB read/frame | ms/step |
+|---|---|---|
+| 250 | 26.6 | 17.68 |
+| 500 | 53.2 | 18.30 |
+| 1000 | 106.5 | 17.58 |
+| 2000 | 213.0 | 17.78 |
+
+**Decode time is FLAT while cache traffic grows 8×** — deltas +0.63 / −0.72 / +0.19, random-signed
+inside a 0.7 ms spread. From bytes: an fp32 cache costs **0.145 ms/step (0.8%) at pos 500** and
+0.58 ms (3.3%) at pos 2000, plus double the resident footprint (109 → 218 MB at 1024). So it would
+be nearly free — **and it is simply unsupported.** bf16 is already the best cache dtype
+`sdpa_decode` accepts, so there is no precision lever on the cache at all.
+
+**A STANDALONE RESULT FROM THE SAME TABLE: decode cost is O(1) in position up to 2048.** Long
+utterances do not degrade RTF, and the KV cache is nowhere near being a bottleneck — 213 MB/frame
+at pos 2000 is 0.58 ms of a 17.8 ms step.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

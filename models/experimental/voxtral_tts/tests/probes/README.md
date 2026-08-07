@@ -25,6 +25,7 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `device_err.py` | is the codes gate's 29.5% coming from Block 2 / FSQ? | **no** — with `h` fixed, Block 2 flips 2.4%; it is Block 1, 22× worse off-manifold (§6.54) |
 | `prefill_precision.py` | can prefill accuracy be improved, and is the synthetic gate a canary? | **no to both** — real error is pinned at 0.70% across the whole weight ladder, and the synthetic number is non-monotonic in precision (§6.55) |
 | `prefill_fp32.py` | is higher-precision prefill worth it (it runs once per utterance)? | **no** — fp32 weights buy nothing; fp32 activations work but the cache dtype blocks decode (§6.56) |
+| `prefill_f32_act.py` | does fp32 prefill (typecast at the cache boundary) help past frame 0? | **no** — gain is gone by step 1; also shows decode is O(1) in position (§6.56) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 
 **Read `mm_block_ab.py` before trusting any isolated sweep.** It is the counterexample: `w2` and
