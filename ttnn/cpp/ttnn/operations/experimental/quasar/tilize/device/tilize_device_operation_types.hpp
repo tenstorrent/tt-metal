@@ -13,6 +13,7 @@ struct TilizeParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     bool use_multicore = false;
+    bool enough_space_width = false;
     bool enough_space_height = false;
     const bool use_low_perf = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
