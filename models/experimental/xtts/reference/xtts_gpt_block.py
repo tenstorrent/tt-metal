@@ -91,30 +91,6 @@ def _install_tts_stub():
         sys.meta_path.insert(0, _FakeTTSFinder())
 
 
-# Non-block GPT weights the model uses (block weights match ``gpt.gpt.h.``).
-_GPT_SCALAR_WEIGHTS = frozenset(
-    {
-        "gpt.gpt.ln_f.weight",
-        "gpt.gpt.ln_f.bias",
-        "gpt.text_embedding.weight",
-        "gpt.mel_embedding.weight",
-        "gpt.text_pos_embedding.emb.weight",
-        "gpt.mel_pos_embedding.emb.weight",
-        "gpt.final_norm.weight",
-        "gpt.final_norm.bias",
-        "gpt.text_head.weight",
-        "gpt.text_head.bias",
-        "gpt.mel_head.weight",
-        "gpt.mel_head.bias",
-    }
-)
-
-
-def _is_gpt_weight(key):
-    """True for the checkpoint keys the XTTS GPT decoder model actually loads."""
-    return key.startswith("gpt.gpt.h.") or key in _GPT_SCALAR_WEIGHTS
-
-
 def load_xtts_state_dict():
     """Download coqui/XTTS-v2 ``model.pth`` and return its tensor state dict.
 
@@ -129,17 +105,6 @@ def load_xtts_state_dict():
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
     tensors = {k: v for k, v in state_dict.items() if torch.is_tensor(v)}
-
-    # Summarise only the weights the GPT model actually consumes (the 30 decoder
-    # blocks + ln_f, the text/mel token + position embeddings, final_norm, and
-    # the two heads) — not the whole ~1.9 GB checkpoint.
-    used = {k: v for k, v in tensors.items() if _is_gpt_weight(k)}
-    total_params = sum(t.numel() for t in used.values())
-    total_bytes = sum(t.numel() * t.element_size() for t in used.values())
-    print(
-        f"[load_xtts_state_dict] {len(used)} GPT weights used (of {len(tensors)} tensors in checkpoint): "
-        f"{total_params:,} params, {total_bytes / 1e6:.2f} MB"
-    )
 
     return tensors
 
