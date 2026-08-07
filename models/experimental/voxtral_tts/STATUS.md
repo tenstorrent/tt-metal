@@ -3599,6 +3599,51 @@ than a shrug.** Real-prompt prefill sits at PCC 0.999894 last-position, ahead of
 own 0.999564 at P=200 on the same FF-BFP8 config, with long-form WER 1 in 894. The 15.58% only
 exists for inputs the model is never asked to process.
 
+### 6.56 — higher-precision PREFILL: the weights do nothing, the activations do, and it still loses
+
+Prefill runs once per utterance, so its cost amortises over ~450 frames and it can afford
+precision decode cannot. Asked whether that is worth taking. Measured on a real prompt (case 0,
+P=200) against the fp32 CPU reference:
+
+| arm | PCC last | rel err | prefill s | cost /frame @450 |
+|---|---|---|---|---|
+| **shipped** (weights bf8/bf16, act bf16) | 0.999894 | **0.70%** | 0.05 | — |
+| weights fp32, act bf16 | 0.999934 | **0.70%** | 0.07 | +0.03 ms |
+| **act fp32**, weights unchanged | 0.999954 | **0.29%** | 0.08 | +0.06 ms |
+| both fp32 | 0.999990 | **0.15%** | 0.08 | +0.07 ms |
+
+**fp32 WEIGHTS BUY NOTHING** — the relative error does not move at all. That is §6.55's prediction
+confirmed on a much bigger jump than the bf16 it was derived from, and it kills the obvious
+version of this idea: a separate fp32 prefill weight copy would cost ~13.6 GB for zero accuracy.
+
+**fp32 ACTIVATIONS DO WORK**, 2.4× on their own and 4.7× combined, at **+0.06 ms/frame** and — the
+appealing part — **zero extra memory**, since the weights are untouched. It reaches the codes too,
+which independently closes §6.54's causal chain end to end:
+
+| prefill act | real codes vs fp64 | synthetic codes vs fp64 |
+|---|---|---|
+| bf16 (ships) | 18/288 (6.2%) | 63/288 (21.9%) |
+| fp32 | **15/288 (5.2%)** | **49/288 (17.0%)** |
+
+**AND IT STILL LOSES, for reasons that only appear when you try to run DECODE.** The accuracy runs
+above call `prefill()` and never `step()`, which hides two hard stops:
+
+- fp32 activations produce fp32 K/V, so the cache becomes fp32 — and
+  `scaled_dot_product_attention_decode` rejects it outright: `TT_FATAL: Unsupported data type
+  DataType::FLOAT32`. **The measured config cannot execute a single decode step.**
+- Forcing the cache back to bf16 instead fails in `fill_cache`: `Input and cache tensors must have
+  same dtype!`
+
+It is not impossible — an explicit `ttnn.typecast` of K/V before `fill_cache` satisfies both. But
+that rounds the cache to bf16 anyway, so the benefit collapses to **frame 0's `h`**: every later
+frame attends over a bf16 prompt cache exactly as it does today. Against that, the price is a
+dtype special-case through the prefill path, and a full 3-seed WER re-gate because codes move.
+
+**Verdict: no.** Three codes in 288, at frame 0 only, with WER already at 1 wrong in 894 — there
+is nothing downstream to collect it. Recorded because "prefill is cheap, spend precision there" is
+a good idea that anyone would have again, and the reason it fails is two op-level dtype
+constraints that are invisible until you call `step()`.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
