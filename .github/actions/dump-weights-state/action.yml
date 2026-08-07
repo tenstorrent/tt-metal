@@ -1,0 +1,40 @@
+name: Dump weights state
+description: >-
+  Report everything needed to diagnose a "weights missing on the runner"
+  failure: the /mnt/MLPerf mount as the container sees it, the directory tree
+  around the HF hub cache, the model's repo/refs/snapshot/blob layout, and
+  huggingface_hub's own offline resolution verdict. Never fails the job.
+
+inputs:
+  hf-model:
+    description: "HF repo id whose cache entry to inspect, e.g. openai/gpt-oss-120b."
+    required: true
+  hf-hub-cache:
+    description: "HF hub cache root. Defaults to the HF_HUB_CACHE already in the environment."
+    required: false
+    default: ""
+  tt-cache-home:
+    description: "TT cache root. Defaults to the TT_CACHE_HOME already in the environment."
+    required: false
+    default: ""
+  label:
+    description: >-
+      Distinguishes several invocations of this action in one job (e.g.
+      before-server vs on-failure) in the log-group titles.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # The script always exits 0: diagnostics must never turn a green job red,
+      # nor mask the real failure of the step that prompted them. Composite
+      # steps do not accept continue-on-error, so the guarantee lives in the
+      # script.
+      env:
+        WEIGHTS_HF_MODEL: ${{ inputs.hf-model }}
+        WEIGHTS_HUB_DIR: ${{ inputs.hf-hub-cache }}
+        WEIGHTS_TT_CACHE_HOME: ${{ inputs.tt-cache-home }}
+        WEIGHTS_LABEL: ${{ inputs.label }}
+      run: bash "${GITHUB_ACTION_PATH}/dump_weights_state.sh"

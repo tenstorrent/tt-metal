@@ -266,6 +266,18 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      # Weights come from a read-only bind of the runner's /mnt/MLPerf weka
+      # mount, and an absent or stale mount surfaces only as an opaque
+      # LocalEntryNotFoundError from the server (HF_HUB_OFFLINE=1). Record the
+      # mount and cache state up front so a missing-weights run is diagnosable
+      # from the log alone, without re-running to reproduce.
+      - name: 🔍 Dump weights state
+        uses: ./docker-job/.github/actions/dump-weights-state
+        timeout-minutes: 5
+        with:
+          hf-model: ${{ matrix.test-group.model }}
+          label: pre-server
+
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
@@ -419,6 +431,17 @@ jobs:
           echo "❌ Server did not become ready in time (${timeout_seconds}s)."
           echo "Check out the server log in a step below."
           exit 1
+
+      # A weka mount can drop between the pre-server snapshot and the load, so
+      # capture the state again at the moment of failure to tell "never there"
+      # apart from "went away mid-job".
+      - name: 🔍 Dump weights state (server failed)
+        if: ${{ failure() }}
+        uses: ./docker-job/.github/actions/dump-weights-state
+        timeout-minutes: 5
+        with:
+          hf-model: ${{ matrix.test-group.model }}
+          label: server-failed
 
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
