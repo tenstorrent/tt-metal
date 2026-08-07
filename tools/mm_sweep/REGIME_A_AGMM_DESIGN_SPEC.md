@@ -199,6 +199,22 @@ wavefront: **no core ever waits on a late wave while an earlier wave sits undeli
 consumes position `c-s` at step `s`, so if `c-1` falls in the last wave, core `c` stalls at step 1 with
 wave-0 data available elsewhere on the ring.
 
+### A cb0 slot index IS the consumption-order index
+
+Worth stating before the phases, because an earlier draft of this appendix got it wrong ("slot `p` holds
+position `p`"). Compute does not pop cb0 per block — it waits cumulatively and addresses each block by an
+explicit ascending offset:
+
+```cpp
+cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);   // cumulative; popped once, after N reuse
+matmul_blocks(..., k_block * in0_block_num_tiles);            // explicit offset into the resident slice
+```
+
+`k_block` walks ascending, so "the stripe consumed s-th" and "the stripe in slot s" are the same statement.
+A fixed position->slot layout would therefore fix the ORDER too, not decouple from it. The only lever on
+consumption order is **which stripe lands in which slot** — which is what phase 1 makes host-controlled, and
+what phase 3 then chooses differently.
+
 ### Two structural facts this rests on
 
 1. Each stripe travels 7 hops (`o -> o+1 -> ... -> o+7`), so **each core forwards exactly 7 stripes over 7
@@ -222,7 +238,7 @@ this        T_ready_max + T_mm/8        per-stripe granularity: after its last s
 | # | change | gate |
 |---|---|---|
 | 0 | Allow `nopayload`+`nowait` together (ablation composition) | **DONE** — closed the 2x2; see Target below. Fixed plumbing is 1.3 us, not the 13.4 us previously attributed to it |
-| 1 | Fixed position->slot layout: slot `p` holds position `p`; forward writes `base0 + pos*shard_bytes`; in1 reader takes an explicit order instead of `(ring_pos+G-step)%G` | **bit-identical** output, neutral perf |
+| 1 | Make the slot assignment schedule-driven: `own_slot`, `peer_slot` and a per-step `{src_slot, dst_slot}` become host-emitted writer args (`RingSlotArg`, 17..32) instead of being derived from the step counter | **DONE** — bit-identical (`468b790b823e2959` pre/post, and direct-L1 == staged), 12/12 both paths, perf neutral (118.3 vs 120.2) |
 | 2 | Make the schedule EXPLICIT but unchanged: per-core consume order (8) + forward order (7) as runtime args, host-computed to reproduce today's rotation exactly | **bit-identical** output, neutral perf. Proves the arg plumbing and writer/in1-reader agreement before any behaviour moves |
 | 3 | Switch to an arrival-aware schedule (host greedy list-schedule: each core forwards the earliest-available stripe its successor still needs; consumes in availability order). Unicast, still 7 forwards/core, identical on-chip traffic | PCC-only (re-associates the K-sum), and the perf win |
 | 4 | Per-slot readiness — only if needed | the spec's per-slot-epoch clause targets out-of-order BIDIRECTIONAL FABRIC arrivals; under direct-L1 each core takes exactly one fabric stripe and the on-chip receive order is static from phase 2, so verify the existing monotone count still suffices rather than adding machinery |
