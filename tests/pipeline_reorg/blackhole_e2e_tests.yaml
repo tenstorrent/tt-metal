@@ -30,7 +30,7 @@
       timeout: 15
     bh_quietbox_2:
       timeout: 15
-  owner_id: U0883RN6CRE # William Ly
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 # --- perf ---
@@ -45,7 +45,7 @@
       timeout: 15
     bh_quietbox_2:
       timeout: 15
-  owner_id: U0883RN6CRE # William Ly
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 # --- unit ---
@@ -61,7 +61,7 @@
       timeout: 20
     bh_quietbox_2:
       timeout: 20
-  owner_id: U0883RN6CRE # William Ly
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 - id: bh-grid-20-cores-ttnn-sharding
@@ -91,7 +91,7 @@
       timeout: 15
     bh_quietbox_2:
       timeout: 15
-  owner_id: U0883RN6CRE # William Ly
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 - id: bh-ttnn-ops-fast-unit
@@ -130,7 +130,7 @@
       timeout: 15
     bh_quietbox_2:
       timeout: 15
-  owner_id: U0883RN6CRE # William Ly
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
 - id: bh-ttnn-stress

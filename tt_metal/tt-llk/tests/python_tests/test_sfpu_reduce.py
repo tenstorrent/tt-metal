@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -560,10 +559,6 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     return golden_tensor[:, 0], res_tensor[:, 0]
 
 
-# The #44750 fix is Wormhole-only: the Blackhole calculate_reduce_max_min_int32 path still converts to
-# sign-magnitude around a plain SFPSWAP (INT32_MIN still loads as sign-magnitude "-0"), so this repro
-# would still fail there. Skip until the Blackhole fix lands (tracked by tenstorrent/tt-metal#44750).
-@skip_for_blackhole
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )

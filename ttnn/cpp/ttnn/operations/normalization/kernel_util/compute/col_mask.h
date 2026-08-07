@@ -25,7 +25,7 @@ namespace norm::kernel_util::compute {
 inline void mask_block_in_place(
     DataflowBuffer& dfb, uint32_t dfb_col_mask_id, uint32_t num_tiles_per_block, uint32_t block_w) {
     const uint32_t dfb_id = dfb.get_id();
-    mul_tiles_init(dfb_id, dfb_col_mask_id);
+    mul_init(dfb_id, dfb_col_mask_id);
     for (uint32_t t = 0; t < num_tiles_per_block; t++) {
         const uint32_t wt = t % block_w;
         dfb.wait_front(1);

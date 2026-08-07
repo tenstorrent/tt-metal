@@ -27,7 +27,7 @@ ALWI void one_row(
     }
     reconfig_data_format(dfb_in0.get_id(), dfb_res.get_id());
     pack_reconfig_data_format(dfb_inp.get_id());
-    add_tiles_init(dfb_in0.get_id(), dfb_res.get_id());
+    add_init(dfb_in0.get_id(), dfb_res.get_id());
     for (uint32_t wt = 0; wt < Wt; wt += blk) {
         dfb_in0.wait_front(blk);
         dfb_res.wait_front(blk);

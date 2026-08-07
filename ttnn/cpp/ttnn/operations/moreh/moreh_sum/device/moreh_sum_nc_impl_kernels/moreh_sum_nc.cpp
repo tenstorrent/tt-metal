@@ -22,12 +22,12 @@ void kernel_main() {
     constexpr uint32_t idx0 = 0;
     constexpr bool acc_to_dest = true;
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     dfb_in1_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();
-        add_tiles_init(cb_in0, cb_in1, acc_to_dest);
+        add_init(cb_in0, cb_in1, acc_to_dest);
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             dfb_in0_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN

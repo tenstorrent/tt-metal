@@ -59,7 +59,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
-    sub_bcast_cols_init_short(in0_dfb, in1_dfb);
+    sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
@@ -97,7 +97,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    add_tiles_init(in0_dfb, in1_dfb);
+    add_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -128,7 +128,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, 
     DataflowBuffer out_dfb_obj(out_dfb);
 
     uint32_t num_tiles = rows * cols;
-    mul_bcast_cols_init_short(in0_dfb, in1_dfb);
+    mul_bcast_cols_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -392,7 +392,7 @@ void mul_block_bcast_scalar_inplace() {
     uint32_t granularity = 1;
 
     reconfig_data_format(in0_dfb, in1_scalar_dfb);
-    mul_tiles_bcast_scalar_init_short(in0_dfb, in1_scalar_dfb);
+    mul_bcast_scalar_init(in0_dfb, in1_scalar_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_scalar_dfb_obj.wait_front(1);
 
