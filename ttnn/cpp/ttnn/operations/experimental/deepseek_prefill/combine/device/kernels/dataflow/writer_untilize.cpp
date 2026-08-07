@@ -343,4 +343,9 @@ void kernel_main() {
     sender_data_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
     noc.async_atomic_barrier();
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
+
+    // NOC_PACKET_TAG is a sticky config register: the barriers above drain in-flight transactions
+    // but leave TRID_NON_LOCAL_WRITE latched in the write cmd buf. The firmware epilogue requires it
+    // to be zero so the next kernel's implicit-trid writes start at transaction ID 0.
+    noc_clear_packet_tag(noc_index, write_cmd_buf);
 }
