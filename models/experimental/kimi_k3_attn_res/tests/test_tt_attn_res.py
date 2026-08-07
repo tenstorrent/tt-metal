@@ -3,15 +3,19 @@
 
 """Rung 4 of the AttnRes numeric ladder: `tt/` against `torch_functional/`.
 
-The torch reference is the oracle here, not a second opinion — rungs 1–3 already
-tied it to the vendored upstream function. PCC ≥ 0.9999 is the inherited op-level
+The torch reference is the oracle here, not a second opinion — rungs 0–3 already tied
+it to the unfolded fp64 ground truth, and rung 0b tied that to upstream. Note what that
+means for this rung: it shares the fold and the rsqrt pull-out with the device op, so it
+gates numerics and plumbing, never the algebra. PCC ≥ 0.9999 is the inherited op-level
 gate; the depth-compounding gate is relative and lives in the Phase-6 harness.
 """
 
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
+from models.experimental.kimi_k3_attn_res.reference.hf_attn_res import hf_attn_res
 from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
     EPS,
     attn_res,
@@ -36,6 +40,9 @@ SATURATED_PCC_SLACK = 1e-3
 
 SHAPES = [(64, 256), (64, 7168)]
 SEALED = [0, 1, 4, 8]
+
+PRODUCTION_TOKENS = 5120
+SMALL_TOKENS = 64
 
 
 def _pcc(a, b):
@@ -100,6 +107,38 @@ def test_forward_matches_torch_reference(mesh_device, num_tokens, hidden_size, n
     # PCC is scale-invariant, so it cannot see lost softmax mass: weights summing
     # to 0.96 scale the output by 0.96 and PCC stays above 0.9999. That is not
     # hypothetical — it is what `ttnn.softmax(dim=1)` does. Gate the magnitude too.
+    rel_err = _rel_err(got, want)
+    assert rel_err <= STAT_REL_TOL, f"{case}: rel err {rel_err:.3e} > {STAT_REL_TOL}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("num_tokens, hidden_size", SHAPES)
+@pytest.mark.parametrize("num_sealed", SEALED)
+def test_forward_matches_upstream_reference(mesh_device, num_tokens, hidden_size, num_sealed):
+    """The device op against upstream's own read, skipping every reference of ours.
+
+    Everything else in this file gates against `torch_functional`, which shares the
+    fold and the rsqrt pull-out with the op — so it cannot see an algebra error the
+    two forms make together. This can. `hf_attn_res` needs the two weights apart,
+    which is why the case is not built by `_make_case`.
+    """
+    generator = torch.Generator().manual_seed(7)
+    randn = lambda *shape: torch.randn(*shape, generator=generator)
+    prefix_sum = randn(num_tokens, hidden_size)
+    block_residual = randn(num_tokens, num_sealed, hidden_size)
+    norm_weight = 1.0 + 0.1 * randn(hidden_size)
+    proj_weight = PROJ_STD * randn(1, hidden_size)
+
+    op = TtAttnRes(mesh_device, hidden_size=hidden_size)
+    query = norm_weight * proj_weight.reshape(-1)
+    tt_prefix, tt_block, tt_query = _to_device(mesh_device, prefix_sum, block_residual, query)
+    got = ttnn.to_torch(op.forward(tt_prefix, tt_block, tt_query)).reshape(num_tokens, hidden_size)
+
+    want = hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    case = f"S={num_sealed} d={hidden_size}"
+    pcc = _pcc(got, want)
+    assert pcc >= PCC_GATE, f"{case}: PCC {pcc:.7f} < {PCC_GATE}"
+
     rel_err = _rel_err(got, want)
     assert rel_err <= STAT_REL_TOL, f"{case}: rel err {rel_err:.3e} > {STAT_REL_TOL}"
 
@@ -256,6 +295,40 @@ def test_values_are_not_normalized(mesh_device):
     assert (
         outputs[0] - outputs[1]
     ).abs().max() > 1e-2, "output is invariant to candidate scale — values got normalized"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("large_tokens", [1000, PRODUCTION_TOKENS])
+def test_token_axis_is_pure_batch(mesh_device, large_tokens):
+    """A token slice of the larger read equals the `T = 64` read, bit for bit.
+
+    Gated at `max|delta| == 0`, not at a tolerance: nothing in the op reduces over
+    `T`, so any difference at all is a real `T`-dependent defect rather than
+    rounding. `T = 1000` carries the same check across a tile-padded boundary.
+
+    One device on purpose. `T` sets the payload of the statistics all-reduce, and
+    the collective picks its algorithm from the payload, so on a mesh two token
+    counts can reduce the same four partials in a different order — equal to within
+    a bf16 ulp, and not bit-exact. Here `tp_factor == 1` makes the reduction the
+    identity, which is what leaves the equality exact."""
+    prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, 7168, 8)
+    op = TtAttnRes(mesh_device, hidden_size=7168)
+
+    outputs = {}
+    for num_tokens in (SMALL_TOKENS, large_tokens):
+        tt_prefix, tt_block, tt_query = _to_device(
+            mesh_device, prefix_sum[:num_tokens], block_residual[:num_tokens], query
+        )
+        out = op.forward(tt_prefix, tt_block, tt_query)
+        outputs[num_tokens] = ttnn.to_torch(out).reshape(num_tokens, 7168)
+        ttnn.deallocate(out)
+
+    delta = (outputs[large_tokens][:SMALL_TOKENS].float() - outputs[SMALL_TOKENS].float()).abs().max().item()
+    logger.info(f"T={large_tokens}: token-slice max|delta| {delta:.3e}")
+    assert delta == 0.0, (
+        f"the shared token slice differs between T={SMALL_TOKENS} and T={large_tokens} "
+        f"by up to {delta:.3e} — T is not a pure batch axis"
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
