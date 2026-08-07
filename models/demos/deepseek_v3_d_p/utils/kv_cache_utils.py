@@ -616,6 +616,158 @@ def populate_kv_chunk_address_table_kimi(
     return lookup_table
 
 
+def populate_kv_chunk_address_table_dflash(
+    lookup_table,
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len,
+    sp_axis,
+    tp_axis,
+    kv_cache,
+    chunk_size_bytes,
+    num_kv_heads,
+    head_idx,
+    num_users=1,
+    config_id=0,
+    chunk_size_global=PREFILL_CHUNK_OUTPUT_TOKENS,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from ONE HEAD of the DFlash
+    drafter's K or V cache (see ``allocate_dflash_kv_cache`` for the layout being described).
+
+    The drafter analog of ``populate_kv_chunk_address_table_kimi``, differing in the two ways the
+    drafter's cache differs from MLA's KVPE cache:
+
+      * **TP carries heads, not replicas.** The MLA latent cache is one head (``shape[1] == 1``)
+        replicated across every TP column, so a whole SP row is a replica set and one device group
+        covers it. The drafter shards its kv-heads over the TP columns, so column
+        ``head_idx // heads_per_chip`` is the ONLY device holding this head — and the migration worker
+        treats a device group as REPLICAS (it reads one member and writes those bytes to every
+        destination), so a row-spanning group would migrate one column's heads as if they were the
+        whole row. Hence a SINGLE-MEMBER group per (config, SP row), the same shape
+        ``models/demos/minimax_m3/tt/runners/kv_chunk_table.py`` uses for its head-sharded K/V.
+
+      * **Several heads per chip, so the bank walk is strided.** The table key is
+        (layer, position, slot) with no head axis, so each head needs its own config — and a per-head
+        config visits only every ``heads_per_chip``-th run of that chip's ND shards. The incremental
+        ``curr_bank_id += 1`` counter the kimi/M3 builders use is correct only for a contiguous walk,
+        so this one computes the shard index outright. The two agree exactly at heads_per_chip == 1.
+
+    Address math. The cache is ND-sharded ``[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]``
+    ROUND_ROBIN_1D over the DRAM banks, so shard ``i`` of a chip's buffer lives in bank
+    ``i % num_banks`` at ``base + (i // num_banks) * chunk_size_bytes``. Enumerating the per-chip shard
+    grid ``[num_users*num_layers, heads_per_chip, seq_local/32, 1]`` row-major gives
+
+        i = ((slot * num_layers + layer) * heads_per_chip + head_idx % heads_per_chip) * blocks_local
+            + seq_chunk * blocks_per_chunk_local + j
+
+    for the chip's ``j``-th local 32-token block of block-cyclic chunk ``seq_chunk``, which holds global
+    position ``seq_chunk * chunk_size_global + row * tokens_per_chunk_local + j * 32``. That row-major
+    ordering — dim 1 between dim 0 and dim 2 — is the one assumption here the working MLA builder does
+    NOT already prove, since its dim 1 has extent 1; a per-head write/readback settles it, and getting
+    it backwards swaps head and layer strides rather than failing loudly.
+
+    Single-stage only (no ``stage_layout``): the drafter is written on the last pipeline rank alone
+    (``tt_prefill_runtime`` guards the write with ``is_last_rank``), so there is no cross-stage layer
+    range to merge and the base address comes from this rank's own tensor instead of an all-gather.
+
+    Args:
+        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
+        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
+        kv_cache: the drafter K or V device tensor this config describes (read for its base address).
+        chunk_size_bytes: bytes of one 32-token block (``kv_chunk_table._dram_chunk_size_bytes``).
+        num_kv_heads: the drafter's GLOBAL kv-head count (8 for Kimi-K2.6-DFlash).
+        head_idx: which global head in [0, num_kv_heads) this config describes.
+        config_id: which config of the table to populate.
+        chunk_size_global: the block-cyclic period, i.e. the runtime's prefill chunk size. Explicit
+            rather than read from the module constant because a cache written at one period and
+            addressed at another yields plausible-looking, wholly wrong addresses.
+        (remaining args as in populate_kv_chunk_address_table_kimi)
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
+    assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    num_layers = config.num_layers
+
+    assert (
+        num_kv_heads % tp == 0
+    ), f"num_kv_heads ({num_kv_heads}) must divide across tp ({tp}) — allocate_dflash_kv_cache asserts the same"
+    heads_per_chip = num_kv_heads // tp
+    assert 0 <= head_idx < num_kv_heads, f"head_idx ({head_idx}) out of range for num_kv_heads ({num_kv_heads})"
+
+    # allocate_dflash_kv_cache builds this tensor from its PER-DEVICE shape (allocate_tensor_on_device
+    # over local_shape, then update_tensor_topology), so both dims below are local: dim 0 is the
+    # unsharded user-major (slot, layer) fold and dim 1 is this chip's slice of the kv-heads.
+    assert kv_cache.shape[0] == num_users * num_layers, (
+        f"drafter cache batch dim {kv_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers}); "
+        f"the walk below assumes the user-major slot*num_layers+layer fold"
+    )
+    assert kv_cache.shape[1] == heads_per_chip, (
+        f"drafter cache head dim {kv_cache.shape[1]} != num_kv_heads({num_kv_heads}) / tp({tp}) = "
+        f"{heads_per_chip}; the per-head shard stride below would land on the wrong head"
+    )
+
+    assert (
+        seq_len % chunk_size_global == 0
+    ), f"seq_len ({seq_len}) must be a whole number of block-cyclic chunks ({chunk_size_global})"
+    assert seq_len % sp == 0, f"seq_len ({seq_len}) must be divisible by sp ({sp})"
+    seq_local = seq_len // sp
+    assert seq_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
+        f"per-chip seq ({seq_local} = seq_len {seq_len} / sp {sp}) must be a multiple of "
+        f"{NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}; the shard grid is whole 32-token blocks"
+    )
+    blocks_local = seq_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+    tokens_per_chunk_local = chunk_size_global // sp  # 640 for 5k chunks on sp=8
+    assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
+        f"{chunk_size_global} tokens / sp({sp}) = {tokens_per_chunk_local}, "
+        f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
+    )
+    blocks_per_chunk_local = tokens_per_chunk_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    num_chunks_per_seq_len = seq_len // chunk_size_global
+
+    host_name = socket.gethostname()
+    base_addr = int(kv_cache.buffer_address())
+    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
+    num_dram_banks = get_num_dram_banks(mesh_device)
+
+    col = head_idx // heads_per_chip  # the TP column that owns this head
+    h_local = head_idx % heads_per_chip  # its index within that chip's head slice
+
+    for row in range(sp):
+        # One device, not one row: this head lives on exactly (row, col), and the worker would read a
+        # multi-member group as replicas. Written axis-generically so sp_axis/tp_axis can swap.
+        coord = [0, 0]
+        coord[sp_axis] = row
+        coord[tp_axis] = col
+        fabric_node_id = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+        group_idx = lookup_table.add_device_group([fabric_node_id])
+        lookup_table.set_fabric_node_host(fabric_node_id, host_name=host_name)
+
+        for slot in range(num_users):
+            for layer in range(num_layers):
+                # Shard index of this (slot, layer, local head)'s FIRST local block. A head's seq blocks
+                # are contiguous in the shard grid, so the per-position term below is a plain add.
+                head_base_shard = ((slot * num_layers + layer) * heads_per_chip + h_local) * blocks_local
+                for seq_chunk in range(num_chunks_per_seq_len):
+                    chunk_token_start = seq_chunk * chunk_size_global + row * tokens_per_chunk_local
+                    for j in range(blocks_per_chunk_local):
+                        shard_idx = head_base_shard + seq_chunk * blocks_per_chunk_local + j
+                        bank_id = shard_idx % num_dram_banks
+                        bank_offset = (shard_idx // num_dram_banks) * chunk_size_bytes
+                        location = ttnn.experimental.disaggregation.KvCacheLocation()
+                        location.noc_addr = (bank_id << 32) | (base_addr + bank_offset)
+                        location.size_bytes = chunk_size_bytes
+                        location.device_group_index = group_idx
+                        position = chunk_token_start + j * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                        lookup_table.set(layer, position, slot, location, config_id)
+    return lookup_table
+
+
 def init_kvpe_cache(
     kvpe_cache_head_dim,
     mesh_device,
