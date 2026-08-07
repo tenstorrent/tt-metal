@@ -1,18 +1,14 @@
 # Mistakes made in this analysis, and since corrected
 
-Every claim that was published as fact during this work and later had to be retracted, downgraded or re-derived.
-**All of them are already fixed in the other documents** — this is the record of what went wrong and how it was
-caught, not a list of outstanding errors.
+Thirty claims that were published as fact during this work and later retracted, downgraded or re-derived,
+grouped by **the error pattern that produced them**. Anyone working from the same artefacts will be tempted the
+same way, which is why the patterns are worth more than the individual corrections.
 
-It is worth keeping because **the error patterns repeat.** Anyone working from the same artefacts will be tempted
-the same way. Each entry gives what was claimed, what was true, how it was caught, and **the check that would
-have caught it first**; that last column is what makes the file useful.
+Each entry gives what was claimed, what was true, how it was caught, and **the check that would have caught it
+first**. Defects in the stage and the advisor are in [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3; this file is
+about the analysis.
 
-None of this is a defect in the stage or the advisor — those are in
-[`READ-THIS`](ADVCHAL-V2-READ-THIS.md) §3. This is about the analysis.
-
-**7 patterns, 30 corrections.** Roughly 5 of ~30 recommendations made here were later refuted by follow-up
-measurement — a useful base rate to hold in mind.
+About 5 of the ~30 recommendations made here were later refuted by follow-up measurement — a useful base rate.
 
 ---
 

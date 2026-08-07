@@ -1028,11 +1028,8 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 
 ## 9. Mistakes made along the way, and since corrected
 
-Thirty claims were published as fact during this work and later retracted, downgraded or re-derived. **All are
-already fixed in the documents above.** They are kept in a separate file, grouped by the error pattern that
-produced them and each paired with the check that would have caught it — the patterns are what transfer to the
-next analysis, not the individual corrections:
+Thirty claims, grouped by the error pattern that produced them, each with the check that would have caught it.
+The patterns transfer to the next analysis; the individual corrections do not. That file also lists what remains
+**unverified** here.
 
 → **[`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md)**
-
-That file also lists what remains **unverified** here, so no open question gets inherited as a fact.

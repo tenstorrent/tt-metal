@@ -21,10 +21,8 @@ Everything here comes from the cells' own artefacts or from re-measurements on t
 This is the short version. The detailed analysis is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) — a reference like
 `§3.11` points there, plain `§1`–`§6` are sections here.
 
-Claims that were made during the analysis and later corrected are kept in
-[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md). **The corrections are already applied here** — that file
-exists so the same mistakes are visible to whoever does this next, not because anything below is still in
-doubt.
+Claims that were corrected along the way are kept in
+[`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md), each with the check that would have caught it.
 
 ---
 
@@ -248,7 +246,7 @@ caught each one.
 |---|---|
 | **this file** | the verdict, the cells, the ledger — a few minutes |
 | [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the detailed analysis: 29 findings and the method** — this is where `§3.x` lives |
-| [`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md) | **mistakes made and since corrected** — 30 of them in 7 patterns, each with the check that would have caught it, plus what is still unverified. For whoever does this next |
+| [`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md) | **30 corrected mistakes, in 7 patterns**, each with the check that would have caught it — plus what remains unverified |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
