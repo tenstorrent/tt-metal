@@ -65,7 +65,6 @@ def _pad_to_tile(ids):
     "input_text, sample, mel_len",
     [
         ("hello world", "en_sample.wav", 64),
-        # ("text to speech synthesis on tenstorrent", "es_sample.wav", 96),
     ],
 )
 @pytest.mark.parametrize("pcc", [0.99])
