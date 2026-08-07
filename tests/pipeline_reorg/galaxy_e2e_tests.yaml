@@ -55,10 +55,7 @@
 
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
-  # Stability traffic runs as one long program launch, and the dispatch progress
-  # counter cannot advance while it runs, so the 5s hang-detection default that
-  # setup-job applies reports a false hang. Multi-rank startup skew adds to that.
-  # 0 disables it; a real hang is still bounded by the SKU timeout below (#47842).
+  # Timeout added to filter false regressions.
   cmd: |
     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
     TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
