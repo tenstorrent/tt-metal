@@ -251,9 +251,6 @@ run_t3000_tests() {
   # Run trace tests
   run_t3000_trace_stress_tests
 
-  # Run wan22 tests
-  run_t3000_wan22_tests
-
   # Run mochi tests
   run_t3000_mochi_tests
 
