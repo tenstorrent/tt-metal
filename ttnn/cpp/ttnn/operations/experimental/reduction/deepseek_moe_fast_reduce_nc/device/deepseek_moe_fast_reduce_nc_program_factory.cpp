@@ -93,6 +93,13 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
     const uint32_t compute_buffer_factor = 1;
     const uint32_t output_tensor_buffer_factor = 2;
 
+    // Every page_size below comes from a buffer page size / tt::tile_size(), while the JIT unpack and
+    // pack tile sizes are generated from the CB data_format plus whatever tile the CB declares. Pin the
+    // tile to the default 32x32 explicitly so the two can never drift apart (a non-32x32 input tile is
+    // additionally rejected in validate_on_program_cache_miss). TileDescriptor{} is the same 32x32
+    // non-transposed tile the JIT already assumes, so this does not change generated code.
+    const TileDescriptor default_tile_descriptor{};
+
     uint32_t compute_input_cb_id_0 = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_tensor_buffer_factor * input_page_size,
@@ -101,6 +108,7 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
             .buffer_index = static_cast<uint8_t>(compute_input_cb_id_0),
             .data_format = input_data_format,
             .page_size = input_page_size,
+            .tile = default_tile_descriptor,
         }}},
     });
 
@@ -112,6 +120,7 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
             .buffer_index = static_cast<uint8_t>(compute_input_cb_id_1),
             .data_format = compute_data_format,
             .page_size = compute_page_size,
+            .tile = default_tile_descriptor,
         }}},
     });
 
@@ -123,6 +132,7 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
             .buffer_index = static_cast<uint8_t>(compute_output_cb_id),
             .data_format = output_data_format,
             .page_size = output_page_size,
+            .tile = default_tile_descriptor,
         }}},
     });
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
@@ -43,7 +44,17 @@ void kernel_main() {
     uint32_t slice_row_offset = start_slice_row_offset;
     uint32_t pages_read_in_row = start_pages_read_in_row;
 
+    // `slice_id` indexes output_slice_tensor_accessors, a std::array of exactly num_output_tensors
+    // wrappers. Host validation guarantees input_tensor_Wt == num_output_tensors * slice_Wt, so
+    // pages_read_in_row / slice_Wt is in range. Clamp regardless: an out-of-range index would read an
+    // accessor pointer and a get_noc_addr function pointer from adjacent stack words, turning the
+    // async_write below into a call through a garbage function pointer or a write to an arbitrary NOC
+    // address on an arbitrary core.
     uint32_t slice_id = pages_read_in_row / slice_Wt;
+    ASSERT(slice_id < num_output_tensors);
+    if (slice_id >= num_output_tensors) {
+        slice_id = num_output_tensors - 1;
+    }
     uint32_t intra_slice_offset = pages_read_in_row % slice_Wt;
 
     uint32_t tiles_read = start_tiles_read;
