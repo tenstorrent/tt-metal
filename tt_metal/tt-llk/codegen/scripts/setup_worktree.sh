@@ -111,6 +111,89 @@ setup_worktree() {
   [[ -n "${CODEGEN_BASE_COMMIT:-}" ]] && base_was_pinned=true
   base_ref="$(resolve_worktree_base)"
 
+  # A resume is an explicit import from one immutable, reconciled checkpoint.
+  # Revalidate the dashboard contract before creating any branch or worktree.
+  local resume_requested=false resume_env_present resume_name
+  local -a resume_names=(
+    CODEGEN_RESUME_RUN_DIR CODEGEN_RESUME_RUN_ID CODEGEN_RESUME_ATTEMPT_ID
+    CODEGEN_RESUME_CHECKPOINT_DIGEST CODEGEN_RESUME_PATCH_SHA256
+    CODEGEN_RESUME_VERIFICATION_REUSE CODEGEN_RESUME_INVALIDATION_REASON
+    CODEGEN_ATTEMPT_ID
+  )
+  resume_env_present="${CODEGEN_RESUME_RUN_DIR:-}${CODEGEN_RESUME_RUN_ID:-}${CODEGEN_RESUME_ATTEMPT_ID:-}${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}${CODEGEN_RESUME_PATCH_SHA256:-}${CODEGEN_RESUME_VERIFICATION_REUSE:-}${CODEGEN_RESUME_INVALIDATION_REASON:-}"
+  if [[ -n "$resume_env_present" ]]; then
+    for resume_name in "${resume_names[@]}"; do
+      if [[ -z "${!resume_name:-}" ]]; then
+        echo "[worktree] incomplete resume contract: $resume_name is missing" >&2
+        return 1
+      fi
+    done
+    python - "$base_ref" "$task_id" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+expected_base = sys.argv[1]
+task_id = sys.argv[2]
+source_dir = Path(os.environ["CODEGEN_RESUME_RUN_DIR"])
+try:
+    source = json.loads((source_dir / "run.json").read_text())
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"[worktree] resume source run is unavailable: {exc}")
+checkpoint = source.get("last_checkpoint")
+if not isinstance(checkpoint, dict):
+    raise SystemExit("[worktree] resume source has no supervisor checkpoint")
+material = dict(checkpoint)
+recorded_digest = str(material.pop("checkpoint_digest", ""))
+actual_digest = hashlib.sha256(json.dumps(
+    material, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    allow_nan=False,
+).encode()).hexdigest()
+if recorded_digest != actual_digest or os.environ["CODEGEN_RESUME_CHECKPOINT_DIGEST"] != actual_digest:
+    raise SystemExit("[worktree] resume checkpoint digest mismatch")
+
+source_run_id = os.environ["CODEGEN_RESUME_RUN_ID"]
+source_attempt = os.environ["CODEGEN_RESUME_ATTEMPT_ID"]
+task_match = re.fullmatch(r"issue-([0-9]+)", task_id)
+source_issue = (source.get("issue") or {}).get("number")
+if not task_match or str(source_issue) != task_match.group(1):
+    raise SystemExit("[worktree] resume source issue identity mismatch")
+if source.get("run_id") != source_run_id or checkpoint.get("run_id") != source_run_id:
+    raise SystemExit("[worktree] resume source run identity mismatch")
+if (checkpoint.get("attempt_id") or source.get("attempt_id")) != source_attempt:
+    raise SystemExit("[worktree] resume source attempt identity mismatch")
+if source_attempt == os.environ["CODEGEN_ATTEMPT_ID"]:
+    raise SystemExit("[worktree] resume requires a distinct new attempt identity")
+if (source.get("status") != "failed" or not source.get("end_time")
+        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost"}):
+    raise SystemExit("[worktree] resume source was not terminally reconciled")
+
+source_base = checkpoint.get("base_commit") or source.get("base_commit")
+if source_base != expected_base or not re.fullmatch(r"[0-9a-f]{40}", str(source_base or "")):
+    raise SystemExit("[worktree] resume source base mismatch")
+patch_digest = str(checkpoint.get("patch_sha256") or "")
+patch_path = source_dir / "generated.patch"
+if checkpoint.get("artifact_patch") != "generated.patch" or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
+    raise SystemExit("[worktree] resume checkpoint patch identity is missing")
+try:
+    actual_patch_digest = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+except OSError as exc:
+    raise SystemExit(f"[worktree] resume checkpoint patch is unavailable: {exc}")
+if actual_patch_digest != patch_digest or os.environ["CODEGEN_RESUME_PATCH_SHA256"] != patch_digest:
+    raise SystemExit("[worktree] resume checkpoint patch digest mismatch")
+
+expected_reuse = "invalidated" if checkpoint.get("completed_results") else "not_available"
+expected_reason = "attempt_identity_changed" if checkpoint.get("completed_results") else "no_completed_results"
+if (os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"] != expected_reuse
+        or os.environ["CODEGEN_RESUME_INVALIDATION_REASON"] != expected_reason):
+    raise SystemExit("[worktree] resume verification disposition mismatch")
+PY
+    resume_requested=true
+  fi
+
   # Reserve a unique branch + dir under a lock (concurrency-safe).
   local lock_fd
   exec {lock_fd}>"$CODEGEN_SETUP_LOCK"
@@ -258,6 +341,42 @@ GITIGNORE
     set SETUP_BASE_COMMIT "$actual_base"
   python "${LLK_ROOT}/codegen/scripts/state.py" --worktree-dir "$WORKTREE_DIR" \
     set BASE_COMMIT_WAS_PINNED "$base_was_pinned" --json
+
+  if [[ "$resume_requested" == "true" ]]; then
+    local resume_patch="${CODEGEN_RESUME_RUN_DIR}/generated.patch"
+    local resume_error="" candidate_digest=""
+    if ! git -C "$WORKTREE_DIR" apply --check "$resume_patch"; then
+      resume_error="retained checkpoint patch does not apply to the exact base"
+    elif ! git -C "$WORKTREE_DIR" apply "$resume_patch"; then
+      resume_error="retained checkpoint patch could not be imported"
+    elif ! candidate_digest="$(python "${LLK_ROOT}/codegen/scripts/run_json_writer.py" \
+        candidate-patch-digest --worktree "$WORKTREE_DIR" \
+        --expected-base-sha "$base_ref")"; then
+      resume_error="imported candidate digest could not be computed"
+    elif [[ "$candidate_digest" != "$CODEGEN_RESUME_PATCH_SHA256" ]]; then
+      resume_error="imported candidate differs from the retained checkpoint patch"
+    fi
+    if [[ -n "$resume_error" ]]; then
+      echo "[worktree] resume rejected: $resume_error" >&2
+      git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+      git -C "$REPO_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+      return 1
+    fi
+    python - <<'PY' | python "${LLK_ROOT}/codegen/scripts/state.py" \
+        --worktree-dir "$WORKTREE_DIR" set-many
+import json
+import os
+print(json.dumps({
+    "QUEUE_ATTEMPT_ID": os.environ["CODEGEN_ATTEMPT_ID"],
+    "RESUMED_FROM_RUN_ID": os.environ["CODEGEN_RESUME_RUN_ID"],
+    "RESUMED_FROM_ATTEMPT_ID": os.environ["CODEGEN_RESUME_ATTEMPT_ID"],
+    "RESUME_CHECKPOINT_DIGEST": os.environ["CODEGEN_RESUME_CHECKPOINT_DIGEST"],
+    "RESUME_PATCH_SHA256": os.environ["CODEGEN_RESUME_PATCH_SHA256"],
+    "RESUME_VERIFICATION_REUSE": os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"],
+    "RESUME_INVALIDATION_REASON": os.environ["CODEGEN_RESUME_INVALIDATION_REASON"],
+}))
+PY
+  fi
 
   echo "[worktree] Ready: $WORKTREE_DIR"
   echo "[worktree] Branch: $WORKTREE_BRANCH"

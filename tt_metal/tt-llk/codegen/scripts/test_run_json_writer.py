@@ -1662,6 +1662,12 @@ def test_init_records_audit_lane_provenance(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEGEN_BASE_COMMIT", "a" * 40)
     monkeypatch.setenv("CODEGEN_CAMPAIGN_ID", "infra-audit")
     monkeypatch.setenv("CODEGEN_ATTEMPT_ID", "try-1")
+    monkeypatch.setenv("CODEGEN_RESUME_RUN_ID", "source-run")
+    monkeypatch.setenv("CODEGEN_RESUME_ATTEMPT_ID", "source-attempt")
+    monkeypatch.setenv("CODEGEN_RESUME_CHECKPOINT_DIGEST", "c" * 64)
+    monkeypatch.setenv("CODEGEN_RESUME_PATCH_SHA256", "d" * 64)
+    monkeypatch.setenv("CODEGEN_RESUME_VERIFICATION_REUSE", "invalidated")
+    monkeypatch.setenv("CODEGEN_RESUME_INVALIDATION_REASON", "attempt_identity_changed")
     _run(
         tmp_path,
         "init",
@@ -1681,6 +1687,14 @@ def test_init_records_audit_lane_provenance(tmp_path, monkeypatch):
     assert doc["base_commit"] == "a" * 40
     assert doc["campaign_id"] == "infra-audit"
     assert doc["attempt_id"] == "try-1"
+    assert doc["resumed_from_run_id"] == "source-run"
+    assert doc["resumed_from_attempt_id"] == "source-attempt"
+    assert doc["resume_checkpoint_digest"] == "c" * 64
+    assert doc["resume_patch_sha256"] == "d" * 64
+    assert doc["resume_verification"] == {
+        "outcome": "invalidated",
+        "reason_code": "attempt_identity_changed",
+    }
 
 
 def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
@@ -1690,6 +1704,8 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
     setup_env = llk_tests / "setup_testing_env.sh"
     setup_env.write_text("#!/bin/bash\nexit 0\n")
     setup_env.chmod(0o755)
+    (repo / "tt_metal" / "tt-llk" / ".gitignore").write_text("*.pyc\n")
+    (repo / "source.txt").write_text("base\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
     subprocess.run(
@@ -1703,6 +1719,61 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
         capture_output=True,
         text=True,
     ).stdout.strip()
+    (repo / "source.txt").write_text("resumed candidate\n")
+    patch = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--binary", base, "--", "source.txt"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    (repo / "source.txt").write_text("base\n")
+    source_run_id = "2026-08-07_issue_5_source"
+    source_attempt = "source-attempt"
+    source_dir = tmp_path / source_run_id
+    source_dir.mkdir()
+    (source_dir / "generated.patch").write_bytes(patch)
+    checkpoint = {
+        "run_id": source_run_id,
+        "attempt_id": source_attempt,
+        "base_commit": base,
+        "artifact_patch": "generated.patch",
+        "patch_sha256": hashlib.sha256(patch).hexdigest(),
+        "completed_results": {"tests_total": 1, "tests_passed": 1},
+    }
+    checkpoint["checkpoint_digest"] = hashlib.sha256(
+        json.dumps(
+            checkpoint,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    (source_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": source_run_id,
+                "attempt_id": source_attempt,
+                "issue": {"number": 5},
+                "status": "failed",
+                "end_time": "2026-08-07T01:00:00Z",
+                "timeout_classification": "outer_timeout",
+                "base_commit": base,
+                "last_checkpoint": checkpoint,
+            }
+        )
+    )
+    resume_env = {
+        **os.environ,
+        "CODEGEN_BASE_COMMIT": base,
+        "CODEGEN_ATTEMPT_ID": "new-attempt",
+        "CODEGEN_RESUME_RUN_DIR": str(source_dir),
+        "CODEGEN_RESUME_RUN_ID": source_run_id,
+        "CODEGEN_RESUME_ATTEMPT_ID": source_attempt,
+        "CODEGEN_RESUME_CHECKPOINT_DIGEST": checkpoint["checkpoint_digest"],
+        "CODEGEN_RESUME_PATCH_SHA256": checkpoint["patch_sha256"],
+        "CODEGEN_RESUME_VERIFICATION_REUSE": "invalidated",
+        "CODEGEN_RESUME_INVALIDATION_REASON": "attempt_identity_changed",
+    }
     worktrees = tmp_path / "worktrees"
     command = r"""
 source "$1"
@@ -1712,7 +1783,7 @@ CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-di
 CODEGEN_SETUP_LOCK="${CODEGEN_GIT_DIR}/codegen-worktree-setup.lock"
 CODEGEN_WORKTREE_ROOT="$3"
 CODEGEN_BASE_COMMIT="$4"
-setup_worktree "issue-base-preflight"
+setup_worktree "${5:-issue-5}"
 """
     proc = subprocess.run(
         [
@@ -1725,13 +1796,14 @@ setup_worktree "issue-base-preflight"
             str(worktrees),
             base,
         ],
+        env=resume_env,
         check=False,
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
 
-    worktree = worktrees / "issue-base-preflight-v1"
+    worktree = worktrees / "issue-5-v1"
     state = json.loads(
         (worktree / "tt_metal" / "tt-llk" / ".codegen_run_state.json").read_text()
     )
@@ -1744,7 +1816,123 @@ setup_worktree "issue-base-preflight"
     assert state["EXPECTED_BASE_COMMIT"] == base
     assert state["SETUP_BASE_COMMIT"] == base
     assert state["BASE_COMMIT_WAS_PINNED"] is True
+    assert state["QUEUE_ATTEMPT_ID"] == "new-attempt"
+    assert state["RESUMED_FROM_RUN_ID"] == source_run_id
+    assert state["RESUMED_FROM_ATTEMPT_ID"] == source_attempt
+    assert state["RESUME_CHECKPOINT_DIGEST"] == checkpoint["checkpoint_digest"]
+    assert state["RESUME_PATCH_SHA256"] == checkpoint["patch_sha256"]
+    assert state["RESUME_VERIFICATION_REUSE"] == "invalidated"
+    assert state["RESUME_INVALIDATION_REASON"] == "attempt_identity_changed"
     assert actual == base
+    assert (worktree / "source.txt").read_text() == "resumed candidate\n"
+
+    bad_digest = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            base,
+        ],
+        env={**resume_env, "CODEGEN_RESUME_CHECKPOINT_DIGEST": "f" * 64},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_digest.returncode != 0
+    assert "checkpoint digest mismatch" in bad_digest.stderr
+    assert not (worktrees / "issue-5-v2").exists()
+
+    (source_dir / "generated.patch").write_bytes(patch + b"\nmutation\n")
+    bad_patch = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            base,
+        ],
+        env=resume_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_patch.returncode != 0
+    assert "patch digest mismatch" in bad_patch.stderr
+    assert not (worktrees / "issue-5-v2").exists()
+    (source_dir / "generated.patch").write_bytes(patch)
+
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-qm", "later base"],
+        check=True,
+    )
+    later_base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bad_base = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            later_base,
+        ],
+        env={**resume_env, "CODEGEN_BASE_COMMIT": later_base},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_base.returncode != 0
+    assert "source base mismatch" in bad_base.stderr
+    assert not (worktrees / "issue-5-v2").exists()
+
+    normal_env = {
+        key: value
+        for key, value in resume_env.items()
+        if not key.startswith("CODEGEN_RESUME_")
+    }
+    normal_env.update(
+        {
+            "CODEGEN_BASE_COMMIT": later_base,
+            "CODEGEN_ATTEMPT_ID": "ordinary-attempt",
+        }
+    )
+    normal = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            later_base,
+            "issue-6",
+        ],
+        env=normal_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert normal.returncode == 0, normal.stderr
+    normal_state = json.loads(
+        (
+            worktrees / "issue-6-v1" / "tt_metal" / "tt-llk" / ".codegen_run_state.json"
+        ).read_text()
+    )
+    assert "RESUMED_FROM_RUN_ID" not in normal_state
 
 
 def test_validate_input_rejects_unset_changed_or_drifted_base(tmp_path):
@@ -1819,11 +2007,73 @@ def test_validate_input_rejects_unset_changed_or_drifted_base(tmp_path):
     assert rejected_changed.returncode == 1
     assert "changed after setup" in rejected_changed.stdout
 
+    (llk / "source.txt").write_text("resumed candidate\n")
+    candidate_digest = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "candidate-patch-digest",
+            "--worktree",
+            str(worktree),
+            "--expected-base-sha",
+            base,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    state.update(
+        {
+            "QUEUE_ATTEMPT_ID": "new-attempt",
+            "RESUMED_FROM_RUN_ID": "source-run",
+            "RESUMED_FROM_ATTEMPT_ID": "source-attempt",
+            "RESUME_CHECKPOINT_DIGEST": "c" * 64,
+            "RESUME_PATCH_SHA256": candidate_digest,
+            "RESUME_VERIFICATION_REUSE": "invalidated",
+            "RESUME_INVALIDATION_REASON": "attempt_identity_changed",
+        }
+    )
+    (llk / ".codegen_run_state.json").write_text(json.dumps(state))
+    resume_env = {
+        **os.environ,
+        "CODEGEN_BASE_COMMIT": base,
+        "CODEGEN_ATTEMPT_ID": "new-attempt",
+        "CODEGEN_RESUME_RUN_ID": "source-run",
+        "CODEGEN_RESUME_ATTEMPT_ID": "source-attempt",
+        "CODEGEN_RESUME_CHECKPOINT_DIGEST": "c" * 64,
+        "CODEGEN_RESUME_PATCH_SHA256": candidate_digest,
+        "CODEGEN_RESUME_VERIFICATION_REUSE": "invalidated",
+        "CODEGEN_RESUME_INVALIDATION_REASON": "attempt_identity_changed",
+    }
+    accepted_resume = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env=resume_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert accepted_resume.returncode == 0, (
+        accepted_resume.stdout + accepted_resume.stderr
+    )
+
+    (llk / "source.txt").write_text("mutated after resume setup\n")
+    rejected_resume_mutation = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env=resume_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_resume_mutation.returncode == 1
+    assert (
+        "resumed candidate patch changed after setup" in rejected_resume_mutation.stdout
+    )
+
     (llk / "source.txt").write_text("drift\n")
     subprocess.run(["git", "-C", str(worktree), "commit", "-qam", "drift"], check=True)
     rejected_drift = subprocess.run(
         ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
-        env={**os.environ, "CODEGEN_BASE_COMMIT": base},
+        env=resume_env,
         check=False,
         capture_output=True,
         text=True,
