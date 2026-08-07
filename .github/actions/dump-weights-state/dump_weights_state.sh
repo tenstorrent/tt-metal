@@ -13,6 +13,21 @@ SUFFIX=""
 MODEL_NAME="${HF_MODEL//\//--}"
 REPO_DIR="$HUB/models--$MODEL_NAME"
 
+# Some legs pass a local directory instead of a repo id (the no-op test model
+# ships in the tt-metal tree). Those have no hub entry by design, so the hub
+# checks below must not report them as missing weights.
+LOCAL_MODEL_DIR=""
+# Snapshot that refs/main points at, set once the refs are walked below.
+MAIN_SNAP=""
+if [ -n "$HF_MODEL" ]; then
+  for base in "" "${TT_METAL_HOME:-/work}/"; do
+    if [ -d "$base$HF_MODEL" ]; then
+      LOCAL_MODEL_DIR="$base$HF_MODEL"
+      break
+    fi
+  done
+fi
+
 # Every listing is capped and time-boxed: the hub is a shared network mount
 # holding hundreds of repos, and a hung mount must yield a timeout line in the
 # log rather than eat the job's whole timeout-minutes budget.
@@ -75,6 +90,9 @@ echo "::endgroup::"
 echo "::group::🔍 Weights state: models--$MODEL_NAME$SUFFIX"
 if [ -z "$HF_MODEL" ]; then
   echo "no model supplied; skipping repo-level inspection"
+elif [ -n "$LOCAL_MODEL_DIR" ]; then
+  echo "model is a local directory, not a hub repo"
+  run ls -la "$LOCAL_MODEL_DIR"
 elif [ ! -d "$REPO_DIR" ]; then
   echo "❌ $REPO_DIR does not exist"
   echo "closest names in the hub:"
@@ -94,6 +112,7 @@ else
     echo "  raw bytes ($(wc -c < "$ref")): $(od -c "$ref" 2>/dev/null | head -n 1)"
     if [ -d "$REPO_DIR/snapshots/$rev" ]; then
       echo "  snapshot dir present"
+      [ "$(basename "$ref")" = "main" ] && MAIN_SNAP="$REPO_DIR/snapshots/$rev"
     else
       echo "  ❌ snapshot dir $REPO_DIR/snapshots/$rev MISSING"
     fi
@@ -107,6 +126,14 @@ else
     # shellcheck disable=SC2012
     ls -la "$snap" 2>&1 | head -n 60
     echo "  files: $(find "$snap" -mindepth 1 2>/dev/null | wc -l)"
+    # An rclone mirror made without symlink support flattens every snapshot
+    # entry into a <name>.rclonelink text file holding the blob path. The repo
+    # still resolves offline, so the load fails much later with a confusing
+    # "Invalid repository ID or local directory" from ModelConfig.
+    rclonelinks="$(find "$snap" -maxdepth 1 -name '*.rclonelink' 2>/dev/null | wc -l)"
+    if [ "$rclonelinks" -gt 0 ]; then
+      echo "  ❌ rclone-flattened entries (.rclonelink, not real symlinks): $rclonelinks"
+    fi
     # HF snapshots are symlinks into blobs/. Dangling links mean a partial or
     # interrupted sync: the metadata looks complete while the payload is gone.
     dangling="$(find "$snap" -xtype l 2>/dev/null)"
@@ -151,7 +178,11 @@ echo "::group::🔍 Weights state: huggingface_hub offline resolution$SUFFIX"
 # -u so the traceback on stderr stays interleaved in order with stdout once
 # both are merged into the pipe below. HF_HUB_CACHE is forced to the same dir
 # the listings above walked, so the two halves cannot disagree.
-HF_MODEL="$HF_MODEL" HF_HUB_CACHE="$HUB" timeout --preserve-status 120 python3 -u - <<'PY' 2>&1 | head -n 60
+PY_MODEL="$HF_MODEL"
+# A local directory is not a valid repo id; resolving it would only raise
+# HFValidationError and say nothing about the cache.
+[ -n "$LOCAL_MODEL_DIR" ] && PY_MODEL=""
+HF_MODEL="$PY_MODEL" HF_HUB_CACHE="$HUB" timeout --preserve-status 120 python3 -u - <<'PY' 2>&1 | head -n 60
 import os
 import traceback
 
@@ -186,9 +217,17 @@ echo "::endgroup::"
 
 # One-line verdict plus a run annotation, so a scan of the run summary shows
 # whether the weights were there without opening the log groups.
-if [ -n "$HF_MODEL" ] && [ ! -d "$REPO_DIR" ]; then
+if [ -n "$LOCAL_MODEL_DIR" ]; then
+  echo "✅ local model directory present: $LOCAL_MODEL_DIR (no hub entry expected)"
+elif [ -n "$HF_MODEL" ] && [ ! -d "$REPO_DIR" ]; then
   echo "::warning title=weights-missing::$HF_MODEL is not cached at $REPO_DIR on this runner. See the '🔍 Weights state' log groups for the mount and directory state."
   echo "❌ weights NOT present: $REPO_DIR"
+elif [ -n "$MAIN_SNAP" ] && [ ! -f "$MAIN_SNAP/config.json" ]; then
+  # Present but unloadable. vLLM needs a readable config.json in the resolved
+  # snapshot; without this check the repo looks healthy right up to the point
+  # the server rejects the directory.
+  echo "::warning title=weights-unusable::$HF_MODEL resolves to $MAIN_SNAP but it has no readable config.json. The repo is cached yet unloadable. See the '🔍 Weights state' log groups."
+  echo "❌ weights present but UNUSABLE: no config.json in $MAIN_SNAP"
 else
   echo "✅ weights directory present: $REPO_DIR"
 fi
