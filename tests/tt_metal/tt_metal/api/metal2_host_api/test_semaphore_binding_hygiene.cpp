@@ -70,11 +70,15 @@ bool looks_like_metal2_kernel(const std::string& text) {
 // whose first non-space character was '*', which also silently dropped real statements such as
 //     *(volatile uint32_t*)get_semaphore(3) += 1;
 // i.e. it hid exactly the raw accesses this lint exists to find.
+// String/char literal contents are stripped too: a "//" or "/*" inside a string must not start a
+// comment, and a banned pattern inside a string is not code.
 std::string strip_comments(const std::string& text) {
     std::string out;
     out.reserve(text.size());
     bool in_block = false;
     bool in_line_comment = false;
+    bool in_string = false;
+    bool in_char = false;
     for (size_t i = 0; i < text.size(); i++) {
         if (in_line_comment) {
             if (text[i] == '\n') {
@@ -92,6 +96,18 @@ std::string strip_comments(const std::string& text) {
             }
             continue;
         }
+        if (in_string || in_char) {
+            if (text[i] == '\\') {
+                i++;  // skip the escaped character
+            } else if (text[i] == (in_string ? '"' : '\'')) {
+                in_string = in_char = false;
+                out += text[i];
+            } else if (text[i] == '\n') {
+                out += '\n';  // unterminated literal: fail safe at end of line
+                in_string = in_char = false;
+            }
+            continue;
+        }
         if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
             in_line_comment = true;
             continue;
@@ -99,6 +115,16 @@ std::string strip_comments(const std::string& text) {
         if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
             in_block = true;
             i++;
+            continue;
+        }
+        if (text[i] == '"') {
+            in_string = true;
+            out += text[i];
+            continue;
+        }
+        if (text[i] == '\'') {
+            in_char = true;
+            out += text[i];
             continue;
         }
         out += text[i];
@@ -142,6 +168,7 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
         "get_semaphore(",                // turning a semaphore id into a raw address
+        "get_semaphore<",                // same, templated spelling: get_semaphore<X>(id)
         "noc_semaphore_inc(",            // atomic increment at a raw address (local or remote)
         "noc_semaphore_set(",            // raw set
         "noc_semaphore_set_remote(",     // remote set
@@ -159,27 +186,28 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
 
 // Files intentionally exempt, with the reason. Keep this list MINIMAL: an entry here can
 // mask a real regression in that file.
+// Entries are anchored on '/' so a file merely CONTAINING an entry's name is not exempt.
 bool is_allowlisted(const std::string& path) {
     // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1 addresses
     // (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
     // self-targeted-atomic keystone, the DM cache-line-width probe, and the NoC atomic-opcode probe.
     // Raw access is the thing under test, so they must stay raw.
-    if (path.find("dm_cacheline_probe.cpp") != std::string::npos ||
-        path.find("noc_self_atomic.cpp") != std::string::npos ||
-        path.find("noc_atomic_ops_probe.cpp") != std::string::npos) {
+    if (path.find("/dm_cacheline_probe.cpp") != std::string::npos ||
+        path.find("/noc_self_atomic.cpp") != std::string::npos ||
+        path.find("/noc_atomic_ops_probe.cpp") != std::string::npos) {
         return true;
     }
     // Residency instrumentation: sem_census_probe deliberately reads its OWN declared semaphore's
     // kernel_config RING slot (read-only, via the uncached alias) so a test can prove that a cached
     // semaphore's count really lives in the pool. It adds no undeclared writer.
-    if (path.find("sem_census_probe.cpp") != std::string::npos) {
+    if (path.find("/sem_census_probe.cpp") != std::string::npos) {
         return true;
     }
     // Watcher fault injection: this kernel issues a raw multicast atomic at an INVALID range,
     // targeting a data-buffer address, specifically to trip the watcher's sanitizer. Its host test
     // (debug_tools/watcher/test_sanitize.cpp) declares no SemaphoreSpec at all, so no semaphore --
     // declared or otherwise -- is involved; the malformed op is the thing under test.
-    if (path.find("dram_copy_to_noc_coord_2_0.cpp") != std::string::npos) {
+    if (path.find("/dram_copy_to_noc_coord_2_0.cpp") != std::string::npos) {
         return true;
     }
     return false;
@@ -219,6 +247,16 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         // ...but the same spelling over a RAW id uses the unaffected uint32_t ctor and is legal.
         {"pinned_scope_raw_id_ok", "void kernel_main() { Semaphore<> s(sem_id); }", false},
         {"multicast_set", "void kernel_main() { noc_semaphore_set_multicast(a, b, 1); }", true},
+        // Templated spelling of get_semaphore.
+        {"templated_get_semaphore",
+         "void kernel_main() { uint32_t a = get_semaphore<ProgrammableCoreType::TENSIX>(0); }",
+         true},
+        // Patterns inside string literals are not code.
+        {"string_literal_pattern", "void kernel_main() { const char* s = \"noc_semaphore_inc(\"; }", false},
+        // A "/*" inside a string must not swallow the real statement after it.
+        {"comment_start_in_string",
+         "void kernel_main() { const char* s = \"/*\"; noc_semaphore_set(ptr, 5); }",
+         true},
         // A declared binding: the managed accessor only, no raw primitive in kernel source.
         {"clean_declared", "void kernel_main() {\n    Semaphore s(sem::counter);\n    s.up(1);\n}", false},
         // Prose mentioning the patterns must NOT be flagged (line and block comments).
@@ -293,7 +331,10 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
             std::stringstream buf;
             buf << f.rdbuf();
             const std::string text = buf.str();
-            if (!looks_like_metal2_kernel(text)) {
+            // Classify on stripped text: a legacy kernel whose COMMENTS mention sem:: must not be
+            // treated as Metal 2.0 (its legitimate raw calls would then fail the suite).
+            const std::string code = strip_comments(text);
+            if (!looks_like_metal2_kernel(code)) {
                 continue;  // legacy kernel: never reaches the AUTO path
             }
             metal2_scanned++;
@@ -301,7 +342,6 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
             if (is_allowlisted(path_str)) {
                 continue;
             }
-            const std::string code = strip_comments(text);
             for (const auto& pat : find_raw_semaphore_uses(code)) {
                 violations.push_back(path_str + "  uses raw: " + pat);
             }
