@@ -26,11 +26,17 @@ def round_ffn_dim_to_multiple(intermediate_size: int, multiple_of: int = 256, ff
     return multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
 
 
+def _cast(t: torch.Tensor | None, dtype: torch.dtype) -> torch.Tensor | None:
+    """Match checkpoint weights (often bfloat16) to the reference input dtype (float32)."""
+    return t.to(dtype) if t is not None else None
+
+
 def swiglu_mlp(x: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
     """LFM2 (and tt_transformers) SwiGLU MLP: ``down_proj(silu(gate_proj(x)) * up_proj(x))``.
 
     Weights are given in ``nn.Linear`` layout, i.e. ``w1: [ff, dim]``, ``w3: [ff, dim]``, ``w2: [dim, ff]``.
     """
+    w1, w2, w3 = _cast(w1, x.dtype), _cast(w2, x.dtype), _cast(w3, x.dtype)
     gate = F.silu(F.linear(x, w1))
     up = F.linear(x, w3)
     return F.linear(gate * up, w2)
@@ -57,6 +63,9 @@ def short_conv(
     """
     hidden_size = x.shape[-1]
     kernel_size = conv_w.shape[-1]
+
+    in_proj_w, out_proj_w, conv_w = _cast(in_proj_w, x.dtype), _cast(out_proj_w, x.dtype), _cast(conv_w, x.dtype)
+    in_proj_b, out_proj_b, conv_b = _cast(in_proj_b, x.dtype), _cast(out_proj_b, x.dtype), _cast(conv_b, x.dtype)
 
     BCx = F.linear(x, in_proj_w, in_proj_b).transpose(-1, -2)  # [B, 3H, S]
     B_gate, C_gate, x_gate = BCx.split(hidden_size, dim=-2)  # each [B, H, S]
@@ -102,6 +111,10 @@ def lfm2_vl_projector(
     batch, num_patches, vision_dim = vision_features.shape
     side = int(round(num_patches**0.5))
     assert side * side == num_patches, num_patches
+
+    dtype = vision_features.dtype
+    linear_1_w, linear_2_w = _cast(linear_1_w, dtype), _cast(linear_2_w, dtype)
+    linear_1_b, linear_2_b = _cast(linear_1_b, dtype), _cast(linear_2_b, dtype)
 
     x = vision_features.reshape(batch, side, side, vision_dim)
     x = pixel_unshuffle(x, factor=downsample_factor)
