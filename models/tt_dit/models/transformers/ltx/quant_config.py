@@ -61,15 +61,30 @@ class LtxQuantProfile:
         """
         pin = LTX_QUANT_ACTIVATIONS
         if role == "gate":
-            return {"pin_blockfloat_output": pin}
+            return {"pin_output_bf16": pin}
         return {
             "dtype": self.out_weight_dtype if role == "out" else self.weight_dtype,
             "activation_dtype": self.activation_dtype if LTX_QUANT_ACTIVATIONS else None,
-            "pin_blockfloat_output": pin,
+            "pin_output_bf16": pin,
+        }
+
+    def ffn_kwargs(self) -> dict:
+        """Construction kwargs for the FFN (ParallelFeedForward), where ff1 and ff2 are both quantized."""
+        lk = self.linear_kwargs("ff")
+        return {
+            "ff1_dtype": lk["dtype"],
+            "ff2_dtype": lk["dtype"],
+            "activation_dtype": lk["activation_dtype"],
+            "pin_output_bf16": lk["pin_output_bf16"],
         }
 
     def mm_compute_config(self, arch):
-        """Compute-kernel config for the DiT-linear matmuls (attention QKV/out and the FFN)."""
+        """Compute-kernel config for the DiT-linear matmuls (attention QKV/out and the FFN).
+
+        ``packer_l1_acc`` stays on regardless of tier: it accumulates matmul partials in L1 at fp32,
+        which is near-free and strictly helps. It is orthogonal to ``fp32_dest_acc_en`` — the pricier
+        fp32 *destination* accumulation that the LoFi/bf8 tier deliberately drops (``mm_fp32_dest_acc``).
+        """
         return ttnn.init_device_compute_kernel_config(
             arch,
             math_fidelity=self.mm_fidelity,
@@ -112,9 +127,9 @@ class LtxQuantProfile:
 
     @staticmethod
     def all_bf4_lofi() -> LtxQuantProfile:
-        """Like ``all_bf8_lofi`` but 4-bit weights and 4-bit linear activations — an aggressive tier to
-        probe where quantization becomes measurably degrading. The ``to_out`` carve-outs keep bf16
-        weights for the fused addcmul epilogue; the ring-SDPA input stays bf8.
+        """Like ``all_bf8_lofi`` but 4-bit weights and 4-bit linear activations. Opt-in probe tier, not
+        shipped: bf4 *activations* visibly destroy quality (bf4 weights alone hold up), so this is for
+        A/B measurement only. Carve-outs and the ring-SDPA bf8 input match all_bf8_lofi.
         """
         return LtxQuantProfile(
             weight_dtype=ttnn.bfloat4_b,

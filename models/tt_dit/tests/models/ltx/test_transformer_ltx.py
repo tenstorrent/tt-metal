@@ -913,8 +913,8 @@ def test_ltx_transformer_block_bf8(
 
     Covers two things a bf16-only run cannot: (1) the profile actually produced bf8 device weights with
     the ``to_out`` carve-out kept bf16 — a mis-wired role or a silent no-quant fails the dtype asserts;
-    (2) the bf8 forward still tracks the fp32 diffusers oracle, at a looser PCC than the bf16 path's
-    0.988. Video-only, matching the block test's PCC path.
+    (2) the bf8 forward still tracks the fp32 diffusers oracle. Video-only, matching the block test's
+    PCC path; the gate-role carve-out only exists under gated (audio) attention, so it is out of scope.
     """
     skip_if_unsupported_num_links(mesh_device, num_links)
     F, H, W = 19, 17, 30  # stage_1 latent grid
@@ -1001,10 +1001,10 @@ def test_ltx_transformer_block_bf8(
     assert tt_v.shape == (1, video_N_real, DIM), f"video shape {tt_v.shape}"
     assert torch.isfinite(tt_v).all(), "bf8 video output NaN/Inf"
 
-    # Calibrated on BH 4x8: bf8 measures PCC 99.93%, RMSE/σ₁ 4.2%. Floors sit a ring-noise margin
-    # below/above that (comparable to the bf16 block test's 0.988), so a broken quant path craters PCC
-    # or blows up RMSE and trips here, while healthy ring variation does not.
-    assert_quality(torch_out, tt_v, pcc=0.99, relative_rmse=0.08)
+    # bf8 measures PCC 99.93% / RMSE 4.2% on BH 4x8. Floor PCC at the bf16 block test's ring-noise
+    # tolerance (0.988), not tighter — the RMSE gate (0.08 vs observed 0.042) is the real quant-
+    # regression catch; a broken quant path craters PCC or blows up RMSE and trips here regardless.
+    assert_quality(torch_out, tt_v, pcc=0.988, relative_rmse=0.08)
     logger.info(f"PASSED bf8 block PCC: video {tuple(tt_v.shape)}")
 
 

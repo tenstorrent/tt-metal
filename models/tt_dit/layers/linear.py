@@ -55,7 +55,7 @@ def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
 def resolve_output_dtype(dtype, x: ttnn.Tensor):
     """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
 
-    Called only by a linear whose quant config opted in (``pin_blockfloat_output``), so no other
+    Called only by a linear whose quant config opted in (``pin_output_bf16``), so no other
     model's default output dtype (``output_dtype.value_or(in0.dtype())``) changes. Keyed on the input's
     dtype so it covers an input that arrived block-float from upstream (e.g. the gate projection fed
     the shared bf8 activation), not just one this linear cast itself; without the pin a bf8 activation
@@ -175,7 +175,7 @@ class ColParallelLinear(Module):
         ccl_manager=None,
         chunks=None,
         activation_dtype=None,
-        pin_blockfloat_output=False,
+        pin_output_bf16=False,
     ):
         super().__init__()
 
@@ -212,7 +212,7 @@ class ColParallelLinear(Module):
         self.activation_dtype = activation_dtype
         # Pin a bf8/bf4-fed output back to bf16 (see resolve_output_dtype). Set by the quant config on
         # the linears on its path; off elsewhere so no other model's default output dtype changes.
-        self.pin_blockfloat_output = pin_blockfloat_output
+        self.pin_output_bf16 = pin_output_bf16
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -273,7 +273,7 @@ class ColParallelLinear(Module):
         If chunks is set, returns a list of tensors split along the output dimension.
         """
         x = maybe_cast_activation(x, self.activation_dtype)
-        if self.pin_blockfloat_output:
+        if self.pin_output_bf16:
             dtype = resolve_output_dtype(dtype, x)
 
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:

@@ -47,9 +47,10 @@ from ...utils.video import Audio
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
 # Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
-# LTX_QUANT=all_bf8_lofi to opt into the bf8 1080p tier (its perf/VBench floors are calibrated against
-# it), or LTX_QUANT to any other LtxQuantProfile preset. _resolve_quant_config resolves this once and
-# threads the tag into the transformer cache name, so a quantized cache stays separate from the baseline.
+# LTX_QUANT=all_bf8_lofi to opt into the shipped bf8 1080p tier (its perf/VBench floors are calibrated
+# against it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
+# destroy quality). _resolve_quant_config resolves this once and threads the tag into the transformer
+# cache name, so a quantized cache stays separate from the baseline.
 LTX_QUANT_DEFAULT = ""
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -636,9 +637,13 @@ class LTXPipeline:
             return
         from ...models.transformers.ltx.quant_config import LtxQuantProfile
 
-        factory = getattr(LtxQuantProfile, preset, None)
-        if factory is None or not callable(factory):
-            logger.warning(f"LTX_QUANT='{preset}' is not an LtxQuantProfile preset; running baseline (bf16/HiFi2)")
+        # Explicit registry, not getattr(LtxQuantProfile, preset): the profile's instance methods
+        # (linear_kwargs, ...) are class attributes too, so getattr would resolve LTX_QUANT=linear_kwargs
+        # to a callable and crash instead of falling back to bf16.
+        presets = {"all_bf8_lofi": LtxQuantProfile.all_bf8_lofi, "all_bf4_lofi": LtxQuantProfile.all_bf4_lofi}
+        factory = presets.get(preset)
+        if factory is None:
+            logger.warning(f"LTX_QUANT='{preset}' is not a quant preset; running baseline (bf16/HiFi2)")
             return
         logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
         # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved

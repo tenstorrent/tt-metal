@@ -64,7 +64,7 @@ class ParallelFeedForward(Module):
         ff1_dtype=ttnn.bfloat16,
         ff2_dtype=ttnn.bfloat16,
         activation_dtype=None,
-        pin_blockfloat_output=False,
+        pin_output_bf16=False,
     ):
         super().__init__()
 
@@ -99,7 +99,7 @@ class ParallelFeedForward(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
             activation_dtype=activation_dtype,
-            pin_blockfloat_output=pin_blockfloat_output,
+            pin_output_bf16=pin_output_bf16,
         )
         self.ff2 = RowCls(
             inner_dim,

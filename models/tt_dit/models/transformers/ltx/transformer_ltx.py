@@ -153,20 +153,11 @@ class LTXTransformerBlock(Module):
             "lora_enabled": lora_enabled,
         }
 
-        # FFN precision, shared by the video and audio ParallelFeedForwards. No quant_config => the
-        # ParallelFeedForward ctor defaults reproduce the bf16 model; the profile supplies dtypes and
-        # casts when set. lora_enabled always threads through.
+        # FFN precision: the profile supplies the ff dtypes + casts; no quant_config leaves the
+        # ParallelFeedForward ctor defaults, reproducing bf16. lora_enabled always threads through.
+        ffn_kwargs = {"lora_enabled": lora_enabled}
         if quant_config is not None:
-            ff_lk = quant_config.linear_kwargs("ff")
-            ffn_kwargs = {
-                "ff1_dtype": ff_lk["dtype"],
-                "ff2_dtype": ff_lk["dtype"],
-                "activation_dtype": ff_lk["activation_dtype"],
-                "pin_blockfloat_output": ff_lk["pin_blockfloat_output"],
-                "lora_enabled": lora_enabled,
-            }
-        else:
-            ffn_kwargs = {"lora_enabled": lora_enabled}
+            ffn_kwargs.update(quant_config.ffn_kwargs())
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
         # without it the FFN is only TP-sharded and replicated across every SP device.
