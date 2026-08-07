@@ -12,6 +12,7 @@ tests can exercise the behavior without involving Claude.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import tempfile
@@ -60,18 +61,26 @@ def cmd_upsert_runs_jsonl(args: argparse.Namespace) -> None:
     if not run_id:
         raise SystemExit(f"run.json missing run_id: {run_path}")
 
-    rows = _read_jsonl(runs_jsonl)
-    replaced = False
-    for i, row in enumerate(rows):
-        if row.get("run_id") == run_id:
-            rows[i] = run
-            replaced = True
-            break
-    if not replaced:
-        rows.append(run)
+    lock_path = runs_jsonl.parent / ".runs.jsonl.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        try:
+            os.chmod(lock_path, 0o664)
+        except OSError:
+            pass
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        rows = _read_jsonl(runs_jsonl)
+        replaced = False
+        for i, row in enumerate(rows):
+            if row.get("run_id") == run_id:
+                rows[i] = run
+                replaced = True
+                break
+        if not replaced:
+            rows.append(run)
 
-    payload = "".join(json.dumps(row) + "\n" for row in rows)
-    _atomic_write(runs_jsonl, payload)
+        payload = "".join(json.dumps(row) + "\n" for row in rows)
+        _atomic_write(runs_jsonl, payload)
     action = "updated" if replaced else "appended"
     print(f"runs-jsonl-{action}: {run_id}")
 
