@@ -160,15 +160,11 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
   unit:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 160
-    wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
     bh_galaxy_perf: 180
@@ -340,7 +336,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
-    bh_sc1: 230
+    bh_sc1: 140
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
