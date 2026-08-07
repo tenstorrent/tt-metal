@@ -2050,14 +2050,19 @@ jobs:
               -d "$(jq -n --arg q "$query" '{query: $q}')" \
               "https://api.github.com/graphql")
 
-            # Fail open on transport error or GraphQL errors block.
-            if [ -z "$resp" ] || ! echo "$resp" | jq -e '.data' >/dev/null 2>&1; then
-              echo "Warning: OOO lookup failed, using full owner list" >&2
+            # Fail open on transport error, malformed/null data, OR a GraphQL
+            # errors array (partial-data responses are valid GraphQL but may omit
+            # some users' status — treat them as "lookup failed").
+            if [ -z "$resp" ] \
+              || ! echo "$resp" | jq -e '.data != null' >/dev/null 2>&1 \
+              || echo "$resp" | jq -e '(.errors // []) | length > 0' >/dev/null 2>&1; then
+              echo "Warning: OOO lookup failed or returned partial data, using full owner list" >&2
               echo "$csv"
               return 0
             fi
 
-            # Logins whose status marks them OOO.
+            # Logins whose status marks them OOO. Match keywords as whole words
+            # (\b...\b) so e.g. "PTO" does not match "laptop".
             local ooo
             ooo=$(echo "$resp" | jq -r '
               .data
@@ -2066,7 +2071,7 @@ jobs:
               | select(. != null and .status != null)
               | select(
                   (.status.indicatesLimitedAvailability == true)
-                  or ((.status.message // "") | test("OOO|out of office|vacation|PTO"; "i"))
+                  or ((.status.message // "") | test("\\b(OOO|out of office|vacation|PTO)\\b"; "i"))
                 )
               | .login
             ' 2>/dev/null | tr '\n' ' ')
@@ -2093,7 +2098,7 @@ jobs:
               return 0
             fi
 
-            [ -n "$dropped" ] && OOO_SKIPPED_USERS="$OOO_SKIPPED_USERS$dropped,"
+            [ -n "$dropped" ] && echo "OOO owners skipped from ping pool: $dropped" >&2
             echo "$kept"
           }
 
