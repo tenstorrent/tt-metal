@@ -876,6 +876,9 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
         sdpa_prefill_compute_kernel_cfg=object(),
         sliding_window=None,
         transformation_mat_prefill=object(),
+        use_minimal_qkv_matmul=MagicMock(return_value=False),
+        use_minimal_wo_matmul=MagicMock(return_value=False),
+        wo_prefill_len_cutoff=1024,
     )
     cache_dtype = object()
     attention = SimpleNamespace(
