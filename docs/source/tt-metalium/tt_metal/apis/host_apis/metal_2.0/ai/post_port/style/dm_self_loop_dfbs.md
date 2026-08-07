@@ -82,12 +82,26 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
    then reads as "this one uses the FIFO" for a buffer that never touches it. Attribute every hit to
    its receiver.
 
-   **No hits on that DFB → not a site for this pass.**
- A self-loop that never calls the FIFO
-   machinery is handled by the [sync-free pass](sync_free_dfbs.md) instead, which is a smaller and
-   safer change. Exclude that DFB from your site list, note it in your report for the other pass, and
-   **carry on surveying the rest** — this is a per-DFB verdict, not a reason to stop the pass. An op
-   can easily hold one of each.
+   **A clean grep is not yet a verdict.** The calls need not appear in the kernel at all — a helper
+   can make them on the kernel's behalf — and this grep is stricter than most, because it requires
+   the `<handle>.<method>` spelling to appear literally. Under an RAII guard such as
+   `integral_image`'s `ReadCBGuard`, or a shared library like
+   `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl` where the synchronization is selected by a
+   template argument, no such expression exists in the kernel anywhere. Before concluding, check
+   whether the DFB's handle — or the id it was built from — is passed into any function, constructor,
+   or template argument, and follow it if it is, out of the op directory if that is where it leads.
+   The [sync-free pass](sync_free_dfbs.md) documents this failure mode in full.
+
+   **No hits on that DFB, and nothing opaque taking it → not a site for this pass.** A self-loop that
+   never calls the FIFO machinery is handled by the [sync-free pass](sync_free_dfbs.md) instead,
+   which is a smaller and safer change. Exclude that DFB from your site list, note it in your report
+   for the other pass, and **carry on surveying the rest** — this is a per-DFB verdict, not a reason
+   to stop the pass. An op can easily hold one of each.
+
+   Getting this one wrong costs more than a missed site. A helper-synchronized buffer that reads as
+   having no FIFO calls is exactly what this step hands to the sync-free pass — and that pass
+   converts to a `Scratchpad`, which has no synchronization semantics at all. The two passes fail
+   into each other here, so the check has to hold in this one.
 
 5. **Confirm the DFB is not built on borrowed memory.** Check `borrowed_from` on its
    `DataflowBufferSpec`: it must be **unset**.
