@@ -76,6 +76,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
-    std::optional<tt::tt_metal::DataType> dtype = std::nullopt);
+    std::optional<tt::tt_metal::DataType> dtype = std::nullopt,
+    // Shared per-MM-core progress counter scratch; see MinimalMatmulStridedReduceScatterAsyncInputs.
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
 }  // namespace ttnn::prim

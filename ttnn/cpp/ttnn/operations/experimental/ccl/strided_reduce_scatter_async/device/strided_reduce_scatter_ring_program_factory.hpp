@@ -70,8 +70,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // Optional fused addcmul at the final RS write step.
     // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
     std::optional<float> fused_ternary_scalar = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,   // residual a [M, D/tp]
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);  // gate b [1, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,  // residual a [M, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,  // gate b [1, D/tp]
+    // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only):
+    // uint32, L1 HEIGHT_SHARDED with one row per core over a grid covering the RS worker cores.
+    // Sharing one tensor across all MMRS programs keeps this off the device's permanent L1 floor;
+    // when omitted a private array is allocated per program and retained for the program's life.
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
 // Override runtime arguments helper for ring topology
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
