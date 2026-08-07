@@ -88,35 +88,65 @@ void kernel_main() {
             const uint32_t index_l1 = index_buffer.get_read_ptr();
             const uint32_t output_l1 = output_buffer.get_write_ptr();
 
-            // Element-level gather: iterate over all elements in the index tile
+            // Element-level gather: iterate over all elements in the index tile.
+            // The valid_h/valid_w bounds check is hoisted out of the element loop:
+            // on the in-order baby RISC the per-element compare+select is a
+            // measurable fraction of the gather-address math it sits inside, and
+            // nearly every tile is full.
+            const bool full_tile = (valid_h == tile_height) && (valid_w == tile_width);
             uint32_t count = 0;
-            for (uint32_t i = 0; i < tile_faces; ++i) {
-                for (uint32_t j = 0; j < tile_faces; ++j) {
-                    for (uint32_t k = 0; k < face_size; ++k) {
-                        for (uint32_t l = 0; l < face_size; l++) {
-                            // Read the global index value from the index tile
-                            const uint32_t row_in_tile = i * face_size + k;
-                            const uint32_t col_in_tile = j * face_size + l;
-                            const uint32_t global_index = (row_in_tile < valid_h && col_in_tile < valid_w)
-                                                              ? get_value_from_tile(index_l1, count, index_df_size)
-                                                              : 0;
+            if (full_tile) {
+                for (uint32_t i = 0; i < tile_faces; ++i) {
+                    for (uint32_t j = 0; j < tile_faces; ++j) {
+                        for (uint32_t k = 0; k < face_size; ++k) {
+                            for (uint32_t l = 0; l < face_size; l++) {
+                                const uint32_t global_index = get_value_from_tile(index_l1, count, index_df_size);
 
-                            // Map global_index to local_index in tiled layout:
-                            // tile_idx = which input tile along W
-                            // index_in_local_tile = position within that tile
-                            const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
-                            const uint32_t index_in_local_tile = global_index & tile_width_mask;
-                            const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
-                            const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
+                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                const uint32_t index_in_local_tile = global_index & tile_width_mask;
+                                const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
+                                const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
 
-                            const uint32_t local_index = tile_idx * (tile_width * tile_height) +
-                                                         which_row * (face_size * face_size) + k * face_size +
-                                                         which_col + i * (tile_width * face_size);
+                                const uint32_t local_index = tile_idx * (tile_width * tile_height) +
+                                                             which_row * (face_size * face_size) + k * face_size +
+                                                             which_col + i * (tile_width * face_size);
 
-                            // Gather: read from input, write to output
-                            const uint32_t value = get_value_from_tile(input_l1, local_index, input_df_size);
-                            write_value_to_tile(output_l1, count, output_df_size, value);
-                            count++;
+                                const uint32_t value = get_value_from_tile(input_l1, local_index, input_df_size);
+                                write_value_to_tile(output_l1, count, output_df_size, value);
+                                count++;
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (uint32_t i = 0; i < tile_faces; ++i) {
+                    for (uint32_t j = 0; j < tile_faces; ++j) {
+                        for (uint32_t k = 0; k < face_size; ++k) {
+                            for (uint32_t l = 0; l < face_size; l++) {
+                                // Read the global index value from the index tile
+                                const uint32_t row_in_tile = i * face_size + k;
+                                const uint32_t col_in_tile = j * face_size + l;
+                                const uint32_t global_index = (row_in_tile < valid_h && col_in_tile < valid_w)
+                                                                  ? get_value_from_tile(index_l1, count, index_df_size)
+                                                                  : 0;
+
+                                // Map global_index to local_index in tiled layout:
+                                // tile_idx = which input tile along W
+                                // index_in_local_tile = position within that tile
+                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                const uint32_t index_in_local_tile = global_index & tile_width_mask;
+                                const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
+                                const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
+
+                                const uint32_t local_index = tile_idx * (tile_width * tile_height) +
+                                                             which_row * (face_size * face_size) + k * face_size +
+                                                             which_col + i * (tile_width * face_size);
+
+                                // Gather: read from input, write to output
+                                const uint32_t value = get_value_from_tile(input_l1, local_index, input_df_size);
+                                write_value_to_tile(output_l1, count, output_df_size, value);
+                                count++;
+                            }
                         }
                     }
                 }
