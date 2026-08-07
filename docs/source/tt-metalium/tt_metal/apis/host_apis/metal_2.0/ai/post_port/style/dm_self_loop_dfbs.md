@@ -160,8 +160,8 @@ uint32_t rd = 0;   // read index, in elements of T
 |---|---|
 | `reserve_back(n)` | *nothing* |
 | `wait_front(n)` | *nothing* |
-| `get_write_ptr()` | the index `wr` — the kernel accesses `stage[wr + …]` |
-| `get_read_ptr()` | the index `rd` |
+| `get_write_ptr()` | the index `wr` **as it stands where the old call was** — the kernel accesses `stage[wr + …]` |
+| `get_read_ptr()` | the index `rd`, likewise at the point of the old call |
 | `push_back(n)` | `wr = (wr + n * entry_elems) % stage.size()` |
 | `pop_front(n)` | `rd = (rd + n * entry_elems) % stage.size()` |
 
@@ -169,6 +169,14 @@ The two waits drop because a sole single-threaded toucher cannot usefully block 
 space or the data is already there, or the original program would have hung. Everything else
 reproduces exactly what the FIFO was computing, which is why this is *equivalent by construction*
 rather than equivalent by argument.
+
+**Substitute the index's value where the old call sat, not the variable as it reads later.** The two
+getter rows are the ones this bites. A kernel that snapshots the address into a local —
+`uint32_t addr = dfb.get_write_ptr();` — and goes on using `addr` *after* a `push_back` is still
+referring to the pointer's value from before the advance. Replacing `addr` with a bare `wr` there
+silently retargets every access to the next slot, which was never written. Where the old code
+captured once and never re-derived, the index it captured is frozen at that value; the later updates
+are what [Cleanup](#cleanup) item 1 is about.
 
 **In the single-entry case — one entry, filled and drained each pass — none of this survives.** Both
 indices stay `0`, so there is no index, no stride, and no modulo: the calls simply disappear and the
@@ -202,10 +210,8 @@ about. A stride that varies with input shape is still fine as a CTA — shape pa
 program-cache key, so a different shape rebuilds the kernel rather than reusing a stale constant.
 
 The wrap bound is `stage.size()`, in **elements**; `stage.size_in_bytes()` is the byte-indexed
-equivalent. Match whichever unit your indices are in.
-
-The wrap bound is `stage.size()`, which the scratchpad already knows — `num_entries` never needs
-reconstructing kernel-side.
+equivalent. Match whichever unit your indices are in. The scratchpad already knows it either way, so
+`num_entries` never needs reconstructing kernel-side.
 
 **The division must be exact.** If `entry_size % sizeof(T) != 0` then `T` is wrong for this buffer —
 the kernel is viewing it as something the entries do not align to — and every index built on the
@@ -242,6 +248,21 @@ Same shape as any DFB-to-scratchpad conversion:
 - Add a `ScratchpadBinding` to **each** kernel that bound it, naming the accessor that kernel will
   use. Where several kernels shared the spec they keep sharing it: a `ScratchpadSpec` may be bound by
   multiple `KernelSpec`s over disjoint node sets, which is exactly the configuration the DFB was in.
+- **`data_format_metadata` has no counterpart, so establish that nothing uses it before dropping
+  it.** A `ScratchpadSpec` carries only `unique_id` and `size_per_node`. The field exists on a DFB
+  for the LLKs, which reach tiles through the FIFO protocol, so on a buffer this pass converts it is
+  *expected* to be inert — but that is a statement about what the field is for, not a guarantee
+  about the op in front of you, and nothing stops an op consulting it some other way.
+
+  So check rather than assume. Walk every use of the DFB's handle or id across the binding kernels:
+  if each one is a raw address grab or a NOC operand, nothing consults the declared format and the
+  field drops. Some ops say as much in a comment beside the spec — useful as a pointer to what the
+  author intended, not as a substitute for looking.
+
+  **If anything does consult it, stop and report.** That combination is not currently expressible,
+  and a real op needing it is exactly the evidence the API owner wants; a workaround in your diff
+  buries it instead. Either way, do not carry it through as a compile-time arg — that is out of
+  scope for this pass.
 
 **A multi-bound spec converts as a unit.** If two kernels each self-looped on it, convert both in the
 same pass. Half a conversion — one kernel on the scratchpad, the other still binding a DFB that no
@@ -253,9 +274,10 @@ Two mechanical details that will otherwise cost you a build:
 
 - **`KernelSpec` fields are written in declaration order**, and designated initializers are compiled
   with `-Werror=reorder-init-list`, so the new entries go in their declared positions rather than
-  appended. **Read the order off `kernel_spec.hpp`** rather than trusting a list here — it grows.
-  At the time of writing: `dfb_bindings` → `semaphore_bindings` → `scratchpad_bindings` →
-  `tensor_bindings` → `compile_time_args` → `runtime_arg_schema`.
+  appended. **Read the order off `kernel_spec.hpp`.** The fields this pass touches fall in the
+  relative order `dfb_bindings` → `scratchpad_bindings` → `compile_time_args`, but that is a subset:
+  the struct carries other fields before, between and after them, and it grows. Do not treat the
+  three above as the list — they are only the ones you are editing.
 - **The spec-name constant changes type**, from `DFBSpecName` to `ScratchpadSpecName` — different
   `StrongType`s, so the declaration must be edited regardless. While you are on that line, rename it
   off any `cb`/`dfb` wording: a scratchpad named `input_cb` is exactly the thing these passes exist
@@ -285,9 +307,11 @@ noc.async_read(src, stage, size, src_args, {.offset_bytes = wr * sizeof(uint32_t
 **Why the offset picks up `wr`:** a `DataflowBuffer` used as a NOC operand resolves to its *current
 FIFO pointer* plus the given offset — `get_write_ptr() + offset_bytes` as a destination,
 `get_read_ptr() + offset_bytes` as a source. That moving pointer is the thing your index now
-replaces, which is why a `{.offset_bytes = 0}` on the old call becomes `{.offset_bytes = wr}` on the
-new one rather than staying zero. A `Scratchpad` operand resolves from its base, so the index has to
-appear explicitly.
+replaces, which is why a `{.offset_bytes = 0}` on the old call becomes
+`{.offset_bytes = wr * sizeof(T)}` on the new one rather than staying zero. A `Scratchpad` operand
+resolves from its base, so the index has to appear explicitly — and the field is named
+`offset_bytes` for a reason, so an element-indexed `wr` scales by `sizeof(T)` on the way in. (With
+byte-indexed `wr`, as when `T` varies across branches, it goes in unscaled.)
 
 This holds for every `Noc` operation — `async_read`, `async_write`, their `_with_state` forms,
 `async_write_zeros` — because they all resolve an operand the same way. Do **not** extract an address
@@ -366,7 +390,10 @@ Scratchpad<uint32_t> stage(scratch::stage);
 ```
 
 `operator[]` is bounds-checked against the region's extent, which neither the raw pointer nor the
-`CoreLocalMem` form was, so this is the one place the conversion buys a little safety for free.
+`CoreLocalMem` form was, so this is the one place the conversion buys a little safety for free. Keep
+the claim narrow, in your report as well as in your head: the check validates *the element you are
+subscripting*, not a range. `&stage[i]` handed to something that then reads a page from it is
+checked at `i` and nowhere else.
 
 Note there is no `wr` in that example, and that is not a simplification. The write pointer sits at
 its initialized position — the base of the allocation — until something advances it, so a view taken
@@ -380,14 +407,77 @@ bounds-checked.
 allocation behind it, which is the manufactured view this recipe is removing, not a way to express
 one.
 
+**If the old address doubled as a flag, you have to re-express the flag.** A kernel that stages
+conditionally often declares the pointer up front, leaves it null when it does not stage, and later
+tests the pointer itself as the predicate:
+
+```cpp
+volatile tt_l1_ptr int* addr_ptr = nullptr;
+if (batch_id_size > 0) { … addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr); }
+…
+if (addr_ptr) { … }        // means "did we stage anything?", not "is this pointer valid?"
+```
+
+A `Scratchpad` cannot be null — it is bound for the program's lifetime whether or not the kernel put
+anything in it — so `if (addr_ptr)` has no direct translation and **must** change. This is a
+required repair rather than optional cleanup, and it is [work your own change
+made necessary](../pass_procedure.md#step-3--apply), so report it as such.
+
+Substitute the condition the pointer was *standing in for*, which is almost always sitting right
+there as the guard that set it — `if (batch_id_size > 0)` above. Recover it by reading, not by
+inventing a nearer-looking test: a predicate that merely agrees on the inputs you thought about is
+the kind of error nothing downstream will catch. If you cannot identify what the nullness meant,
+stop — see [When to stop](#when-to-stop).
+
+If you know what it meant but the condition is not usable where the predicate sits — the value is
+out of scope there, or recomputing it would be awkward — carry the answer in an explicit `bool`,
+set where the pointer used to be:
+
+```cpp
+bool staged = false;
+if (batch_id_size > 0) { … staged = true; }
+…
+if (staged) { … }
+```
+
+**Do not encode the flag as a sentinel index** (`-1`, `UINT32_MAX`). The pointer was only ever a
+flag by accident — a pointer happened to be what was in hand — and an index carrying a sentinel
+repeats that double duty in fresh code, where it has no excuse. It also forces the index signed or
+magic-valued, and the index is the thing your `% stage.size()` wrap runs on. Often there is no index
+to overload anyway: once [Cleanup](#cleanup) item 1 has run on a buffer whose update was dead, none
+remains.
+
+Note this is a *runtime* condition and a different thing from a **conditionally bound** DFB, which
+is a compile-time affair and keeps its `#ifdef` untouched (see [Host side](#host-side)).
+
 ### Cleanup
 
 After the translation is in and the tests are green, the following are permitted, and **nothing
 else**. Every item is safe by local inspection — that is why the list is this short.
 
-1. **The buffer had a single entry** → both indices are always `0`, so delete them, the stride, and
-   the modulo. Accesses become `stage[i]` and any address is just `get_base_address()`. (If the
-   translation was done faithfully this is usually already how it came out.)
+**These are readability nice-to-haves, and correctness outranks every one of them.** A cleanup you
+are not certain of is not worth its own risk: the pass has already delivered its value once the
+translation is in, and a simplification that turns out to be wrong costs far more than the tidiness
+was worth. **If you are not sure, describe it in your report and leave the code alone.** That is a
+success-tier outcome — someone who knows the op can act on the observation, and nothing was
+gambled to get it.
+
+Do not lean on your sentinels to license one of these. Coverage varies a great deal across ops, and
+some of these buffers are exercised thinly or not at all by the tests you are running; a green run
+is much weaker evidence for a cleanup than it is for the translation, which is equivalent by
+construction. The whole list assumes you have satisfied yourself *locally*, by reading, and the
+tests are only a backstop.
+
+1. **The index's value is never read after the update** → the update is dead, so delete it along
+   with the stride and the modulo. Accesses become `stage[i]` and any address is just
+   `get_base_address()`.
+
+   The question is **observability, not entry count.** A single-entry buffer reaches this
+   automatically, since both indices stay `0` — but so does a multi-entry buffer whose kernel
+   captures the pointer *before* the only `push_back` and never re-reads it afterwards. Conversely a
+   two-entry buffer that does re-read the pointer needs its rotation kept. Read what the kernel does
+   with the index; do not infer it from `num_entries`. (If the translation was done faithfully, a
+   dead update is usually already visible as a variable nothing consumes.)
 2. **`rd` and `wr` provably hold the same value at every point they are used** → fold them into one
    index.
 
@@ -397,14 +487,20 @@ else**. Every item is safe by local inspection — that is why the list is this 
    two genuinely differ exactly where it matters. Folding them makes the read hit the wrong entry:
    numerically wrong, and on a two-entry buffer it may well still pass a test, because the other slot
    holds recent data. **If anything touches the buffer between the push and the pop, do not fold.**
-3. **Rename the leftover locals** off `cb_` / `dfb_` prefixes, which now describe nothing.
+3. **Rename the leftover locals** off `cb_` / `dfb_` prefixes, which now describe nothing. One
+   constraint on the new name: **do not call the local `scratch`.** The generated accessor lives in
+   a namespace of that name, so a local `scratch` shadows it and `scratch::<accessor>` stops
+   resolving in that scope. Name it for the buffer — `stage`, `ids` — as you would anyway.
 4. **Delete a local the translation left unused.** A `uint32_t addr = dfb.get_write_ptr();` whose only
    consumer was the FIFO becomes a variable holding an index nobody reads. Check it really has no
    other use, then remove it rather than leaving the translation's scaffolding behind.
 
-**Do not collapse a multi-entry rotation onto a single slot**, however plainly the buffer looks
-emptied on each pass. Whether the rotation is load-bearing depends on how many NOC transfers are
-outstanding against the buffer at once, and there is more than one way to have several in flight:
+**Do not collapse a rotation that is still observed onto a single slot**, however plainly the buffer
+looks emptied on each pass. This is precisely the case item 1 does *not* reach: there the index's
+updated value is never read, so removing it changes nothing; here the kernel does read it after it
+advances, so the rotation is live code and the question becomes whether it is load-bearing. That
+depends on how many NOC transfers are outstanding against the buffer at once, and there is more than
+one way to have several in flight:
 transaction-ID-scoped barriers, or simply issuing a batch of reads before one blanket barrier. A
 rotation doing that work looks identical to one that is pure bookkeeping — and pinning the wrong one
 lets an in-flight transfer overwrite data still being read. No error, no failing test, wrong
