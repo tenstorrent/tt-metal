@@ -1082,7 +1082,7 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | The advisor has a "fewer-cores bias" | Its ordering prefers *more* cores, at level 6 of 7. The low values come from elsewhere — §3.3, open question |
 | qwen's unreachable linear layers are "~91 %" of its model time | **97 %** — recomputed from its own per-kind medians and layer counts |
 | "Re-measure an overlapping candidate at 4× replays" (my proposal) | **Refuted by experiment.** No separation, and the floor got 3–4× worse (§3.7, E8) |
-| "The advisor's rope advice is illegal" (my first claim) | **The reasoning was wrong** — my probe left the *slices* height-sharded, which the advisor wants interleaved. A faithful implementation does fail, but the finding is the validation gap (§3.23), not the illegality |
+| "The advisor's rope advice is illegal" (my first claim) | **Superseded twice — see the row below for the final position.** I first blamed my probe's *slices*, then re-framed it as a validation gap. Both were wrong: the advised shard is (32,64) and every op in the real plan runs (§3.23) |
 | Implicit: that the wins generalise across batch | They do **not** — phi is batch-32-pinned by construction (E17), and nothing records it |
 | Row 46/54 `linear` "follows the advice" | **Downgraded to *family only*.** Both were already L1 width-sharded before the change, and the advised grid differs (88c vs 32c, 88c vs 12c). I had credited the advisor with the incumbent's own choice |
 | Seven rows read as "does not follow the advice" / "op removed" | **Downgraded to *undecidable*.** All seven are `pair_confidence: position` — the tool's own documented guess. I had been reading positional pairings as findings (§3.24) |
