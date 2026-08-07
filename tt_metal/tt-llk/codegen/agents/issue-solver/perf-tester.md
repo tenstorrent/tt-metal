@@ -203,7 +203,9 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
     --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-perf-${TARGET_ARCH}-${role}" \
     --timeout 1800 --artifact-out "$destination")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
-  if [ "$role" = current ] && [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
+  if [ "$role" = current ] &&
+     [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ] &&
+     [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
     mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
     args+=(--result-json-out "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json")
   fi
@@ -216,8 +218,13 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
 The queue selector is intentionally separate from `PERF_OP`: `--k` narrows
 pytest while `PERF_OP` narrows CSV comparison. Require exactly one
 `HW_TEST_RESULT arch=${TARGET_ARCH}` marker in each queue log and retain its job
-ID in the result and self-log. Current and baseline use distinct session labels
-so the queue's warm workspaces cannot overwrite one another.
+ID in the result and self-log. For an audit run's current candidate, also
+require the exact protocol-v2 result at the sealed requirement path and leave
+it unchanged for the strict reducer; a missing, malformed, foreign, or
+non-success result is not valid performance evidence. Production and the
+baseline comparison retain the legacy marker path and do not request a strict
+result copy. Current and baseline use distinct session labels so the queue's
+warm workspaces cannot overwrite one another.
 
 Runner exits for the fixed tree:
 

@@ -298,10 +298,9 @@ files. Check `git status --short`; if an untracked path belongs to the fix,
 return `ENV_ERROR` without dispatching. These are queue transport limitations;
 the issue-solver's local compile remains the gate.
 
-The queue accepts a pytest node selector, but not a separate `-k` expression.
-Require `TEST_ID` or an unfiltered `TEST_FILE`; if the plan has only
-`K_FILTER`, return `ENV_ERROR` rather than silently running a broader test.
-The queue also always uses split producer/consumer execution, so reject a test
+The queue accepts the same exact pytest node or `-k` selector sealed in the
+manifest. Pass `--k "$K_FILTER"` when present; never silently run a broader
+test. The queue always uses split producer/consumer execution, so reject a test
 that specifically requires `--no-split`.
 
 Construct the selector relative to `tests/python_tests`, which differs from
@@ -310,21 +309,45 @@ the wrapper's arch-relative selector:
 ```bash
 QUEUE_TEST="${TEST_ID:-$TEST_FILE}"
 [ "$arch" = quasar ] && QUEUE_TEST="quasar/$QUEUE_TEST"
+selector_args=()
+[ -n "$K_FILTER" ] && selector_args+=(--k "$K_FILTER")
+result_args=()
+if [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ]; then
+  result_args+=(--result-json-out "$RESULT_JSON_OUT")
+fi
 
 set +e
 $HW_TEST_DISPATCH_CMD --kind llk --arch "$arch" \
   --test "$QUEUE_TEST" \
+  "${selector_args[@]}" \
   --worktree "$WORKTREE_DIR" \
   --base "$(sg GIT_COMMIT)" \
   --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
-  --result-json-out "$RESULT_JSON_OUT" \
+  "${result_args[@]}" \
   --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/run.log"
 dispatch_exit=${PIPESTATUS[0]}
 set -e
 ```
 
 Require one final `HW_TEST_RESULT arch=<arch>` marker and record its `job`
-value:
+value. For an audit run, also require `RESULT_JSON_OUT` to contain the exact
+protocol-v2 result copied by dispatch. Validate its schema, run, attempt,
+requirement, architecture, backend, and selector against the sealed manifest;
+then derive the compatibility suite summary from its structured evidence:
+
+- `classification=success` -> `SUCCESS`;
+- `candidate_failure|coverage_error` -> `TESTS_FAILED`;
+- `infra_error|timed_out`, a missing/invalid result, or an identity mismatch ->
+  `ENV_ERROR`.
+
+Set `tests_total=collection.selected` and
+`tests_passed=execution.passed`. Preserve skipped, xfailed, and xpassed counts
+in the self-log; do not convert them into passes. The strict reducer rereads
+the same result file and is authoritative for an audit verdict. The marker and
+dispatch exit are correlation/supporting evidence only.
+
+For production compatibility, no protocol-v2 result copy is requested and the
+legacy marker remains authoritative:
 
 | Marker | Verdict |
 |---|---|
@@ -332,8 +355,7 @@ value:
 | `ok=false ran=true` | `TESTS_FAILED` |
 | missing, malformed, or `ran=false` | `ENV_ERROR` |
 
-The marker is authoritative; the command exit is supporting evidence. Current
-LLK queue results do not provide test counts. Record zero counts with an
+Legacy queue markers do not provide exact counts. Record zero counts with an
 explicit obstacle instead of inventing them, and always retain the job ID so
 the detailed queue result can be inspected.
 
