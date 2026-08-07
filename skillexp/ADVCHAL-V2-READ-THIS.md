@@ -82,25 +82,35 @@ it shipped the *sharded multiply/add* form of the rope chain, which on the `fuse
 −6.97 % against −10.43 % for the fully advised form. If that ordering holds on its own incumbent — untested — it
 has headroom too.
 
-### How solid are the zeros?
+### How solid are the zeros, and which are still blocked?
 
 A zero can mean three different things — no headroom, no measurement, or no way to look — and they carry very
-different weight. Only one of the seven is verified by measurement:
+different weight. Only one of the seven is verified by measurement. The last column says what has happened to the
+obstruction since: four of the seven had a real one, and two of those four are now measured through.
 
-| cell | zero because | how well established |
-|---|---|---|
-| **llama-3.1-8B** `exp17` | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win |
-| llama-3.2-1B `exp17` | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
-| phi-3.5 `exp17` | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi-3.5 `fuse-noadvise` — was **never tried here** |
-| qwen3.6-27B `nofuse-noadvise` | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stops inside it — **63.5 % of that layer is `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect |
-| north-mini `nofuse-noadvise-onA` | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the ceiling from 0.66× the noise floor to **10.09×** — **2 candidates worth 61.9 µs/model** that did not exist before. §3.5 |
-| north-mini `nofuse-noadvise` | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
-| qwen3.6-27B `fuse-noadvise` | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
+| cell | zero because | how well established | blocker since? |
+|---|---|---|---|
+| **llama-3.1-8B** `exp17` | nothing on its ladder beats the default | **Verified.** The whole achievable ladder was swept — {8, 16, 32, 64}, the only counts its knob can express. 16 (≈ the advised 22) and 32 are both **inside the noise floor**; 64 is +3.78 %, 8 is +11.21 %. The advised 22 is not expressible at all; the knob rounds it to 16. There is no hidden norm win | **none — this zero is real** |
+| llama-3.2-1B `exp17` | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way | **none — just unmeasured.** Sweeping its ladder needs device time, not a fix |
+| phi-3.5 `exp17` | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi-3.5 `fuse-noadvise` — was **never tried here** | **none — a screening-order choice**, not an obstruction. Fixed by F5 in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) |
+| north-mini `nofuse-noadvise-onA` | sparse MoE untraceable | **Not a placement verdict.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail | **UNBLOCKED.** One handler ported from the sibling tracer. Capture 14 → 39 ops, `untraced` **77.15 % → 14.39 %**, ceiling 0.66× → **10.09×** the noise floor, **2 candidates worth 61.9 µs/model**. [tt-mlir branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps), [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) |
+| north-mini `nofuse-noadvise` | all measured geometries slower or stalled | **Graded reasonable, and that grade was wrong.** It did screen and its `advisor_dense_chain_exact` candidate regressed 15 %, but its ceiling sat *below* its own noise floor because three quarters of each MoE layer was never traced | **UNBLOCKED.** Two handlers — `ttnn.ones_like` and `ttnn.sparse_matmul`. `untraced` **~76 % → ~21 %** on both MoE kinds, ceiling 0.45×/1.80× → **16.09×/22.77×**, **11 candidates worth 632 µs/model** — the largest find in the corpus. [tt-mlir branch](https://github.com/tenstorrent/tt-mlir/tree/mvasiljevic/ttnn-jit-tracer-coverage-gaps), [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) |
+| qwen3.6-27B `nofuse-noadvise` | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stopped inside it — **63.5 % of that layer `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect | **TRACER UNBLOCKED, STILL BLOCKED.** Four gaps closed — `ttnn.copy`, `ttnn.softplus`, `TracedTensor.__getitem__` and `ttnn.repeat_interleave` — and the full **71-op** mixer now traces. A native abort inside `mlir::PassManager::run` blocks it instead: **not** a coverage gap, unattributed, and needs a debug build. [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md) §5 |
+| qwen3.6-27B `fuse-noadvise` | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies to its `linear_attention` kind | **PROBABLY UNBLOCKED, UNTESTED.** Same four handlers should apply; this arm was never re-captured, so that is an expectation, not a measurement |
 
-**1 verified, 1 asserted, 1 reasonable, 1 partial, and at least 3 of these seven are coverage gaps** — with
-north-mini `nofuse-noadvise` and `fuse-noadvise`, which this table grades as reasonable and untested, now also known to have been
-coverage-limited. So "7 of 15 returned zero" is true and misleading: for most of them nobody had shown the advisor
-the layer. The zero records a tracer limitation, not a measurement.
+Three of the seven were never blocked: llama-3.1-8B has a real zero, llama-3.2-1B needs device time, and phi-3.5
+`exp17` needs a different screening order. Of the four that were, **two are unblocked and re-measured**, one is
+**expected to be but untested**, and one **moved** — qwen `nofuse-noadvise`'s obstruction is no longer coverage but
+a pipeline crash.
+
+Note what the two north-mini rows have in common: **both cells screened honestly and both concluded correctly from
+what they could see.** The zero was a property of the tracer, not of the decoder or the optimizer — and nothing in
+the stage's own output distinguished that case from a real zero. That is the finding worth carrying forward, more
+than any individual cell's number.
+
+**So the tally is 1 verified, 1 asserted, 1 screening-order, and 4 coverage gaps** — not the 3 the earlier
+accounting recorded. "7 of 15 returned zero" is true and misleading: for most of them nobody had shown the
+advisor the layer.
 
 Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREMENTS.md).
 
@@ -115,7 +125,7 @@ Per-cell narratives and every cell measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEAS
 | **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. Both figures are lower bounds: nine cells were never probed for a better configuration, and eight cell/kinds were never fully traced. |
 | **What is the single biggest miss?** | The **screening order**. The harness builds candidates up chain by chain from the frozen incumbent and never applies the optimizer's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % against the −4.88 % that shipped — 3.7×** — and −10.43 % of that is **bit-identical** to the incumbent. Nobody tried it. |
 | **Did the cells follow the advice?** | **7 of 15 tried the advisor's exact value on at least one advised item**, 6 as their first candidate, and all 7 ended cleanly. **4 never tried it and recorded no reason. None applied the whole plan.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **Are the zeros failures?** | Mostly not the optimizer's. Only **1 of 7 is verified by measurement** (llama-3.1-8B `exp17`, whose whole ladder was swept). **At least 5 are coverage gaps** — the tracer never showed the advisor those layers, so the stage produced no verdict either way. Every real tracer gap is now fixed and re-measured: [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). |
+| **Are the zeros failures?** | Mostly not the optimizer's. Only **1 of 7 is verified by measurement** (llama-3.1-8B `exp17`, whose whole ladder was swept). **4 of the 7 are coverage gaps** — the tracer never showed the advisor those layers, so the stage produced no verdict either way. Three of those four are now unblocked and re-measured, and the fourth moved from a coverage gap to a pipeline crash: §1 and [`BLOCKER-AUDIT`](ADVCHAL-V2-BLOCKER-AUDIT.md). |
 | **Whose defects?** | **10 in the stage**, almost all one-file changes with no build, and they account for the larger measured loss. **6 in the optimizer or its reporting**, needing tt-mlir work. The ledger is §3. |
 
 **The surrounding tooling is new, and it shows — which is the good news.** `ttnn-jit` is ten months old and
