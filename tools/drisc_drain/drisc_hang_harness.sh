@@ -26,6 +26,25 @@ DELAY=${DELAY:-150}; N=${N:-60}; ARMED=${ARMED:-0}
 STOP_ON_WEDGE=${STOP_ON_WEDGE:-0}
 # REPEAT>0 arms the egress amplifier (TT_METAL_PERF_DEBUG_SHIP_REPEAT). Payload becomes duplicate
 # frames, so it is a STRESS tool, not a capture -- NO_DECODE is already on.
+# 2x2 factorial knobs: DISPATCH=fast|slow and DRAINER=drisc|tensix
+DISPATCH=${DISPATCH:-fast}; DRAINER=${DRAINER:-drisc}
+# Producer grid. MUST be stated explicitly, never "--gx 0" (= whatever the device offers).
+#
+# Slow dispatch reserves nothing for dispatch, so compute_with_storage_grid_size() returns the FULL
+# 12x10; fast dispatch returns 11x10. The drainer holds the last column back under slow dispatch
+# (perf_debug_profiler.cpp ~line 613), so "--gx 0" put producers on column 12 that NO drainer polls.
+# Those lossless producers fill their rings, block in ring_ensure_room forever, and the run dies in
+# wait_until_cores_done -- an UNCAUGHT 45 s throw that dumps core. That is the "26/26 slow-dispatch
+# TEARDOWN" of FINDINGS N+21 B: a harness grid bug, not a device fault. Reproduced and fixed 2026-08-07.
+#   DRISC arm  -> only the 10 undrained cores of column 12 hang
+#   Tensix arm -> the drainer LIVES in that column, so a producer lands on it and scribbles its L1;
+#                 nothing drains at all and all 120 cores hang
+# 11x10 is also exactly the fast-dispatch grid, so pinning it makes all four 2x2 cells offer the
+# identical 110-core / 550-lane load.
+GX=${GX:-11}; GY=${GY:-10}
+CELLX=""
+[ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1"
+[ "$DRAINER"  = "tensix" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1"
 REPEAT=${REPEAT:-0}
 REPX=""
 [ "$REPEAT" != "0" ] && REPX="TT_METAL_PERF_DEBUG_SHIP_REPEAT=$REPEAT"
@@ -43,7 +62,7 @@ recover(){ ssh -p $P -o ConnectTimeout=10 $H 'tt-smi -r' >/dev/null 2>&1; sleep 
     until ssh -p $P -o ConnectTimeout=5 $H 'true' 2>/dev/null; do sleep 15; done; sleep 10; st=$(card_state); fi
   echo "  [recover] card=$st" | tee -a $SUM; }
 
-echo "=== HARNESS: delay=$DELAY armed=${ARMED:-mixed} N=$N repeat=$REPEAT ===" | tee -a $SUM
+echo "=== HARNESS: delay=$DELAY armed=${ARMED:-mixed} N=$N repeat=$REPEAT dispatch=$DISPATCH drainer=$DRAINER grid=${GX}x${GY} ===" | tee -a $SUM
 echo "class rules: WEDGE=card Unknown|63 | TEARDOWN=core-wait, card healthy | MASKED=rc0 but caught timeout" | tee -a $SUM
 echo "start card=$(card_state)" | tee -a $SUM
 
@@ -52,8 +71,8 @@ for k in $(seq 1 $N); do
   log=$OUT/${k}.log
   t0=$(python3 -c 'import time;print(time.time())')
   ssh -p $P -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 $H "cd $R && timeout -k 15 300 env \
-    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX $REPX \
-    $BIN --gx 0 --gy 0 --iters 500 --delay $DELAY" > $log 2>&1 &
+    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX $REPX $CELLX \
+    $BIN --gx $GX --gy $GY --iters 500 --delay $DELAY" > $log 2>&1 &
   sshpid=$!
   waited=0
   while kill -0 $sshpid 2>/dev/null; do
