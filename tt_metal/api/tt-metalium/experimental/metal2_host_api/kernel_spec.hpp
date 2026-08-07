@@ -175,17 +175,19 @@ struct KernelSpec {
         // pool when the semaphore is provably confined to one node with a single binder kernel, else
         // EXTERNAL). Mark OBSERVE to opt a read-only binding out of the writer census.
         //
-        // TRUST BOUNDARY: this label is BELIEVED, not verified. The emitted sem:: token carries only
-        // {id, scope}, so nothing stops a kernel from calling up()/down()/set() on a binding declared
-        // OBSERVE, and the hygiene lint cannot see it either (it reads kernel source; the label lives
-        // here, in host code). A false OBSERVE therefore silently forfeits the atomic mechanism and
-        // leaves the semaphore on the legacy non-atomic RMW -- i.e. it costs you the guarantee this
-        // feature exists to provide. It is bounded: a false label can never select DM_LOCAL_CACHED
-        // (a lying sole binder gives writer_instance_count == 0 -> LOCAL_NONATOMIC; a second binder
-        // fails cached_geometry_ok's one-kernel rule -> EXTERNAL), and readers still count toward the
-        // cached geometry check, so mislabelling cannot shrink the binder set. Enforcing this at
-        // compile time -- by carrying the access mode in the token and static_asserting the mutators --
-        // is tracked as a follow-up. Until then: only write OBSERVE when the kernel truly only reads.
+        // OBSERVE IS COMPILE-TIME ENFORCED, not merely trusted. The emitted sem:: token carries
+        // SemaphoreBindingToken<id, scope, read_only>, and read_only is set iff this label is OBSERVE.
+        // The kernel's Semaphore adopts it through CTAD, and every mutator -- up(), down(), set(),
+        // set_multicast(), inc_multicast(), and a relay's DESTINATION -- static_asserts on it. So a
+        // kernel that declares OBSERVE and then writes fails to BUILD; it cannot silently remove
+        // itself from the writer census and leave a contended semaphore on the non-atomic path.
+        // wait(), wait_min() and value() stay available, which is the point of the label.
+        //
+        // The other three labels are NOT enforced this way: a binding marked SET or CONSUME still
+        // yields a fully mutable Semaphore. That is deliberate -- "an OBSERVE binding must not write"
+        // is the one rule that protects a host DECISION, whereas policing INCREMENT-vs-SET-vs-CONSUME
+        // would reject legitimate kernels (a consumer that also initialises, say) for no gain. Those
+        // three remain host-side hints, checked by the AUTO honesty FATALs in ResolveSemaphoreScope.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
