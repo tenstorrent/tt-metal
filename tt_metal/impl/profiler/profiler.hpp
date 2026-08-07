@@ -273,7 +273,7 @@ public:
 
     // Optional rt-profiler clock anchor (host_anchor TSC, device_anchor cycle, frequency GHz), kept in lockstep with
     // the rt Tracy calibration so worker zones render against the same anchor. Valid because all cores share one
-    // device wall clock. Set via ProfilerStateManager::set_realtime_sync_anchor.
+    // device wall clock.
     struct RealtimeSyncLine {
         double host_anchor = 0.0;
         double device_anchor = 0.0;

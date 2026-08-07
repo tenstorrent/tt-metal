@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -41,28 +42,27 @@ public:
 
     // What one record publishes with, covering both of its timestamps.
     //
-    // One timestamp is anchored exactly where its bracketing probes place it; the other is derived through the
-    // published rate. sync_error covers both: the anchoring reads' brackets, the measured departure of the clock from
-    // their secant, and the derived timestamp's exposure -- its distance from the anchor times the disagreement
-    // between the published rate and the pair's own. What it cannot cover is a rate step inside the bracketing pair
-    // that no probe has resolved yet; the didt suite bounds what that costs in practice.
+    // The rate is the secant over the widest measured window the record itself spans: its probe pair, its own two
+    // placements, or -- for a record that outlived the ring -- the whole retained history. Timestamps land exactly
+    // where their probes placed them, so sync_error is the anchoring reads' brackets plus the measured departure of
+    // the clock from their secant; only a ring-outliving record's start, derived through the ring-wide rate, is
+    // additionally charged that slope's noise over the ride. What sync_error cannot cover: the part of a rate step
+    // the bow measurement's read-noise deduction swallows, and -- for a ring-outliving start only -- a sustained rate
+    // change older than the retained history, which is unobservable in principle. It is an estimate that tracks the
+    // measured clock, not a worst-case ceiling; the didt suite bounds what the gap costs in practice.
     struct RecordMapping {
         experimental::ProgramRealtimeClockSync clock_sync;
         double frequency = 0.0;
     };
 
-    // How wide a window the published rate is measured across. Wide is what keeps the rate quiet -- a chord's own
-    // slope is uncertain by (both brackets)/span, thousands of ppm at chord width, and every duration a consumer
-    // computes divides by the published rate -- while wider still would smooth over the ~5200ppm AICLK steps the rate
-    // has to keep tracking.
-    static constexpr auto kRateBaseline = std::chrono::milliseconds(4);
-
-    // Overwrites the oldest probe when full. The pair around an undecoded record's end can never be overwritten: the
-    // receiver probes once per drained batch, and on the idle floor only when nothing is in flight, so a record sees
-    // a few dozen probes at most between ending and being decoded (asserted against the FIFO geometry in the
-    // receiver). Only a record's start can predate the ring -- a program that ran longer than the ring spans -- and
-    // that start is derived from the record's end instead of a pair of its own.
-    static constexpr size_t kProbeHistoryCapacity = 4096;
+    // Probes retained per device: 16 seconds of history at the default sync_interval, which is the cadence a running
+    // program's device is probed at, so any program shorter than that still has a pair around its start (768 KB per
+    // device). The pair around an undecoded record's end can never be overwritten regardless: the receiver probes
+    // once per drained batch, and on the idle floor only when nothing is in flight, so a record sees a few dozen
+    // probes at most between ending and being decoded (asserted against the FIFO geometry in the receiver). Only a
+    // start older than the whole ring -- a program that outran it -- is derived from the record's end instead of a
+    // pair of its own.
+    static constexpr size_t kProbeHistoryCapacity = std::chrono::seconds(16) / std::chrono::microseconds(500);
 
     // Retains `probe`. One that does not advance both clocks past the newest retained probe is dropped -- a real
     // counter and steady_clock cannot produce one -- so the ring is strictly monotone in host and ticks and no reader
@@ -81,10 +81,9 @@ public:
 
 private:
     // The probe pair around a run of records, resolved once and reused until a record's start passes `close_ticks`.
-    // The slope is inverted here because the alternative is a division per record on the drain thread.
+    // The slope is carried both ways round because the alternative is a division per record on the drain thread.
     struct Chord {
         std::chrono::nanoseconds sync_error{};
-        // Measured across kRateBaseline where the history allows, this pair's own slope until then.
         double frequency = 0.0;
         uint64_t open_ticks = 0;
         double open_host_ns = 0.0;
@@ -108,10 +107,6 @@ private:
     [[nodiscard]] static RecordMapping anchored(
         double frequency, uint64_t anchor_ticks, double anchor_host_ns, std::chrono::nanoseconds error);
 
-    // What a timestamp `dur_ticks` away from the anchor is charged for riding the published rate: its distance times
-    // the disagreement between that rate and the pair's own.
-    [[nodiscard]] static std::chrono::nanoseconds rate_exposure(const Chord& chord, uint64_t dur_ticks);
-
     // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
     // it inherits how well those points are placed. A clock that moved within the interval adds to this; see
     // measured_bow.
@@ -130,18 +125,15 @@ private:
     // rather than a claim of linearity.
     [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t close_index) const;
 
-    // The rate across the retained probe history, or nullopt while it is too narrow to beat a single chord.
-    [[nodiscard]] std::optional<double> baseline_rate() const;
-
     // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
     // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record
     // is what turns a backlog into a stall.
     [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
 
     [[nodiscard]] uint64_t oldest_probe() const {
-        return probes_end_ > kProbeHistoryCapacity ? probes_end_ - kProbeHistoryCapacity : 0;
+        return probes_end_ > probe_history_.size() ? probes_end_ - probe_history_.size() : 0;
     }
-    [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
+    [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % probe_history_.size()]; }
 
     // Overwrites its oldest entry when full, so nothing has to be retired. Not a deque: a deque puts a block
     // malloc/free on the drain thread every few probes, and glibc hands large blocks back with munmap, which takes
@@ -157,8 +149,9 @@ private:
 // runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
 // push loop.
 //
-// warm_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here is
-// shared and none of it needs a publication protocol.
+// warm_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here needs
+// a publication protocol except the cost counters, which the receiver's reporter thread reads; those are relaxed
+// atomics for that reason alone.
 class RealtimeProfilerClockSync {
 public:
     using Anchor = RealtimeProfilerClockMapping::Anchor;
@@ -230,7 +223,12 @@ public:
     // sync_error of the last record mapped, which is the bound currently standing for this device.
     [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return mapping_.last_sync_error(); }
 
-    [[nodiscard]] Cost cost() const { return cost_; }
+    [[nodiscard]] Cost cost() const {
+        return Cost{
+            resyncs_.load(std::memory_order_relaxed),
+            clock_reads_.load(std::memory_order_relaxed),
+            std::chrono::nanoseconds(busy_ns_.load(std::memory_order_relaxed))};
+    }
 
 private:
     void configure_clock_read_path();
@@ -258,7 +256,10 @@ private:
     uint32_t cached_clock_hi_ = 0;
     uint32_t last_clock_lo_ = 0;
     std::chrono::steady_clock::time_point last_probe_at_;
-    Cost cost_;
+
+    std::atomic<uint64_t> resyncs_{0};
+    std::atomic<uint64_t> clock_reads_{0};
+    std::atomic<int64_t> busy_ns_{0};
 
     RealtimeProfilerClockMapping mapping_;
 };

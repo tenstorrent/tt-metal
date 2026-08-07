@@ -59,14 +59,6 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
-#define TT_LOG_WARNING_THROTTLED(last, now, interval, ...) \
-    do {                                                   \
-        if ((now) - (last) >= (interval)) {                \
-            (last) = (now);                                \
-            log_warning(tt::LogMetal, __VA_ARGS__);        \
-        }                                                  \
-    } while (0)
-
 namespace tt::tt_metal {
 
 namespace {
@@ -90,7 +82,7 @@ constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 // The probe history must out-span anything still in flight: a device is probed once per drained batch and, when its
 // FIFO is empty, once per sync interval, so a record that has ended sees at most pipeline-depth / batch-size probes
 // (plus a handful racing the push) before it is decoded. This is what lets a record's end always find the pair of
-// probes around it, however far its start may reach back.
+// probes around it, however far its start may reach back -- whatever horizon the ring was sized for.
 static_assert(
     RealtimeProfilerClockMapping::kProbeHistoryCapacity >=
         8 * (RealtimeProfilerRuntimeSizes::fifo_pages + RT_PROFILER_RING_CAPACITY) / kMaxSocketPagesPerRead,
@@ -98,6 +90,9 @@ static_assert(
 
 // Floor on how often a repeating fault is logged.
 constexpr auto kWarnInterval = std::chrono::seconds(30);
+
+// How often the reporter thread turns pending telemetry into log lines.
+constexpr auto kReporterInterval = std::chrono::seconds(1);
 
 constexpr auto kSyncCostReportInterval = std::chrono::seconds(5);
 
@@ -386,42 +381,114 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
-// Reports what the clock sync costs the receiver thread. `busy` is time inside resync(), which is time this thread was
-// not draining, so the fraction is the share of the drain loop the sync path takes -- the number to watch when changing
-// probe cadence or count.
-void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_point now) {
-    RealtimeProfilerClockSync::Cost total;
-    for (const auto& dev_state : devices_) {
-        total += dev_state.clock_sync->cost();
-    }
-    // The counters run from process start, so the first call only records where the window begins.
-    if (last_sync_cost_report_ == std::chrono::steady_clock::time_point{}) {
-        last_sync_cost_report_ = now;
-        sync_cost_at_last_report_ = total;
-        return;
-    }
-    if (now - last_sync_cost_report_ < kSyncCostReportInterval) {
-        return;
-    }
-    const auto window = now - last_sync_cost_report_;
-    const RealtimeProfilerClockSync::Cost cost = total.since(sync_cost_at_last_report_);
-    sync_cost_at_last_report_ = total;
-    last_sync_cost_report_ = now;
-    if (cost.resyncs == 0) {
-        return;
-    }
+void RealtimeProfilerReceiver::run_reporter() {
+    tracy::SetThreadName("RtProfReporter");
 
-    log_info(
-        tt::LogMetal,
-        "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
-        std::chrono::duration<double>{window}.count(),
-        devices_.size(),
-        cost.resyncs,
-        cost.clock_reads,
-        static_cast<double>(cost.clock_reads) / static_cast<double>(cost.resyncs),
-        std::chrono::duration<double, std::micro>{cost.busy}.count() / static_cast<double>(cost.resyncs),
-        100.0 * std::chrono::duration<double>{cost.busy}.count() / std::chrono::duration<double>{window}.count());
+    auto sum_costs = [this] {
+        RealtimeProfilerClockSync::Cost total;
+        for (const auto& dev_state : devices_) {
+            total += dev_state.clock_sync->cost();
+        }
+        return total;
+    };
+    auto last_cost_report = std::chrono::steady_clock::now();
+    RealtimeProfilerClockSync::Cost cost_at_last_report = sum_costs();
+    std::vector<uint64_t> malformed_seen(devices_.size(), 0);
+    std::vector<uint64_t> exceptions_seen(devices_.size(), 0);
+    std::vector<bool> capacity_warned(devices_.size(), false);
+    std::chrono::steady_clock::time_point last_gap_warn{};
+    std::chrono::steady_clock::time_point last_malformed_warn{};
+    std::chrono::steady_clock::time_point last_exception_warn{};
+
+    const auto emit_pending = [&](std::chrono::steady_clock::time_point now) {
+        // While throttled the pack is left in place, still taking maxes, so the eventual line carries the worst gap.
+        if (worst_drain_gap_.load(std::memory_order_relaxed) != 0 && now - last_gap_warn >= kWarnInterval) {
+            const uint64_t pack = worst_drain_gap_.exchange(0, std::memory_order_relaxed);
+            last_gap_warn = now;
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Receiver drain stalled {} us between passes, {} us of it inside clock reads; "
+                "the FIFO has peaked at {} of {} pages this run",
+                pack >> 32,
+                pack & 0xFFFFFFFFu,
+                peak_fifo_pages_.load(std::memory_order_relaxed),
+                RealtimeProfilerRuntimeSizes::fifo_pages);
+        }
+
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            const DeviceState& dev_state = devices_[i];
+            DeviceTelemetry& telemetry = *dev_state.telemetry;
+            if (!capacity_warned[i] && telemetry.fifo_reached_capacity.load(std::memory_order_relaxed)) {
+                capacity_warned[i] = true;
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} D2H FIFO reached capacity ({} pages); profiler data may be "
+                    "dropped",
+                    dev_state.chip_id,
+                    RealtimeProfilerRuntimeSizes::fifo_pages);
+            }
+            const uint64_t malformed = telemetry.malformed_records.load(std::memory_order_relaxed);
+            if (malformed != malformed_seen[i] && now - last_malformed_warn >= kWarnInterval) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} dropped {} corrupt record(s) -- an end timestamp preceding its "
+                    "start, or timestamps predating every retained clock probe; these were not delivered to consumers "
+                    "({} in total)",
+                    dev_state.chip_id,
+                    malformed - malformed_seen[i],
+                    malformed);
+                malformed_seen[i] = malformed;
+                last_malformed_warn = now;
+            }
+            const uint64_t exceptions = telemetry.drain_exceptions.load(std::memory_order_relaxed);
+            if (exceptions != exceptions_seen[i] && now - last_exception_warn >= kWarnInterval) {
+                std::string latest;
+                {
+                    const std::lock_guard lock(telemetry.last_drain_error_mutex);
+                    latest = telemetry.last_drain_error;
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: {} exception(s) while draining since the last report; latest: {}",
+                    dev_state.chip_id,
+                    exceptions - exceptions_seen[i],
+                    latest);
+                exceptions_seen[i] = exceptions;
+                last_exception_warn = now;
+            }
+        }
+
+        // `busy` is time inside resync(), which is time the drain thread was not draining, so the fraction is the
+        // share of the drain loop the sync path takes -- the number to watch when changing probe cadence or count.
+        if (now - last_cost_report >= kSyncCostReportInterval) {
+            const RealtimeProfilerClockSync::Cost total = sum_costs();
+            const RealtimeProfilerClockSync::Cost cost = total.since(cost_at_last_report);
+            const auto window = now - last_cost_report;
+            cost_at_last_report = total;
+            last_cost_report = now;
+            if (cost.resyncs != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} "
+                    "per resync), {:.2f}us mean per resync, {:.2f}% of the receiver thread",
+                    std::chrono::duration<double>{window}.count(),
+                    devices_.size(),
+                    cost.resyncs,
+                    cost.clock_reads,
+                    static_cast<double>(cost.clock_reads) / static_cast<double>(cost.resyncs),
+                    std::chrono::duration<double, std::micro>{cost.busy}.count() / static_cast<double>(cost.resyncs),
+                    100.0 * std::chrono::duration<double>{cost.busy}.count() /
+                        std::chrono::duration<double>{window}.count());
+            }
+        }
+    };
+
+    std::unique_lock lock(reporter_mutex_);
+    while (!reporter_cv_.wait_for(lock, kReporterInterval, [this] { return stop_.load(std::memory_order_acquire); })) {
+        emit_pending(std::chrono::steady_clock::now());
+    }
+    // One last sweep so telemetry from the final second still reaches the log.
+    emit_pending(std::chrono::steady_clock::now());
 }
 
 uint32_t RealtimeProfilerReceiver::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
@@ -442,10 +509,7 @@ uint32_t RealtimeProfilerReceiver::read_ring_full_wait_count() {
 // surround it. Nothing is held back: the probe taken after the read is past every record in it, so the pair a record
 // needs already exists by the time it is decoded.
 bool RealtimeProfilerReceiver::publish_pages(
-    DeviceState& dev_state,
-    std::chrono::steady_clock::time_point now,
-    std::span<const uint32_t> pages,
-    std::vector<ProgramRealtimeRecord>& batch) {
+    DeviceState& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch) {
     TTZoneScopedDN(RT_PROFILER, "PublishBatch");
     const size_t num_pages = pages.size() / RealtimeProfilerRuntimeSizes::page_words;
     constexpr uint32_t kEndWord = sizeof(::realtime_profiler_timestamp_t) / sizeof(uint32_t);
@@ -480,15 +544,7 @@ bool RealtimeProfilerReceiver::publish_pages(
 
     if (rejected != 0) {
         num_malformed_records_.fetch_add(rejected, std::memory_order_relaxed);
-        TT_LOG_WARNING_THROTTLED(
-            last_malformed_warn_,
-            now,
-            kWarnInterval,
-            "[Real-time profiler] Device {} dropped {} corrupt record(s) -- an end timestamp preceding its start, or "
-            "timestamps predating every retained clock probe; these were not delivered to consumers ({} in total)",
-            dev_state.chip_id,
-            rejected,
-            num_malformed_records_.load(std::memory_order_relaxed));
+        dev_state.telemetry->malformed_records.fetch_add(rejected, std::memory_order_relaxed);
     }
     if (batch.empty()) {
         return false;
@@ -518,7 +574,7 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
-    // Serial: a warm-up is a few probes milliseconds apart, so a whole mesh costs milliseconds. It replaced a
+    // Serial: a warm-up is a few probes a sync interval apart, so a whole mesh costs milliseconds. It replaced a
     // half-second per-device fit, which is what the concurrency here existed for.
     for (DeviceState& dev_state : devices_) {
         dev_state.clock_sync->warm_up();
@@ -530,8 +586,17 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_->attach_producer(*this);
 
     try {
+        reporter_thread_ = std::thread(&RealtimeProfilerReceiver::run_reporter, this);
         receiver_thread_ = std::thread(&RealtimeProfilerReceiver::run, this);
     } catch (...) {
+        {
+            const std::lock_guard lock(reporter_mutex_);
+            stop_.store(true, std::memory_order_release);
+        }
+        reporter_cv_.notify_all();
+        if (reporter_thread_.joinable()) {
+            reporter_thread_.join();
+        }
         realtime_profiler_service_->detach_producer(*this);
         throw;
     }
@@ -602,6 +667,7 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
         dev_state.chip_id = device_id;
         dev_state.realtime_profiler_core = realtime_profiler_core;
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
+        dev_state.telemetry = std::make_unique<DeviceTelemetry>();
 
         // Constructed before anything is published to dispatch_s or launched, so a device whose clock register cannot
         // be mapped is skipped rather than left half configured. There is no slower read to fall back to; see
@@ -703,16 +769,11 @@ void RealtimeProfilerReceiver::note_fifo_depth(uint32_t available) {
 }
 
 RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pages(
-    DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
+    DeviceState& dev_state, std::vector<uint32_t>& page_buf) {
     const uint32_t available = dev_state.socket->pages_available();
     note_fifo_depth(available);
-    if (available >= RealtimeProfilerRuntimeSizes::fifo_pages && !dev_state.fifo_reached_capacity) {
-        dev_state.fifo_reached_capacity = true;
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} D2H FIFO reached capacity ({} pages); profiler data may be dropped",
-            dev_state.chip_id,
-            available);
+    if (available >= RealtimeProfilerRuntimeSizes::fifo_pages) {
+        dev_state.telemetry->fifo_reached_capacity.store(true, std::memory_order_relaxed);
     }
     if (available == 0) {
         return {};
@@ -736,7 +797,6 @@ RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pag
 
     const bool published = publish_pages(
         dev_state,
-        now,
         std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words),
         publish_batch_);
     return {.pages = num_pages_to_read, .published = published};
@@ -752,19 +812,20 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
     auto last_pass = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
-        // Reporting what the clock reads took separates a stall spent blocked on PCIe from one spent anywhere else in
-        // the pass. It does not attribute the remainder, and the remainder is where the surprises have been.
+        // Recording what the clock reads took separates a stall spent blocked on PCIe from one spent anywhere else in
+        // the pass. It does not attribute the remainder, and the remainder is where the surprises have been. Handed
+        // to the reporter thread rather than logged: this thread blocking on a log write is itself a stall.
         if (const auto gap = now - last_pass; gap >= kDrainGapReportThreshold) {
-            TT_LOG_WARNING_THROTTLED(
-                last_drain_gap_warn_,
-                now,
-                kWarnInterval,
-                "[Real-time profiler] Receiver drain stalled {} us between passes, {} us of it inside clock reads; "
-                "the FIFO has peaked at {} of {} pages this run",
-                std::chrono::duration_cast<std::chrono::microseconds>(gap).count(),
-                std::chrono::duration_cast<std::chrono::microseconds>(pass_sync_busy_).count(),
-                peak_fifo_pages_.load(std::memory_order_relaxed),
-                RealtimeProfilerRuntimeSizes::fifo_pages);
+            const auto saturate_us = [](std::chrono::nanoseconds d) {
+                return std::min<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(d).count(),
+                    std::numeric_limits<uint32_t>::max());
+            };
+            const uint64_t pack = saturate_us(gap) << 32 | saturate_us(pass_sync_busy_);
+            // Single writer, so a load-then-store is a max.
+            if (pack > worst_drain_gap_.load(std::memory_order_relaxed)) {
+                worst_drain_gap_.store(pack, std::memory_order_relaxed);
+            }
         }
         last_pass = now;
         const uint32_t num_pages = drain_all_devices(now, page_buf);
@@ -787,8 +848,6 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
             last_fifo_plot = now;
         }
 
-        report_sync_cost(now);
-
         if (num_pages > 0) {
             backoff = std::chrono::microseconds{1};
             continue;
@@ -807,7 +866,7 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
     pass_sync_busy_ = std::chrono::nanoseconds::zero();
     for (auto& dev_state : devices_) {
         try {
-            const DrainResult drained = drain_device_pages(dev_state, now, page_buf);
+            const DrainResult drained = drain_device_pages(dev_state, page_buf);
             num_pages += drained.pages;
             published |= drained.published;
             if (drained.pages != 0) {
@@ -820,8 +879,12 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
                 pass_sync_busy_ += dev_state.clock_sync->resync();
             }
         } catch (const std::exception& e) {
-            log_warning(
-                tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());
+            DeviceTelemetry& telemetry = *dev_state.telemetry;
+            telemetry.drain_exceptions.fetch_add(1, std::memory_order_relaxed);
+            if (telemetry.last_drain_error_mutex.try_lock()) {
+                telemetry.last_drain_error = e.what();
+                telemetry.last_drain_error_mutex.unlock();
+            }
         }
     }
     if (published) {
@@ -913,6 +976,17 @@ void RealtimeProfilerReceiver::shutdown() {
     if (receiver_thread_.joinable()) {
         stop_.store(true, std::memory_order_release);
         receiver_thread_.join();
+    }
+    // After the drain thread, so the reporter's final sweep sees everything it recorded.
+    if (reporter_thread_.joinable()) {
+        {
+            // Under the mutex, or a notify landing between the reporter's predicate check and its block is lost and
+            // this join waits out a full reporter tick.
+            const std::lock_guard lock(reporter_mutex_);
+            stop_.store(true, std::memory_order_release);
+        }
+        reporter_cv_.notify_all();
+        reporter_thread_.join();
     }
 
     // detach_producer is idempotent, so a second shutdown() is harmless.

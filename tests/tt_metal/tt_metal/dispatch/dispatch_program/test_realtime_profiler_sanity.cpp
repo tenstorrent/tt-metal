@@ -302,6 +302,7 @@ TEST(RealtimeProfilerClockMapping, RecordBetweenTwoProbesLandsOnTheirSecant) {
     // timestamps have to come back out of the published offset and frequency exactly where the clock put them.
     EXPECT_NEAR(rt_mapped_host_ns(*record, start), static_cast<double>(start) / kNominalRate, 1.0);
     EXPECT_NEAR(rt_mapped_host_ns(*record, end), static_cast<double>(end) / kNominalRate, 1.0);
+    EXPECT_NEAR(record->frequency, kNominalRate, kNominalRate * 1e-6);
     EXPECT_EQ(record->clock_sync.sync_error, kProbeBracket / 2);
 }
 
@@ -357,8 +358,11 @@ TEST(RealtimeProfilerClockMapping, RecordOutlivingTheRingIsAnchoredAtItsEnd) {
 
     ASSERT_TRUE(record.has_value());
     EXPECT_NEAR(rt_mapped_host_ns(*record, end), static_cast<double>(end) / kNominalRate, 1.0);
+    // The ride is charged the ring-wide slope's own noise: brackets over the ring's span, times the ride. Anything
+    // orders of magnitude past that means the ride is being charged some narrow window's noise again.
     EXPECT_GE(record->clock_sync.sync_error, kProbeBracket / 2);
-    EXPECT_GT(record->frequency, 0.0);
+    EXPECT_LT(record->clock_sync.sync_error, std::chrono::microseconds(10));
+    EXPECT_NEAR(record->frequency, kNominalRate, kNominalRate * 1e-4);
 }
 
 // A read serviced late puts its anchor at the midpoint of a wide bracket, which moves the span the slope is taken over
@@ -439,64 +443,6 @@ TEST(RealtimeProfilerClockMapping, DepartureWithinAProbesOwnReadNoiseIsNotCharge
 
     ASSERT_TRUE(record.has_value());
     EXPECT_EQ(record->clock_sync.sync_error, kProbeBracket / 2);
-}
-
-// The rate a record is published with is measured across kRateBaseline, not across its own chord: a chord's slope is
-// uncertain by (both brackets)/span, thousands of ppm, and every duration a consumer computes divides by the
-// published rate. Placement is unaffected: the record's start lands exactly where its own chord puts it.
-TEST(RealtimeProfilerClockMapping, PublishedRateComesFromTheBaselineNotTheChord) {
-    RealtimeProfilerClockMapping mapping;
-    const auto first = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
-    const auto second =
-        anchor_at(first.host + RealtimeProfilerClockMapping::kRateBaseline, kNominalRate, kProbeBracket);
-    auto open = anchor_at(second.host + std::chrono::microseconds(100), kNominalRate, kProbeBracket);
-    // The record's own chord reads 0.3% fast -- well past any real read noise, and far past what the baseline,
-    // averaging the same distortion over its whole window, picks up.
-    auto closing = anchor_at(open.host + sync_interval(), kNominalRate, kProbeBracket);
-    closing.ticks += static_cast<uint64_t>(0.003 * kNominalRate * chord_span_ns());
-    mapping.retain(first);
-    mapping.retain(second);
-    mapping.retain(open);
-    mapping.retain(closing);
-
-    const uint64_t start = open.ticks + (closing.ticks - open.ticks) / 4;
-    const auto record = mapping.map_record(start, start + 10);
-
-    ASSERT_TRUE(record.has_value());
-    EXPECT_NEAR(record->frequency, kNominalRate, kNominalRate * 1e-3);
-    // Anchored to its own chord's placement of the start, not to where the baseline rate alone would put it.
-    const double chord_inv_rate =
-        static_cast<double>((closing.host - open.host).count()) / static_cast<double>(closing.ticks - open.ticks);
-    const double start_on_chord = static_cast<double>(open.host.time_since_epoch().count()) +
-                                  static_cast<double>(start - open.ticks) * chord_inv_rate;
-    EXPECT_NEAR(rt_mapped_host_ns(*record, start), start_on_chord, 1.0);
-}
-
-// A record published at a rate measured somewhere other than its own chord carries the difference on its end: end =
-// start + duration / frequency, and the duration rides the published rate while the placement rode the chord's. The
-// exposure grows with the record's length and is charged in sync_error.
-TEST(RealtimeProfilerClockMapping, EndExposureToThePublishedRateIsCharged) {
-    RealtimeProfilerClockMapping mapping;
-    const auto first = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
-    const auto second =
-        anchor_at(first.host + RealtimeProfilerClockMapping::kRateBaseline, kNominalRate, kProbeBracket);
-    auto open = anchor_at(second.host + std::chrono::microseconds(100), kNominalRate, kProbeBracket);
-    auto closing = anchor_at(open.host + sync_interval(), kNominalRate, kProbeBracket);
-    closing.ticks += static_cast<uint64_t>(0.003 * kNominalRate * chord_span_ns());
-    mapping.retain(first);
-    mapping.retain(second);
-    mapping.retain(open);
-    mapping.retain(closing);
-
-    const uint64_t start = open.ticks + 10;
-    const auto short_record = mapping.map_record(start, start + 100);
-    const auto long_record = mapping.map_record(start, start + (closing.ticks - open.ticks) / 2);
-
-    ASSERT_TRUE(short_record.has_value());
-    ASSERT_TRUE(long_record.has_value());
-    EXPECT_GT(long_record->clock_sync.sync_error, short_record->clock_sync.sync_error);
-    // ~0.3% of the long record's ~185us duration.
-    EXPECT_GT(long_record->clock_sync.sync_error, kProbeBracket / 2 + std::chrono::nanoseconds(400));
 }
 
 // A record that outlives the pair its start was placed between takes the secant through its own two placements, so a
@@ -943,6 +889,26 @@ TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     EXPECT_LT(pct(0.90), static_cast<double>(kSyncErrorP90Ns)) << "p90 sync error too high";
     EXPECT_LT(pct(0.99), static_cast<double>(kSyncErrorP99Ns))
         << "tail sync error too high; a bad re-anchor is not being rejected";
+
+    // Not asserted, but logged with the same weight as sync_error: the published rate's record-to-record scatter is
+    // the noise every duration a consumer computes inherits, and it is what a rate-window mechanism would have to
+    // beat to earn its complexity back.
+    std::vector<double> freqs;
+    freqs.reserve(records.size());
+    for (const auto& record : records) {
+        freqs.push_back(record.frequency);
+    }
+    std::ranges::sort(freqs);
+    const auto fpct = [&freqs](double p) { return rt_percentile(freqs, p); };
+    const double median = fpct(0.50);
+    log_info(
+        tt::LogTest,
+        "[RT profiler sanity] published frequency over {} records: median={:.6f} GHz, p1..p99 spread={:.0f} ppm, "
+        "min..max spread={:.0f} ppm",
+        freqs.size(),
+        median,
+        1e6 * (fpct(0.99) - fpct(0.01)) / median,
+        1e6 * (freqs.back() - freqs.front()) / median);
 }
 
 TEST_F(RealtimeProfilerDeviceSanity, CloseDrainsRegisteredCallback) {
@@ -1407,11 +1373,11 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
            "understates the real error";
 }
 
-// A program that runs longer than the probe ring spans (~2s at the idle probe cadence) has, by the time it ends,
-// a start older than every probe the ring still holds. Its record must be delivered anyway -- anchored at its end,
-// whose bracketing pair the drain loop guarantees, with the start riding the published rate backward. This was the
-// one case where a healthy pipeline dropped a record.
-TEST_F(RealtimeProfilerDeviceSanity, ProgramOutlivingTheProbeRingIsStillDelivered) {
+// A program that spans thousands of probe pairs: its start and end are placed on pairs measured seconds apart, so
+// this is the secant path at full stretch, and historically the class of record the pipeline dropped outright.
+// Outliving the ring itself would take a kernel longer than kProbeHistoryHorizon, which no test should run; that
+// path is covered at the unit level by RecordOutlivingTheRingIsAnchoredAtItsEnd.
+TEST_F(RealtimeProfilerDeviceSanity, LongProgramIsDeliveredIntact) {
     RecordCollector collector;
     constexpr uint32_t kLongRuntimeId = 7201;
     // ~4e9 cycles: comfortably past the ring's span at any plausible AICLK.

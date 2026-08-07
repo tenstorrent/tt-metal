@@ -51,31 +51,8 @@ void RealtimeProfilerClockMapping::retain(const Anchor& probe) {
             return;
         }
     }
-    probe_history_[probes_end_ % kProbeHistoryCapacity] = probe;
+    probe_history_[probes_end_ % probe_history_.size()] = probe;
     ++probes_end_;
-}
-
-std::optional<double> RealtimeProfilerClockMapping::baseline_rate() const {
-    const uint64_t begin = oldest_probe();
-    if (probes_end_ - begin < 2) {
-        return std::nullopt;
-    }
-    const Anchor& newest = probe_at(probes_end_ - 1);
-    // Walk back to the newest probe still at least kRateBaseline older than the newest. How far back the rate is
-    // measured has to be a property of the rate, not of how much history the ring happens to be holding.
-    const auto cutoff = newest.host - kRateBaseline;
-    uint64_t near = probes_end_ - 1;
-    while (near > begin && probe_at(near).host > cutoff) {
-        --near;
-    }
-    const Anchor& oldest = probe_at(near);
-    // A baseline this narrow is no quieter than the chord it exists to improve on, so the chord's own slope stands.
-    if (newest.ticks <= oldest.ticks || newest.host - oldest.host < kRateBaseline / 4) {
-        return std::nullopt;
-    }
-    const double span_ns =
-        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(newest.host - oldest.host).count());
-    return static_cast<double>(newest.ticks - oldest.ticks) / span_ns;
 }
 
 uint64_t RealtimeProfilerClockMapping::first_probe_at_or_past(uint64_t ticks) const {
@@ -147,10 +124,9 @@ std::optional<RealtimeProfilerClockMapping::Chord> RealtimeProfilerClockMapping:
     // clock's own departure from the line grows with span.
     const double span_ns =
         static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(closing.host - open.host).count());
-    const double chord_rate = static_cast<double>(closing.ticks - open.ticks) / span_ns;
     return Chord{
         .sync_error = interpolation_error(open, closing) + measured_bow(close_index),
-        .frequency = baseline_rate().value_or(chord_rate),
+        .frequency = static_cast<double>(closing.ticks - open.ticks) / span_ns,
         .open_ticks = open.ticks,
         .open_host_ns = static_cast<double>(open.host.time_since_epoch().count()),
         .inv_chord_rate = span_ns / static_cast<double>(closing.ticks - open.ticks),
@@ -168,11 +144,6 @@ RealtimeProfilerClockMapping::RecordMapping RealtimeProfilerClockMapping::anchor
         frequency};
 }
 
-std::chrono::nanoseconds RealtimeProfilerClockMapping::rate_exposure(const Chord& chord, uint64_t dur_ticks) {
-    return std::chrono::nanoseconds(
-        std::llround(static_cast<double>(dur_ticks) * std::abs(chord.inv_chord_rate - 1.0 / chord.frequency)));
-}
-
 std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClockMapping::map_record(
     uint64_t start_ticks, uint64_t end_ticks) {
     if (!chord_.has_value() || start_ticks > chord_->close_ticks) {
@@ -183,24 +154,26 @@ std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClock
     if (!chord_.has_value()) {
         // The start predates every retained probe: the program ran longer than the ring spans. Its end always has a
         // pair -- see kProbeHistoryCapacity -- so the record is anchored there and the start rides the published rate
-        // backward, charged for the whole ride.
+        // backward. That also means the ring is full, so the whole retained history is the widest rate window there
+        // is, and a ride this long gets it: the ride is charged the wide slope's own noise, where a single pair's
+        // noise over seconds of ride would claim milliseconds against a rate that in truth holds to ~ppm.
         const std::optional<Chord> end_chord = chord_around(end_ticks);
         if (!end_chord.has_value()) {
             return std::nullopt;
         }
-        mapping = anchored(
-            end_chord->frequency,
-            end_ticks,
-            host_ns_on(*end_chord, end_ticks),
-            end_chord->sync_error + rate_exposure(*end_chord, end_ticks - start_ticks));
+        const Anchor& ring_oldest = probe_at(oldest_probe());
+        const Anchor& ring_newest = probe_at(probes_end_ - 1);
+        const double ring_span_ns = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(ring_newest.host - ring_oldest.host).count());
+        const double frequency = static_cast<double>(ring_newest.ticks - ring_oldest.ticks) / ring_span_ns;
+        const double ride_ns = static_cast<double>(end_ticks - start_ticks) / frequency;
+        const auto ride_noise = std::chrono::nanoseconds(std::llround(
+            ride_ns * static_cast<double>((ring_oldest.bracket + ring_newest.bracket).count()) / ring_span_ns));
+        mapping = anchored(frequency, end_ticks, host_ns_on(*end_chord, end_ticks), end_chord->sync_error + ride_noise);
     } else if (const Chord& chord = *chord_; end_ticks <= chord.close_ticks) {
-        // Both timestamps sit on this chord: the start is anchored where the chord places it, and the end, riding the
-        // quiet baseline rate instead of the chord's own, is charged for the difference over the record's length.
-        mapping = anchored(
-            chord.frequency,
-            start_ticks,
-            host_ns_on(chord, start_ticks),
-            chord.sync_error + rate_exposure(chord, end_ticks - start_ticks));
+        // Both timestamps sit on this chord and the published rate is its own slope, so both land exactly where the
+        // pair places them and the pair's bound is the whole story.
+        mapping = anchored(chord.frequency, start_ticks, host_ns_on(chord, start_ticks), chord.sync_error);
     } else {
         // A record that outlives its chord takes the secant through its own two placements: any other rate puts the
         // difference, times the record's length, onto its end -- tens of microseconds on a millisecond program,
@@ -296,7 +269,7 @@ RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
     }
     last_clock_lo_ = lo;
     last_probe_at_ = host_after;
-    ++cost_.clock_reads;
+    clock_reads_.fetch_add(1, std::memory_order_relaxed);
     const auto bracket = host_after - host_before;
     TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
     const auto bracket_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(bracket);
@@ -324,19 +297,17 @@ RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::best_of(int probes)
     return best;
 }
 
-// Enough probes for the first record to have a pair to be placed between and a third to read the departure from.
-// Spaced well past sync_interval() on purpose: these probes are all the history the earliest baseline rate is
-// measured across, so pinching them here would publish the first records at a rate measured over a fraction of a
-// millisecond. This replaced a 100-probe half-second fit whose result never reached a consumer.
+// Enough probes for the first record to have a pair to be placed between and a third to read the departure from,
+// spaced a sync interval apart so the first chords are the same width as every later one. This replaced a 100-probe
+// half-second fit whose result never reached a consumer.
 void RealtimeProfilerClockSync::warm_up() {
     TTZoneScopedDN(RT_PROFILER, "ClockWarmUp");
     constexpr int kWarmUpProbes = 4;
-    constexpr auto kWarmUpSpacing = std::chrono::milliseconds(4);
     // Warms the cold PCIe path; its bracket is not representative and it is not retained.
     (void)probe();
     for (int i = 0; i < kWarmUpProbes; i++) {
         if (i != 0) {
-            std::this_thread::sleep_for(kWarmUpSpacing);
+            std::this_thread::sleep_for(sync_interval());
         }
         resync();
     }
@@ -345,10 +316,11 @@ void RealtimeProfilerClockSync::warm_up() {
 std::chrono::nanoseconds RealtimeProfilerClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
     const auto started_at = std::chrono::steady_clock::now();
-    ++cost_.resyncs;
+    resyncs_.fetch_add(1, std::memory_order_relaxed);
     mapping_.retain(best_of(kResyncProbes));
     const auto blocked_for = std::chrono::steady_clock::now() - started_at;
-    cost_.busy += blocked_for;
+    busy_ns_.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(blocked_for).count(), std::memory_order_relaxed);
     return blocked_for;
 }
 

@@ -6,10 +6,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -77,6 +80,18 @@ public:
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
+    // What the drain thread wants said about a device, for the reporter thread to say. The drain thread must never
+    // block on I/O -- a write to a stalled terminal froze it long enough to fill every FIFO -- so it only bumps these,
+    // and the reporter turns them into log lines on its own clock.
+    struct DeviceTelemetry {
+        std::atomic<uint64_t> malformed_records{0};
+        std::atomic<bool> fifo_reached_capacity{false};
+        std::atomic<uint64_t> drain_exceptions{0};
+        // try_lock on the drain side: losing one message under contention is fine, blocking is not.
+        std::mutex last_drain_error_mutex;
+        std::string last_drain_error;
+    };
+
     struct DeviceState {
         IDevice* device = nullptr;
         uint32_t chip_id = 0;
@@ -85,9 +100,10 @@ private:
         // Keeps the BRISC+NCRISC kernels (and their tt-inspector metadata) alive for the receiver's lifetime.
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
-        bool fifo_reached_capacity = false;
-        // Held by pointer so moving DeviceState does not copy the sync object's 128KB probe ring.
+        // Held by pointer so moving DeviceState does not copy the sync object's 768KB probe ring, and so the
+        // telemetry's atomics do not make DeviceState unmovable.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
+        std::unique_ptr<DeviceTelemetry> telemetry;
 
         DeviceState();
         ~DeviceState();
@@ -103,15 +119,16 @@ private:
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
 
-    void report_sync_cost(std::chrono::steady_clock::time_point now);
     void note_fifo_depth(uint32_t available);
     // Decodes `pages` and publishes them, placed against the probe history. True when anything was published, so the
     // caller knows to wake consumers. `batch` is the caller's scratch, reused so this never allocates.
     bool publish_pages(
-        DeviceState& dev_state,
-        std::chrono::steady_clock::time_point now,
-        std::span<const uint32_t> pages,
-        std::vector<ProgramRealtimeRecord>& batch);
+        DeviceState& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch);
+
+    // Reporter thread body: turns the drain thread's telemetry into log lines. Everything the drain thread wants
+    // logged funnels through here, because a log write can block on a stalled terminal for longer than it takes the
+    // devices to fill every FIFO.
+    void run_reporter();
 
     struct DrainResult {
         uint32_t pages = 0;
@@ -125,8 +142,7 @@ private:
     // `now` is re-read as devices are drained, so a device late in a long pass isn't gated on a stale timestamp.
     uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
     // Reads, probes, then publishes -- in that order, which is what makes the batch's bracketing pair exist.
-    DrainResult drain_device_pages(
-        DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
+    DrainResult drain_device_pages(DeviceState& dev_state, std::vector<uint32_t>& page_buf);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
@@ -143,7 +159,9 @@ private:
     std::atomic<uint32_t> peak_fifo_pages_since_report_{0};  // peak since take_peak_fifo_pages()
     uint32_t fifo_pages_window_max_ = 0;         // peak since the last Tracy plot sample; that plot is its only reader
     std::chrono::nanoseconds pass_sync_busy_{};  // clock-read time in the pass just finished
-    std::chrono::steady_clock::time_point last_drain_gap_warn_{};
+    // Worst pass gap since the reporter last consumed it: gap microseconds in the high word, how much of it was spent
+    // inside clock reads in the low word -- packed so the pair cannot tear and comparing packs compares gaps first.
+    std::atomic<uint64_t> worst_drain_gap_{0};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
     std::atomic<uint64_t> num_malformed_records_{0};  // rejected at decode as unmappable
@@ -152,9 +170,9 @@ private:
     // being drained at a time, and preallocated because the drain thread must never touch the allocator.
     std::vector<ProgramRealtimeRecord> publish_batch_;
 
-    std::chrono::steady_clock::time_point last_malformed_warn_{};
-    std::chrono::steady_clock::time_point last_sync_cost_report_{};
-    RealtimeProfilerClockSync::Cost sync_cost_at_last_report_;
+    std::thread reporter_thread_;
+    std::mutex reporter_mutex_;
+    std::condition_variable reporter_cv_;
 };
 
 }  // namespace tt::tt_metal

@@ -93,7 +93,7 @@ private:
     struct KernelSourceStore {
         std::mutex mutex;
         std::unordered_set<std::string> paths;
-        // Keys never repeat: ProgramImpl::program_counter is process-wide and only ever increments.
+        // ProgramImpl::program_counter is process-wide and only ever increments, so keys never repeat.
         std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources;
     };
     static KernelSourceStore& kernel_source_store();
