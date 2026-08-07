@@ -35,6 +35,9 @@ Subcommands:
                     Seal a local attempt-owned LLK artifact set before execution.
     required-verification
                     Normalize and seal the run's immutable verification contract.
+    candidate-patch-digest
+                    Hash the complete base-to-worktree candidate without changing
+                    the worktree's real Git index.
     verification-result
                     Write a strict v2 result from collection/JUnit/artifact evidence.
     reduce-verification
@@ -245,6 +248,22 @@ def cmd_init(args: argparse.Namespace) -> None:
         "base_commit": os.environ.get("CODEGEN_BASE_COMMIT") or None,
         "campaign_id": os.environ.get("CODEGEN_CAMPAIGN_ID") or None,
         "attempt_id": os.environ.get("CODEGEN_ATTEMPT_ID") or None,
+        "resumed_from_run_id": os.environ.get("CODEGEN_RESUME_RUN_ID") or None,
+        "resumed_from_attempt_id": (
+            os.environ.get("CODEGEN_RESUME_ATTEMPT_ID") or None
+        ),
+        "resume_checkpoint_digest": (
+            os.environ.get("CODEGEN_RESUME_CHECKPOINT_DIGEST") or None
+        ),
+        "resume_patch_sha256": (os.environ.get("CODEGEN_RESUME_PATCH_SHA256") or None),
+        "resume_verification": (
+            {
+                "outcome": os.environ.get("CODEGEN_RESUME_VERIFICATION_REUSE"),
+                "reason_code": os.environ.get("CODEGEN_RESUME_INVALIDATION_REASON"),
+            }
+            if os.environ.get("CODEGEN_RESUME_RUN_ID")
+            else None
+        ),
         "git_commit": args.git_commit,
         "git_branch": args.git_branch,
         "description": args.description or None,
@@ -672,6 +691,69 @@ def _canonical_digest(value: Any) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
+    """Hash all candidate content while preserving setup-owned index exclusions."""
+    worktree = Path(args.worktree)
+    base = args.expected_base_sha
+    if not worktree.is_dir() or not _SHA40_RE.fullmatch(base):
+        raise ValueError("candidate patch requires a worktree and exact base SHA")
+    resolved = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "--verify", f"{base}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    if resolved != base:
+        raise ValueError("candidate patch base did not resolve to itself")
+    index = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    if not Path(index).is_file():
+        raise ValueError("candidate worktree index is unavailable")
+
+    temporary_index = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=Path(index).parent,
+            prefix=".candidate-index-",
+            delete=False,
+        ) as temporary:
+            temporary_index = temporary.name
+            temporary.write(Path(index).read_bytes())
+        env = {**os.environ, "GIT_INDEX_FILE": temporary_index}
+        subprocess.run(
+            ["git", "-C", str(worktree), "add", "-A", "--", "."],
+            check=True,
+            capture_output=True,
+            env=env,
+            timeout=120,
+        )
+        patch = subprocess.run(
+            ["git", "-C", str(worktree), "diff", "--cached", "--binary", base, "--"],
+            check=True,
+            capture_output=True,
+            env=env,
+            timeout=120,
+        ).stdout
+    finally:
+        if temporary_index:
+            Path(temporary_index).unlink(missing_ok=True)
+    print(hashlib.sha256(patch).hexdigest())
 
 
 _VERIFICATION_ARCHES = {"blackhole", "wormhole", "quasar"}
@@ -3002,6 +3084,14 @@ def _build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--source-tree-sha256", required=True)
     manifest.add_argument("--compiler-sha256", required=True)
     manifest.set_defaults(func=cmd_artifact_manifest)
+
+    candidate = sub.add_parser(
+        "candidate-patch-digest",
+        help="Hash the complete base-to-worktree candidate using a temporary index",
+    )
+    candidate.add_argument("--worktree", required=True)
+    candidate.add_argument("--expected-base-sha", required=True)
+    candidate.set_defaults(func=cmd_candidate_patch_digest)
 
     required = sub.add_parser(
         "required-verification",

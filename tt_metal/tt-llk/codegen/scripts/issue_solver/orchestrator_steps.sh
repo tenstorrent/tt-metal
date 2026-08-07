@@ -157,6 +157,8 @@ execute_step_validate_input() {
 
     local S="$_ORCH_SCRIPTS" mode num title wb tb clb cpr arches arch dirty ok=1
     local expected_base setup_base actual_base base_was_pinned env_base
+    local resumed_from_run resumed_from_attempt resume_checkpoint resume_patch
+    local resume_reuse resume_reason queue_attempt candidate_digest env_resume_present
     mode="$(python "$S/state.py" --worktree-dir "$wt" get RUN_MODE)"
     num="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_NUMBER)"
     title="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_TITLE)"
@@ -171,6 +173,14 @@ execute_step_validate_input() {
     base_was_pinned="$(python "$S/state.py" --worktree-dir "$wt" get BASE_COMMIT_WAS_PINNED)"
     actual_base="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
     env_base="${CODEGEN_BASE_COMMIT:-}"
+    resumed_from_run="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_RUN_ID)"
+    resumed_from_attempt="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_ATTEMPT_ID)"
+    resume_checkpoint="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_CHECKPOINT_DIGEST)"
+    resume_patch="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_PATCH_SHA256)"
+    resume_reuse="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_VERIFICATION_REUSE)"
+    resume_reason="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_INVALIDATION_REASON)"
+    queue_attempt="$(python "$S/state.py" --worktree-dir "$wt" get QUEUE_ATTEMPT_ID)"
+    env_resume_present="${CODEGEN_RESUME_RUN_ID:-}${CODEGEN_RESUME_ATTEMPT_ID:-}${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}${CODEGEN_RESUME_PATCH_SHA256:-}${CODEGEN_RESUME_VERIFICATION_REUSE:-}${CODEGEN_RESUME_INVALIDATION_REASON:-}"
 
     { [ "$mode" = "single" ] || [ "$mode" = "multi" ]; } || { echo "REJECT: RUN_MODE must be single|multi (got '$mode')"; ok=0; }
     printf '%s' "$num" | grep -qE '^[0-9]+$' || { echo "REJECT: ISSUE_NUMBER must be numeric (got '$num')"; ok=0; }
@@ -197,10 +207,49 @@ execute_step_validate_input() {
         echo "REJECT: CODEGEN_BASE_COMMIT changed after setup: expected $expected_base, got $env_base"
         ok=0
     fi
+    if [ -n "$resumed_from_run" ]; then
+        [ -n "$resumed_from_attempt" ] && [ -n "$queue_attempt" ] \
+            || { echo "REJECT: resume attempt lineage is incomplete"; ok=0; }
+        printf '%s' "$resume_checkpoint" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "REJECT: resume checkpoint digest is invalid"; ok=0; }
+        printf '%s' "$resume_patch" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "REJECT: resume patch digest is invalid"; ok=0; }
+        { [ "$resume_reuse" = "invalidated" ] && [ "$resume_reason" = "attempt_identity_changed" ]; } \
+            || { [ "$resume_reuse" = "not_available" ] && [ "$resume_reason" = "no_completed_results" ]; } \
+            || { echo "REJECT: resume verification disposition is invalid"; ok=0; }
+        [ "$resumed_from_attempt" != "$queue_attempt" ] \
+            || { echo "REJECT: resume requires a distinct new attempt identity"; ok=0; }
+        [ "${CODEGEN_RESUME_RUN_ID:-}" = "$resumed_from_run" ] \
+            || { echo "REJECT: resume source run changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_ATTEMPT_ID:-}" = "$resumed_from_attempt" ] \
+            || { echo "REJECT: resume source attempt changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}" = "$resume_checkpoint" ] \
+            || { echo "REJECT: resume checkpoint digest changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_PATCH_SHA256:-}" = "$resume_patch" ] \
+            || { echo "REJECT: resume patch digest changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_VERIFICATION_REUSE:-}" = "$resume_reuse" ] \
+            || { echo "REJECT: resume verification disposition changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_INVALIDATION_REASON:-}" = "$resume_reason" ] \
+            || { echo "REJECT: resume invalidation reason changed after setup"; ok=0; }
+        [ "${CODEGEN_ATTEMPT_ID:-}" = "$queue_attempt" ] \
+            || { echo "REJECT: queue attempt identity changed after resume setup"; ok=0; }
+        if ! candidate_digest="$(python "$S/run_json_writer.py" \
+                candidate-patch-digest --worktree "$wt" \
+                --expected-base-sha "$expected_base")"; then
+            echo "REJECT: cannot compute resumed candidate patch digest"
+            ok=0
+        elif [ "$candidate_digest" != "$resume_patch" ]; then
+            echo "REJECT: resumed candidate patch changed after setup"
+            ok=0
+        fi
+    elif [ -n "$env_resume_present" ]; then
+        echo "REJECT: resume environment is present without validated setup state"
+        ok=0
+    fi
     if ! dirty="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)"; then
         echo "REJECT: cannot inspect worktree status"
         ok=0
-    elif [ -n "$dirty" ]; then
+    elif [ -n "$dirty" ] && [ -z "$resumed_from_run" ]; then
         echo "REJECT: issue-solver worktree must start clean; unexpected paths:"
         printf '%s\n' "$dirty"
         ok=0
@@ -603,6 +652,13 @@ PY
     ss ARCH_COUNT            "$ARCH_COUNT" --json
     ss ARCH_PROFILES_JSON    "$ARCH_PROFILES_JSON" --json
     [ "$MODE" = "single" ] && ss TARGET_ARCH "$TARGET_ARCH"
+    local resume_key resume_value
+    for resume_key in QUEUE_ATTEMPT_ID RESUMED_FROM_RUN_ID \
+        RESUMED_FROM_ATTEMPT_ID RESUME_CHECKPOINT_DIGEST RESUME_PATCH_SHA256 \
+        RESUME_VERIFICATION_REUSE RESUME_INVALIDATION_REASON; do
+        resume_value="$(python "$S/state.py" --worktree-dir "$wt" get "$resume_key")"
+        [ -z "$resume_value" ] || ss "$resume_key" "$resume_value"
+    done
     # Counters + limits.
     ss COMPILATION_ATTEMPTS  0 --json
     ss DEBUG_CYCLES          0 --json
@@ -1404,9 +1460,9 @@ execute_step_write_generated_patch() {
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
     local cf cfj base fix packaged tmp_patch
-    # Input validation requires a clean dedicated worktree, so every non-ignored
-    # change now belongs to this run. Stage the whole worktree and exclude only
-    # generated test infrastructure.
+    # Input validation requires either a clean dedicated worktree or the exact
+    # content-addressed resumed candidate, so every non-ignored change belongs to
+    # this run. Stage the whole worktree and exclude generated test infrastructure.
     local -a pathspec=(
         .
         ':(exclude,glob)**/perf_data/**'
