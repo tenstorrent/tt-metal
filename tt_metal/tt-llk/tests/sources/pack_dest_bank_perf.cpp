@@ -214,8 +214,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces,
             false /* partial_face */,
             false /* narrow_tile */,
-            // num_tiles sets MOP_OUTER_LOOP, so it is what one _llk_pack_ call packs, and the loop
-            // below already runs once per block. TILE_CNT here inflated cycles/tile by NUM_BLOCKS.
             NUM_TILES_IN_BLOCK /* num_tiles */);
         reconfigure_packer_l1_acc(L1_ACC);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

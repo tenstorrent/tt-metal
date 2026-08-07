@@ -64,8 +64,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
             num_faces_B, // In1
             num_faces_A, // In0
-            // in1 first, like every other paired argument here: B goes to SEC0, whose base advances
-            // by TILE_SIZE_A per MOP iteration, so reversing them re-read one tile CT_DIM times.
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
         _llk_unpack_AB_matmul_init_<>(
