@@ -106,10 +106,30 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    // Startup rendezvous, now the same barrier every zone uses. It was an L1 protocol with an absolute
+    // Startup rendezvous, the same barrier every zone uses. It was an L1 protocol with an absolute
     // sentinel, which stopped being a barrier at all after the first launch in a session because the
     // barrier array is never cleared, and it was a third implementation of something we only need one of.
+#if defined(ARCH_QUASAR)
+    // Quasar has no spare semaphore, so it keeps the L1 form. Relative generation rather than the old
+    // absolute sentinel, so it stays a real barrier on every launch and not just the first.
+    auto& barrier           = *barrier_ptr;
+    const std::uint32_t gen = barrier[TRISC_ID] + 1;
+    barrier[TRISC_ID]       = gen;
+    ckernel::invalidate_data_cache();
+    for (std::uint32_t i = 0; i < NUM_CORES; ++i)
+    {
+        if (i == TRISC_ID)
+        {
+            continue;
+        }
+        while (barrier[i] < gen)
+        {
+            ckernel::invalidate_data_cache();
+        }
+    }
+#else
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
+#endif
 }
 
 // The L1 epoch and barrier words below are no longer used by any rendezvous: every barrier now goes

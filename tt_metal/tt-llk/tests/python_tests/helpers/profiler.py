@@ -9,6 +9,7 @@ from typing import ClassVar
 
 import pandas as pd
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
 from .perf_schema import (
@@ -102,7 +103,15 @@ class ProfilerData:
         START_PERF_MEASURE puts a three-way rendezvous at zone entry in both builds, which is what makes
         this hold. Only markers that are reported are checked, so a kernel is free to keep an unreported
         zone such as UNINIT on a thread that a run type happens to skip.
+
+        Blackhole and Wormhole only. Quasar's perf sources still open their zones with bare ZONE_SCOPED
+        and there is no rendezvous behind it: llk_barrier needs a semaphore nothing else uses, and
+        Quasar's three (MATH_PACK, UNPACK_MATH, PACK_UNPACK) are all owned by the ops. So the invariant
+        is not something Quasar can satisfy yet, and asserting it there would fail every perf test
+        rather than report a regression.
         """
+        if get_chip_architecture() == ChipArchitecture.QUASAR:
+            return
         if MARKER not in starts.columns or "timestamp" not in starts.columns:
             return
         # raw() is also called on several runs concatenated together, so compare within a run.

@@ -6,7 +6,9 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "ckernel_structs.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel_structs.h" // semaphore indices; Quasar names its own set in ckernel_trisc_common.h
+#endif
 
 // One cross-thread rendezvous for the whole perf harness.
 //
@@ -50,6 +52,12 @@ constexpr std::uint32_t NUM_THREADS = 3;
 // the bugs above. boot.h seeds it with t6_semaphore_init(PACK_DONE, 0, 1), and that max of 1 does not
 // clamp anything here: the max drives o_stall_cond for SEMWAIT, and this code only ever posts, reads and
 // gets, never waits. So no SEMINIT of our own is needed and none is issued.
+// Quasar has no semaphore to spare: its set is MATH_PACK, UNPACK_MATH and PACK_UNPACK, all three in
+// use by the ops themselves, and there is no PACK_DONE. It also does not compile the counter path at all
+// (counters.h static_asserts it out), so the only caller there is sync_threads, and borrowing an op's
+// semaphore for a measurement barrier is exactly the coupling this header exists to avoid. Quasar keeps
+// the L1 rendezvous in profiler.h until it has a free semaphore or its own mechanism.
+#if !defined(ARCH_QUASAR)
 constexpr std::uint8_t RENDEZVOUS_SEM = ckernel::semaphore::PACK_DONE;
 
 // Every thread announces by incrementing. The action thread waits for all announcements, runs action(),
@@ -105,5 +113,7 @@ constexpr bool is_action_thread()
     return false;
 #endif
 }
+
+#endif // !ARCH_QUASAR
 
 } // namespace llk_barrier
