@@ -337,6 +337,12 @@ def _norm_w_tt(w: torch.Tensor, device, dtype=ttnn.bfloat16, *, wc: WeightCache 
 # ──────────────────────────────────────────────────────────────
 
 
+def _replace_cfg_wdtype(cfg, wdtype):
+    """Return ``cfg`` with weights_dtype set (Conv2dConfig fields are settable in-place)."""
+    cfg.weights_dtype = wdtype
+    return cfg
+
+
 class TTConv1d:
     """1D convolution on device via ttnn.conv2d with H=1 NHWC layout.
 
@@ -363,6 +369,20 @@ class TTConv1d:
         self.out_ch = out_ch
         self.in_ch = in_per_group * cw.groups
         self.K = K
+
+        # bfloat8_b conv weights (VV_CONV_BF8B=0 restores bf16), but ONLY for the few genuinely
+        # read-bound convs.  Frame profile: 16384x2048 (67.1 MB) runs at 278 GB/s, 7168x1024
+        # (14.7 MB) at 235 and 5120x1024 (10.5 MB) at 239 — those stream their weights, so
+        # halving the bytes pays.  The other big convs are NOT read-bound (4096x1024 sits at
+        # 93 GB/s, 14336x128 at 32) and bf8b buys exactly zero wherever the weight read is
+        # already hidden behind per-core work — measured on five separate ops — so the numel
+        # floor keeps them at bf16 rather than spending accuracy for nothing.
+        #
+        # -0.46% ms/tok on the 100-min render.  NOT bit-exact; validated by listening, and the
+        # render came out CLOSER to the pre-change reference than the build without it on every
+        # stability metric (see the commit message).
+        _bf8b_min = int(os.environ.get("VV_CONV_BF8B_MIN_NUMEL", "5000000"))
+        self._bf8b_w = os.environ.get("VV_CONV_BF8B", "1") == "1" and (out_ch * in_per_group * K) >= _bf8b_min
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
         wc = weight_cache or _no_cache()
@@ -553,6 +573,12 @@ class TTConv1d:
                     f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
                     flush=True,
                 )
+        if self._bf8b_w:
+            _conv_cfg = (
+                ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat8_b)
+                if _conv_cfg is None
+                else _replace_cfg_wdtype(_conv_cfg, ttnn.bfloat8_b)
+            )
         # Depthwise single-column output → mul + reduce instead of a dense conv2d (see _dw_mr).
         if self._dw_mr and self.stride == 1 and T_padded == self.K:
             if self._dw_w_kc is None:
