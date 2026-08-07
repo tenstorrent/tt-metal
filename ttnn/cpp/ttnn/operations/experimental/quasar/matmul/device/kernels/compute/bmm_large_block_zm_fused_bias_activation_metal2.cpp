@@ -498,13 +498,12 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
-                        // [#48552] The old "wait_front increments must be identical" rationale was based on
-                        // OUTDATED CB docs and is FALSE (the only DFB constraint is num_entries <= capacity,
-                        // dataflow_buffer.inl:209/231). The real hazard is TEN-4746: a bare wait->pop races
-                        // POP_TILES past WAIT_TILES on the Quasar unpacker (the mm_partials TDMA->SYNC counter
-                        // retire -> 0x10000). Fix = interpose a REAL unpack TDMA (dummy copy of tile 0) between
-                        // wait and pop; NOP/DMANOP/TTI_NOP are insufficient (abhullar/pop-wait-fix 69014037a, and
-                        // our TTI_NOP-fails/DPRINT-works bisection). This is the real fix that drops the DPRINT mask.
+                        // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
+                        // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
+                        // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
+                        // bisection). NB the old "wait_front increments must be identical" rationale for the
+                        // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
 #ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
                         copy_tile_to_dst_init_short(mm_partials_cb_id);
@@ -531,8 +530,8 @@ void kernel_main() {
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
-                        // [#48552] TEN-4746 real fix (see the FUSE_BIAS drain above): interpose a real unpack
-                        // TDMA (dummy copy of tile 0) between the bare wait_front/pop_front on mm_partials.
+                        // [#48552] TEN-4746 interpose (see the FUSE_BIAS drain above): REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
 #ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
                         copy_tile_to_dst_init_short(mm_partials_cb_id);

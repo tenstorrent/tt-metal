@@ -912,15 +912,28 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
+#ifdef ARCH_QUASAR
+                            // TEN-4746: a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES races
+                            // past WAIT_TILES). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0); NOP/
+                            // TTI_NOP are INSUFFICIENT (LLK-team guidance + abhullar/pop-wait-fix 69014037a).
+                            // Reconfig srcA to partials for the copy, then restore srcA + re-init the matmul.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
-                            // TEN-4746: a bare pop_front right after wait_front traps the Quasar unpacker (HW
-                            // expects TDMA activity between). Interpose a dummy op as the documented quick
-                            // guard; proper fix is a scratch-CB + semaphore sequence. Now reachable on the
-                            // Quasar spill path (force_conv_no_spill disabled).
-                            UNPACK(TTI_NOP);
+                            tile_regs_acquire();
+                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
 #endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -929,12 +942,26 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (see above): REAL unpack TDMA (dummy copy_tile) between the bare
+                            // wait_front/pop_front; NOP/TTI_NOP insufficient.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
-                            // TEN-4746 (see above): TDMA interpose between bare wait_front/pop_front.
-                            UNPACK(TTI_NOP);
+                            tile_regs_acquire();
+                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
 #endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
