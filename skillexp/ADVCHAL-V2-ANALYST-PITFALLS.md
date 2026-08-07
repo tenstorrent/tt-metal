@@ -1,6 +1,6 @@
 # Mistakes made in this analysis, and since corrected
 
-Thirty-eight claims that were published as fact during this work and later retracted, downgraded or re-derived,
+Thirty-nine claims that were published as fact during this work and later retracted, downgraded or re-derived,
 grouped by **the error pattern that produced them**. Anyone working from the same artefacts will be tempted the
 same way, which is why the patterns are worth more than the individual corrections.
 

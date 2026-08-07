@@ -1224,7 +1224,7 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 
 ## 9. Mistakes made along the way, and since corrected
 
-Thirty-eight claims, grouped by the error pattern that produced them, each with the check that would have caught
+Thirty-nine claims, grouped by the error pattern that produced them, each with the check that would have caught
 it. The patterns transfer to the next analysis; the individual corrections do not. That file also lists what
 remains **unverified** here.
 
