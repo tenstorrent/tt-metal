@@ -52,7 +52,6 @@ protected:
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
-    bool is_quasar{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     IDevice* device_{nullptr};
     std::vector<uint32_t> result;
@@ -69,10 +68,7 @@ protected:
         device_ = mesh_device_->get_devices()[0];
         report_addr = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        is_quasar = arch_ == tt::ARCH::QUASAR;
-        if (is_quasar) {
-            num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
-        }
+        num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
     }
 
     // Runs the smoke kernel with the given host-baked scope and returns the value the
@@ -80,9 +76,10 @@ protected:
     // the SemaphoreSpec; the kernel is scope-agnostic and picks it up via CTAD on the emitted
     // sem::counter token.
     uint32_t run_scope(SemaphoreScope scope, bool with_down = false) {
-        // Zero the report scratch word.
-        std::vector<uint32_t> zero(1, 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+        // Prefill with a sentinel, not 0: the with_down tests expect 0, so a zero prefill would
+        // pass even if the kernel never reported.
+        std::vector<uint32_t> sentinel(1, kNoReport);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         Program program;
@@ -141,6 +138,8 @@ protected:
 
         tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
+        // The kernel must have overwritten the sentinel, or the 0-expecting tests pass vacuously.
+        EXPECT_NE(result.empty() ? kNoReport : result[0], kNoReport) << "kernel never reported";
         return result.empty() ? 0u : result[0];
     }
 
@@ -148,8 +147,10 @@ protected:
     // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP or
     // PRODUCER_CONSUMER. Returns the value() the reporter/consumer read back.
     uint32_t run_concurrent(SemaphoreScope scope, const std::string& mode_define) {
-        std::vector<uint32_t> zero(1, 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+        // Sentinel prefill: the producer-consumer tests expect 0, so a zero prefill would pass
+        // even if the reporter thread never ran.
+        std::vector<uint32_t> sentinel(1, kNoReport);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         Program program;
@@ -205,6 +206,8 @@ protected:
 
         tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
+        // The kernel must have overwritten the sentinel, or the 0-expecting tests pass vacuously.
+        EXPECT_NE(result.empty() ? kNoReport : result[0], kNoReport) << "kernel never reported";
         return result.empty() ? 0u : result[0];
     }
 
@@ -295,8 +298,15 @@ protected:
         SemaphoreScope scope = SemaphoreScope::AUTO) {
         // Prefill with a sentinel OUTSIDE the SemScope range: LOCAL_NONATOMIC == 0, so a zero prefill
         // would be indistinguishable from "the probe never reported" (e.g. the reporter never ran).
+        // Prefill/read at the REPORTER's node: the probe writes its local L1.
+        experimental::NodeCoord reporter_node = core;
+        for (const auto& k : kernels) {
+            if (k.reporter) {
+                reporter_node = k.node;
+            }
+        }
         std::vector<uint32_t> sentinel(4, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, reporter_node, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};
@@ -308,6 +318,9 @@ protected:
 
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
+        // Each kernel gets barrier slot = its index; only NUM_KERNEL_BARRIERS(3) slots exist and
+        // wait_threads() does not bounds-check.
+        EXPECT_LE(kernels.size(), 3u) << "run_census supports at most 3 kernels (barrier slots)";
         // WorkUnitSpecs must have DISJOINT target nodes, so kernels sharing a node go into ONE work
         // unit (a work unit holds a Group of kernels). Grouped here by node, preserving order.
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
@@ -362,7 +375,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, reporter_node, report_addr, 4 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 4u);
         if (result.size() < 4) {
             return {kNoReport, 0u};
@@ -485,9 +498,6 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
 // G1: all num_dms DMs concurrently up(1) a shared Semaphore. Exact num_dms*iters proves
 // up() routes to the atomic mechanism (a non-atomic up() would lose updates -> less).
 TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
-    }
     const uint32_t observed = run_concurrent(SemaphoreScope::EXTERNAL, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "EXTERNAL concurrent up value(): {} (expected {})", observed, expected);
@@ -495,9 +505,6 @@ TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
-    }
     const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "DM_LOCAL_CACHED concurrent up value(): {} (expected {})", observed, expected);
@@ -508,18 +515,12 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
 // down()'s decrement is atomic vs concurrent producer increments (a non-atomic down() loses
 // producer increments -> the consumer starves and the test times out).
 TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
-    }
     const uint32_t observed = run_concurrent(SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
-    }
     const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
@@ -532,9 +533,6 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
 // MEM_MAP_END <= kernel_config ring base), so the cached AMO's 64B-line write-back cannot clobber
 // the external sem's ring word (nor vice versa). Both counts exact => coexistence works.
 TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "cached pool + AMO + mhartid roles are Quasar-only";
-    }
     const auto [cached_val, external_val] = run_coexist();
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(
@@ -554,9 +552,6 @@ TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
 // here one multi-threaded kernel on one node, so it is the cached pool; TestCensus* assert the
 // specific decision. This test's job is the end-to-end atomicity guarantee.
 TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
-    }
     const uint32_t observed = run_concurrent(SemaphoreScope::AUTO, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "AUTO multi-writer up value(): {} (expected {})", observed, expected);
@@ -567,7 +562,9 @@ TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
 
 // AUTO on a SINGLE-writer semaphore resolves to the cheap LOCAL_NONATOMIC path (single-thread,
 // single-node). Single writer -> value() == iterations; confirms the cheap path runs correctly.
-TEST_F(SemScopeFixture, TestAutoSingleWriterResolvesLocal) {
+// Count-only end-to-end check; the actual resolution is asserted by TestCensusSingleWriterPicksLocal
+// (every correct mechanism yields the same count, so this test cannot tell them apart).
+TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
     const uint32_t observed = run_scope(SemaphoreScope::AUTO);
     log_info(LogTest, "AUTO single-writer value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations) << "AUTO on a single-writer semaphore did not produce the expected count.";
@@ -593,9 +590,6 @@ TEST_F(SemScopeFixture, TestCensusSingleWriterPicksLocal) {
 // Many writer instances (threads) all on the semaphore's ONE node -> cached-pool AMO: atomic among
 // the node's coherent DM cores, with no NoC round-trip. This is the auto-selected fast path.
 TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "multi-threaded DM kernels + the cached pool are Quasar-only";
-    }
     const auto [scope, count] =
         run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     const uint32_t expected = num_dms_ * concurrent_iterations;
@@ -609,9 +603,6 @@ TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
 // still hold the untouched initial value. Every other cached assertion is count-only and would pass
 // even if the semaphore had silently fallen back to the ring -- this is the only test that can tell.
 TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "the cached pool is Quasar-only";
-    }
     const auto [scope, count] =
         run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     ASSERT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED)) << "expected the cached pick for this shape";
@@ -629,11 +620,11 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
 // thread counts hang at kernel entry; equal counts let a seed land after an increment). Both must be
 // demoted to EXTERNAL. Uses different thread counts, which is the hanging variant.
 TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
-    if (!is_quasar) {
-        GTEST_SKIP() << "the cached pool is Quasar-only";
-    }
-    if (num_dms_ < 3) {
-        GTEST_SKIP() << "needs >= 3 user DMs to give the two kernels different thread counts";
+    // threads_b = num_dms_ - 2 must be >= 2 (so BOTH kernels are cached candidates) and != 2
+    // (unequal counts, the hanging variant). num_dms_ >= 5 guarantees both.
+    if (num_dms_ < 5) {
+        GTEST_SKIP() << "needs >= 5 user DMs so both kernels are multi-threaded cached candidates "
+                        "with different thread counts";
     }
     std::vector<uint32_t> sentinel(3, kNoReport);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
@@ -733,6 +724,8 @@ TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
 }
 
 // A WRITER on another node means the semaphore is reachable from off-node -> cached would split it.
+// Two binder kernels, one off-node: EXTERNAL (the single-binder rule alone already forces it here;
+// node confinement in isolation is covered by TestCensusOffNodeSoleBinderPicksExternal below).
 TEST_F(SemScopeFixture, TestCensusOffNodeWriterPicksExternal) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
@@ -745,6 +738,26 @@ TEST_F(SemScopeFixture, TestCensusOffNodeWriterPicksExternal) {
     (void)count;
     log_info(LogTest, "census off-node writer: scope={}", scope);
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "a binder off the semaphore's node must force the NoC atomic";
+}
+
+// Node confinement in ISOLATION: a single multi-threaded binder kernel on a different node than the
+// semaphore. Every other cached conjunct holds (one binder kernel, multi-writer, single-cell sem, no
+// node conflict), so only the node-confinement check can demote this to EXTERNAL. Count is not
+// asserted: the binder's node has no host-initialized word for this semaphore.
+TEST_F(SemScopeFixture, TestCensusOffNodeSoleBinderPicksExternal) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to place the binder off the semaphore's node";
+    }
+    const auto [scope, count] = run_census(
+        core,
+        {{.node = second_node(),
+          .num_threads = num_dms_,
+          .increments = concurrent_iterations,
+          .reporter = true}});
+    (void)count;
+    log_info(LogTest, "census off-node sole binder: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
+        << "with every other cached conjunct satisfied, node confinement alone must demote to EXTERNAL";
 }
 
 // An OBSERVE reader must NOT inflate the writer count: 1 writer + 1 reader is still single-writer.
