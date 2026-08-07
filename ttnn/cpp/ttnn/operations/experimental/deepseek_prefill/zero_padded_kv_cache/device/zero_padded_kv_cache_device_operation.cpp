@@ -61,6 +61,8 @@ constexpr uint32_t kValidGlobalCommonArgIdx = 3;
 constexpr uint32_t kSlotIdxCommonArgIdx = 9;
 constexpr uint32_t kSlotIdxAddrCommonArgIdx = 10;
 constexpr uint32_t kValidGlobalAddrCommonArgIdx = 11;
+// Indices 12 (num_slots) and 13 (global_capacity) are the structural bounds the kernels clamp the two
+// per-call values against. They derive only from hashed attributes, so they never need patching.
 
 // Per-call scalar checks shared by the cache-miss and cache-hit paths.
 void validate_runtime_args(
@@ -96,9 +98,9 @@ void validate_runtime_args(
     }
 
     // slot_idx is a host value only on the scalar path; on the tensor path it lives in the device
-    // tensor (read on-device) and is the caller's responsibility.
+    // tensor (read on-device), where the kernel clamps it to num_slots-1 (common arg 12) instead.
+    const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
     if (!tensor_args.slot_idx.has_value()) {
-        const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
     }
 
@@ -134,7 +136,8 @@ void validate_runtime_args(
         "global cache capacity ({}) must be a multiple of pad_align ({})",
         global_capacity,
         args.pad_align);
-    // valid_global is a host value only on the scalar path.
+    // valid_global is a host value only on the scalar path; on the tensor path the kernel clamps the
+    // on-device value to this same global_capacity (common arg 13).
     if (!tensor_args.valid_global.has_value()) {
         TT_FATAL(
             args.valid_global <= global_capacity,
@@ -266,10 +269,19 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     // width-tiles for TILE, one complete token row for ROW_MAJOR.
     // Layout: 0 my_sp_coord, 1 sp_factor, 2 chunk_local(tokens), 3 valid_global, 4 pad_align,
     //         5 layer_idx, 6 num_layers, 7 Wt, 8 cache_CH_pages (== cache_CHtWt for TILE), 9 slot_idx,
-    //         10 slot_idx_addr, 11 valid_global_addr.
+    //         10 slot_idx_addr, 11 valid_global_addr, 12 num_slots, 13 global_capacity(tokens).
     // Indices 3/9 are the scalar-path per-call values; 10/11 are the slot_idx/valid_global tensors' raw
     // DRAM addresses (metadata path, 0 on the scalar path). override_runtime_arguments patches whichever
     // applies. The metadata (per-element-tensor) path is TILE-only; ROW_MAJOR uses the scalar values.
+    //
+    // 12/13 are the STRUCTURAL BOUNDS the kernels clamp slot_idx / valid_global against
+    // (zero_pad_clamp_slot / zero_pad_clamp_valid_global). They mirror the scalar-path host TT_FATALs
+    // `slot_idx < num_slots` and `valid_global <= global_capacity`, which validate_runtime_args
+    // deliberately skips on the metadata path (those values live in DRAM tensors, off the dispatch path,
+    // so they cannot be checked host-side) -- without them a stale metadata value yields unbounded DRAM
+    // page ids in the reader/writer. Both derive from hashed attributes only, so they never go stale.
+    const uint32_t num_slots = cache_shape[0] / args.num_layers;
+    const uint32_t global_capacity = sp_factor * cache_shape[-2];
     const std::vector<uint32_t> common_runtime_args = {
         my_sp_coord,
         sp_factor,
@@ -283,6 +295,8 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         args.slot_idx,
         slot_idx_addr,
         valid_global_addr,
+        num_slots,
+        global_capacity,
     };
 
     if (is_row_major) {
