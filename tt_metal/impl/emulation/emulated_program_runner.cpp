@@ -582,8 +582,14 @@ struct Metal2BindingsSnapshot {
         }
         for (const auto& [name, h] : sem_accessors) {
             // Fold the baked scope too: same id under a different scope is a different device
-            // mechanism and must not reuse the first kernel's .so.
+            // mechanism and must not reuse the first kernel's .so. Same for the access bit, which is
+            // also baked into the token and changes which members compile -- without it a read-only
+            // binding would silently reuse a mutable binding's .so. Appended only when set, so
+            // existing emu cache keys stay byte-stable and nothing needlessly recompiles.
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
+            if (h.read_only) {
+                s += ":ro";
+            }
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -801,7 +807,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id, SemScope scope) { s.sem_accessors[name] = {id, scope}; });
+        [&s](const std::string& name, uint16_t id, SemScope scope, bool read_only) {
+            s.sem_accessors[name] = {id, scope, read_only};
+        });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
         // snapshot doesn't yet model per-binding runtime CRTA words, and the
@@ -847,7 +855,7 @@ static void emit_metal2_namespaces(
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
     if (!s.sem_accessors.empty()) {
-        // SemaphoreBindingToken<Id, SemScope> token header (pulls in SemScope); see genfiles.cpp.
+        // SemaphoreBindingToken<Id, SemScope, ReadOnly> token header (pulls in SemScope); see genfiles.cpp.
         f << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
@@ -910,12 +918,13 @@ static void emit_metal2_namespaces(
                 "or LOCAL_NONATOMIC for this semaphore when running under emule.",
                 name);
         }
-        // Emit each bound semaphore as a SemaphoreBindingToken<id, baked-scope> token (see genfiles.cpp):
-        // the kernel's Semaphore ctor deduces the host-resolved mechanism via CTAD.
+        // Emit each bound semaphore as a SemaphoreBindingToken<id, baked-scope, read-only> token (see
+        // genfiles.cpp): the kernel's Semaphore ctor deduces the host-resolved mechanism AND the
+        // declared access rights via CTAD.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
             f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
-              << static_cast<int>(h.scope) << ")> " << name << "{};\n";
+              << static_cast<int>(h.scope) << "), " << (h.read_only ? "true" : "false") << "> " << name << "{};\n";
         }
         f << "}  // namespace sem\n";
     }

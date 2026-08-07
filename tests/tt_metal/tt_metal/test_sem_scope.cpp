@@ -295,7 +295,7 @@ protected:
         SemaphoreScope scope = SemaphoreScope::AUTO) {
         // Prefill with a sentinel OUTSIDE the SemScope range: LOCAL_NONATOMIC == 0, so a zero prefill
         // would be indistinguishable from "the probe never reported" (e.g. the reporter never ran).
-        std::vector<uint32_t> sentinel(3, kNoReport);
+        std::vector<uint32_t> sentinel(4, kNoReport);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
@@ -362,12 +362,13 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
-        EXPECT_EQ(result.size(), 3u);
-        if (result.size() < 3) {
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+        EXPECT_EQ(result.size(), 4u);
+        if (result.size() < 4) {
             return {kNoReport, 0u};
         }
         census_ring_word_ = result[2];
+        census_read_only_ = result[3];
         // Catch "the probe never reported" instead of silently reading it as LOCAL_NONATOMIC(0).
         EXPECT_NE(result[0], kNoReport) << "census probe never reported: the reporter kernel/thread did not run";
         return {result[0], result[1]};
@@ -390,6 +391,10 @@ protected:
     // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
     // semaphore this must stay at the initial value, proving the count lives in the pool.
     uint32_t census_ring_word_{kNoReport};
+    // The baked read_only bit as observed by the last run_census() (report word 3). Asserting on this
+    // is what stops the OBSERVE enforcement from rotting into a no-op: several host edits would leave
+    // the bit permanently false without breaking any other assertion in this file.
+    uint32_t census_read_only_{kNoReport};
 
     // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
@@ -752,6 +757,40 @@ TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
     EXPECT_EQ(scope, scope_val(SemScope::LOCAL_NONATOMIC))
         << "an OBSERVE reader must not count as a writer (it would needlessly force an atomic path)";
     EXPECT_EQ(count, iterations);
+}
+
+// POSITIVE CONTROL for the OBSERVE->ReadOnly plumbing, and the reason it cannot rot into a no-op.
+//
+// Every other assertion in this file would still pass if the host silently stopped baking the
+// read_only bit: the classifier would make the same decisions (the census reads access_type
+// host-side, not the baked bit), the counts would be identical, and the kernels would still compile
+// -- an unenforced OBSERVE simply permits more than it should. Several of the host edits that carry
+// the bit compile perfectly if omitted and leave it false everywhere. So the ONLY way to know the bit
+// survives the trip to the device is to read it back off the device, which is what report word 3 is.
+//
+// The OBSERVE kernel must be the REPORTER here: read_only is a property of a BINDING, not of the
+// semaphore, so a writer kernel reporting on the same semaphore would correctly bake 0 and prove
+// nothing about the observer's binding. Its count is not asserted (a reader on a different kernel is
+// outside the writer's barrier), which is fine -- this test is about the baked bit.
+TEST_F(SemScopeFixture, TestObserveBindingBakesReadOnlyBit) {
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = 1, .increments = iterations},
+         {.num_threads = 1, .access = experimental::SemaphoreAccessType::OBSERVE, .increments = 0, .reporter = true}});
+    (void)count;
+    log_info(LogTest, "observe binding: scope={} read_only={}", scope, census_read_only_);
+    EXPECT_EQ(census_read_only_, 1u)
+        << "an AccessType::OBSERVE binding must bake read_only=1 into its sem:: token; a 0 here means "
+           "the host is not emitting the bit, so every mutator static_assert is silently inert";
+}
+
+// ...and the negative half: a writer binding must NOT be baked read-only, or every mutating kernel in
+// the tree would fail to compile.
+TEST_F(SemScopeFixture, TestWriterBindingBakesMutable) {
+    const auto [scope, count] = run_census(core, {{.num_threads = 1, .increments = iterations, .reporter = true}});
+    EXPECT_EQ(scope, scope_val(SemScope::LOCAL_NONATOMIC));
+    EXPECT_EQ(count, iterations);
+    EXPECT_EQ(census_read_only_, 0u) << "a default (INCREMENT) binding must bake read_only=0";
 }
 
 // ...but an OBSERVE reader DOES count for node confinement: a reader on another node would read that
