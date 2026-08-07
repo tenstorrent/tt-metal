@@ -846,6 +846,11 @@ def test_qwen_demo_text(
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
+        if os.environ.get("QWEN_PROFILE_DRAIN") == "1":
+            # Drain device-profiler DRAM buffers after prefill so decode trace-replay markers are not
+            # dropped ("Profiler DRAM buffers were full"): batch-32 prefill alone fills the buffers.
+            ttnn.ReadDeviceProfiler(mesh_device)
+
         if prefill_profile:  # If we are profiling prefill, we stop here
             model.tt_ccl.close()
             return True
@@ -1064,6 +1069,10 @@ def test_qwen_demo_text(
 
             current_pos += 1
             iteration += 1
+
+            if os.environ.get("QWEN_PROFILE_DRAIN") == "1":
+                # Drain profiler buffers every token so each decode trace replay's markers survive.
+                ttnn.ReadDeviceProfiler(mesh_device)
 
             # Upper limit of generated tokens for each user; if users_decoding is already False (say by hitting eos), then we don't need to check the max_generated_tokens.
             if users_decoding:

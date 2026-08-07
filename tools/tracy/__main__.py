@@ -214,7 +214,9 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
+        # generate_report derives the logs folder itself (generate_logs_folder), so pass the output
+        # folder as-is; wrapping it here doubled the path to <out>/.logs/.logs and broke reprocessing.
+        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
