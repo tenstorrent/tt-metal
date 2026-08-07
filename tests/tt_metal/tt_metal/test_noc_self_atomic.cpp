@@ -29,23 +29,20 @@ namespace tt::tt_metal {
 // ============================================================================
 // KEYSTONE TESTS for the auto-path-selecting Quasar semaphore design.
 // ============================================================================
+// On an externally-touched semaphore, even a DM core's own increment/decrement
+// goes through a NoC atomic (NOC_AT_INS_INCR_GET) so local and remote writers
+// serialize at one NIU atomicity point. RISC-V AMOs hang on the uncached alias
+// (dev_mem_map.h), so the self-targeted NoC atomic has NO software fallback.
+// The DM-local fast path relies on a 32-bit RISC-V AMO on the cached alias.
 //
-// The design routes every access to an externally-touched semaphore -- INCLUDING
-// a DM core's own local increment -- through a NoC atomic (NOC_AT_INS_INCR_GET) so
-// local and remote writers serialize at one NIU atomicity point. RISC-V AMOs
-// cannot substitute for the local case (they hang on the uncached alias,
-// dev_mem_map.h:34-35), so the self-targeted NoC atomic is the ONLY mechanism --
-// with NO software fallback. The DM-local fast path, in turn, relies on a 32-bit
-// RISC-V AMO on the cached alias.
-//
-// These tests establish the load-bearing hardware behaviors before any of the
-// design is built:
-//   1. TestSelfTargetedNocAtomicIncrement -- self-targeted (loopback) NoC atomic
-//      works, does not deadlock, and serializes across same-node DM cores.
-//   2. TestSelfVsRemoteNodeNocAtomic      -- a self-targeted (loopback) atomic and
-//      a genuinely-remote (other-node) atomic to the same word are mutually atomic.
-//   3. TestDmCachedAmo32                   -- a 32-bit RISC-V AMO (amoadd.w) on the
-//      cached L1 alias is correct (the DM_LOCAL_CACHED fast-path keystone).
+//   1. TestSelfTargetedNocAtomicIncrement -- loopback NoC atomic does not
+//      deadlock and serializes across same-node DM cores.
+//   2. TestSelfVsRemoteNodeNocAtomic      -- a loopback atomic and a remote
+//      atomic to the same word are mutually atomic.
+//   3. TestDmCachedAmo32                  -- 32-bit RISC-V AMO (amoadd.w) on the
+//      cached L1 alias is correct (DM_LOCAL_CACHED keystone).
+//   4. TestDmCacheLineWidth               -- measures the DM write-back cache
+//      line width the cached-pool segregation must enforce.
 // ============================================================================
 class NocSelfAtomicFixture : public MeshDispatchFixture {
 protected:
@@ -68,9 +65,10 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // Wormhole has no NoC/RISC-V atomics; these are Quasar/Blackhole features.
+        // Wormhole lacks the RISC-V AMOs half of this fixture, and the feature never selects
+        // these mechanisms on Gen1 (AUTO keeps the legacy word there).
         if (arch_ == tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "No atomics on Wormhole";
+            GTEST_SKIP() << "Wormhole lacks RISC-V AMOs; these mechanisms are Blackhole/Quasar-scoped";
         }
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
@@ -163,7 +161,8 @@ protected:
 
     // Launch the single-thread cache-line-width probe on `core`. base_addr is the
     // (line-aligned) region the probe sweeps; report_addr is a disjoint scratch the
-    // probe writes 2*NUM_SEPS words to (wc,wn per separation).
+    // probe writes 2 + 3*NUM_SEPS words to (control pair, then wc/wn_pre/wn_post per
+    // separation).
     void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
         distributed::MeshWorkload workload;
         Program program;
@@ -331,26 +330,21 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
            "path needs a 32-bit CAS loop or a 64-bit word instead.";
 }
 
-// (4) DM write-back cache line width, measured as the minimum separation at which a
-// cached-AMO word and a NoC-atomic word STOP sharing a cache line (i.e. the cached
-// dirty-line write-back stops clobbering the NoC word). This is the separation the
-// DM_LOCAL_CACHED segregation (S3) must enforce between a cached semaphore and any
-// NoC-touched word.
+// (4) DM write-back cache line width: the minimum separation at which a cached-AMO
+// word and a NoC-atomic word stop sharing a cache line (the dirty-line write-back
+// stops clobbering the NoC word). This is the separation the DM_LOCAL_CACHED pool
+// segregation must enforce between a cached semaphore and any NoC-touched word.
 //
-// This is a MEASUREMENT with mandatory validity controls (an adversarial review found
-// that without them, an emulator that fails to model the write-back cache / a coherent
-// NIU would read "safe" at every separation and a naive probe would emit the smallest
-// separation as the width -> S3 under-guards -> silent production corruption). The
-// controls turn every such "hazard not modeled" world into a HARD FAILURE instead of a
-// bogus small width:
+// Validity controls turn a platform that does not model the hazard (which would read
+// "safe" at every separation and yield a bogus small width) into a HARD FAILURE:
 //   - Control A (residency): a cached write must be invisible via the uncached alias
-//     until flushed (proves a write-back cache exists and the uncached alias bypasses it).
+//     until flushed (write-back cache exists; uncached alias bypasses it).
 //   - Control B (landed): each NoC atomic must be observed at TL1 pre-flush (so a
 //     post-flush 0 is a genuine clobber, not "never landed").
-//   - Positive control: sep=4B (guaranteed same line) MUST clobber; if not, the clobber
-//     mechanism is not live on this platform -> width INVALID -> verify on silicon.
-// Ceiling: FLUSH64 triggers the write-back, so a width > 64B is not detectable here
-// (needs a natural-eviction variant or silicon); 64B matches the documented L1 D$/L2 line.
+//   - Positive control: sep=4B (guaranteed same line) MUST clobber, else the hazard
+//     is not live here -> width INVALID -> verify on silicon.
+// Ceiling: FLUSH64 triggers the write-back, so a width > 64B is not detectable here;
+// 64B matches the documented L1 D$/L2 line.
 TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     if (!is_quasar) {
         GTEST_SKIP() << "cached/uncached alias + write-back cache is Quasar-only";
@@ -450,7 +444,7 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     log_info(LogTest, "==> DM write-back cache line width (min NoC-safe separation) = {} B", width);
     EXPECT_EQ(width, EXPECTED_WIDTH)
         << "measured DM write-back line width (" << width << "B) != documented 64B (L1 D$/L2 line). If this is "
-           "real (not an artifact), S3 segregation must use the measured value -- investigate.";
+           "real (not an artifact), the pool segregation must use the measured value -- investigate.";
 }
 
 }  // namespace tt::tt_metal
