@@ -11,16 +11,23 @@
 #include <cxxopts.hpp>
 
 #include <cabling_generator/regen_descriptors.hpp>
+#include <factory_system_descriptor/subset_check.hpp>
 
 using namespace tt::scaleout_tools;
 
 namespace {
+
+// Exit codes (stable for CI/automation gating).
+constexpr int kExitOk = 0;             // regen succeeded (and skinny subset satisfied, if checked)
+constexpr int kExitSkinnyMissing = 2;  // regen succeeded but the regenerated topology lacks skinny connections
+constexpr int kExitError = 1;          // bad input / parse failure
 
 struct InputConfig {
     std::string cabling_descriptor_path;
     std::string deployment_descriptor_path;
     std::string unretrainable_channels_path;
     std::string output_dir;
+    std::string skinny_fsd_path;  // optional
 };
 
 bool file_exists(const std::string& path) {
@@ -57,7 +64,11 @@ InputConfig parse_arguments(int argc, char** argv) {
         "Path to unretrainable_channels.yaml emitted by run_cluster_validation",
         cxxopts::value<std::string>())(
         "o,output-dir", "Directory to write the regenerated descriptor set into", cxxopts::value<std::string>())(
-        "h,help", "Print usage information");
+        "s,skinny-fsd",
+        "Optional: skinny (minimum required) FSD (.textproto). After regeneration, check whether the\n"
+        "regenerated topology still contains every connection it lists; if not, the missing ones are\n"
+        "reported and the tool exits 2.",
+        cxxopts::value<std::string>())("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -84,6 +95,7 @@ InputConfig parse_arguments(int argc, char** argv) {
             .deployment_descriptor_path = result["deployment"].as<std::string>(),
             .unretrainable_channels_path = result["unretrainable-channels"].as<std::string>(),
             .output_dir = result["output-dir"].as<std::string>(),
+            .skinny_fsd_path = result.contains("skinny-fsd") ? result["skinny-fsd"].as<std::string>() : "",
         };
 
         if (!file_exists(config.cabling_descriptor_path) && !directory_exists(config.cabling_descriptor_path)) {
@@ -97,12 +109,15 @@ InputConfig parse_arguments(int argc, char** argv) {
             throw std::invalid_argument(
                 "Unretrainable channels YAML not found: '" + config.unretrainable_channels_path + "'");
         }
+        if (!config.skinny_fsd_path.empty() && !file_exists(config.skinny_fsd_path)) {
+            throw std::invalid_argument("Skinny FSD not found: '" + config.skinny_fsd_path + "'");
+        }
 
         return config;
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;
         std::cerr << options.help() << std::endl;
-        std::exit(1);
+        std::exit(kExitError);
     }
 }
 
@@ -141,9 +156,26 @@ int main(int argc, char** argv) {
             }
         }
 
-        return 0;
+        // Optional: confirm the regenerated topology still satisfies a skinny (minimum) topology.
+        if (!config.skinny_fsd_path.empty()) {
+            auto missing = missing_skinny_connections(config.skinny_fsd_path, summary.output_fsd_path);
+            std::cout << "\nSkinny check against " << config.skinny_fsd_path << ":" << std::endl;
+            if (missing.empty()) {
+                std::cout << "  PASS: regenerated topology contains the full skinny topology; safe to deploy on skinny."
+                          << std::endl;
+            } else {
+                std::cerr << "  FAIL: " << missing.size()
+                          << " skinny-required connection(s) missing from the regenerated topology:" << std::endl;
+                for (const auto& [endpoint_a, endpoint_b] : missing) {
+                    std::cerr << "    - " << endpoint_a << " <-> " << endpoint_b << std::endl;
+                }
+                return kExitSkinnyMissing;
+            }
+        }
+
+        return kExitOk;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
+        return kExitError;
     }
 }

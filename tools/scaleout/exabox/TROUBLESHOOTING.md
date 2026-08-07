@@ -30,6 +30,7 @@ Real issues encountered and their solutions.
   - [UMD Firmware Version Mismatch - Links Not Detected](#umd-firmware-version-mismatch---links-not-detected)
   - [QSFP Connections Missing Between Hosts](#qsfp-connections-missing-between-hosts)
   - [Diagnosing Bad Cables via Swap Test](#diagnosing-bad-cables-via-swap-test)
+  - [Deploying Around a Dead Cable (Regenerate Descriptors)](#deploying-around-a-dead-cable-regenerate-descriptors)
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
   - [Z Ports Showing Down](#z-ports-showing-down)
   - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
@@ -741,6 +742,35 @@ To determine if the issue is with the cable or the port, swap the suspect cable 
 - Host pair affected
 - Tray IDs and port IDs
 - Results of the swap test
+
+---
+
+## Deploying Around a Dead Cable (Regenerate Descriptors)
+
+**Symptom**: A cable is confirmed bad (won't retrain) and can't be replaced right
+away, but you still need to bring the cluster up on the remaining good links.
+
+When `recover.sh` validation fails because links cannot be retrained, it writes
+`unretrainable_channels.yaml` and automatically runs `run_regen_descriptors`,
+which prunes every cable containing a dead channel and emits a fresh set of FSD,
+cabling, and deployment descriptors describing the degraded-but-working topology.
+Deploy from the regenerated descriptors to skip the dead cable.
+
+```bash
+# Regen runs automatically on failure; pass --no-regenerate-on-failure to skip it.
+./recover.sh --hosts <hosts> --output <dir>
+```
+
+**Optional skinny deploy-gate**: if your workload only needs a minimal subset of
+links, provide that subset as a "skinny" FSD. After regenerating, the tool checks
+that the degraded topology still contains every skinny connection and refuses to
+deploy (non-zero exit) if any are missing:
+
+```bash
+./recover.sh --hosts <hosts> --output <dir> --skinny-fsd <skinny_fsd.textproto>
+```
+
+Run `./recover.sh --help` or `run_regen_descriptors --help` for the full flag list.
 
 ---
 
