@@ -1,20 +1,18 @@
 # advchal-v2 — read this one file
 
-**The question.** Can `$shard-advise` contribute meaningfully to decode performance, and how much? Stage 02b
-(`$advisor-challenger`) ran on **15 decoder cells** to find out — each one a decoder already optimised *without*
-the advisor, so that anything it adds is a real gain and not a re-derivation of work already done.
+Can `$shard-advise` contribute meaningfully to decode performance, and how much? Stage 02b
+(`$advisor-challenger`) ran on **15 decoder cells** to find out. Each one was a decoder already optimised
+*without* the advisor, so anything it adds is a real gain rather than a re-derivation of work already done.
 
-**How it was answered.** By strict attribution: the incoming decoder is frozen as the control and never
-re-tuned, and only what the advisor's directions add on top is counted. That accounting is deliberately
-conservative and **it undercounts** — it prices in-chain re-grids at zero (§3.6), records the one direction the
-advisor reliably gets right as `kept: 0` (§3.14), and never applies the advised plan as written (§3.27). So §2
-gives two numbers per cell wherever both were measured: what the stage credited, and what was reachable.
+The measurement is deliberately strict: freeze the incoming decoder as the control, never re-tune it, and count
+only what the advisor's directions add on top. **That undercounts**, in three ways that are themselves measured —
+it prices in-chain re-grids at zero (§3.6), records the one direction the advisor reliably gets right as
+`kept: 0` (§3.14), and never applies the advised plan as written (§3.27). So §2 carries two numbers per cell
+wherever both exist: what the stage credited, and what was reachable.
 
-Numbers come from the cells' own artefacts or from re-measurements on the same hardware.
-
-**This file is the few-minute version.** The evidence — 29 findings and the method — is in
-[`FINDINGS`](ADVCHAL-V2-FINDINGS.md). **Section references with a decimal — `§3.11` — are in that file; plain
-`§1`–`§6` are sections of this one.** What the analysis itself got wrong is in
+Everything below comes from the cells' own artefacts or from re-measurements on the same hardware. This is the
+short version — the evidence is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md), where a decimal reference like `§3.11`
+points; plain `§1`–`§6` are sections here. What the analysis itself got wrong is in
 [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
 
 ---
@@ -57,9 +55,8 @@ directions:
 | **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside it — 97 % of one model's | §3.5 |
 | The corpus's **largest single cost** — 191 ms/model — is a graph-shape choice **no layout advisor could reach** | §3.18–3.19 |
 
-**What limited the advisor in v2 was not the advisor.** It was the stage's use of it — ten cheap defects — plus
-tracer coverage. Both are more tractable than a cost model, which is the encouraging part. The 82 %-vs-99.4 % gap
-is the part to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
+What limited the advisor in v2 was not the advisor. It was the stage's use of it — ten cheap defects — plus
+tracer coverage, and both are more tractable than a cost model. The 82 %-vs-99.4 % gap is the part to watch: **until `LayoutScore` prices latency, trust the advisor for *where* to look and *which
 direction* to move, and treat its specific core count as one rung on a ladder to sweep.**
 
 In one line: a **defect detector with a broken cost model** — no latency term anywhere in its objective — used by
@@ -166,10 +163,10 @@ action points in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).*
 | STG-9 | **The capture monkey-patches `_decode_rope`**, so the advisor never sees the cell's real RoPE. | The advice for that region is advice for a substitute method | stage/capture, or fix the tracer limitation |
 | STG-10 | **It throws away the perf report it runs.** Only 1 of 15 cells saved a before/after profile pair. | Op-level verification is impossible for 14 cells | **B0** |
 
-**The two columns are not the same size of problem.** The advisor's defects are real but need tt-mlir builds. **The stage's defects are
-almost all one-file, no-build changes, and they account for the larger measured loss** — STG-1 alone is 3.7× on the
-cell where it can be measured, and STG-2 hid two of the corpus's three biggest wins. gemma-4-12B is the extreme
-case: **52 measurements without ever applying one advised grid.**
+The two columns are not the same size of problem. The advisor's defects are real, but each needs a tt-mlir
+build. **The stage's are almost all one-file changes with no build, and they account for the larger measured
+loss** — STG-1 alone is 3.7× on the cell where it can be measured, and STG-2 hid two of the corpus's three
+biggest wins. gemma-4-12B is the extreme case: **52 measurements without ever applying one advised grid.**
 
 ### Neither — outside any layout advisor's reach
 
@@ -181,9 +178,10 @@ and to tt-metal — a layout advisor could not reach any of them.
 
 ## 4. What is still on the table
 
-**From placement — ≈9.2 ms/model, across four cells.** All four were located from the advisor's *own* per-op
-output, by a one-line static check needing no device time. But only **half** the total is the advisor's actual
-recommendation: in three of the four it named the right op and a grid that a sweep of the legal ladder beat.
+Placement leaves **≈9.2 ms/model** on the table across four cells. All four were located from the advisor's
+*own* per-op output, by a one-line static check needing no device time — but only **half** the total is the
+advisor's actual recommendation. In three of the four it named the right op and a grid that a sweep of the legal
+ladder beat.
 
 | cell | winning change | advised value | µs/model | the advisor's own number? |
 |---|---|---|---|---|
