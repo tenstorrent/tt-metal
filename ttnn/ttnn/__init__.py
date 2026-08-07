@@ -485,9 +485,9 @@ from ttnn.operations.matmul import (
     MatmulParams,
     MatmulInputs,
     MatmulDeviceOperation,
-    MatmulMultiCoreReuseOptimizedProgramFactory,
+    MatmulMultiCoreReuseOptimizedProgramFactoryForPython,
     create_matmul_attributes,
-    matmul_select_program_factory,
+    matmul_select_program_factory_for_python,
 )
 
 from ttnn.operations.normalization import (
