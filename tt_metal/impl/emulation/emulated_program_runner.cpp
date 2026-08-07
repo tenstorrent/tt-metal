@@ -581,11 +581,9 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
         for (const auto& [name, h] : sem_accessors) {
-            // Fold the baked scope too: same id under a different scope is a different device
-            // mechanism and must not reuse the first kernel's .so. Same for the access bit, which is
-            // also baked into the token and changes which members compile -- without it a read-only
-            // binding would silently reuse a mutable binding's .so. Appended only when set, so
-            // existing emu cache keys stay byte-stable and nothing needlessly recompiles.
+            // Fold the baked scope and access bit too: same id under a different scope or access
+            // compiles a different token and must not reuse the first kernel's .so. ":ro" is
+            // appended only when set, so mutable bindings' keys don't carry it.
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
             if (h.read_only) {
                 s += ":ro";
@@ -906,10 +904,8 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // emule does not model the DM_LOCAL_CACHED tier: this emitter bakes the host-resolved scope but,
-        // unlike genfiles, emits no sem::init_dm_cached() and injects no entry wrapper, and emule seeds
-        // only the ring slot -- never MEM_DM_CACHED_SEM_BASE. A cached semaphore would therefore read an
-        // unseeded pool word. Refuse it loudly here rather than emit something that cannot work.
+        // emule does not model DM_LOCAL_CACHED (no pool seeder, no entry wrapper; only the ring
+        // slot is seeded), so a cached semaphore would read an unseeded pool word. Refuse loudly.
         for (const auto& [name, h] : s.sem_accessors) {
             TT_FATAL(
                 h.scope != SemScope::DM_LOCAL_CACHED,
@@ -918,9 +914,8 @@ static void emit_metal2_namespaces(
                 "or LOCAL_NONATOMIC for this semaphore when running under emule.",
                 name);
         }
-        // Emit each bound semaphore as a SemaphoreBindingToken<id, baked-scope, read-only> token (see
-        // genfiles.cpp): the kernel's Semaphore ctor deduces the host-resolved mechanism AND the
-        // declared access rights via CTAD.
+        // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, read_only> (see
+        // genfiles.cpp); CTAD gives the kernel's Semaphore the host-resolved mechanism and access.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
             f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("

@@ -27,16 +27,14 @@
 namespace tt::tt_metal {
 
 // ============================================================================
-// Phase-1 SemScope skeleton validation.
+// Scoped semaphore (SemScope) tests.
 // ============================================================================
-//
-// Exercises the scoped device Semaphore class (noc_semaphore.h) end-to-end: a
-// single DM thread constructs Semaphore<TENSIX, Scope> over a bound semaphore,
-// increments it N times via up(), reads it back with value(), and reports the
-// observed value. This confirms the DM_LOCAL_CACHED (32-bit AMO) and EXTERNAL
-// (self-targeted NoC atomic) code paths compile and produce the correct
-// single-writer count. Multi-writer atomicity of the underlying mechanisms is
-// covered by the keystone tests (NocSelfAtomicFixture).
+// Exercises the scoped device Semaphore class (noc_semaphore.h) end-to-end
+// across all three mechanisms -- LOCAL_NONATOMIC (plain L1 RMW),
+// DM_LOCAL_CACHED (32-bit AMO on the cached alias), EXTERNAL (self-targeted
+// NoC atomic) -- plus the AUTO classifier that picks between them. Raw
+// multi-writer atomicity of the underlying hardware mechanisms is covered by
+// the keystone tests (NocSelfAtomicFixture).
 // ============================================================================
 class SemScopeFixture : public MeshDispatchFixture {
 protected:
@@ -58,9 +56,7 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // Every spec in this file uses DataMovementGen2Config, so the whole suite is Gen2 (Quasar)
-        // only -- on Gen1 the specs themselves would be rejected, which would look like test failures
-        // rather than an unsupported configuration.
+        // Every spec here uses DataMovementGen2Config, so the suite is Gen2 (Quasar) only.
         if (arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
         }
@@ -289,15 +285,13 @@ protected:
     };
 
     // Build + run a program with the given census shape; returns {baked_scope, counter_value}.
-    // The baked scope is read back from the device, so it is the classifier's ACTUAL decision as
-    // compiled into the kernel -- not an inference from the resulting counts (every correct mechanism
-    // yields the same counts, so a count-only assertion cannot detect a wrong pick).
+    // The scope is read back from the device -- the classifier's ACTUAL decision, since counts
+    // alone look right under any correct mechanism.
     std::pair<uint32_t, uint32_t> run_census(
         const experimental::Nodes& sem_target,
         const std::vector<CensusKernel>& kernels,
         SemaphoreScope scope = SemaphoreScope::AUTO) {
-        // Prefill with a sentinel OUTSIDE the SemScope range: LOCAL_NONATOMIC == 0, so a zero prefill
-        // would be indistinguishable from "the probe never reported" (e.g. the reporter never ran).
+        // Sentinel prefill (LOCAL_NONATOMIC == 0, so a zero prefill would hide "never reported").
         // Prefill/read at the REPORTER's node: the probe writes its local L1.
         experimental::NodeCoord reporter_node = core;
         for (const auto& k : kernels) {
@@ -387,9 +381,7 @@ protected:
         return {result[0], result[1]};
     }
 
-    // A node other than `core`, on whichever axis the device actually exposes. The off-node shapes
-    // used to hardcode {1,0} and skip on grid.x < 2, which silently dropped their coverage on a
-    // 1-wide (but taller) grid.
+    // A node other than `core`, on whichever axis the device actually exposes.
     bool has_second_node() const {
         const auto grid = mesh_device_->compute_with_storage_grid_size();
         return grid.x >= 2 || grid.y >= 2;
@@ -404,9 +396,8 @@ protected:
     // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
     // semaphore this must stay at the initial value, proving the count lives in the pool.
     uint32_t census_ring_word_{kNoReport};
-    // The baked read_only bit as observed by the last run_census() (report word 3). Asserting on this
-    // is what stops the OBSERVE enforcement from rotting into a no-op: several host edits would leave
-    // the bit permanently false without breaking any other assertion in this file.
+    // The baked read_only bit as observed by the last run_census() (report word 3); only a device
+    // readback can prove the host actually emitted the bit.
     uint32_t census_read_only_{kNoReport};
 
     // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
@@ -487,10 +478,8 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
 }
 
-// NOTE: token-CTAD deduction (the S1 mechanism) is now exercised by EVERY test above and
-// below — after the S2b emitter flip, sem::counter IS a SemaphoreBindingToken<id, baked-scope> token and
-// the kernels construct via plain `Semaphore s(sem::counter)`, so the standalone
-// TestTokenCtadDeduction became redundant and was removed.
+// NOTE: token-CTAD deduction is exercised by every test here: sem::counter is a
+// SemaphoreBindingToken<id, baked-scope> and the kernels construct via plain `Semaphore s(sem::counter)`.
 
 // ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
 // atomic path from a non-atomic one; these do. ----
@@ -526,7 +515,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
 }
 
-// ---- S3: dedicated cached-only pool coexistence proof ----
+// ---- Cached-pool / EXTERNAL coexistence ----
 
 // A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs in one
 // program. The pool is physically disjoint from the NoC-written ring (MEM_DM_CACHED_SEM_BASE <
@@ -544,13 +533,11 @@ TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
            "ring word (pool separation FAILED).";
 }
 
-// ---- S5: AUTO classifier behavior (auto-select LOCAL_NONATOMIC vs EXTERNAL) ----
+// ---- AUTO classifier behavior ----
 
-// AUTO on a MULTI-writer semaphore must resolve to an ATOMIC mechanism. All DMs concurrently up() an
-// AUTO-scoped semaphore; exact num_dms*iters proves atomicity (a wrong LOCAL_NONATOMIC pick loses
-// updates under contention -> short count). Which atomic mechanism it picks depends on confinement --
-// here one multi-threaded kernel on one node, so it is the cached pool; TestCensus* assert the
-// specific decision. This test's job is the end-to-end atomicity guarantee.
+// AUTO on a MULTI-writer semaphore must resolve to an ATOMIC mechanism: exact num_dms*iters proves
+// no lost updates (a wrong LOCAL_NONATOMIC pick would come up short). The specific mechanism picked
+// (here the cached pool) is asserted by the TestCensus* tests.
 TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
     const uint32_t observed = run_concurrent(SemaphoreScope::AUTO, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
@@ -560,10 +547,8 @@ TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
            "classifier wrongly picked LOCAL_NONATOMIC).";
 }
 
-// AUTO on a SINGLE-writer semaphore resolves to the cheap LOCAL_NONATOMIC path (single-thread,
-// single-node). Single writer -> value() == iterations; confirms the cheap path runs correctly.
-// Count-only end-to-end check; the actual resolution is asserted by TestCensusSingleWriterPicksLocal
-// (every correct mechanism yields the same count, so this test cannot tell them apart).
+// AUTO on a SINGLE-writer semaphore takes the cheap LOCAL_NONATOMIC path. Count-only end-to-end
+// check; the actual resolution is asserted by TestCensusSingleWriterPicksLocal.
 TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
     const uint32_t observed = run_scope(SemaphoreScope::AUTO);
     log_info(LogTest, "AUTO single-writer value(): {} (expected {})", observed, iterations);
@@ -576,7 +561,7 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
 // Each test builds a distinct census shape and asserts the scope the host ACTUALLY baked into the
 // kernel (read back from the device), so a regression in the classifier or the census arithmetic
 // fails loudly instead of hiding behind counts that look right under any correct mechanism.
-// Second node used for the off-node shapes; those tests skip on a 1-wide grid.
+// Off-node shapes use second_node() and skip only on a single-node 1x1 grid.
 // ============================================================================
 
 // 1 writer instance on a single-cell semaphore -> nothing can race -> cheapest path.
@@ -614,11 +599,10 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
            "to the kernel_config ring.";
 }
 
-// TWO DISTINCT cached-eligible semaphores, each with its own single binder kernel, co-resident on one
-// node. Each passes the per-semaphore single-binder-kernel rule, but the injected pool seeder
-// rendezvouses on ONE node-wide barrier slot -- so caching both would mix rendezvous groups (unequal
-// thread counts hang at kernel entry; equal counts let a seed land after an increment). Both must be
-// demoted to EXTERNAL. Uses different thread counts, which is the hanging variant.
+// TWO cached-eligible semaphores, each with its own single binder kernel, on one node: the injected
+// pool seeder rendezvouses on ONE node-wide barrier slot, so caching both would mix rendezvous
+// groups (unequal thread counts hang at entry; equal counts let a seed land after an increment).
+// Both must be demoted to EXTERNAL. Uses different thread counts -- the hanging variant.
 TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
     // threads_b = num_dms_ - 2 must be >= 2 (so BOTH kernels are cached candidates) and != 2
     // (unequal counts, the hanging variant). num_dms_ >= 5 guarantees both.
@@ -688,7 +672,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
-    ASSERT_NE(result[0], kNoReport) << "reporter never ran (the program hung or the seeder deadlocked)";
+    ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
     EXPECT_EQ(result[0], scope_val(SemScope::EXTERNAL))
         << "two co-resident cached-binder kernels share one node-wide seeder barrier slot -> both must "
@@ -772,19 +756,10 @@ TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
     EXPECT_EQ(count, iterations);
 }
 
-// POSITIVE CONTROL for the OBSERVE->ReadOnly plumbing, and the reason it cannot rot into a no-op.
-//
-// Every other assertion in this file would still pass if the host silently stopped baking the
-// read_only bit: the classifier would make the same decisions (the census reads access_type
-// host-side, not the baked bit), the counts would be identical, and the kernels would still compile
-// -- an unenforced OBSERVE simply permits more than it should. Several of the host edits that carry
-// the bit compile perfectly if omitted and leave it false everywhere. So the ONLY way to know the bit
-// survives the trip to the device is to read it back off the device, which is what report word 3 is.
-//
-// The OBSERVE kernel must be the REPORTER here: read_only is a property of a BINDING, not of the
-// semaphore, so a writer kernel reporting on the same semaphore would correctly bake 0 and prove
-// nothing about the observer's binding. Its count is not asserted (a reader on a different kernel is
-// outside the writer's barrier), which is fine -- this test is about the baked bit.
+// POSITIVE CONTROL for the OBSERVE->ReadOnly plumbing: every other assertion here still passes if
+// the host silently stops baking the read_only bit, so the bit is read back off the device (report
+// word 3). The OBSERVE kernel must be the REPORTER: read_only is a property of a BINDING, so a
+// writer kernel reporting on the same semaphore would correctly bake 0. Its count is not asserted.
 TEST_F(SemScopeFixture, TestObserveBindingBakesReadOnlyBit) {
     const auto [scope, count] = run_census(
         core,
@@ -898,7 +873,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
     }) << "binding the same semaphore twice in one kernel must be rejected (it double-counts the census)";
 }
 
-// ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
+// ---- Host-side scope resolution + contradiction FATALs ----
 
 // Explicit single-node scopes are accepted (ResolveSemaphoreScope validates, no throw).
 TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
@@ -906,10 +881,8 @@ TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
 }
 
-// NOTE: there is deliberately no "compute kernel binds a cached semaphore" test -- Metal 2.0 forbids
-// semaphore bindings on compute kernels outright (ValidateProgramSpec), and hw_config has only
-// DataMovement/Compute alternatives, so a semaphore binder is always a data-movement kernel and the
-// cached path needs no compute-specific guard.
+// NOTE: no "compute kernel binds a cached semaphore" test -- Metal 2.0 forbids semaphore bindings
+// on compute kernels outright (ValidateProgramSpec), so a binder is always a data-movement kernel.
 
 // The pool is per-core, so a binder running on a node OTHER than the semaphore's node would
 // increment its own node's copy -> silent split -> host FATAL at config time.
@@ -922,7 +895,6 @@ TEST_F(SemScopeFixture, TestForcedDmLocalCachedRemoteBinderFatal) {
     EXPECT_ANY_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
     // Sanity: the same spread-out binding is fine on the NoC-atomic path.
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::EXTERNAL, core));
-    kernel_target_ = experimental::Nodes{core};  // restore for other tests
 }
 
 // A forced DM_LOCAL_CACHED semaphore that spans >1 node is a contradiction -> host FATAL.

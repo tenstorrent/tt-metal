@@ -2,38 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// KEYSTONE probe: the DM write-back cache line width, measured as the minimum
-// separation at which a DM cached-AMO word and a NoC-atomic word STOP sharing a
-// cache line. This is the separation the DM_LOCAL_CACHED segregation (S3) must
-// enforce: if a DM_LOCAL_CACHED semaphore shares a cache line with any NoC-touched
-// word, the DM's dirty-line write-back silently CLOBBERS that word.
+// DM write-back cache line width probe: the minimum separation at which a cached-AMO
+// word (wc) and a NoC-atomic word (wn) stop sharing a cache line -- i.e. the DM's
+// dirty-line write-back stops clobbering the NoC word. Single-thread and sequenced to
+// FORCE the worst-case ordering, so a "safe" result means the hazard is impossible at
+// that separation, not that a race was won.
 //
-// DETERMINISTIC (single-thread, sequenced) design. The corruption is an ordering
-// hazard: it manifests only if the DM caches the line (capturing the neighbour's
-// OLD value) BEFORE the NoC writes the neighbour, and then writes back AFTER. We
-// FORCE that worst case, so a "safe" result means the hazard is impossible at that
-// separation (different line), not merely that a race was won this run.
-//
-// GUARDS AGAINST FALSE-SAFE (an adversarial review's dominant failure mode: on an
-// emulator that does NOT model the write-back cache / NoC-incoherence, or with a
-// cache-coherent NIU, every separation would read "safe" and a naive probe would
-// report the smallest separation as the width -> S3 under-guards -> corruption):
-//
-//   CONTROL A (write-back residency): seed OLD at TL1 via the uncached alias,
-//     write NEW via the cached alias WITHOUT flushing, then read via the uncached
-//     alias. It MUST still read OLD (proof: the cached write sits in a write-back
-//     cache and the uncached alias truly bypasses it). Then flush; it MUST read
-//     NEW. If the no-flush read already sees NEW, the platform is not modeling a
-//     write-back cache (flat/coherent/write-through) and the host rejects the run.
-//
-//   CONTROL B (per-sep NoC-landed): read wn via the uncached alias BEFORE the
-//     flush. It MUST equal NOC_ADD (the atomic committed at TL1). This makes a
-//     post-flush wn==0 a genuine "clobbered NOC_ADD->0", not "never landed".
-//
-//   POSITIVE CONTROL (host): the smallest separation (sep=4, guaranteed same line
-//     for a line-aligned base) MUST read CLOBBERED. If it does not, the clobber
-//     mechanism is not live (coherent NIU / unfaithful emu) and the width is
-//     INVALID -> the host HARD-FAILS rather than emitting a bogus small width.
+// Controls (a platform that does not model the write-back cache would read "safe"
+// everywhere and yield a bogus small width; the host rejects such runs):
+//   CONTROL A (residency): a cached write must stay invisible via the uncached alias
+//     until flushed (write-back cache exists; uncached alias bypasses it).
+//   CONTROL B (landed): wn is read via the uncached alias BEFORE the flush and must
+//     equal NOC_ADD, so a post-flush 0 is a genuine clobber, not "never landed".
+//   POSITIVE CONTROL (host): sep=4 (guaranteed same line) must read CLOBBERED, else
+//     the clobber mechanism is not live and the width is INVALID.
 //
 // Per sub-test i:  wc = base + i*STRIDE  (cached-AMO word),  wn = wc + sep[i]  (NoC word)
 //   1. zero wc, wn via cached alias; flush both lines           -> TL1=0, lines clean
@@ -44,11 +26,8 @@
 //   5. flush wc's line                                          -> clobbers TL1 wn iff same line
 //   6. read wc, wn via uncached                                 -> report
 //
-// CEILING (documented limitation): the write-back is triggered by flush_l2_cache_line
-// = FLUSH64, a fixed 64B window, so this probe can confirm a width UP TO 64B (which
-// matches the documented L1 D$ / L2 line = 64B) but cannot detect a hypothetical
-// natural-eviction line > 64B. A >64B line needs the natural-eviction variant or
-// silicon. Quasar-only (cached alias + RISC-V AMO + flush).
+// Ceiling: flush_l2_cache_line = FLUSH64 (fixed 64B window), so a width > 64B is not
+// detectable here; 64B matches the documented L1 D$ / L2 line. Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"

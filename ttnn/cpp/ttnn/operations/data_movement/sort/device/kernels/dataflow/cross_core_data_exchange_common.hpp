@@ -45,12 +45,8 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * @param other_core_x                 Physical X coordinate of the peer core.
  * @param other_core_y                 Physical Y coordinate of the peer core.
  */
-// Generic in BOTH baked token parameters: the caller's Semaphore is CTAD-deduced from its
-// SemaphoreBindingToken, so its Scope (host-chosen mechanism) and ReadOnly (host-declared
-// AccessType::OBSERVE) are whatever the host picked and cannot be pinned here. SemRO is deduced
-// rather than fixed to false so this signature keeps matching if a caller's binding is ever
-// relabelled -- a mutating call inside then fails on the mutator's own assert, which is the useful
-// error, instead of failing to match this parameter at all.
+// Generic in both baked token parameters (Scope, ReadOnly): the caller's Semaphore is
+// CTAD-deduced from its binding, so accept whatever the host picked rather than pin it here.
 template <SemScope SemS, bool SemRO = false>
 FORCE_INLINE
 void sort_noc_exchange_Wt_tiles(
@@ -178,7 +174,6 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  *
  * @note If only one core is participating, the function returns immediately.
  */
-// Scope-generic for the same reason as sort_noc_exchange_Wt_tiles above.
 // Generic in both token parameters, for the same reason as sort_noc_exchange_Wt_tiles above.
 template <SemScope SemS, bool SemRO = false>
 FORCE_INLINE
