@@ -188,7 +188,7 @@ using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>
 //  Common-field accessors
 // ----------------------------------------------------------------------------
 //
-// Many compute settings are common to Gen1 and Gen2 archictures.
+// Many compute settings are common to Gen1 and Gen2 architectures.
 //
 // Reaching a common field through the variant is syntactically awkward; you should not need
 // to know which alternative is held. For convenience, each common field is given an accessor
