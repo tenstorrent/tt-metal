@@ -9,6 +9,11 @@
 >
 > Three DISTINCT failures, never pool them: **WEDGE** (card `Unknown|63`) · **TEARDOWN** (healthy card,
 > core-wait hangs) · **DEGRADED** (13× MMIO latency, needs a box freeze).
+>
+> **§N+24 (newest) SOLVES the slow-dispatch TEARDOWN** and overrides §N+21 B: it was the harness passing
+> `--gx 0` (= 12x10 under slow dispatch) while the drainer polls 11 columns. Harness fixed; slow cells are
+> now 10/10 clean and slow dispatch is unblocked. **All previously recorded slow-dispatch cells are void.**
+> `14-2..14-11` are TENSIX WORKERS (one column), not the DRAM/DRISC column.
 
 <!--
 SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
@@ -2427,3 +2432,82 @@ IOVAs -- the signature of an address register that only the DRAM-core path leave
 **Next, in order:** (1) correlate `AMD-Vi` fault timestamps against wedge times from the harness CSVs;
 (2) get the actual IOVA of the CQ region and of the D2H socket buffer and see which sits near zero;
 (3) diff the DMA setup between the DRAM-core and worker egress paths.
+
+## §N+24 — SOLVED: the slow-dispatch TEARDOWN is a HARNESS GRID BUG, not a device fault (bh-05, 2026-08-07)
+
+**§N+21 B's "slow dispatch fails 26/26 on BOTH drainers" is explained and fixed. It was the harness
+running `--gx 0 --gy 0`.** The slow cells are now 10/10 CLEAN. Slow dispatch is no longer blocked, and
+the "fix the 10-core teardown in code before slow dispatch can answer the wedge question" blocker in
+§N+21 B is **void** — it was a one-flag harness change, not a code change.
+
+### The mechanism
+
+`compute_with_storage_grid_size()` is **dispatch-dependent**, and the two sides disagreed:
+
+| | compute grid | drainer polls |
+|---|---|---|
+| fast dispatch | 11x10 = 110 (dispatch reserves the rest) | 11 columns |
+| slow dispatch | **12x10 = 120** (`core_descriptor.cpp:247` logs `Using full logical grid (12, 10)`) | **11 columns** |
+
+Nothing is reserved for dispatch under slow dispatch, so the compute grid gains a 12th column, while
+the drainer deliberately holds that last column back (`perf_debug_profiler.cpp:613`, `reserve_column`).
+`--gx 0` means "use the full grid", so the harness put producers on a column **no drainer polls**.
+Those producers are lossless: they fill their SPSC rings, block forever in `ring_ensure_room`, never
+finish, and the host dies in `wait_until_cores_done` — an **uncaught** 45 s throw that dumps core.
+
+**The code already warned about exactly this**, at `perf_debug_profiler.cpp:603-607`: *"Run the workload
+with `--gx 11` to match — the poll list built below stops at column 11, so a producer placed there would
+both go undrained and scribble on the drainer's L1."* The harness never got the memo.
+
+### The two arms fail differently — and that difference is the proof
+
+| arm | hanging cores | why |
+|---|---|---|
+| **DRISC** | **10** — `14-2..14-11`, exactly column 12 | drainer is on a DRAM core and is fine; only the undrained column blocks |
+| **Tensix** | **all 120** | the drainer *lives* in the reserved column, so a producer lands on its core and scribbles its L1 — nothing drains at all |
+
+### ⚠ `14-2..14-11` ARE TENSIX WORKERS, NOT THE DRAM/DRISC COLUMN
+
+Earlier notes called this "the whole DRAM/DRISC column". **Wrong, and it sent the investigation at the
+drainer instead of at the producers.** `blackhole_140_arch.yaml` lists `1-2 … 16-11` under
+`functional_workers`; `14-2..14-11` is one full worker column (x=14, rows 2–11). x=14 is the **12th**
+worker column in noc0 x order (1,2,3,4,5,6,7,10,11,12,13,**14**,15,16) — i.e. logical x=11, precisely
+the column the drainer reserves. **Always resolve a core list against the soc descriptor before naming
+its core type.**
+
+### Verified from three directions (bh-05, delay 125, `--iters 500`, card reset between)
+
+| producers | drainer polls | result |
+|---|---|---|
+| 12x10 (`--gx 0`) | 11 cols | **HANG** — 10 cores (DRISC) / 120 cores (Tensix) |
+| **11x10 (`--gx 11 --gy 10`)** | 11 cols | **CLEAN, rc=0** — both drainers |
+| 12x10 (`--gx 0`) + `TT_METAL_PERF_DEBUG_FULL_GRID=1` | **12 cols** | **CLEAN, rc=0** (DRISC; 600 lanes) |
+
+Closing the gap from *either* side fixes it, which is what makes this a grid mismatch and not a fault.
+
+### Harness fixed
+
+`drisc_hang_harness.sh` now takes `GX`/`GY` (default **11x10**) and never passes `--gx 0`. Post-fix,
+`DISPATCH=slow` at delay 125, unarmed: **DRISC 5/5 CLEAN, Tensix 5/5 CLEAN** (was 13/13 TEARDOWN each),
+2.1 s median both. 11x10 is also exactly the fast-dispatch grid, so **all four 2x2 cells now offer an
+identical 110-core / 550-lane load** — the cells are comparable for the first time.
+
+### Consequences
+
+1. **Every slow-dispatch cell ever recorded is void**, including §N+21 B's 26/26 and §N+11's "0/98
+   clean". They measured a misconfigured grid.
+2. **The wedge question is now testable under slow dispatch.** Nothing has to be fixed in code first.
+3. **TEARDOWN counts under FAST dispatch are unaffected** — fast dispatch's full grid is already 11x10,
+   so there was never a mismatch there. §N+21 A / §N+22 / §N+23 (all fast) still stand.
+4. Fast-dispatch teardowns on a *single* core (`14-3`) are a **different** thing from this — same
+   column, but one core and caught by a try/catch. Do not merge the two without re-checking.
+
+### Proposed guard (NOT implemented — decide deliberately)
+
+`PROFILER_TERMINATE` (`profiler_common.h:166`) is checked **only** inside `ring_ensure_room_slow`
+(`kernel_profiler.hpp:277`) and makes a producer *drop* the marker instead of spinning — it is a
+producer escape hatch, **not** a drainer stop flag, so it is safe to set on a core that is not drained.
+Setting it on the reserved columns at boot would turn the DRISC arm's silent 45 s hang into "column 12
+is simply unprofiled". **It does not save the Tensix arm** — there the stray producer physically
+overwrites the drainer's L1, which no flag prevents. Full protection needs the workload to clamp to the
+drainer's producer grid, which means publishing that grid.
