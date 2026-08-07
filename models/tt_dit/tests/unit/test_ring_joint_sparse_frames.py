@@ -416,6 +416,28 @@ def _run_sparse_frames_op(
             goldens_f.append(
                 gt_g.reshape(gt_g.shape[0], gt_g.shape[1], num_frames_real, tokens_per_frame, gt_g.shape[-1])
             )
+        # Also compare against the DENSE (every real Q attends every real K) golden. If the device
+        # is silently ignoring the sparse mask and attending ALL frames, `out` will PCC-match this
+        # dense golden at ~0.99 even though each Q was told to attend a single frame. That would
+        # pinpoint the bug as "skip not happening / mask ignored" rather than a data-layout shift.
+        allow_dense = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
+        allow_dense[:num_frames_real, :num_frames_real] = 1
+        gt_dense = _torch_sdpa_ref(
+            padded_Q,
+            padded_K,
+            padded_V,
+            allow_dense,
+            num_frames_real=num_frames_real,
+            tokens_per_frame=tokens_per_frame,
+        )[:, :, :real_n, :]
+        gt_dense_f = gt_dense.reshape(
+            gt_dense.shape[0], gt_dense.shape[1], num_frames_real, tokens_per_frame, gt_dense.shape[-1]
+        )
+        dense_pccs = [comp_pcc(gt_dense_f[:, :, qi], out_f[:, :, qi])[1] for qi in range(num_frames_real)]
+        logger.info(
+            "[layout-scan] DEVICE-vs-DENSE(attend-all) per-frame PCC (high => device ignores mask "
+            f"and attends all frames): {[f'{p:.3f}' for p in dense_pccs]}"
+        )
         intended = [int(allow[qi].argmax()) if allow[qi].sum() > 0 else -1 for qi in range(num_frames_real)]
         logger.info(
             "[layout-scan] per Q frame: intended K frame -> best-matching K frame in DEVICE output "
