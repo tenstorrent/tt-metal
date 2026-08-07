@@ -168,6 +168,44 @@ bool no_noc_init() {
     return v;
 }
 
+// ABLATION: strip the drain loop to EGRESS ONLY. TT_METAL_PERF_DEBUG_ABLATE=1 compiles out every worker
+// read and all per-core processing; the drainer re-ships the same pre-staged mock bytes forever. Purpose is to
+// bisect the hang: if DRAM-core -> PCIe egress alone can hang the card, the read side is irrelevant.
+// TT_METAL_PERF_DEBUG_ABLATE_SPIN is a cycle count that stands in for the sweep, so pushes keep their real
+// spacing instead of running as fast as the loop allows. Pair with NO_DECODE=1 -- the payload is mock.
+uint32_t ablate() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ABLATE");
+        return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
+uint32_t ablate_spin() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ABLATE_SPIN");
+        return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_NOC selects which NIU the DRISC drainer EGRESSES on (reads use the other one). Default
+// 0, matching every result recorded so far. Exists to test whether the hang follows the NoC rather than the
+// core: if egress on NoC 1 stops hanging, NoC 0's route from the DRAM endpoint to the PCIe tile is implicated.
+//
+// NOT just a flag flip. On Blackhole NoC 1 MIRRORS coordinates
+// (NOC_0_X_PHYS_COORD(noc, size_x, x) = noc == 0 ? x : size_x - 1 - x), while the socket's pcie_xy_enc is
+// built from NOC0 coords by a NoC-agnostic hal function. Flipping NOC_INDEX alone would aim every payload
+// write at the wrong tile -- which could hang the card for a reason that has nothing to do with the question.
+// So the host re-encodes the PCIe tile in mirrored coords and passes it down as an override.
+uint32_t drain_noc() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NOC");
+        return (s == nullptr || *s == '\0') ? 0u : (std::strtoul(s, nullptr, 10) == 1 ? 1u : 0u);
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_FULL_GRID: under slow dispatch, do NOT hold the last worker column back -- poll the
 // whole 12x10=120 grid. The column is reserved by default so a DRISC (120 cores) and a Tensix (110, one of
 // them being the drainer itself) sweep the same poll-list length and stay comparable. Give it back when the
@@ -922,6 +960,28 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
                 ctx.drisc_l1_noc[d] + (ctx.results_addr[d] - ctx.drisc_l1_base[d]));
 
+            // Mirrored PCIe-tile encoding for NoC 1 (see drain_noc()). 0 => kernel uses the socket's NOC0 value.
+            uint32_t pcie_enc_override = 0;
+            // MEASURED WRONG, kept only as a knob: mirroring the PCIe tile for NoC 1 makes the payload land
+            // somewhere else -- pages still flow (socket credits are a separate path) but decode yields ZERO
+            // markers. The PCIe encoding is in TRANSLATED space (the kernel is built with PCIE_NOC_X=19,
+            // PCIE_NOC_Y=24, outside the 17x12 NOC0 grid), and NOC_0_X_PHYS_COORD mirrors WORKER coordinates,
+            // not this. Default is now to use the socket's own encoding on both NoCs.
+            const char* mirror_env = std::getenv("TT_METAL_PERF_DEBUG_NOC_MIRROR");
+            const bool want_mirror = mirror_env != nullptr && *mirror_env != '\0' && *mirror_env != '0';
+            if (!tensix_drain && drain_noc() == 1 && want_mirror) {
+                const auto& mmio_soc = cluster.get_soc_desc(cluster.get_associated_mmio_device(device_id));
+                const auto pcie_noc0 = mmio_soc.get_cores(CoreType::PCIE, CoordSystem::NOC0).front();
+                const uint32_t mx = static_cast<uint32_t>(mmio_soc.grid_size.x) - 1 - static_cast<uint32_t>(pcie_noc0.x);
+                const uint32_t my = static_cast<uint32_t>(mmio_soc.grid_size.y) - 1 - static_cast<uint32_t>(pcie_noc0.y);
+                pcie_enc_override = hal.noc_xy_pcie64_encoding(mx, my);
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] NoC 1 egress: PCIe tile NOC0 ({},{}) -> NOC1 ({},{}) on a {}x{} grid, "
+                    "enc 0x{:x}",
+                    pcie_noc0.x, pcie_noc0.y, mx, my, mmio_soc.grid_size.x, mmio_soc.grid_size.y, pcie_enc_override);
+            }
+
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
             const std::vector<uint32_t> cargs = {
                 stage_base,
@@ -935,7 +995,12 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 128,
                 drisc_gap_cycles(),
                 ship_repeat(),
-                no_noc_init() ? 0u : 1u};
+                no_noc_init() ? 0u : 1u,
+                ablate(),
+                ablate_spin(),
+                nstage,
+                (my_cores + nstage - 1) / nstage,
+                pcie_enc_override};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -951,7 +1016,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                                    *ctx.drain_program[d],
                                    kdrain,
                                    ctx.drisc_logical[d],
-                                   DramConfig{.noc = NOC::NOC_0, .compile_args = cargs});
+                                   DramConfig{.noc = drain_noc() == 1 ? NOC::NOC_1 : NOC::NOC_0, .compile_args = cargs});
             std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
             rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
             SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);

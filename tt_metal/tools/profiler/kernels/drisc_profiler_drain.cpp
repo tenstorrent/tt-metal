@@ -167,6 +167,19 @@ void kernel_main() {
     constexpr uint32_t kShipRepeat = get_compile_time_arg_val(10);
     // 1 = resync the software NoC mirrors from hardware at entry (see the wedge note below). 0 = diagnostic.
     constexpr uint32_t kNocInit = get_compile_time_arg_val(11);
+    // ABLATION knobs. kAblate=1 strips the drain loop down to EGRESS ONLY: no worker reads, no per-core
+    // processing, just re-shipping the same pre-staged bytes. kAblateSpin stands in for the sweep so the PCIe
+    // push keeps its normal cadence; kAblateSlots is how many staging slots go out per iteration.
+    constexpr uint32_t kAblate = get_compile_time_arg_val(12);
+    constexpr uint32_t kAblateSpin = get_compile_time_arg_val(13);
+    constexpr uint32_t kAblateSlots = get_compile_time_arg_val(14);
+    // How many pushes make up one ablated 'sweep'. A real busy sweep walks the grid in batches of kNStage and
+    // ships each one, so 110 cores / 7 slots = 16 pushes per sweep. Shipping ONCE per iteration instead
+    // under-drives egress badly (measured 4.2 GB/s vs the real 16.2) because the per-push credit wait, write
+    // barrier and notify stop being amortised the way they really are.
+    constexpr uint32_t kAblateBatches = get_compile_time_arg_val(15);
+    // Non-zero => the host recomputed the PCIe tile encoding for THIS NoC's mirrored coordinate space.
+    constexpr uint32_t kPcieEncOverride = get_compile_time_arg_val(16);
 
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kRingWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -230,7 +243,7 @@ void kernel_main() {
     UnicastEndpoint src;
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
-    const uint32_t pcie_xy_enc = sender.d2h.pcie_xy_enc;
+    const uint32_t pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
     const uint64_t pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
     set_sender_socket_page_size(sender, kPageBytes);
 
@@ -376,6 +389,13 @@ void kernel_main() {
     // old ship_run. The drop/dead checks stay OUT here so a dead consumer costs the whole run's worth of
     // frames once, not once per repeat.
     auto ship_run = [&](uint32_t start, uint32_t count) {
+        // kAblate=2: the COMPLEMENT of the egress-only ablation. Sweep the grid, bulk-read every worker,
+        // process the batches and write the heads back -- but never touch PCIe. The producers still see their
+        // heads advance so the workload runs normally; the only thing missing is the D2H socket. If THIS
+        // hangs the card, the trigger is on the read side and egress is a bystander.
+        if constexpr (kAblate == 2) {
+            return;
+        }
         if (count == 0) {
             return;
         }
@@ -391,6 +411,16 @@ void kernel_main() {
         }
     };
 
+    // Fill the staging area once for the ablation: egress must ship deterministic bytes, and uninitialised
+    // L1 would make a corruption result unreadable if we ever needed one.
+    if constexpr (kAblate != 0) {
+        volatile tt_l1_ptr uint32_t* stg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
+        const uint32_t nwords = (kAblateSlots * kSlotBytes) / 4;
+        for (uint32_t i = 0; i < nwords; i++) {
+            stg[i] = 0xAB000000u | (i & 0x00FFFFFFu);
+        }
+    }
+
     const uint64_t t_start = get_timestamp();
     while (sweeps < kMaxSweeps && *stop == 0 && !egress_dead) {
         sweeps++;
@@ -399,6 +429,32 @@ void kernel_main() {
         const uint64_t t_sweep0 = get_timestamp();
         const uint32_t frames_at_sweep_start = frames;
 
+        // ---- ABLATION: egress only (kAblate=1) ----
+        //
+        // Everything that touches the worker grid is compiled out. The staged bytes are a fixed pattern
+        // written once at init and never refreshed, so the PCIe push, the socket credit loop, the write
+        // barrier and the notify all run exactly as they do in a real capture while the read side does not
+        // exist. A spin replaces the sweep so pushes keep their normal spacing -- without it the loop would
+        // ship far faster than the real drainer and change the very thing being measured.
+        //
+        // This is NOT a capture: the host receives the same mock bytes forever. Run with
+        // TT_METAL_PERF_DEBUG_NO_DECODE=1 and read the page/byte counters.
+        if constexpr (kAblate != 0) {
+            if constexpr (kAblateSpin != 0) {
+                const uint64_t until = get_timestamp() + kAblateSpin;
+                while (get_timestamp() < until) {
+                }
+            }
+            for (uint32_t b = 0; b < kAblateBatches && !egress_dead; b++) {
+                ship_run(0, kAblateSlots);
+                frames += kAblateSlots;
+                // Tick the heartbeat per PUSH, not per iteration. The host's liveness check wants movement
+                // within 200 ms, and one ablated iteration is 16 pushes -- most of it legitimately parked in
+                // the credit wait at 511/512 occupancy, which reads as "failed to start" if hb only moves
+                // once per iteration.
+                *hb = sweeps * kAblateBatches + b + 1;
+            }
+        } else {
         // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
         //
         // Per iteration: free the generation we are about to refill (its ship was issued last iteration),
@@ -532,6 +588,8 @@ void kernel_main() {
                 egress_dead = true;
             }
             c_barrier += get_timestamp() - t_b0;
+        }
+
         }
 
         const uint32_t sweep_cyc = static_cast<uint32_t>(get_timestamp() - t_sweep0);
