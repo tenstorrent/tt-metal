@@ -12,6 +12,11 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+// Diagnostic TX/RX packet counters. Must come AFTER the CT args (it uses MY_ERISC_ID to
+// pick this ERISC's private counter bank) and BEFORE fabric_edm_packet_transmission.hpp,
+// which instruments the receive path with it. Outside any FABRIC_2D guard: the call
+// sites are unconditional, so a 1D build must see this too.
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_link_debug_counters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
@@ -37,10 +42,6 @@
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
-// Diagnostic TX/RX packet counters. Outside the FABRIC_2D guard: the counter call sites
-// are unconditional, so a 1D build must see this too.
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_link_debug_counters.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -558,6 +559,13 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #endif
 }
 
+// fabric_link_debug_counters.hpp hard-codes this value to stay include-free. Pin it to the
+// real enum here, where the packet-header types are in scope.
+static_assert(
+    static_cast<uint8_t>(tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) ==
+        tt::tt_fabric::debug::kNocFusedUnicastAtomicInc,
+    "NocSendType renumbered -- update kNocFusedUnicastAtomicInc in fabric_link_debug_counters.hpp");
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -593,6 +601,16 @@ FORCE_INLINE void send_next_data(
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
+    }
+    // FABRIC LINK COUNTER: handed to the eth TXQ hardware. Paired against tx, this splits the
+    // send path in two -- tx > txq means the EDM decided to send but never reached the handoff;
+    // txq == tx with the peer's rx short means the loss is past the handoff, i.e. link-layer.
+    {
+        auto* counters = tt::tt_fabric::debug::fabric_link_counters();
+        counters->txq++;
+        if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
+            counters->txq_r3++;
+        }
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
@@ -1690,6 +1708,11 @@ FORCE_INLINE
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
+        // FABRIC LINK COUNTER: of those pushes, the ones carrying an R3 semaphore increment.
+        // Read before update_packet_header_before_eth_send, which may rewrite routing fields.
+        if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
+            tt::tt_fabric::debug::fabric_link_counters()->tx_r3++;
+        }
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -2271,9 +2294,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
 
     uint16_t fabric_heartbeat_counter = 0;
-    // Dumps TX/RX to the watcher ring buffer from the inner router loop. Holds the
-    // last-pushed values, so it must outlive execute_main_loop (captured by reference).
-    tt::tt_fabric::debug::FabricLinkCountersRbDumper fabric_link_counters_rb_dumper;
+    // The watcher ring-buffer dumper was dropped along with the single-bank counter
+    // layout: it only gave a live view, needs TT_METAL_WATCHER on to be visible at all,
+    // and rb_pushes read 0 in every run we captured. Post-mortem exalens reads of the
+    // per-ERISC banks are what this investigation actually uses.
 #if defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
 #else
@@ -2621,15 +2645,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
-                // FABRIC LINK COUNTERS: piggyback on the heartbeat's 1-in-64 rate so the
-                // dumper's own check is off the hot path; it then rate-limits again by packet
-                // count. ERISC0 only -- both ERISCs run this loop and share one watcher
-                // mailbox, and push_to_ring_buffer's index bump is not atomic, so letting
-                // both push would corrupt the buffer. ERISC0 reads both counters out of
-                // shared L1, so nothing is lost by dumping from one side.
-                if constexpr (MY_ERISC_ID == 0) {
-                    fabric_link_counters_rb_dumper.maybe_dump();
-                }
             }
 
             if constexpr (enable_context_switch) {

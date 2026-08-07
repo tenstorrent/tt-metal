@@ -12,6 +12,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+// Diagnostic counters. Included here rather than relying on the router's include order,
+// since this header instruments the receive path. Needs the CT args above for MY_ERISC_ID.
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_link_debug_counters.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (at least one of) the intended destination(s)
@@ -147,6 +150,18 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
+    // FABRIC LINK COUNTERS: classify every received packet BEFORE the unreachable hint
+    // below. NOC_SEND_TYPE_LAST is NOC_UNICAST_SCATTER_WRITE (4), but the enum also
+    // defines NOC_MULTICAST_WRITE (5), NOC_MULTICAST_ATOMIC_INC (6) and
+    // NOC_UNICAST_READ (7). Anything above 4 -- a real multicast, or a garbled header --
+    // is undefined behaviour here: the switch can match nothing and execute nothing,
+    // while the packet has already been counted as received. Recording the type here is
+    // the only way to see that; past the hint the compiler may assume it cannot happen.
+    // packet_start, not &header: header is a const reference and reinterpret_cast cannot
+    // strip constness.
+    tt::tt_fabric::debug::record_rx_type(
+        static_cast<uint8_t>(noc_send_type), *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(packet_start));
+
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
@@ -199,17 +214,11 @@ FORCE_INLINE
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
 
-            // FABRIC LOSS COUNTERS (diagnostic): tally locally-executed fused incs.
-            {
-                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
-                dbg[2]++;  // +72 total fused incs executed
-                uint32_t semlo =
-                    (uint32_t)(header.command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
-                dbg[4] = semlo;  // +80 last sem addr
-                if (semlo == 213440) {
-                    dbg[3]++;  // +76 R3 sem specifically
-                }
-            }
+            // FABRIC LINK COUNTERS: tally locally-executed fused incs. Was a raw write to
+            // a hard-coded address shared by both ERISCs; now goes through the per-ERISC
+            // bank so an off-by-one here cannot be a lost counter update.
+            tt::tt_fabric::debug::record_fused_inc(
+                static_cast<uint32_t>(header.command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF));
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
             if (header.command_fields.unicast_seminc_fused.flush) {

@@ -12,6 +12,8 @@
 // headers that define helpers such as send_next_data, send_credits_to_upstream_workers,
 // receiver_send_completion_ack, receiver_send_received_ack, etc.
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_link_debug_counters.hpp"
+
 static constexpr bool speedy_mode_has_non_worker_vc0_sender = []() constexpr {
     for (size_t ch = 1; ch < ACTUAL_VC0_SENDER_CHANNELS; ++ch) {
         if (is_sender_channel_serviced[ch]) {
@@ -138,6 +140,20 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
+                }
+            }
+            // FABRIC LINK COUNTERS: the speedy path is a second, complete send implementation.
+            // Uninstrumented it would make tx/txq undercount by exactly the VC0 traffic it
+            // carries, which reads as packet loss that never happened. tx and txq are bumped
+            // together here because this path fuses the send decision and the hardware handoff
+            // into one block -- unlike send_next_data, where they are separable.
+            {
+                auto* counters = tt::tt_fabric::debug::fabric_link_counters();
+                counters->tx++;
+                counters->txq++;
+                if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
+                    counters->tx_r3++;
+                    counters->txq_r3++;
                 }
             }
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -278,6 +294,10 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
         wr_sent_counter.increment();
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+        // FABRIC LINK COUNTER: the speedy path's consume site. Must match the send side above,
+        // or a link whose two ends were built with different path selections would appear to
+        // lose (or invent) packets purely from the instrumentation gap.
+        tt::tt_fabric::debug::fabric_link_counters()->rx++;
         receiver_state.unacked_sends++;
     }
 
