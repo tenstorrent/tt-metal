@@ -74,8 +74,13 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
 4. **Confirm the FIFO calls are used** — in each binding kernel:
 
    ```bash
-   grep -nE "reserve_back|push_back|wait_front|pop_front" <the binding kernel>
+   grep -nE "<the dfb's local>\.(reserve_back|push_back|wait_front|pop_front)" <the binding kernel>
    ```
+
+   **Grep for calls on *that DFB's handle*, not for the method names loose in the file.** A kernel
+   binding several buffers will show plenty of hits belonging to the others, and a bare name-grep
+   then reads as "this one uses the FIFO" for a buffer that never touches it. Attribute every hit to
+   its receiver.
 
    **No hits on that DFB → not a site for this pass.** A self-loop that never calls the FIFO
    machinery is handled by the [sync-free pass](sync_free_dfbs.md) instead, which is a smaller and
@@ -149,8 +154,9 @@ common default even where nothing overlaps — so read the spec rather than assu
 constexpr uint32_t entry_elems = entry_size / sizeof(T);   // elements per former FIFO entry
 ```
 
-**Take `entry_size` from the `DataflowBufferSpec`'s `entry_size` field, on the host side.** That is
-the definition of the stride, and it is the only place it is stated exactly.
+**The stride is whatever expression the `DataflowBufferSpec`'s `entry_size` field held** — read it
+before you delete the spec, and carry that expression forward. It is the only place the stride is
+stated exactly.
 
 **Do not assume the size the kernel passes to its NOC transfers is the same number.** It very often
 is not: a factory routinely aligns the entry up (`aligned_page_size = round_up(page_size, …)`) while
@@ -163,7 +169,11 @@ If the kernel has no argument equal to the spec's `entry_size`, add one as a com
 `KernelSpec::compile_time_args` (a top-level field, *not* part of `compiler_options`), read
 kernel-side as `constexpr uint32_t entry_size = get_arg(args::<name>);`. A CTA is a constant in a
 generated header and costs nothing, so prefer adding one over reusing an argument you had to reason
-about.
+about. A stride that varies with input shape is still fine as a CTA — shape participates in the
+program-cache key, so a different shape rebuilds the kernel rather than reusing a stale constant.
+
+The wrap bound is `stage.size()`, in **elements**; `stage.size_in_bytes()` is the byte-indexed
+equivalent. Match whichever unit your indices are in.
 
 The wrap bound is `stage.size()`, which the scratchpad already knows — `num_entries` never needs
 reconstructing kernel-side.
@@ -171,6 +181,14 @@ reconstructing kernel-side.
 **The division must be exact.** If `entry_size % sizeof(T) != 0` then `T` is wrong for this buffer —
 the kernel is viewing it as something the entries do not align to — and every index built on the
 stride will be off. **Stop**; see [When to stop](#when-to-stop).
+
+> **Keep `wr` and `rd` separate while translating, however alike they look.** A loop that pushes once
+> and pops once per pass, with the same `n`, invites collapsing them into one index — and that is
+> wrong whenever the buffer is *read between the push and the pop*, because there the write index has
+> advanced and the read index has not. Folded, the read lands on the wrong entry: numerically wrong,
+> and on a two-entry buffer it may still pass a test, because the other slot holds recent data.
+> Cleanup item 2 permits the fold only when nothing touches the buffer in between; do not anticipate
+> it here.
 
 Do the translation faithfully first, then clean up. Trying to shortcut to the tidy end state while
 translating is how an off-by-one gets in.
@@ -204,10 +222,11 @@ longer exists — does not build, and splitting it across two passes gains nothi
 
 Two mechanical details that will otherwise cost you a build:
 
-- **`KernelSpec` fields are written in declaration order** (`dfb_bindings` → `scratchpad_bindings` →
-  `tensor_bindings` → `compile_time_args` → `runtime_arg_schema`). Designated initializers are
-  compiled with `-Werror=reorder-init-list`, so the new `scratchpad_bindings` entry has to go in its
-  declared position, not appended.
+- **`KernelSpec` fields are written in declaration order**, and designated initializers are compiled
+  with `-Werror=reorder-init-list`, so the new entries go in their declared positions rather than
+  appended. **Read the order off `kernel_spec.hpp`** rather than trusting a list here — it grows.
+  At the time of writing: `dfb_bindings` → `semaphore_bindings` → `scratchpad_bindings` →
+  `tensor_bindings` → `compile_time_args` → `runtime_arg_schema`.
 - **The spec-name constant changes type**, from `DFBSpecName` to `ScratchpadSpecName` — different
   `StrongType`s, so the declaration must be edited regardless. While you are on that line, rename it
   off any `cb`/`dfb` wording: a scratchpad named `input_cb` is exactly the thing these passes exist
@@ -233,6 +252,13 @@ noc.async_read(src, stage_dfb, size, src_args, {.offset_bytes = 0});
 Scratchpad<uint32_t> stage(scratch::stage);
 noc.async_read(src, stage, size, src_args, {.offset_bytes = wr * sizeof(uint32_t)});
 ```
+
+**Why the offset picks up `wr`:** a `DataflowBuffer` used as a NOC operand resolves to its *current
+FIFO pointer* plus the given offset — `get_write_ptr() + offset_bytes` as a destination,
+`get_read_ptr() + offset_bytes` as a source. That moving pointer is the thing your index now
+replaces, which is why a `{.offset_bytes = 0}` on the old call becomes `{.offset_bytes = wr}` on the
+new one rather than staying zero. A `Scratchpad` operand resolves from its base, so the index has to
+appear explicitly.
 
 This holds for every `Noc` operation — `async_read`, `async_write`, their `_with_state` forms,
 `async_write_zeros` — because they all resolve an operand the same way. Do **not** extract an address
@@ -278,6 +304,12 @@ Bytes are the one representation every branch agrees on, and the indices usually
 the `#ifdef`s anyway — the FIFO calls they replace are typically in the common path even when the
 element accesses are not. Do this only when the type genuinely varies; with a single `T`, element
 indices read better and need no conversion at all.
+
+The NOC calls are usually in that common path too, so declare **one more scratchpad outside the
+branches** for them to use. Its `T` is free — a NOC operand resolves by address and `size_in_bytes()`
+is type-independent — so use `uint8_t` and let the byte indices read naturally against it. Take the
+typed views inside the branches, once each at the top rather than rebuilt per iteration: the
+scratchpad base does not move, so there is nothing to re-anchor.
 
 **Where the kernel read or wrote elements through the old address**, index the scratchpad directly.
 `Scratchpad<T>` *is* the typed handle to that memory, so a `CoreLocalMem` built on top of it — or a
