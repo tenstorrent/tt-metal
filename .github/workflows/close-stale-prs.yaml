@@ -1,0 +1,35 @@
+name: "[internal] Close Stale PRs"
+
+permissions:
+  pull-requests: write
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # Runs nightly at 05:00 UTC
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  close-stale-prs:
+    if: github.repository == 'tenstorrent/tt-metal'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9.1.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-pr-stale: 32
+          days-before-pr-close: 0
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          # We do not want a warning comment before the close. Leaving the stale
+          # message empty suppresses the stale comment while still applying the
+          # stale label, and close-pr-message posts the single comment after the
+          # PR is closed in the same run.
+          stale-pr-message: ""
+          close-pr-message: >
+            **AUTOMATION**: This PR has been automatically closed because it has
+            had no activity for 32 days. If you still need this change, feel free
+            to reopen it or open a new PR whenever you're ready to continue.
+          stale-pr-label: "stale"
+          exempt-draft-pr: false
+          operations-per-run: 100
+          remove-stale-when-updated: true

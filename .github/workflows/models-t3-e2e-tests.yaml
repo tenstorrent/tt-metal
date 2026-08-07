@@ -25,6 +25,8 @@ on:
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           - mamba-2.8b
+          - gemma-2-2b
+          - gemma-2-9b
           - gemma-4-e2b
           - gemma-4-e4b
           - panoptic-deeplab
