@@ -4,14 +4,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-// Fused scatter phase for neighbor_pad_halo padded-output mode. Runs on cores DISJOINT from the fabric
-// exchange (columns x>=1), concurrently with the exchange. Writes the padded output [outer, Hp, Wp, C]:
-//   INTERIOR (t,h,w) -> padded[t, h+pH, w+pW]   from interior_src (input); NO dependency on the exchange
-//     -> processed first, overlapping the fabric exchange.
-//   BORDER  -> from the compact halo buffer [H-top|H-bot|W-left|W-right]; depends on the exchange, so
-//     before its first border stick a core waits exchange_done >= num_readers (all fabric halo landed).
-// Same stick mapping as halo_scatter_writer (interior + 4 border sections, t-major). border_only: interior
-// already present in padded_output, work starts at the border (interior skipped, no overlap).
+// Fused scatter phase for neighbor_pad_halo padded-output mode
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);        // interior source (input)
     const uint32_t compact_addr = get_arg_val<uint32_t>(1);  // border source (compact halo buffer)
@@ -102,8 +95,7 @@ void kernel_main() {
         }
     };
 
-    // Border sticks (gi >= n_int) depend on the fabric exchange. Wait exactly once, before the first
-    // border stick this core touches; interior sticks (gi < n_int) run first with no wait (overlap).
+    // Border sticks (gi >= n_int) depend on the fabric exchange
     volatile tt_l1_ptr uint32_t* exch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exchange_done_addr);
     bool waited = false;
     if (border_only) {

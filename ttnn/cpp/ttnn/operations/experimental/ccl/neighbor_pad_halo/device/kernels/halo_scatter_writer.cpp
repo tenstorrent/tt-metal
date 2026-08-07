@@ -4,19 +4,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-// Repack into a persistent padded buffer [outer, Hp, Wp, C]: fill the INTERIOR from the unpadded
-// activation `x` and the BORDER from the compact halo buffer [H-top | H-bot | W-left | W-right], in a
-// single pass that writes every padded page exactly once (folds the old ttnn.pad + border-scatter).
-//   interior stick (t, h, w)  -> padded[t, h+pH,       w+pW]         (src: x page t*Hd*Wd + h*Wd + w)
-//   H-top  stick (t, pr, w)   -> padded[t, pr,          pW+w]        (src: compact)
-//   H-bot  stick (t, pr, w)   -> padded[t, pH+Hd+pr,    pW+w]
-//   W-left stick (t, hp, wc)  -> padded[t, hp,          wc]          (full height, incl corners)
-//   W-right stick(t, hp, wc)  -> padded[t, hp,          pW+Wd+wc]
-// Compact section order + (t,row,col) t-major matches compact_halo_reference(). Parallelized by a
-// single global stick index: [0, N_int) are interior sticks (from x), [N_int, ...) are compact border
-// sticks; each core owns a contiguous [start, start+count) range. Pages of interleaved DRAM are
-// bank-distributed (no contiguous multi-page read), so throughput comes from BATCHING the async
-// reads/writes (one barrier per batch of cb_pages) rather than a per-stick read+write+barrier.
+// Repack into a persistent padded buffer [outer, Hp, Wp, C]: fill the INTERIOR from the unpadded activation `x`
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);        // interior source (unpadded activation)
     const uint32_t compact_addr = get_arg_val<uint32_t>(1);  // border source (compact halo buffer)
