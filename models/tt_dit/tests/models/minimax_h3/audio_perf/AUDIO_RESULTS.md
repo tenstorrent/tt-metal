@@ -140,9 +140,9 @@ plausible high frequencies rather than reconstructing them sample-for-sample. He
 PSNR on audio that sounds fine, and hence waveform PSNR is a weak proxy for quality here.
 
 **This qualifies the "indistinguishable" claim above.** Log-spectral distance against the source is
-CPU 1.04-1.52 vs device 1.82-2.13 -- roughly double -- and it is near-additive (voice_libri1: 1.06
-codec + 1.16 hardware ~= 2.13 total). So by a log-spectral measure the hardware error is *comparable
-to the entire codec error*, not negligible.
+CPU 1.17 mean vs device 2.00 mean -- about **1.7x** -- and it is near-additive (voice_libri1: 1.06
+codec + 1.16 hardware ~= 2.14 measured). So by a log-spectral measure the hardware error is
+*comparable to the entire codec error*, not negligible.
 
 Both statements are true of different metrics. PSNR is energy-weighted and dominated by loud content,
 so it hides a broadband low-level error; log-spectral distance weights quiet bins equally, so it
