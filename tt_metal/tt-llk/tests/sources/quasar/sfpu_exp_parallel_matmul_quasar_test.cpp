@@ -97,6 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
 #include "cfg_defines.h"
+#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -161,40 +162,39 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
     const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
 
-    // One-time setup: program the self-contained exp LOADMACRO sequence (load -> EXP->STG ->
-    // store to load_addr + store_offset) and record one macro per element into replay slot 0.
-    // store_offset (= 2 * YDIM = slice size) must be a compile-time constant for the instr-reg-6
-    // store capture, so branch on the (runtime) 32-bit mode into constexpr specializations.
+    // The SFPU load reads what UNP_S wrote (unpack_S_dst); the folded store writes what PACK1
+    // will read (pack_S_src).
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
+
+    // One-time setup of the exp LOADMACRO replay. The store offset (2 * YDIM = slice size) must
+    // be a compile-time constant, so branch on the runtime 32-bit mode into constexpr variants.
     if (PARAM_SRCS_32BIT_MODE)
     {
-        _exp_init_loadmacro_<2 * srcs_dims::ydim(true)>(load_base_addr, num_sfpu_iterations);
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(true)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
     }
     else
     {
-        _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations);
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
     }
     const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
 
+    // One MOP run issues one REPLAY per SrcS slice of a tile. The `done` bit on the final
+    // LOADMACRO of each replay swaps the SrcS banks and resets the dvalids in hardware, so the
+    // SFPU is paced purely by the dvalid handshake with the unpacker and packer.
+    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1, TT_OP_REPLAY(0, exp_replay_len, 0, 0, 0, 0));
+    mop.program(instrn_buffer);
+
     // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.
-    // Per slice: replay the macro, then clear_vlds to signal SrcS read+write done for PACK/unpack.
+    // Pack is kicked before the MOP so PACK1 is already waiting on the output dvalids.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
-        {
-            TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
-            // Drain the folded STORE, then signal SrcS read+write done so PACK1 sees the output
-            // slice valid and the unpacker can refill the input slice. clear_vlds == SFPNOP(1,1,0);
-            // the macro `done` bit only toggles the write bank, it does not raise these dvalids.
-            TTI_SFPNOP(0, 0, 0);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-        }
+        ckernel_template::run(instrn_buffer);
     }
 
-    wait_unpack_idle();
-    wait_sfpu_idle();
+    wait_mop_idle();
     wait_pack_idle();
 }
 
