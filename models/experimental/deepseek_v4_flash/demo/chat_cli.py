@@ -265,9 +265,12 @@ class ChatEngine:
     paged KV session on the model. Switching users is a page-table rewrite plus a
     swap of the small compressor window buffers, so it costs no cache copying and
     needs no second trace capture.
+
+    ``prefetcher`` is a stack owned by the caller that the model's prefetcher session is
+    entered on, so the DRISC senders stay up for as long as the engine is alive.
     """
 
-    def __init__(self, mesh_device, args):
+    def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer
         from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -302,6 +305,7 @@ class ChatEngine:
             weight_dtype=_WEIGHT_DTYPE,
             max_layers=max_layers,
             use_submeshes=True,
+            use_prefetcher=args.prefetcher,
         )
         self.lm_head = Linear(
             _w(loader, "lm_head.weight"),
@@ -313,6 +317,13 @@ class ChatEngine:
             f"built DeepSeekV4Model with {self.model.num_layers}/{config.num_hidden_layers} layers, "
             f"context {self.max_seq} tokens/user"
         )
+
+        # One prefetcher session for the whole process rather than one per turn: starting the
+        # DRISC senders is not free and each GCB's ring state carries from one step to the
+        # next. The caller owns the stack, so the session also covers the trace capture, the
+        # warmup and every turn of the REPL. A no-op when the prefetcher is off.
+        prefetcher.enter_context(self.model.prefetcher_session())
+        logger.info(f"tensor prefetcher: {'on' if self.model.use_prefetcher else 'off'}")
 
         if self.traced:
             # Traces are captured lazily on the first decode step and address these
@@ -711,6 +722,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--trace-region-size", type=int, default=int(os.environ.get("DEEPSEEK_V4_TRACE_REGION_SIZE", "0")))
     p.add_argument("--no-trace", dest="traced", action="store_false", help="eager decode instead of traced decode")
+    p.add_argument(
+        "--no-prefetcher",
+        dest="prefetcher",
+        action="store_const",
+        const=False,
+        default=None,
+        help="feed the attention projections with a DRAM->L1 copy per call instead of the "
+        "DRISC tensor prefetcher (default: use it wherever the device supports it)",
+    )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
     args = p.parse_args(argv)
     if args.system_prompt_file:
@@ -744,9 +764,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     torch.manual_seed(0)
     with open_mesh_device(args.trace_region_size) as mesh_device:
-        engine = ChatEngine(mesh_device, args)
-        engine.warmup()
-        repl(engine)
+        # The prefetcher session spans the trace capture, the warmup and the REPL both, so it
+        # is opened inside ``ChatEngine`` (once the model exists) against this stack, and the
+        # senders are stopped before the mesh device is closed.
+        with contextlib.ExitStack() as prefetcher:
+            engine = ChatEngine(mesh_device, args, prefetcher)
+            engine.warmup()
+            repl(engine)
     return 0
 
 
