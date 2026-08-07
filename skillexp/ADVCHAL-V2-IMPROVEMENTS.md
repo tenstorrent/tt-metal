@@ -616,35 +616,63 @@ applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
 
-## D7. `ttnn-jit` — reconcile the two tracers' handler tables ⭐⭐ bounded, additive, and it unblocks this corpus
+## D7. `ttnn-jit` — port `sparse_matmul` into the direct-TTNN tracer ⭐⭐⭐ done and measured; 42 lines, no rebuild
 
-Not the optimizer — `tt-mlir/tools/ttnn-jit/_src/`. Three of 15 cells lost coverage to a *missing op handler*,
-not to anything about placement, and the two tracers already hold handlers the other lacks.
+Not the optimizer — `tt-mlir/tools/ttnn-jit/_src/ttnn_emit_tracer.py`. **One missing handler cost north-mini's
+sparse-MoE cell 63 points of coverage and both of its screenable candidates.**
 
-**Port 3 handlers into the direct-TTNN tracer** (the default, and the one `shard_advisor.py:191` selects):
-`sparse_matmul`, `paged_update_cache`, `paged_fill_cache`. The shape logic exists, hand-written, in
-`interception_tracer.py`. `sparse_matmul` alone unblocks the MoE captures — north-mini onA truncated to 14 ops
-because of it.
+**Done, and measured.** One 37-line handler transcribed from `interception_tracer._sparse_matmul_handler`, one
+`_VALUE_HANDLERS` entry, one docstring fix. Same cell, same 822.608 µs window, same advisor pin:
 
-**Port 13 handlers into the interception tracer,** or stop advertising it: `arange, clamp, concat, embedding,
-matmul, pad, permute, repeat, rotary_embedding, rotary_embedding_hf, scaled_dot_product_attention_decode,
-transpose, zeros`. `--tracer interception` is documented as the fallback "for ops not yet handled by the
-direct-TTNN tracer", but with `rotary_embedding_hf`, `concat`, `permute`, `embedding` and `matmul` missing it
-cannot trace a modern decoder — switching to it fails *earlier* than the default. **Tested:** it dies on
-`rotary_embedding_hf` before reaching the sparse tail.
+| | shipped | with the handler |
+|---|---|---|
+| ops traced | 14 | **39** |
+| untraced share | **77.15 %** | **14.39 %** |
+| chain (screenable) | 12.41 % | **23.45 %** |
+| ceiling vs noise floor | 0.562 µs = 0.66× | 8.543 µs = **10.09×** |
+| chains resolvable alone | **0** | **2** |
 
-**Write 5 new handlers:** `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`, `recurrent_state_update`.
-Only these are genuinely new work; the rest is a port.
+The two new candidates are a `scatter` chain (2.825 µs, 3.34× floor, **33.9 µs/model**) and boundary chain `b24`
+(2.331 µs, 2.75× floor, **28.0 µs/model**). Neither is counted in the corpus's reachable total, so that total is a
+lower bound for a third reason.
 
-**Why a generator does not cover it.** `supported_ops.py` allowlists 54 ops in six categories and the TTIR path
-routes all of them through one generic `BaseOpHandler`, so auto-generating those 54 for the emit tracer is
-straightforward. **None of the ops above are in that allowlist** — they need per-op output-shape logic, and the
-dialect will not supply it: `TTNN_SparseMatmulOp` has `hasVerifier = 1` and `outs AnyRankedTensor` (it *checks*
-shapes, it does not *infer* them), and `TTNN_RotaryEmbeddingHfOp` / `TTNN_PagedFusedUpdateCacheOp` declare
-neither a verifier nor `InferTypeOpInterface`. The shape relationship lives in C++ verifier code, not in a form a
-Python generator can read.
+**It also prices the `OpModelExempt` soft gap.** The advisor now sees both `sparse_matmul` ops and leaves them
+`dram/interleaved`, as `OpConstraintValidation.cpp:167-177` says it will. They are **47.4 %** of the window
+(241.506 + 148.461 µs). Half the layer goes unplaced — but the router and MoE tail around it now get placed, which
+is the point of tracing it.
 
-- **Evidence:** [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), axis 3 and the missing-op tables.
+**What is left in `ttnn-jit`, counted properly** (emit = explicit handlers only, 85; interception = its 27
+explicit handlers **plus** the 54-op `supported_ops.py` allowlist it reaches via `BaseOpHandler`):
+
+- **emit still lacks 3:** `pow`, `pow_tensor`, `rearrange` — all allowlisted, so an allowlist-driven generator
+  covers them.
+- **interception still lacks 9:** `arange`, `fill_cache`, `logical_and`, `mul`, `pad`, `rotary_embedding`,
+  **`rotary_embedding_hf`**, `scaled_dot_product_attention_decode`, `zeros`. `rotary_embedding_hf` is why
+  `--tracer interception` dies on RoPE before it reaches anything else — either add it or stop advertising the
+  fallback in `--help`.
+- **neither has 2:** `paged_fused_update_cache`, `ones_like` — the only genuinely new shape logic needed.
+
+**Evidence:** [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md), "The port, and what it bought".
+
+## D7a. A missing-op autofix skill is feasible, because the verifier is a spec and the oracle is cheap ⭐⭐
+
+Three mechanical tiers, in cost order: **port from the sibling tracer** (a `ttir.` → `ttnn.` substitution plus
+`_retype`); **generate from the allowlist** (`supported_ops.py`'s six categories each have one fixed shape rule —
+precisely what `BaseOpHandler` exploits); **derive from the verifier** for genuinely new ops.
+
+The third tier is the one that looked impossible from `TTNNOps.td` and is not. `SparseMatmulOp::verify`
+(`TTNNOps.cpp:2720`) states the shape relation in its error branches
+(`outputShape[0] != A || outputShape[1] != B || outputShape[2] != 1 || ...`), per sparse mode. That is invertible
+into a shape function. `TTNNOps.td` carries only `AnyRankedTensor`, so the generator has to read C++ — but the C++
+is explicit.
+
+**What makes it safe to automate is the oracle.** A wrong output shape is rejected by the MLIR verifier
+immediately, so the loop is propose → trace a one-op function → read the error, in seconds. Where a verifier only
+checks rank, compare against the live `ttnn` op's own output shape at the model call site.
+
+**What it must not infer:** which non-shape kwargs to drop. Dropping `program_config`/`memory_config` is right
+*for the advisor pipeline*, because the advisor discards input memory configs and re-places everything. That is a
+fact about the consumer, not the op, and belongs in the skill's instructions.
 
 ## E0a. Add a cross-model op-cost comparison — it finds defects the stage's question cannot express ⭐
 

@@ -144,47 +144,107 @@ everything was not.**
 coverage has drifted apart. Nothing about it implicates the tt-mlir optimizer, and adding the handlers is
 additive work rather than a design change.
 
-### Can this be fixed mechanically? Partly — and not the part that blocks
+### The gap was one handler, and porting it worked
 
 `ttnn-jit` lives in **`tt-mlir/tools/ttnn-jit/`** — first commit 2025-09-19, 127 commits, last touched
 2026-07-27. Real upstream tooling, young and still filling in.
 
-**There is already a generic path, and it does not cover these ops.** `supported_ops.py` defines an allowlist of
-**54** ops in six categories (unary 25, binary 16, reduction 4, tm 4, data-movement 3, ccl 3). The TTIR tracer
-routes all 54 through one generic `BaseOpHandler`; the direct-TTNN tracer wants a handler each and stubs the rest
-via `_unhandled`, which raises with an actionable message. **Auto-generating those 54 for the emit tracer is
-straightforward** — the shape rule is fixed per category — **but none of the ops that block this corpus are among
-them.** `sparse_matmul`, `rotary_embedding_hf`, `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`,
-`recurrent_state_update` are all outside the allowlist, in the tracers' own hand-written tables.
+**The two tracers reach coverage differently, and that is the whole story.** `supported_ops.py` defines an
+allowlist of **54** ops in six categories (unary 25, binary 16, reduction 4, tm 4, data-movement 3, ccl 3), plus
+`matmul`/`div`/`pow`. The TTIR tracer routes every allowlisted op through one generic `BaseOpHandler`, so it gets
+all 54 for free and needs only **27** hand-written handlers on top. The direct-TTNN tracer has no generic path:
+it needs a handler per op and stubs anything else via `_unhandled`. It carries **85**.
 
-**And the dialect cannot supply the missing piece.** A tracer must *compute* an output shape. `TTNN_SparseMatmulOp`
-has `hasVerifier = 1` and `outs AnyRankedTensor` — it **checks** shapes rather than **inferring** them, and
-`TTNN_RotaryEmbeddingHfOp` and `TTNN_PagedFusedUpdateCacheOp` declare neither. So a generator cannot read result
-shapes off `TTNNOps.td` for these; the relationship exists only in verifier code.
-
-**What is cheap is reconciling the two tracers**, because each already holds handlers the other lacks:
+Counting them properly — explicit handlers for the emit tracer, explicit **plus** the allowlist for the
+interception tracer:
 
 | direction | count | ops |
 |---|---|---|
-| **interception has, emit lacks** | 3 | `sparse_matmul`, `paged_update_cache`, `paged_fill_cache` |
-| **emit has, interception lacks** | 13 | `arange`, `clamp`, `concat`, `embedding`, `matmul`, `pad`, `permute`, `repeat`, `rotary_embedding`, **`rotary_embedding_hf`**, `scaled_dot_product_attention_decode`, `transpose`, `zeros` |
-| in **neither** | — | `paged_fused_update_cache`, `ones_like`, `copy`, `softplus`, `recurrent_state_update` |
+| **interception reaches, emit did not** | 4 | **`sparse_matmul`**, and `pow` / `pow_tensor` / `rearrange` (allowlisted, so `_unhandled` stubs) |
+| **emit reaches, interception does not** | 9 | `arange`, `fill_cache`, `logical_and`, `mul`, `pad`, `rotary_embedding`, **`rotary_embedding_hf`**, `scaled_dot_product_attention_decode`, `zeros` |
+| **neither** | 2 | `paged_fused_update_cache`, `ones_like` |
 
-*(Counts from a regex over the handler tables, so treat as indicative; the specific ops named were each checked
-individually.)*
+So for north-mini's sparse-MoE decode, **`sparse_matmul` was the only missing piece** — router (`topk`, `scatter`,
+`zeros_like`, `sigmoid`), experts, and the MoE tail were all already covered by the emit tracer. And the
+documented fallback fails for a narrower reason than a coverage deficit: `--tracer interception` is offered "for
+ops not yet handled by the direct-TTNN tracer", but `rotary_embedding_hf` is neither allowlisted nor hand-written
+there, so it dies on RoPE before reaching the sparse tail. One missing handler each way.
 
-Three consequences worth acting on:
+### The port, and what it bought
 
-1. **Porting `sparse_matmul` into the emit tracer is a one-handler change** — the shape logic already exists,
-   hand-written, in `interception_tracer._sparse_matmul_handler`. That alone unblocks the MoE captures.
-2. **The documented fallback is stale advice.** `--tracer interception` is offered "for ops not yet handled by
-   the direct-TTNN tracer", but interception lacks 13 handlers the default has — including `rotary_embedding_hf`,
-   `concat`, `permute`, `embedding` and `matmul`. It cannot trace a modern decoder, which is why switching to it
-   failed *earlier* than the default did.
-3. **Only the third group is new work.** `paged_fused_update_cache` and friends need per-op shape logic written
-   once; everything else is a port or a generator.
+**The change:** one 37-line handler transcribed from `interception_tracer._sparse_matmul_handler`, one line in
+`_VALUE_HANDLERS`, and a docstring correction. 42 inserted lines, no C++ and no rebuild — the tracers are pure
+Python.
 
+**Result — the same cell, the same profile window (822.608 µs, one layer), the same advisor pin:**
 
+| | shipped (14 traced ops) | ported (39 traced ops) |
+|---|---|---|
+| untraced | 32 ops, **77.15 %** | 16 ops, **14.39 %** |
+| chain (screenable disagreement) | 4 ops, 12.41 % | 14 ops, **23.45 %** |
+| `agrees_with_shipped` | 1 op, 3.16 % | 3 ops, 6.24 % |
+| `dram_resident` | 2 ops, 1.26 % | 6 ops, **49.90 %** |
+| boundary | 8 ops, 6.02 % | 8 ops, 6.02 % |
+| chains found | 3 | 8 |
+| **ceiling vs noise floor** | 0.562 µs = **0.66×** | 8.543 µs = **10.09×** |
+| **chains resolvable alone** | **0** | **2** |
+
+The advisor went from seeing 22.8 % of the layer to 85.6 % of it. The cell published a zero and was *right* to —
+its ceiling was below the noise floor, so there was nothing to screen. With the handler in place there are two
+candidates above the floor: a `scatter` chain worth 2.825 µs (3.34× floor, **33.9 µs/model**) and a boundary chain
+`b24` worth 2.331 µs (2.75× floor, **28.0 µs/model**). Neither existed before, and neither is in the corpus's
+reachable total.
+
+**And it prices the `OpModelExempt` gap.** The advisor now sees both `sparse_matmul` ops and leaves them at
+`dram/interleaved` — it places nothing on them, exactly as `OpConstraintValidation.cpp:167-177` says it will. Those
+two ops are **47.4 %** of the window on their own (241.506 + 148.461 µs of 822.608). That is the soft gap made
+concrete: not a crash, but half a layer the optimizer declines to reason about — while still placing the router
+and tail around it, which is the reason to trace it anyway.
+
+### How hard was it, really
+
+**Easy, and for reasons that will not generalise evenly.** What made it a transcription rather than a design task:
+
+- the shape logic already existed in the sibling tracer, with the three sparse modes worked out;
+- `TTNN_SparseMatmulOp` and its Python binding already existed, with the same operand and attribute names as
+  the TTIR op — so the diff was `ttir.sparse_matmul` → `ttnn.sparse_matmul` plus `_retype` for the layout'd
+  result type;
+- `SparseMatmulOp::verify` (`TTNNOps.cpp:2720`) states the output-shape relation explicitly in its error
+  branches, and it matched the TTIR handler's arithmetic exactly — so the port could be **checked** rather than
+  guessed;
+- `_capture` already passes scalars, `None` and non-tensor objects through, so `memory_config`, `output_tile`,
+  `program_config` and `dtype` from the real call site needed no handling at all.
+
+The judgement calls were small but real: drop `program_config`/`compute_config` (every direct-TTNN tensor starts
+DRAM-interleaved and the optimizer re-decides, so a carried-over config would be a lie), default to b-sparse when
+neither flag is set (matching ttnn), and trust the layout builder with a rank-6 result — which it accepted.
+
+Roughly ten minutes of reading, five of editing, 40 seconds to run.
+
+### Could a skill do this automatically?
+
+Yes for the class this belonged to, and it is worth building, but the class is nearly exhausted in this direction.
+
+**What a skill can do mechanically.** On a `_unhandled` raise or a `cannot consume ... TracedTensor` TypeError,
+name the op, then:
+
+1. **Port from the sibling tracer** if it has a handler — a two-token substitution plus `_retype`. After this
+   port, that leaves `pow`/`pow_tensor`/`rearrange`, which the allowlist generator below covers anyway.
+2. **Generate from the allowlist** for anything in `supported_ops.py` with no emit handler: the shape rule is
+   fixed per category (unary/binary/reduction/tm/data-movement), which is exactly what `BaseOpHandler` relies on.
+3. **Derive from the verifier** for the genuinely new ops. This is the interesting one, and the
+   `SparseMatmulOp::verify` case suggests it is tractable: the verifier spells out the shape relation in prose
+   *and* in comparisons (`outputShape[0] != A || outputShape[1] != B || ...`), so it can be read and inverted
+   into a shape function rather than inferred from `TTNNOps.td`, which carries only `AnyRankedTensor`.
+
+**Why it is safe to automate: there is a hard oracle, and it is cheap.** A wrong shape does not produce a subtly
+bad capture — the MLIR verifier rejects the op immediately. So a skill can propose a handler, trace a
+single-op function, and know within seconds whether it is right. Where the verifier is only a rank check, compare
+against the real `ttnn` op's output shape at the live call site, which is right there in the model.
+
+**What it cannot decide.** Which non-shape kwargs to drop, and whether dropping them is honest for the pipeline
+being run. Here that meant knowing the advisor discards input memory configs — a fact about the *advisor*, not
+the op. That belongs in the skill's instructions, not in its inference.
 
 ### And the measurement: transcription does not cost coverage
 

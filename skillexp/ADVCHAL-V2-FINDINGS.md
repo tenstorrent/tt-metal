@@ -279,7 +279,7 @@ and a 30-op capture of the same op count are not read as the same evidence.
 | model | unreachable | cause |
 |---|---|---|
 | qwen3.6-27B (both arms) | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` |
-| north-mini onA | the whole sparse MoE tail | `ttnn.sparse_matmul` rejects tracer tensors |
+| north-mini onA | the whole sparse MoE tail | `ttnn.sparse_matmul` had no direct-TTNN handler — **since ported, see below** |
 | gemma-4-26B onA | **64.7 % sliding / 58.5 % full** of the window | sparse experts |
 | phi-3.5 B | the fused-cache share | no tracer handler for `paged_fused_update_cache` |
 
@@ -290,6 +290,31 @@ qwen B's 15,833 µs `linear_attention` window, **63.5 % is `untraced`** (the gat
 boundary 30.9 %, disagreements 2.7 %, agreement 2.9 %. So the advisor saw about **36 %** of it, and **≈62 % of
 qwen B's model decode time sits in ops the tracer could not capture**. **This is a `$shard-advise`/tt-mlir
 coverage problem, not a placement problem.**
+
+**And one of them was a single missing handler.** `ttnn.sparse_matmul` was the only op on north-mini's sparse-MoE
+decode path that the direct-TTNN tracer could not emit — router (`topk`, `scatter`, `zeros_like`, `sigmoid`),
+experts and MoE tail were all already covered. Transcribing the handler that already existed in the sibling
+interception tracer (37 lines, one registry entry, no rebuild) changes the cell's accounting on the same window:
+
+| | shipped | ported |
+|---|---|---|
+| ops traced | 14 | **39** |
+| `untraced` | 32 ops, **77.15 %** | 16 ops, **14.39 %** |
+| `chain` (screenable) | 4 ops, 12.41 % | 14 ops, **23.45 %** |
+| `dram_resident` | 2 ops, 1.26 % | 6 ops, **49.90 %** |
+| ceiling vs noise floor | 0.562 µs = 0.66× | 8.543 µs = **10.09×** |
+| chains resolvable alone | **0** | **2** |
+
+The cell published a zero and was right to — its ceiling was below its own noise floor. With the handler there are
+two candidates above it: a `scatter` chain (2.825 µs, **33.9 µs/model**) and boundary chain `b24` (2.331 µs,
+**28.0 µs/model**). Neither is in the corpus's reachable total, which is therefore a lower bound for a third
+reason.
+
+The `dram_resident` jump to 49.90 % is the `OpModelExempt` soft gap priced: the advisor now *sees* both
+`sparse_matmul` ops — **47.4 % of the window** — and leaves them `dram/interleaved`, placing nothing on them, as
+`OpConstraintValidation.cpp:167-177` says it will. It places the router and tail around them, which is the reason
+to trace the op regardless. Full detail, including how hard the port was and whether it can be automated:
+[`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md).
 
 ### 3.6 A ~0 µs ceiling is not a stopping condition
 

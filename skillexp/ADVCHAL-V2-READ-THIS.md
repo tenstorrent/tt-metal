@@ -135,7 +135,7 @@ different weight. Only one of the seven is verified by measurement:
 | llama-3.2-1B | its two candidates regressed | **Asserted, not verified.** Its ladder was never swept. The norm arrived well placed and the advisor wanted *fewer* cores — a direction that wins about half the time — so there is no particular reason to expect a win here, and no measurement either way |
 | phi-3.5 exp17 | every direction overlapped its floor or hard-failed | **Partly.** Its floor is the corpus's second-worst (1.092 µs) and the advised rope sharding — the thing worth −10.43 % on phi FN — was **never tried here** |
 | qwen3.6-27B B | the geometry hard-failed | **Partly a coverage gap.** Its `linear_attention` kind is 97 % of model decode time, and the trace stops inside it — **63.5 % of that layer is `untraced`**, so ≈62 % of the model was never advised on. The advisor did see the other third. Reading the profile directly finds the corpus's largest single cost there, ~191 ms/model of `retilize` (§3.18) — not a placement defect |
-| north-mini onA | sparse MoE untraceable | **Not a placement verdict.** `ttnn.sparse_matmul` rejects tracer tensors, so the advisor never saw the MoE tail. Its placement headroom is **unmeasured**, and no one has read that profile directly either |
+| north-mini onA | sparse MoE untraceable | **Not a placement verdict — and now fixed.** `ttnn.sparse_matmul` had no direct-TTNN handler, so the advisor never saw the MoE tail. Adding one (42 lines, no rebuild) takes the capture from 14 ops to 39, `untraced` from **77.15 % to 14.39 %**, and the screening ceiling from 0.66× the noise floor to **10.09×** — **two candidates worth ~62 µs/model** that did not exist before. §3.5 |
 | north-mini B | all measured geometries slower or stalled | **Reasonable.** It did screen, and its `advisor_dense_chain_exact` candidate regressed by 15 % |
 | qwen3.6-27B FN | its win is inside its own band | **Honest about itself** — the cell said so. But the same coverage gap applies |
 
@@ -213,8 +213,8 @@ ladder beat.
 | opportunity | scale | whose |
 |---|---|---|
 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 % of its decode time**, 14× every shipped win combined | the decoder's shape choice — a 4-element conv window on the 32-wide tile axis |
-| qwen's untraced token mixer | the kind is **97 %** of decode time; **≈62 %** of the model is in ops the tracer cannot capture | tt-metal tracer coverage |
-| `ttnn.sparse_matmul` tracer support | unblocks a whole cell; 58–65 % of every gemma-4-26B window | tt-metal |
+| qwen's untraced token mixer | the kind is **97 %** of decode time; **≈62 %** of the model is in ops the tracer cannot capture (`ttnn.copy`, `softplus`, `recurrent_state_update`) | tt-mlir `ttnn-jit` tracer coverage |
+| ~~`ttnn.sparse_matmul` tracer support~~ | **done** — 42 lines in `ttnn-jit`; north-mini onA's `untraced` 77.15 % → 14.39 %, ceiling 0.66× → 10.09× floor. Still open for gemma-4-26B (58–65 % of its window) | tt-mlir `ttnn-jit`, not tt-metal |
 | sharded GQA SDPA output | blocks two cells' top candidate *and* a 2.6 ms/model wrong-op fix | tt-metal kernel |
 
 Itemised with evidence: [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §8. What to change:

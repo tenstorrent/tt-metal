@@ -1,0 +1,85 @@
+diff --git a/tools/ttnn-jit/_src/ttnn_emit_tracer.py b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
+index abaada1806..288b2c3f7c 100644
+--- a/tools/ttnn-jit/_src/ttnn_emit_tracer.py
++++ b/tools/ttnn-jit/_src/ttnn_emit_tracer.py
+@@ -17,12 +17,16 @@ Coverage is the full transformer-decoder vocabulary: dense compute
+ (matmul/linear, elementwise binary/unary, rms_norm, softmax), data movement
+ (slice, reshape, transpose, permute, concat, embedding), attention (SDPA,
+ paged SDPA decode), heads (QKV split + concat, prefill and decode), RoPE, and
+-in-place paged KV-cache ops. The full Llama decoder sweeps in both phases. Not
+-MoE router (topk/scatter/zeros/arange/pad/clamp/fill_cache). Not yet ported:
+-the long-tail allowlisted ops the TTIR tracer covers via BaseOpHandler, and
+-ttnn.sparse_matmul -- the routed-expert path -- for which the whole optimizer
+-has no coverage anyway (the op is OpModelExempt and unregistered in the rule
+-book), so a MoE capture must trace its dense expert graph.
++in-place paged KV-cache ops, the MoE router (topk/scatter/zeros/arange/pad/
++clamp/fill_cache) and the routed-expert ttnn.sparse_matmul. The full Llama
++decoder sweeps in both phases, and a sparse-MoE decoder traces end to end.
++
++Note on sparse_matmul: TTNN_SparseMatmulOp is OpModelExempt, so the optimizer
++returns notImplemented for it and places nothing on the op itself. That is a
++soft gap, not a terminal -- tracing it still lets the optimizer see and place
++the surrounding graph (router, activations, the MoE tail), which is the point.
++Not yet ported: pow/pow_tensor/rearrange, allowlisted ops the TTIR tracer
++covers via BaseOpHandler and this tracer stubs via _unhandled.
+ """
+ 
+ from contextlib import contextmanager
+@@ -245,6 +249,49 @@ def _linear_handler(
+         )
+ 
+ 
++def _sparse_matmul_handler(
++    jit_ctx,
++    a,
++    b,
++    *,
++    sparsity=None,
++    is_input_a_sparse=None,
++    is_input_b_sparse=None,
++    nnz=None,
++    **kwargs,
++):
++    # ttnn.sparse_matmul(a, b=[1,E,K,N], sparsity) -> ttnn.sparse_matmul. Output
++    # shape per SparseMatmulOp::verify (E,K,N from b; M = a[-2]): dense-sparse
++    # (b sparse, e.g. MoE gate/up) -> [A,B,1,E,M,N]; sparse-dense (a sparse, e.g.
++    # down) -> [A,B,M,N]; both sparse -> [1,E,M,N]. ttnn defaults to b-sparse when
++    # neither flag is set. program_config/compute_config are dropped: every
++    # direct-TTNN tensor starts DRAM-interleaved and the optimizer re-decides.
++    a_sparse = bool(is_input_a_sparse)
++    b_sparse = (
++        bool(is_input_b_sparse) if is_input_b_sparse is not None else not a_sparse
++    )
++    a_shape = [int(d) for d in a.mlir_value.type.shape]
++    b_shape = [int(d) for d in b.mlir_value.type.shape]
++    E, N, M = b_shape[1], b_shape[-1], a_shape[-2]
++    if a_sparse and b_sparse:
++        out = [1, E, M, N]
++    elif b_sparse:
++        out = [a_shape[0], a_shape[1], 1, E, M, N]
++    else:
++        out = [a_shape[0], a_shape[1], M, N]
++    with InsertionPoint(jit_ctx.func_bb), Location.unknown(jit_ctx.ctx):
++        rt = _retype(jit_ctx.ctx, a.mlir_value, out)
++        return ttnn.sparse_matmul(
++            result=rt,
++            a=a.mlir_value,
++            b=b.mlir_value,
++            sparsity=sparsity.mlir_value,
++            is_input_a_sparse=a_sparse,
++            is_input_b_sparse=b_sparse,
++            nnz=nnz,
++        )
++
++
+ def _binary(op_fn):
+     def handler(jit_ctx, x, y, **kwargs):
+         # Either operand may be a python scalar -- `ttnn.multiply(gate, 1.703125)`
+@@ -966,6 +1013,7 @@ def _repeat_handler(jit_ctx, x, repeat_dims=None, **kwargs):
+ _VALUE_HANDLERS = {
+     "matmul": _matmul_handler,
+     "linear": _linear_handler,
++    "sparse_matmul": _sparse_matmul_handler,
+     "reshape": _reshape_handler,
+     "typecast": _typecast_handler,
+     "softmax": _softmax_handler,

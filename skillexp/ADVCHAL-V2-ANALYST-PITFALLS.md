@@ -35,6 +35,13 @@ the artefact when the artefact is one file away.
 **The check:** when a component has two implementations of the same role, find out which one runs before
 concluding anything from reading either. A traceback names it in one line; source-reading does not.
 
+| I claimed | what was true | how it was caught |
+|---|---|---|
+| A handler-table diff: "the emit tracer lacks `sparse_matmul`, `paged_update_cache`, `paged_fill_cache`; the interception tracer lacks 13 including `concat`, `permute`, `embedding`, `matmul`" | **Only `sparse_matmul` was right.** Emit has both cache handlers. Interception reaches `concat`/`permute`/`embedding`/`matmul` through `BaseOpHandler` over the 54-op `supported_ops.py` allowlist, which my diff did not model. Truth: emit lacked **4**, interception lacks **9** | Importing `supported_ops` and enumerating each table by name, rather than regexing the file |
+
+**The check:** a regex over a data structure is not a reading of it. Import the module, or enumerate every table
+by name — and account for generic dispatch paths before reporting a coverage count.
+
 ---
 
 ## Pattern 2 — I blamed the tool for my own reconstruction's failure
