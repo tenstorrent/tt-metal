@@ -15,8 +15,11 @@ to one stream makes each harder to read, so this splits them:
 * the **log**, timestamped, with the time in a narrow left column and the message on the
   right, scrolling under the status.
 
-Keys, while it runs: ``d`` toggles debug lines, ``p`` pauses scrolling (the status keeps
-updating), ``c`` clears the log, ``q`` quits the server.
+Keys, while it runs: up/down (or ``k``/``j``) and page-up/page-down scroll the log back
+through what the pane holds, home jumps to the oldest line and end returns to following
+the newest; ``d`` toggles debug lines, ``p`` pauses scrolling (the status keeps updating),
+``c`` clears the log, ``q`` quits the server. The live view owns the alternate screen, so
+these keys, rather than the terminal's own scrollback, are how to read back.
 
 Everything degrades gracefully: without ``rich`` installed, or when stdout is not a
 terminal (a pipe, ``nohup``, a CI log), :func:`console` yields ``None`` and the server
@@ -27,7 +30,6 @@ from __future__ import annotations
 
 import contextlib
 import queue
-import shutil
 import sys
 import threading
 import time
@@ -44,7 +46,24 @@ _LEVEL_STYLE = {
     "CRITICAL": "bold white on red",
 }
 # Square brackets are rich markup, so the key hints spell the keys out instead.
-_HELP = "keys: d debug · p pause · c clear · q quit"
+_HELP = "keys: up/down pgup/pgdn scroll · end follow · d debug · p pause · c clear · q quit"
+
+# Escape sequences for the navigation keys, in both the normal and the application cursor
+# modes a terminal may be in ("\x1b[A" and "\x1bOA" are both Up).
+_KEY_SEQUENCES = {
+    "[A": "up",
+    "OA": "up",
+    "[B": "down",
+    "OB": "down",
+    "[5~": "pageup",
+    "[6~": "pagedown",
+    "[H": "home",
+    "OH": "home",
+    "[1~": "home",
+    "[F": "end",
+    "OF": "end",
+    "[4~": "end",
+}
 
 
 def available() -> tuple[bool, str]:
@@ -75,9 +94,18 @@ class ServerConsole:
         self.fps = fps
         self.console = Console(highlight=False, soft_wrap=False)
         self._lines: deque[tuple[str, str, str]] = deque(maxlen=max_lines)  # (time, level, message)
+        # The same records folded to the message column's width, one entry per *screen*
+        # line. Scrolling and the height budget are both counted in these: a single log
+        # record can be a whole screenful once a request's prompt is in it, so counting
+        # records would overflow the frame and make the window mean nothing.
+        self._display: deque[tuple[str, str, str]] = deque(maxlen=max_lines * 8)
+        self._wrapped_at = 0  # the width _display was folded for
         self._incoming: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self.paused = False
+        # How many lines back from the newest the log is scrolled; 0 follows the tail.
+        self._scroll = 0
+        self._log_height = 20  # what the last frame had room for, so a page key can match it
         self._stop = threading.Event()
         self._painter = threading.Thread(target=self._paint_loop, name="tui-painter", daemon=True)
         self._keys = threading.Thread(target=self._key_loop, name="tui-keys", daemon=True)
@@ -94,16 +122,46 @@ class ServerConsole:
         except Exception:  # noqa: BLE001 - logging must never take the server down
             self._dropped += 1
 
-    def _drain(self) -> None:
+    def _message_width(self) -> int:
+        """Width the message column gets: the console less the time column and padding."""
+        return max(self.console.width - 16, 20)
+
+    @staticmethod
+    def _fold(text: str, width: int) -> list[str]:
+        """``text`` in width-sized pieces, matching what the table's fold would do."""
+        if not text:
+            return [""]
+        return [text[i : i + width] for i in range(0, len(text), width)]
+
+    def _append(self, stamp: str, level: str, text: str) -> int:
+        """Add one record to the log and its folded form; returns the lines added."""
+        self._lines.append((stamp, level, text))
+        pieces = self._fold(text, self._message_width())
+        for i, piece in enumerate(pieces):
+            self._display.append((stamp if i == 0 else "", level, piece))
+        return len(pieces)
+
+    def _refold(self) -> None:
+        """Rebuild the folded log after a resize changed how wide a line may be."""
+        width = self._message_width()
+        self._wrapped_at = width
+        self._display.clear()
+        for stamp, level, text in self._lines:
+            for i, piece in enumerate(self._fold(text, width)):
+                self._display.append((stamp if i == 0 else "", level, piece))
+
+    def _drain(self) -> int:
+        """Move the queued records into the log, returning how many lines they added."""
+        added = 0
         while True:
             try:
                 stamp, level, text = self._incoming.get_nowait()
             except queue.Empty:
-                return
+                return added
             if level == "DEBUG" and not self.debug:
                 continue
             for i, line in enumerate(text.splitlines() or [""]):
-                self._lines.append((stamp if i == 0 else "", level, line))
+                added += self._append(stamp if i == 0 else "", level, line)
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
@@ -202,22 +260,39 @@ class ServerConsole:
             flags.append("[cyan]debug[/cyan]")
         if self.paused:
             flags.append("[yellow]paused[/yellow]")
+        if self._scroll:
+            flags.append(f"[yellow]scrolled back {self._scroll} lines, end to follow[/yellow]")
         if self._dropped:
             flags.append(f"[red]{self._dropped} log lines dropped[/red]")
         subtitle = "  ".join(flags + [f"[dim]{_HELP}[/dim]"])
         return Panel(Group(head, table), title="DeepSeek-V4-Flash server", subtitle=subtitle, border_style="cyan")
 
     def _log_lines(self, height: int):
-        """The tail of the log, as ``time | message`` rows sized to what is left of the
+        """A window of the log, as ``time | message`` rows sized to what is left of the
         screen. Rendered as a table so the time column stays aligned and the message
-        column wraps under itself rather than under the timestamps."""
+        column wraps under itself rather than under the timestamps.
+
+        The window ends ``_scroll`` lines before the newest, so scrolling back reads
+        older lines; at 0 it is the tail and follows the log live.
+
+        Both the height and the scroll are counted in folded screen lines rather than log
+        records, so one long record fills the pane instead of overflowing the frame."""
         from rich.table import Table
 
         table = Table(box=None, pad_edge=False, expand=True, show_header=False)
         table.add_column("time", justify="left", no_wrap=True, style="dim", width=12)
         table.add_column("message", justify="left", overflow="fold", ratio=1)
-        rows = list(self._lines)[-max(height, 1) :]
-        for stamp, level, text in rows:
+
+        height = max(height, 1)
+        self._log_height = height
+        if self._message_width() != self._wrapped_at:
+            self._refold()
+        lines = list(self._display)
+        # Clamped here rather than on the key press: the limit moves with the log's length
+        # and the terminal's height, both of which change under the key thread's feet.
+        self._scroll = max(0, min(self._scroll, max(len(lines) - height, 0)))
+        end = len(lines) - self._scroll
+        for stamp, level, text in lines[max(end - height, 0) : end]:
             table.add_row(stamp, text, style=_LEVEL_STYLE.get(level, ""))
         return table
 
@@ -225,9 +300,11 @@ class ServerConsole:
         from rich.console import Group
 
         status = self._status_panel()
-        rows = shutil.get_terminal_size((100, 30)).lines
-        # Measure the status so the log fills exactly the rest of the screen: a frame
-        # taller than the terminal would scroll the status off the top.
+        # The console's own height, not shutil's: rich renders into the former, and the two
+        # disagree when the terminal is detected differently (env vars against an ioctl).
+        # Budgeting from the wrong one overflows the frame and scrolls the status away.
+        rows = self.console.size.height
+        # Measure the status so the log fills exactly the rest of the screen.
         used = len(self.console.render_lines(status, self.console.options, pad=False))
         return Group(status, self._log_lines(rows - used - 1))
 
@@ -245,7 +322,11 @@ class ServerConsole:
             ) as live:
                 while not self._stop.is_set():
                     if not self.paused:
-                        self._drain()
+                        added = self._drain()
+                        if added and self._scroll:
+                            # Keep the window on the lines being read: without this the
+                            # arrivals push them off the top while the eye is on them.
+                            self._scroll += added
                     with contextlib.suppress(Exception):  # a resize mid-render, etc.
                         live.update(self._frame())
                     time.sleep(interval)
@@ -271,17 +352,41 @@ class ServerConsole:
         try:
             tty.setcbreak(fd)
             while not self._stop.is_set():
-                key = sys.stdin.read(1)
-                if not key:
+                key = self._read_key(fd)
+                if key is None:
                     return
-                self._on_key(key.lower())
+                self._on_key(key)
         except Exception:  # noqa: BLE001 - losing the keys is not worth a crash
             return
         finally:
             with contextlib.suppress(Exception):
                 termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
+    @staticmethod
+    def _read_key(fd) -> str | None:
+        """One keypress: a character, or a name like ``"pageup"`` for the arrow and
+        navigation keys, which a terminal sends as multi-character escape sequences.
+
+        ``None`` means stdin closed. A bare Escape reads as ``"escape"`` after a short
+        wait, which is the standard way to tell it from the start of a sequence."""
+        import select
+
+        key = sys.stdin.read(1)
+        if not key:
+            return None
+        if key != "\x1b":
+            return key.lower()
+        sequence = ""
+        for _ in range(4):
+            if not select.select([fd], [], [], 0.05)[0]:
+                break
+            sequence += sys.stdin.read(1)
+            if sequence in _KEY_SEQUENCES:
+                return _KEY_SEQUENCES[sequence]
+        return "escape"
+
     def _on_key(self, key: str) -> None:
+        page = max(self._log_height - 1, 1)  # a line of overlap, so nothing is skipped
         if key == "q":
             self._stop.set()
             if self.on_quit is not None:
@@ -294,10 +399,26 @@ class ServerConsole:
             self._note(f"log {'paused' if self.paused else 'resumed'}")
         elif key == "c":
             self._lines.clear()
+            self._display.clear()
             self._dropped = 0
+            self._scroll = 0
+        elif key in ("up", "k"):
+            self._scroll += 1
+        elif key in ("down", "j"):
+            self._scroll = max(self._scroll - 1, 0)
+        elif key in ("pageup", "b"):
+            self._scroll += page
+        elif key in ("pagedown", " "):
+            self._scroll = max(self._scroll - page, 0)
+        elif key in ("home", "g"):
+            self._scroll = len(self._display)  # clamped to the oldest line when it renders
+        elif key in ("end", "f"):  # keys are folded to lower case, so follow is 'f', not 'G'
+            self._scroll = 0
 
     def _note(self, text: str) -> None:
-        self._lines.append((datetime.now().strftime("%H:%M:%S.%f")[:-3], "SUCCESS", f"[console] {text}"))
+        added = self._append(datetime.now().strftime("%H:%M:%S.%f")[:-3], "SUCCESS", f"[console] {text}")
+        if self._scroll:
+            self._scroll += added  # as with an arriving log line, hold the window still
 
 
 @contextlib.contextmanager
