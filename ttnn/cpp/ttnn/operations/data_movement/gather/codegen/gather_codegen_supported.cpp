@@ -83,9 +83,11 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
 
     // codegen_gather.py::invalidate_vector: an index element must be able to name any position
     // along the gathered axis. The kernels read the index at its own byte width, so a uint16 index
-    // on a longer axis cannot express the upper positions at all.
-    constexpr uint32_t kUint16Max = 65535;
-    if (input_index_tensor.dtype() == DataType::UINT16 && input_tensor.logical_shape()[gather_axis] > kUint16Max) {
+    // on a longer axis cannot express the upper positions at all. Positions are 0-based, so the
+    // limit is the axis LENGTH, not the max value: 65536 addresses 0..65535 and fits.
+    constexpr uint32_t kUint16MaxAxisLength = 65536;
+    if (input_index_tensor.dtype() == DataType::UINT16 &&
+        input_tensor.logical_shape()[gather_axis] > kUint16MaxAxisLength) {
         return false;
     }
 

@@ -97,6 +97,19 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_index_tensor.storage_type() == StorageType::DEVICE,
         "gather_codegen: operation requires index to be on Device. Input storage type: {}",
         tensor_args.input_index_tensor.storage_type());
+    // The descriptor launches on input_tensor.device() while embedding the other operands' raw
+    // buffer addresses, so every operand must live on that same device.
+    TT_FATAL(
+        tensor_args.input_tensor.device() == tensor_args.input_index_tensor.device(),
+        "gather_codegen: input and index tensors must be on the same device.");
+    if (tensor_args.output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.output_tensor.value().device() == tensor_args.input_tensor.device(),
+            "gather_codegen: preallocated output tensor must be on the same device as the input.");
+        TT_FATAL(
+            tensor_args.output_tensor.value().buffer() != nullptr,
+            "gather_codegen: preallocated output tensor has no device buffer allocated.");
+    }
     TT_FATAL(attributes.sparse_grad == false, "gather_codegen: sparse gradient is not supported.");
 
     // Second belt-and-suspenders gate, this one over the output placement the free function checks
