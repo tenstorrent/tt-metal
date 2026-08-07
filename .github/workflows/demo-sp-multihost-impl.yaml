@@ -271,7 +271,7 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
-      # MUST precede teardown: NFS staging stays until workers are reclaimed.
+      # MUST precede NFS cleanup: staging stays until logs are uploaded.
       # Cluster validation logs are written per-host under
       # $PIPELINE_DIR/cluster_validation_logs/<hostname>/ (not runner-local /tmp).
       - name: Upload launch + per-rank logs and automapper outputs
@@ -282,20 +282,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
-
-      - name: Delete test environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-
-      - name: Delete allocation
-        if: always()
-        uses: ./.github/actions/ttop-delete-allocation
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
 
       - name: Clean up shared staging dir
         if: always()
