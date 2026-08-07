@@ -171,8 +171,12 @@ bool no_noc_init() {
 // ABLATION: strip the drain loop to EGRESS ONLY. TT_METAL_PERF_DEBUG_ABLATE=1 compiles out every worker
 // read and all per-core processing; the drainer re-ships the same pre-staged mock bytes forever. Purpose is to
 // bisect the hang: if DRAM-core -> PCIe egress alone can hang the card, the read side is irrelevant.
-// TT_METAL_PERF_DEBUG_ABLATE_SPIN is a cycle count that stands in for the sweep, so pushes keep their real
-// spacing instead of running as fast as the loop allows. Pair with NO_DECODE=1 -- the payload is mock.
+// TT_METAL_PERF_DEBUG_ABLATE_SPIN is a cycle count that stands in for the sweep. IT MUST BE LARGE. A real run
+// is only 1.7% duty (268 busy sweeps of 15,477) and idles ~1.7 ms between bursts, which is what lets the host
+// fully drain the FIFO so the NEXT burst runs at the true ~16 GB/s. Spins of 4k-40k cycles (3-30 us) are ~57x
+// too small: the loop stays permanently credit-bound at ~3.9 GB/s and the spin appears to do nothing, because
+// when you are already blocked on credits a spin only displaces wait time. Use ~2.3M cycles (~1.7 ms) to
+// reproduce real burst behaviour. Pair with NO_DECODE=1 -- the payload is mock.
 uint32_t ablate() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ABLATE");

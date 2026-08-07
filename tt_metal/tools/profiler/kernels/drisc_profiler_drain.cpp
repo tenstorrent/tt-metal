@@ -389,22 +389,6 @@ void kernel_main() {
     // old ship_run. The drop/dead checks stay OUT here so a dead consumer costs the whole run's worth of
     // frames once, not once per repeat.
     auto ship_run = [&](uint32_t start, uint32_t count) {
-        // kAblate=2: the COMPLEMENT of the egress-only ablation. Sweep the grid, bulk-read every worker,
-        // process the batches and write the heads back -- but never touch PCIe. The producers still see their
-        // heads advance so the workload runs normally; the only thing missing is the D2H socket. If THIS
-        // hangs the card, the trigger is on the read side and egress is a bystander.
-        if constexpr (kAblate == 2) {
-            return;
-        }
-        // kAblate=3: TOKEN EGRESS. Sweep, bulk-read and write heads back exactly as normal, but ship only the
-        // FIRST slot of each run instead of the whole run -- roughly 1/16 the PCIe bytes. Unlike kAblate=2 the
-        // socket protocol stays alive, so credits, the write barrier, notify and teardown all behave, which is
-        // what makes this arm measurable at all. It sits between "egress only, no reads" (clean, 98 runs) and
-        // "reads + full egress" (4 hangs / ~134): if THIS hangs, the read side is the trigger and egress volume
-        // is irrelevant.
-        if constexpr (kAblate == 3) {
-            count = 1;
-        }
         if (count == 0) {
             return;
         }
@@ -621,12 +605,7 @@ void kernel_main() {
 
     // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
     // like the write barrier did. Skip both when we already know the consumer is gone.
-    // kAblate==2 never ships, so it can never set egress_dead or trip a credit timeout -- yet there IS no
-    // consumer (the host writer gives up after its no-progress watchdog). Without this the drainer calls
-    // socket_barrier() against a consumer that has already exited, never publishes `done`, and the run burns
-    // the whole harness timeout while the drainer itself is perfectly healthy (phase 2 POLL, heartbeat
-    // advancing). Declaring the consumer gone up front is what makes the read-only arm measurable.
-    const bool consumer_gone = egress_dead || credit_timeouts != 0 || (kAblate == 2);
+    const bool consumer_gone = egress_dead || credit_timeouts != 0;
     *phase = kPhSockBar;
     if (!consumer_gone) {
         socket_barrier(sender);
