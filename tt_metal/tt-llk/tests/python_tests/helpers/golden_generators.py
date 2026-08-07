@@ -2248,6 +2248,7 @@ class UnarySFPUGolden:
             MathOperation.LogicalNotUnary: self._logical_not,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
+            MathOperation.Cumsum: self._cumsum,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -2355,8 +2356,26 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
+        # Whole-tensor ops are evaluated here, on the untilized (row-major) view, because
+        # they are not element-wise and so cannot go through the per-element map below:
+        # cumsum accumulates down each tile's columns. The tilize that follows moves the
+        # computed values into the same layout the element-wise path produces, so every
+        # later stage (dest-format rounding, untilize, output-format conversion) is shared.
+        whole_tensor_res = (
+            self._cumsum(result, dimensions)
+            if operation == MathOperation.Cumsum
+            else None
+        )
+
         if not skip_tilize:
             result = tilize_block(result, dimensions, input_format).flatten()
+            if whole_tensor_res is not None:
+                # Tilized as Float32 so this permutation does not round the accumulated
+                # values; the single Dest-format rounding is applied below, together with
+                # the element-wise path's.
+                whole_tensor_res = tilize_block(
+                    whole_tensor_res, dimensions, DataFormat.Float32
+                ).flatten()
 
         start = ELEMENTS_PER_TILE * dest_idx
         elements_to_process = TILE_SIZE * iterations
@@ -2368,17 +2387,23 @@ class UnarySFPUGolden:
                 f"but tensor has only {tensor.numel()} elements)"
             )
 
-        op_res = [
-            (
-                self.ops[operation](x, fill_const_value)
-                if operation == MathOperation.Fill
-                else self.ops[operation](x)
-            )
-            for x in result.tolist()[
+        if whole_tensor_res is not None:
+            op_res = whole_tensor_res.tolist()[
                 ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
                 + TILE_SIZE * iterations
             ]
-        ]
+        else:
+            op_res = [
+                (
+                    self.ops[operation](x, fill_const_value)
+                    if operation == MathOperation.Fill
+                    else self.ops[operation](x)
+                )
+                for x in result.tolist()[
+                    ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
+                    + TILE_SIZE * iterations
+                ]
+            ]
 
         op_dtype = (
             torch.float32
@@ -3052,6 +3077,24 @@ class UnarySFPUGolden:
     def _sigmoid_appx(self, x):
         # Golden is the exact sigmoid; the kernel is a LUT approximation of it.
         return self._torch_unary(x, torch.sigmoid)
+
+    def _cumsum(self, x, dimensions: tuple[int, int]):
+        """Column-wise (top-to-bottom) cumulative sum inside each 32x32 tile.
+
+        Not element-wise, so it is reached through the whole-tensor branch of __call__
+        instead of the per-element dispatch. ``x`` is the untilized (row-major) view of
+        the [H, W] tensor already converted to the Dest format, so one tile is a
+        (TILE_DIM, TILE_DIM) block and the sum runs down its rows. Each tile is
+        independent because the kernel is called once per tile with ``first = true``,
+        which zeroes the cross-tile carry.
+
+        The accumulation is done in float32 because the SFPU keeps the running total in
+        an FP32 LREG and rounds only the element it stores; the caller applies that
+        single Dest-format rounding to the returned values.
+        """
+        rows, cols = dimensions[0], dimensions[1]
+        tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
+        return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
         """Reduce columns across tiles, computing sum, average, or max."""
