@@ -1,5 +1,5 @@
-# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"90c3711399f1db87a39c1fc462e354cb1393a569df1a27cee7a2a193a63a19b1","body_hash":"25822536b9f7fa61d861e102ba0eb629b19ac15ece8a04d06526c350d40e39de","compiler_version":"v0.85.4","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.78"},"agent_image_runner":"[\"N150\",\"in-service\",\"cloud-virtual-machine\"]"}
-# gh-aw-manifest: {"version":1,"secrets":["CODEGEN_REPO_TOKEN","COPILOT_GITHUB_TOKEN","GARAGE_S3_ACCESS_KEY","GARAGE_S3_SECRET_KEY","GH_AW_CI_TRIGGER_TOKEN","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/checkout","sha":"de0fac2e4500dabe0009e67214ff5f5447ce83dd","version":"de0fac2e4500dabe0009e67214ff5f5447ce83dd"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"2709137ea6c5b0e19aa621454dc643ea8dc526b1","version":"v0.85.4"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.8","digest":"sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.8@sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.8.0","digest":"sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520","pinned_image":"ghcr.io/github/github-mcp-server:v1.8.0@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520"}]}
+# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"6613db26a87c99c80a5923cac36f6b35fb0b5a17ad593213664108164f19b28d","body_hash":"2a5540260d35056b29feef258c83c18521eef41d39eaa23bbc764bf226177062","compiler_version":"v0.85.4","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.78"},"agent_image_runner":"[\"N150\",\"in-service\",\"cloud-virtual-machine\"]"}
+# gh-aw-manifest: {"version":1,"secrets":["CODEGEN_REPO_TOKEN","COPILOT_GITHUB_TOKEN","GARAGE_S3_ACCESS_KEY","GARAGE_S3_SECRET_KEY","GH_AW_CI_TRIGGER_TOKEN","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/checkout","sha":"de0fac2e4500dabe0009e67214ff5f5447ce83dd","version":"de0fac2e4500dabe0009e67214ff5f5447ce83dd"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/setup-python","sha":"5fda3b95a4ea91299a34e894583c3862153e4b97","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"2709137ea6c5b0e19aa621454dc643ea8dc526b1","version":"v0.85.4"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.8","digest":"sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.8@sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.8.0","digest":"sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520","pinned_image":"ghcr.io/github/github-mcp-server:v1.8.0@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520"}]}
 # This file was automatically generated by gh-aw (v0.85.4). DO NOT EDIT. To debug this workflow, load the skill at https://github.com/github/gh-aw/blob/main/debug.md
 #
 #    ___                   _   _
@@ -57,6 +57,7 @@
 #   - actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
 #   - actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
 #   - actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+#   - actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
 #   - actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
 #   - github/gh-aw-actions/setup@2709137ea6c5b0e19aa621454dc643ea8dc526b1 # v0.85.4
 #
@@ -68,8 +69,11 @@
 #   - ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196
 #   - ghcr.io/github/github-mcp-server:v1.8.0@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520
 
-name: "Port `${{ inputs.op }}` to a C++ program factory"
+name: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
 on:
+  push:
+    branches:
+      - ebanerjee/port-op-dryrun
   workflow_dispatch:
     inputs:
       aw_context:
@@ -106,12 +110,14 @@ on:
 permissions: {}
 
 concurrency:
-  group: gh-aw-port-op-${{ inputs.op }}
+  group: gh-aw-port-op-${{ inputs.op || 'pad' }}
 
-run-name: "Port `${{ inputs.op }}` to a C++ program factory"
+run-name: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
 
 jobs:
   activation:
+    needs: pre_activation
+    if: needs.pre_activation.outputs.activated == 'true'
     runs-on: ubuntu-slim
     permissions:
       actions: read
@@ -141,9 +147,11 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
+          trace-id: ${{ needs.pre_activation.outputs.setup-trace-id }}
+          parent-span-id: ${{ needs.pre_activation.outputs.setup-parent-span-id || needs.pre_activation.outputs.setup-span-id }}
           safe-output-artifact-client: ${{ env.GH_AW_MAX_DAILY_AI_CREDITS != '' }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AWF_VERSION: "v0.27.44"
@@ -157,7 +165,7 @@ jobs:
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AGENT_VERSION: "1.0.78"
           GH_AW_INFO_CLI_VERSION: "v0.85.4"
-          GH_AW_INFO_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_INFO_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_INFO_EXPERIMENTAL: "false"
           GH_AW_INFO_SUPPORTS_TOOLS_ALLOWLIST: "true"
           GH_AW_INFO_STAGED: "false"
@@ -203,7 +211,7 @@ jobs:
         if: ${{ env.GH_AW_MAX_DAILY_AI_CREDITS != '' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_ID: "port-op"
           GH_AW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_AW_WORKFLOW_DISPATCH_AW_CONTEXT: ${{ github.event.inputs.aw_context || '' }}
@@ -274,8 +282,10 @@ jobs:
           GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
           GH_AW_SAFE_OUTPUTS: ${{ runner.temp }}/gh-aw/safeoutputs/outputs.jsonl
           GH_AW_EXPR_1A3A194A: ${{ github.event.discussion.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'discussion' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
           GH_AW_EXPR_463A214A: ${{ github.event.pull_request.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'pull_request' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
           GH_AW_EXPR_802A9F6A: ${{ github.event.issue.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'issue' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
           GH_AW_EXPR_FF1D34CE: ${{ github.event.comment.id || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').comment_id }}
           GH_AW_GITHUB_ACTOR: ${{ github.actor }}
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
@@ -344,7 +354,9 @@ jobs:
         env:
           GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
           GH_AW_ENGINE_ID: "copilot"
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
           GH_AW_INPUTS_CATEGORY: ${{ inputs.category }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
           GH_AW_INPUTS_OP: ${{ inputs.op }}
         with:
           script: |
@@ -357,8 +369,10 @@ jobs:
         env:
           GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
           GH_AW_EXPR_1A3A194A: ${{ github.event.discussion.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'discussion' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
           GH_AW_EXPR_463A214A: ${{ github.event.pull_request.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'pull_request' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
           GH_AW_EXPR_802A9F6A: ${{ github.event.issue.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'issue' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
           GH_AW_EXPR_FF1D34CE: ${{ github.event.comment.id || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').comment_id }}
           GH_AW_GITHUB_ACTOR: ${{ github.actor }}
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
@@ -367,6 +381,7 @@ jobs:
           GH_AW_INPUTS_CATEGORY: ${{ inputs.category }}
           GH_AW_INPUTS_OP: ${{ inputs.op }}
           GH_AW_MCP_CLI_SERVERS_LIST: "- `github` — run `github --help` to see available tools\n- `mcpscripts` — run `mcpscripts --help` to see available tools\n- `safeoutputs` — run `safeoutputs --help` to see available tools"
+          GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED: ${{ needs.pre_activation.outputs.activated }}
         with:
           script: |
             const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
@@ -379,8 +394,10 @@ jobs:
               file: process.env.GH_AW_PROMPT,
               substitutions: {
                 GH_AW_EXPR_1A3A194A: process.env.GH_AW_EXPR_1A3A194A,
+                GH_AW_EXPR_1CE92DB3: process.env.GH_AW_EXPR_1CE92DB3,
                 GH_AW_EXPR_463A214A: process.env.GH_AW_EXPR_463A214A,
                 GH_AW_EXPR_802A9F6A: process.env.GH_AW_EXPR_802A9F6A,
+                GH_AW_EXPR_85CED5DD: process.env.GH_AW_EXPR_85CED5DD,
                 GH_AW_EXPR_FF1D34CE: process.env.GH_AW_EXPR_FF1D34CE,
                 GH_AW_GITHUB_ACTOR: process.env.GH_AW_GITHUB_ACTOR,
                 GH_AW_GITHUB_REPOSITORY: process.env.GH_AW_GITHUB_REPOSITORY,
@@ -388,7 +405,8 @@ jobs:
                 GH_AW_GITHUB_WORKSPACE: process.env.GH_AW_GITHUB_WORKSPACE,
                 GH_AW_INPUTS_CATEGORY: process.env.GH_AW_INPUTS_CATEGORY,
                 GH_AW_INPUTS_OP: process.env.GH_AW_INPUTS_OP,
-                GH_AW_MCP_CLI_SERVERS_LIST: process.env.GH_AW_MCP_CLI_SERVERS_LIST
+                GH_AW_MCP_CLI_SERVERS_LIST: process.env.GH_AW_MCP_CLI_SERVERS_LIST,
+                GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED: process.env.GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED
               }
             });
       - name: Validate prompt placeholders
@@ -427,15 +445,6 @@ jobs:
     - N150
     - in-service
     - cloud-virtual-machine
-    container:
-      image: ${{ inputs.docker-image }}
-      options: |
-        --device /dev/tenstorrent --group-add 1457 --tmpfs /tmp
-      volumes:
-      - ${{ github.workspace }}/docker-job:/work
-      - ${{ github.workspace }}/codegen:/codegen
-      - /dev/hugepages-1G:/dev/hugepages-1G
-      - /home/ubuntu/.ccache-ci:/github/home/.ccache
     permissions:
       contents: read
       copilot-requests: write
@@ -480,7 +489,7 @@ jobs:
           trace-id: ${{ needs.activation.outputs.setup-trace-id }}
           parent-span-id: ${{ needs.activation.outputs.setup-parent-span-id || needs.activation.outputs.setup-span-id }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AWF_VERSION: "v0.27.44"
@@ -507,14 +516,8 @@ jobs:
       - name: Configure environment
         run: |
           {
+            echo "PORT_CONTAINER=portdev"
             echo "TT_METAL_HOME=/work"
-            echo "PYTHONPATH=/work:/work/ttnn:/work/tools:/codegen"
-            echo "LD_LIBRARY_PATH=/work/build/lib"
-            echo "ARCH_NAME=wormhole_b0"
-            echo "CCACHE_TEMPDIR=/tmp/ccache"
-            echo "CCACHE_BASEDIR=/work"
-            echo "TRACY_NO_INVARIANT_CHECK=1"
-            echo "TRACY_NO_ISA_EXTENSIONS=1"
           } >> $GITHUB_ENV
           mkdir -p /tmp/ccache
       - name: Checkout tt-metal
@@ -529,66 +532,92 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
       - name: Checkout tt-dm-codegen
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: codegen
           persist-credentials: false
-          ref: ${{ inputs.codegen-ref }}
+          ref: ${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}
           repository: tenstorrent/tt-dm-codegen
           token: ${{ secrets.CODEGEN_REPO_TOKEN }}
       - env:
-          GH_AW_EXPR_60689D82: ${{ inputs.perf-limit }}
-          GH_AW_INPUTS_CATEGORY: ${{ inputs.category }}
-          GH_AW_INPUTS_OP: ${{ inputs.op }}
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
+          GH_AW_EXPR_F14CFA75: ${{ inputs['perf-limit'] || '24' }}
         name: Record the base commit
         run: |
-          git config --global --add safe.directory /work
-          git config --global --add safe.directory /codegen
           echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "PORT_OP=$GH_AW_INPUTS_OP" >> $GITHUB_ENV
-          echo "PORT_CATEGORY=$GH_AW_INPUTS_CATEGORY" >> $GITHUB_ENV
-          echo "PORT_MANIFEST=/codegen/agentic_port/manifests/$GH_AW_INPUTS_OP.yaml" >> $GITHUB_ENV
-          echo "PORT_LIMIT=$GH_AW_EXPR_60689D82" >> $GITHUB_ENV
-        working-directory: /work
+          echo "PORT_OP=$GH_AW_EXPR_85CED5DD" >> $GITHUB_ENV
+          echo "PORT_CATEGORY=$GH_AW_EXPR_1CE92DB3" >> $GITHUB_ENV
+          echo "PORT_MANIFEST=/codegen/agentic_port/manifests/$GH_AW_EXPR_85CED5DD.yaml" >> $GITHUB_ENV
+          echo "PORT_LIMIT=$GH_AW_EXPR_F14CFA75" >> $GITHUB_ENV
+        working-directory: docker-job
       - env:
-          GH_AW_INPUTS_CATEGORY: ${{ inputs.category }}
-          GH_AW_INPUTS_OP: ${{ inputs.op }}
+          GH_AW_EXPR_CDB6415C: ${{ inputs['docker-image'] || 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest' }}
+          GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
+        name: Start the toolchain container
+        run: |
+          docker pull "$GH_AW_EXPR_CDB6415C"
+          docker run -d --name portdev \
+            --device /dev/tenstorrent \
+            --group-add 1457 \
+            -v "$GH_AW_GITHUB_WORKSPACE/docker-job:/work" \
+            -v "$GH_AW_GITHUB_WORKSPACE/codegen:/codegen" \
+            -v /dev/hugepages-1G:/dev/hugepages-1G \
+            -e TT_METAL_HOME=/work \
+            -e PYTHONPATH=/work:/work/ttnn:/work/tools:/codegen \
+            -e LD_LIBRARY_PATH=/work/build/lib \
+            -e ARCH_NAME=wormhole_b0 \
+            -e TRACY_NO_INVARIANT_CHECK=1 \
+            -e TRACY_NO_ISA_EXTENSIONS=1 \
+            -e CCACHE_TEMPDIR=/tmp/ccache \
+            -e CCACHE_BASEDIR=/work \
+            -w /work \
+            "$GH_AW_EXPR_CDB6415C" sleep infinity
+          docker exec portdev git config --global --add safe.directory /work
+          docker exec portdev git config --global --add safe.directory /codegen
+          docker exec portdev bash -c 'ls /dev/tenstorrent && echo "card visible in container"'
+      - env:
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
         name: Scaffold the port
         run: |
-          python3 .github/scripts/port/scaffold.py \
-            --op "$GH_AW_INPUTS_OP" --category "$GH_AW_INPUTS_CATEGORY" \
+          docker exec portdev python3 .github/scripts/port/scaffold.py \
+            --op "$GH_AW_EXPR_85CED5DD" --category "$GH_AW_EXPR_1CE92DB3" \
             --ttmetal-home /work --codegen-root /codegen
-        working-directory: /work
       - env:
           AWS_ACCESS_KEY_ID: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: garage
           AWS_SECRET_ACCESS_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
-          CCACHE_COMPRESS: "true"
-          CCACHE_REMOTE_ONLY: "true"
-          CCACHE_REMOTE_STORAGE: s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900
         name: Build tt-metal
         run: |
           if [ -z "$AWS_ACCESS_KEY_ID" ]; then
             echo "::warning::Garage S3 credentials missing; this build will be cold."
           fi
-          ccache -z || true
-          ./build_metal.sh --build-dir build --build-type Release --enable-ccache --enable-profiler
-          ccache -sv || true
-        working-directory: /work
+          docker exec \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+            -e AWS_DEFAULT_REGION=garage \
+            -e CCACHE_REMOTE_ONLY=true -e CCACHE_COMPRESS=true \
+            -e "CCACHE_REMOTE_STORAGE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" \
+            portdev bash -c '
+              ccache -z || true
+              ./build_metal.sh --build-dir build --build-type Release --enable-ccache --enable-profiler
+              ccache -sv || true
+            '
       - continue-on-error: true
         env:
-          GH_AW_EXPR_60689D82: ${{ inputs.perf-limit }}
-          GH_AW_INPUTS_CATEGORY: ${{ inputs.category }}
-          GH_AW_INPUTS_OP: ${{ inputs.op }}
+          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
+          GH_AW_EXPR_85CED5DD: ${{ inputs.op || 'pad' }}
+          GH_AW_EXPR_F14CFA75: ${{ inputs['perf-limit'] || '24' }}
         name: Native baseline
-        run: |
-          python3 .github/scripts/port/gate.py \
-            --op "$GH_AW_INPUTS_OP" --manifest "$PORT_MANIFEST" --category "$GH_AW_INPUTS_CATEGORY" \
-            --band performance --repo /work --work /tmp/port-baseline \
-            --limit "$GH_AW_EXPR_60689D82" --skip-write-check || true
-          echo "Baseline recorded (the ported leg is expected to fail here: it is still a stub)."
-        working-directory: /work
+        run: |-
+          docker exec portdev python3 .github/scripts/port/gate.py \
+            --op "$GH_AW_EXPR_85CED5DD" --manifest "/codegen/agentic_port/manifests/$GH_AW_EXPR_85CED5DD.yaml" \
+            --category "$GH_AW_EXPR_1CE92DB3" --band performance --repo /work \
+            --work /tmp/port-baseline --limit "$GH_AW_EXPR_F14CFA75" --skip-write-check || true
 
       - name: Configure Git credentials
         env:
@@ -845,7 +874,7 @@ jobs:
 
       - name: Write MCP Scripts Tool Files
         run: |
-          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh" << 'GH_AW_MCP_SCRIPTS_SH_BUILD_821f3e84eb0b3942_EOF'
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh" << 'GH_AW_MCP_SCRIPTS_SH_BUILD_582ded0556f314a6_EOF'
           #!/bin/bash
           # Auto-generated mcp-script tool: build
           # Rebuild ttnn after editing the codegen sources. Returns compiler diagnostics on failure and a short success line otherwise. Call this after every batch of edits, before calling verify.
@@ -853,14 +882,12 @@ jobs:
           set +o histexpand
           set -euo pipefail
 
-          cd /work
-          cmake --build build --target install -j"$(nproc)" 2>&1 | tail -120
-          exit "${PIPESTATUS[0]}"
+          docker exec portdev bash -c 'cmake --build build --target install -j"$(nproc)" 2>&1 | tail -150; exit "${PIPESTATUS[0]}"'
 
 
-          GH_AW_MCP_SCRIPTS_SH_BUILD_821f3e84eb0b3942_EOF
+          GH_AW_MCP_SCRIPTS_SH_BUILD_582ded0556f314a6_EOF
           chmod +x "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh"
-          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh" << 'GH_AW_MCP_SCRIPTS_SH_VERIFY_0a9bb17f446d7c61_EOF'
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh" << 'GH_AW_MCP_SCRIPTS_SH_VERIFY_a7990cf8e8f282af_EOF'
           #!/bin/bash
           # Auto-generated mcp-script tool: verify
           # Grade the port on real hardware and return the verdict as JSON. `correctness` checks bit-exactness against a torch golden for in-scope cases and native fallback for out-of-scope ones; `performance` measures wall clock and device kernel duration against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has changed outside the port's own files. You cannot change what it measures or where the thresholds sit.
@@ -868,19 +895,19 @@ jobs:
           set +o histexpand
           set -euo pipefail
 
-          cd /work
           # The schema has no enum, so the allowlist lives here. `band` is the only agent-supplied
-          # value in this file and it never reaches a shell as anything but a matched literal.
+          # value in this file, and matching it against literals before use means nothing the agent
+          # writes ever reaches a shell as anything but one of these three words.
           case "$INPUT_BAND" in
-            correctness|performance|both) ;;
+            correctness|performance|both) BAND="$INPUT_BAND" ;;
             *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
           esac
-          python3 .github/scripts/port/gate.py \
+          docker exec portdev python3 .github/scripts/port/gate.py \
             --op "$PORT_OP" --manifest "$PORT_MANIFEST" --category "$PORT_CATEGORY" \
-            --band "$INPUT_BAND" --repo /work --base-sha "$PORT_BASE_SHA" --limit "$PORT_LIMIT"
+            --band "$BAND" --repo /work --base-sha "$PORT_BASE_SHA" --limit "$PORT_LIMIT"
 
 
-          GH_AW_MCP_SCRIPTS_SH_VERIFY_0a9bb17f446d7c61_EOF
+          GH_AW_MCP_SCRIPTS_SH_VERIFY_a7990cf8e8f282af_EOF
           chmod +x "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh"
 
       - name: Generate MCP Scripts Server Config
@@ -1313,7 +1340,7 @@ jobs:
           trace-id: ${{ needs.activation.outputs.setup-trace-id }}
           parent-span-id: ${{ needs.activation.outputs.setup-parent-span-id || needs.activation.outputs.setup-span-id }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AWF_VERSION: "v0.27.44"
@@ -1407,7 +1434,7 @@ jobs:
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
           GH_AW_NOOP_MAX: "1"
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
           GH_AW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_AW_AGENT_CONCLUSION: ${{ needs.agent.result }}
@@ -1428,7 +1455,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
           GH_AW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_AW_DETECTION_CONCLUSION: ${{ needs.detection.outputs.detection_conclusion }}
@@ -1446,7 +1473,7 @@ jobs:
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
           GH_AW_MISSING_TOOL_CREATE_ISSUE: "true"
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
@@ -1461,7 +1488,7 @@ jobs:
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
           GH_AW_REPORT_INCOMPLETE_CREATE_ISSUE: "true"
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
@@ -1476,7 +1503,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
           GH_AW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_AW_AGENT_CONCLUSION: ${{ needs.agent.result }}
@@ -1525,7 +1552,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
           GH_AW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_AW_REPORT_FAILED_JOBS: "true"
@@ -1563,7 +1590,7 @@ jobs:
           trace-id: ${{ needs.activation.outputs.setup-trace-id }}
           parent-span-id: ${{ needs.activation.outputs.setup-parent-span-id || needs.activation.outputs.setup-span-id }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AWF_VERSION: "v0.27.44"
@@ -1640,7 +1667,7 @@ jobs:
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           WORKFLOW_DESCRIPTION: "Port a tt-dm-codegen generic_op into tt-metal as a C++ program factory, on a card, in one job.\n\nAn op that exists only as a tt-dm-codegen generic_op already has a working kernel and a measured\ndevice-time win, but it pays a per-call program-descriptor rebuild that eats the win at wall\nclock. Porting it means transliterating the generator's builder into a cached DeviceOperation and\nwiring the native/codegen routing, then proving on silicon that the win survives.\n\nThe deterministic parts run before the agent: kernels are copied, the build is registered, the\ntree is compiled, and a native baseline is measured. The agent writes C++ and calls two tools --\n`build` and `verify` -- until the gates pass, then opens a draft PR. It never picks the cases,\nthe thresholds, or the measurement method, and `verify` refuses to run at all if the working tree\nhas changed outside the port's own files.\n\nV1 scope: one op, one arch (N150), `workflow_dispatch` only. `is_demoted()` ships as a stub."
           HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
           GH_AW_DETECTION_CONTINUE_ON_ERROR: "true"
@@ -1791,6 +1818,42 @@ jobs:
               }
             }
 
+  pre_activation:
+    runs-on: ubuntu-slim
+    env:
+      GH_AW_RUNTIME_FEATURES: ${{ vars.GH_AW_RUNTIME_FEATURES }}
+    outputs:
+      activated: ${{ steps.check_membership.outputs.is_team_member == 'true' }}
+      matched_command: ''
+      setup-parent-span-id: ${{ steps.setup.outputs.parent-span-id || steps.setup.outputs.span-id }}
+      setup-span-id: ${{ steps.setup.outputs.span-id }}
+      setup-trace-id: ${{ steps.setup.outputs.trace-id }}
+    steps:
+      - name: Setup Scripts
+        id: setup
+        uses: github/gh-aw-actions/setup@2709137ea6c5b0e19aa621454dc643ea8dc526b1 # v0.85.4
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+          job-name: ${{ github.job }}
+        env:
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
+          GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
+          GH_AW_INFO_VERSION: "1.0.78"
+          GH_AW_INFO_AWF_VERSION: "v0.27.44"
+          GH_AW_INFO_ENGINE_ID: "copilot"
+      - name: Check team membership for workflow
+        id: check_membership
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GH_AW_REQUIRED_ROLES: "admin,maintainer,write"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/check_membership.cjs');
+            await main();
+
   safe_outputs:
     needs:
       - activation
@@ -1816,7 +1879,7 @@ jobs:
       GH_AW_RUNTIME_FEATURES: ${{ vars.GH_AW_RUNTIME_FEATURES }}
       GH_AW_THREAT_DETECTION_AIC: ${{ needs.detection.outputs.aic }}
       GH_AW_WORKFLOW_ID: "port-op"
-      GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+      GH_AW_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
       GH_AW_WORKFLOW_SOURCE_URL: "${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/.github/workflows/port-op.md"
     outputs:
       code_push_failure_count: ${{ steps.process_safe_outputs.outputs.code_push_failure_count }}
@@ -1840,7 +1903,7 @@ jobs:
           trace-id: ${{ needs.activation.outputs.setup-trace-id }}
           parent-span-id: ${{ needs.activation.outputs.setup-parent-span-id || needs.activation.outputs.setup-span-id }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op }}` to a C++ program factory"
+          GH_AW_SETUP_WORKFLOW_NAME: "Port `${{ inputs.op || 'pad' }}` to a C++ program factory"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/port-op.lock.yml@${{ github.ref }}
           GH_AW_INFO_VERSION: "1.0.78"
           GH_AW_INFO_AWF_VERSION: "v0.27.44"
