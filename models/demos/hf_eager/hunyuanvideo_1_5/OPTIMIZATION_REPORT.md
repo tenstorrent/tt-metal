@@ -379,6 +379,70 @@ section is measured unless explicitly marked otherwise.
   The `hunyuan` preset stays the only working setting; the candidate can be
   closed rather than left pending.
 
+### DiT prepared-weight cache (measured; blocked on mesh replication)
+
+- Motivation: after the heads-major change, denoise is no longer the e2e
+  bottleneck. A 480p i2v 121f/50-step run spends ~72% of its wall clock outside
+  denoise, and a stage breakdown puts ~99s of silent work between "Enabling
+  program cache" and the first denoise tick. Qwen and byT5 avoid re-preparing
+  weights every process via tt_dit's `cache.load_model`; the DiT does not.
+- Single-device measurement at the real per-block weight shapes confirms the
+  cost is host-side preparation, not device transfer:
+
+  | weight | MB | `from_torch` | cached `load` | speedup |
+  |---|---:|---:|---:|---:|
+  | qkv (col-parallel) | 25.2 | 72.5 ms | 7.9 ms | 9.2x |
+  | ffn up | 33.6 | 96.3 ms | 10.5 ms | 9.2x |
+  | ffn down | 33.6 | 96.4 ms | 10.5 ms | 9.2x |
+  | adaLN proj | 50.3 | 144.6 ms | 15.6 ms | 9.3x |
+  | **per block** | **235** | **653 ms** | **73 ms** | |
+
+- **But the obvious implementation is wrong, and the correct one does not fit.**
+  Three findings from testing on the actual 8x4 mesh:
+  1. `dump_tensor(from_device(t))` serialises only ONE device shard and
+     `load_tensor` restores it **replicated** across all 32 devices. A
+     (2048, 8192) TP4-sharded weight came back as (2048, 2048) on 32 devices --
+     silently wrong weights on 31 of them. This fails without raising.
+  2. A correct per-shard cache is 8x disk-bloated: the weight is replicated
+     across the 8 SP ranks, so 32 shards of a 33.6 MB weight wrote **268.5 MB**.
+     Extrapolated, the DiT's ~16.5 GB of bf16 weights need ~130 GB of cache,
+     against 59 GB free on this host.
+  3. `ttnn.aggregate_as_tensor` is not present in this build, so restoring a
+     per-shard cache to its original placement needs another API.
+- Scale correction: `from_torch` mesh-sharded costs ~84 ms warm, not the 535 ms
+  a first (cold) call suggests. Weight preparation is therefore roughly 32s of
+  the ~99s window, not all of it; the remainder is mesh setup and program-cache
+  population.
+- Conclusion: the win is real but requires tt_dit's Module-level
+  `cache.load_model`, which dedups replicated shards and reconstructs
+  placement. That needs the DiT restructured from its closure-based
+  `_stubs.build()` into a Module exposing `is_loaded`/`load`/`save`/
+  `load_torch_state_dict`. Prefetching is not a substitute: the weights already
+  land in device DRAM and the cost is host-side preparation, so overlap could
+  hide at most the ~32s of concurrent setup.
+
+### Trace replay defect: stale-timestep hypothesis ruled out
+
+- `HY_TRACE=1` captures exactly (1-step traced generation is bit-identical to
+  eager) but replay degrades across steps (aggregate PCC 0.237300). The natural
+  explanation is a resident input buffer not refreshed between replays.
+- That is not the cause: `denoise_write_inputs` copies **both** the latent and
+  the timestep into their resident buffers on CQ1 every step
+  (`tt/pipeline.py`, `copy_host_to_device_tensor` for `resident_hidden` and
+  `r["timestep"]`). Ruled out, so the defect lies elsewhere.
+
+### VAE spatial sharding: scaffolded but unwired
+
+- `tt/vae_spatial.py` provides a complete, property-tested toolkit
+  (`SpatialShardPlan`, `host_shard_with_halo`, `stitch_host_shards`,
+  `block_causal_chunk_plan`, edge-fill and canonicalisation helpers), but
+  `tt/vae_decoder.py` references it once and the module docstring states the
+  production decoder is not on this contract yet.
+- VAE decode plus media save is ~70s, about 24% of a 290s run, so this is the
+  second-largest e2e target after weight preparation. Wiring it means moving
+  every causal convolution and the mid-block attention onto the halo-exchanged
+  fractured contract.
+
 ### SDPA chunk tuning (rejected: inside measurement noise, and changes output)
 
 - After the heads-major layout change, a re-profile shows LAYOUT/MOVE collapsed
