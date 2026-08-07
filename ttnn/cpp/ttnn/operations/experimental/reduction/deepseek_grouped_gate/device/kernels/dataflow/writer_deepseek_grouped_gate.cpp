@@ -8,6 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ckernel.h"
 
@@ -81,11 +82,30 @@ FORCE_INLINE void generate_index_tiles(
 }
 
 // Vertically along each tile, write index 0, ..., n_groups - 1
+//
+// BOUNDS GUARD: the loop below only reserves ONE page (tile_size_bytes == 2048 B) and walks
+// `write_ptr` forward with a hand-rolled face-advance. That advance is only correct while every
+// row lands in face 0, i.e. group_index < rows_per_face (16):
+//   - the `> rows_per_face - 1` test is off by one (it should be `>= rows_per_face`: the jump out
+//     of face 0 has to happen on the *last* face-0 row, not one row later), and
+//   - more seriously, the "skip to face 3" branch fires once *per group* instead of exactly once,
+//     so write_ptr advances a whole 512 B face for every group past the boundary. The resulting
+//     offsets are 512 B at g=16, 1024 B at g=17, 1536 B at g=18 and >= 2048 B for g >= 19 — past
+//     the end of the reserved page, ~6 KB past it at n_groups == 32 (so the "max of 32 groups"
+//     comment on the reserve_back below is wrong), scribbling over the rest of the L1 heap.
+// The host op hard-fails unless n_groups == 8 (deepseek_grouped_gate_device_operation.cpp), so
+// this is unreachable today. Clamp anyway so that relaxing the host check can only produce wrong
+// values, never an out-of-bounds L1 write. With the clamp in place group_index <= 15 always, so
+// the "skip to face 3" branch is dead and its off-by-one is moot; fix both together if multi-face
+// group index tiles are ever actually needed.
 FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t cb_group_index_template, uint32_t width_tiles, uint32_t n_groups) {
+    ASSERT(n_groups <= rows_per_face);
+    const uint32_t bounded_n_groups = (n_groups <= rows_per_face) ? n_groups : rows_per_face;
+
     Noc noc;
     CircularBuffer cb_group_index(cb_group_index_template);
-    cb_group_index.reserve_back(1);  // max of 32 groups
+    cb_group_index.reserve_back(1);
     uint32_t base_write_addr = cb_group_index.get_write_ptr();
     // G x W x T slice of the tile is written
     // G x T subset of the tile is written, where G is the n_groups and T is the tokens
@@ -93,7 +113,7 @@ FORCE_INLINE void generate_group_indices_tiles(
     // first row –> 0, 0, 0, second row –> 1, 1, 1, n_groups - 1 row –> n_groups - 1, n_groups - 1, n_groups
     // - 1
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
-    for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
+    for (uint32_t group_index = 0; group_index < bounded_n_groups; group_index++) {
         // 16 uint16_t values is 8 uint32_t writes
         for (uint32_t i = 0; i < columns_per_face / 2; i++) {
             write_ptr[i] = (group_index) << 16 | group_index;
