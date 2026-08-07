@@ -65,7 +65,10 @@ def parse_fixes_dir(fixes_dir: str, repo_root: str | None = None) -> list[Violat
             with open(yaml_path, encoding="utf-8") as f:
                 doc = yaml.safe_load(f)
         except (OSError, yaml.YAMLError) as e:
-            print(f"::warning::clang_tidy_report: skipping unparseable {yaml_path}: {e}", file=sys.stderr)
+            # stdout, not stderr: under GH Actions' non-tty capture, stdout is block-buffered
+            # while stderr isn't, so a stderr line can surface out of order relative to the
+            # stdout output below — looks like garbled/interleaved output in the raw log.
+            print(f"::warning::clang_tidy_report: skipping unparseable {yaml_path}: {e}", flush=True)
             continue
         if not doc or not isinstance(doc.get("Diagnostics"), list):
             continue
