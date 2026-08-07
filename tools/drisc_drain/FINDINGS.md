@@ -2351,3 +2351,43 @@ Every wrong conclusion came from a **coarse observable standing in for the thing
 code for failure mode, wall-clock for card health, arm label for causation, a single block for a rate.
 The fix was never more runs; it was always a finer discriminator. **When a result surprises, sharpen
 the observable before spending silicon.**
+
+## §N+22 — Tensix does not wedge: 0/200 against DRISC's 4/200, egress-matched
+
+200 runs, delay 125, unarmed, fast dispatch, Tensix-BRISC drainer, fully classified:
+
+| drainer | n | WEDGE | TEARDOWN | CLEAN |
+|---|---|---|---|---|
+| **DRISC** (§N+21 A, same conditions) | 200 | **4** | 3 | 193 |
+| **Tensix BRISC** | 200 | **0** | 1 | 199 |
+
+**The arms are egress-matched**, verified at delay 125 before the block ran -- within 0.2% on every
+metric, so a Tensix null cannot be dismissed as "it just does fewer DMAs":
+
+| | DRISC @125 | Tensix @125 |
+|---|---|---|
+| frames / pushes | 7,841 / 2,638 | 7,857 / 2,643 |
+| words | 11,002,970 | 11,002,970 |
+| pages | 1,293,765 | 1,296,405 |
+| busy sweeps | 72 @ 71.6 us | 72 @ 71.5 us |
+
+Staging is identical too (`7 slots x 10560 B`), so L1 capacity is not a factor. The only differences are
+minor and both say the Tensix drainer is slightly less eager: max occupancy 430/512 vs 348/512, and
+worst credit-wait 13.8 us vs 0.1 us -- consistent with sitting on a worker core contending with
+dispatch rather than on a dedicated DRAM core. Neither changes bytes shipped.
+
+**Statistics, stated honestly:**
+- Today's matched comparison alone: 4/200 vs 0/200, **Fisher p ~ 0.12 -- suggestive, NOT significant.**
+- Pooling §N+11's 196 Tensix runs: 4/200 vs 0/396, **p ~ 0.02**. Those old runs were exit-code scored,
+  which we voided for TEARDOWN -- but a WEDGE leaves the card dead so the NEXT process dies loudly at
+  device open with `PcieHangError`. Exit-code scoring is therefore *valid for wedges* even though it is
+  blind to silent teardowns. The pooling still spans ~24 h of code changes, so treat p ~ 0.02 as
+  indicative rather than clean.
+
+**TEARDOWN hits both** (Tensix 1/200, DRISC 3/200) -- it is not drainer-specific. Only the WEDGE is.
+
+**This is the strongest surviving structural claim about the wedge, and it fits the IOMMU lead**
+(§N+21 C): the DRISC drainer egresses from a DRAM core whose DMA path differs from a worker's, and the
+faults are four repeating near-zero IOVAs. A per-path address register that is stale or zeroed on the
+DRAM-core path only would produce exactly this. **Next: correlate fault timestamps against wedge times,
+then compare the DMA setup of the two paths.**
