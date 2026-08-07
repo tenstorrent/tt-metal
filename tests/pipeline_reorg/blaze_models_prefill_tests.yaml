@@ -550,6 +550,79 @@
   team: models
   sp_config: sc1
 
+# 4-galaxy (SC4-blitz) disaggregated prefill: a 4-rank background runner opens the mesh, loads
+# Kimi-2.7, warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less
+# producer then reads it back and PCCs it against the golden KV cache.
+- name: "Disaggregated Prefill Runner + Producer KV PCC (Kimi-2.7 SC4)"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    # This launcher runs on the GH runner pod, whose TT_METAL_HOME holds build
+    # artifacts only -- full source reaches the galaxy workers via `mpirun --pernode`
+    # but never this pod. ttrun.py, the rank-binding, and the binding's
+    # TT_METAL_HOME-relative mesh_graph_desc_path all resolve against source here, so
+    # overlay it from the pod-local /ci checkout without clobbering the build.
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PYTHONPATH="${TT_METAL_HOME}"
+    : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
+    mkdir -p "${PIPELINE_DIR}"
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    HOSTS=$(awk 'NF {printf "%s:1,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    MR_DIR=$(mktemp -d "${PIPELINE_DIR}/prefill_ci_mr.XXXXXX")
+    export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"   # ttrun expandvars this into the committed binding's global_env
+    trap 'rm -rf "${MR_DIR}"' EXIT
+
+    python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --rank-binding models/demos/common/prefill/runners/topology_configuration/prefill_ci_4galaxy_mr_binding.yaml \
+      --mpi-args "--host ${HOSTS} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
+      python3 -m models.demos.common.prefill.runners.prefill_runner &
+    RUNNER_PID=$!
+
+    for i in $(seq 1 360); do
+      [ -f "${TABLE_PATH}" ] && break
+      kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
+      sleep 5
+    done
+    [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
+
+    MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
+    set +e
+    "${MPIRUN}" \
+      --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+      --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+      bash -lc "cd '${TT_METAL_HOME}'; \
+        export PYTHONPATH='${TT_METAL_HOME}'; \
+        export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
+        export MESH_DEVICE=TG; \
+        export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
+        export PREFILL_MAX_SEQ_LEN=56320; \
+        export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+        export PREFILL_PRODUCER_CHECK_PCC=1; \
+        export PREFILL_SEND_SHUTDOWN=1; \
+        export PREFILL_STANDALONE_CHUNKED_PCC=0.85; \
+        export PREFILL_H2D_CONNECT_TIMEOUT=120; \
+        export LOGURU_LEVEL=INFO; \
+        exec python3 -m models.demos.common.prefill.runners.prefill_producer"
+    PROD_RC=$?
+    set -e
+
+    exit ${PROD_RC}
+  test_type: prefill_runner_kv_pcc
+  test_group: module
+  skus:
+    bh_sc4-blitz:
+      timeout: 60
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: scaleout
+  sp_config: sc4-blitz
+
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
 # Requires staged mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):
 #   HF_MODEL          -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/
