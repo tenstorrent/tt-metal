@@ -5,25 +5,59 @@ how much of a decoder's speed can the shard advisor be credited with, on a decod
 it? Every number below is from the cells' own artefacts or from my re-measurements on the same hardware.
 
 **This file is the few-minute version.** The evidence — 29 findings and the method — is in
-[`FINDINGS`](ADVCHAL-V2-FINDINGS.md); **every `§` reference below points there**, not into this file. What the
+[`FINDINGS`](ADVCHAL-V2-FINDINGS.md); **`§`-references below point there** unless they say "of this file". What the
 analysis itself got wrong is in [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
 
 ---
 
 ## 1. The verdict
 
+**Scope, stated up front.** This corpus measures **stage 02b v2 as implemented**, on 15 cells. Everything about
+the *stage* below is measured. Everything about **`ttnn-advise` itself** is an inference from how it behaved in
+that one setting — a good setting, since 15 independent decoders exercised it, but not a study of the advisor.
+The two are worth separating, because they are not the same verdict.
+
+### 1a. What v2 delivered
+
 | question | answer |
 |---|---|
-| **Is the advisor worth running?** | Yes, but narrowly. Its value is the size of the *placement defect it happens to find* — and that is essentially **one** defect class, a reduction stuck on too few cores. Worth **6–13 %/layer** where it exists; **7 of 15 cells honestly returned zero**. |
-| **How well did the stage use it?** | It shipped **13,601 µs/model** of saving where **21,368 µs** was reachable from the advisor's own directions — **64 %**. |
-| **What is the single biggest miss?** | The **screening order**. The stage builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
-| **Was the advice even followed?** | **7 of 15 cells tried the exact advice**, 6 of them first — and all 7 ended cleanly. **4 never tried it and recorded no reason.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
-| **How much is left on the table?** | **≈9.2 ms/model** from placement — and **≈191 ms/model** from one thing no layout advisor can see. |
-| **Is the advisor or the stage the problem?** | Both, unequally. **6 advisor defects** need tt-mlir builds; **10 stage defects** are one-file changes and account for the larger measured loss. See §3. |
+| **How much did it ship?** | **13,601 µs/model** across 8 of 15 cells, where **21,368 µs** was reachable from the advisor's own directions on the same decoders — **64 %**. |
+| **What is the single biggest miss?** | The **screening order**. It builds candidates up chain by chain and never applies the advisor's plan as written. On the one cell where the counterfactual is measurable, applying it gives **−17.84 % vs the −4.88 % that shipped — 3.7×**, and −10.43 % of that is **bit-identical** to the incumbent. It was never tried. |
+| **Did it follow the advice?** | **7 of 15 cells tried the exact advice**, 6 of them first — and all 7 ended cleanly, shipping it or recording a measured regression. **4 never tried it and recorded no reason.** Of the 9 cells that changed anything, **3 shipped the advised sharding *and* grid**. |
+| **Are the zeros failures?** | Mostly no. Of 7 zeros: **2 are honest** — the decoder was already well placed, which is a fact about the decoder, not the advisor. **3 are tracer-coverage** zeros, **1 a legality wall**, **1 unseparable from its own noise floor**. |
+| **Whose defects?** | **10 stage defects**, almost all one-file changes with no build, and they account for the larger measured loss. **6 advisor defects**, all needing tt-mlir builds — the ledger is §3 **of this file**. |
+
+### 1b. Is `ttnn-advise` a promising thing to build a stage on?
+
+**Cautiously yes — as a detector and a starting configuration, not yet as a grid chooser.** The evidence, both
+directions:
+
+| supports it | measured |
+|---|---|
+| Its **direction** on the dominant defect class — widen a starved reduction — was right in **4 of 4** cells where anyone measured it | §3.2, §3.14 |
+| Its **exact plan**, applied verbatim, contained more than the stage extracted: **−10.43 % at PCC 1.0** where the cell shipped −4.88 % | §3.27 — *one cell, the only one with the artefacts to test it* |
+| It adds **precision** to detection: "and the advisor wants more cores" narrows a 7-cell flag list to 5 with the same recall | §3.14 |
+| It **declares what it cannot place**, with the exact runtime error — a genuinely useful output the stage discards | §3.28 |
+| **Deterministic**, and **~18 s** to run end to end | §3.29 |
+
+| limits it | measured |
+|---|---|
+| **No latency term anywhere in its objective.** Its grid choice scored **82 %** of achievable across the three ladders I swept; a fixed *"closest to 16 cores"* heuristic with no advisor at all scored **99.4 %** | §3.3, §3.14 — the sharpest number against it |
+| **3 of the 4 placement wins are at grids it did not name** — it identified the op, not the value | §4 **of this file** |
+| A detection rule using only the shipped profile, **no advisor**, catches all 4 win cells. So it buys precision, **not recall** | §3.14 |
+| Its per-op hit rate over the 118 rows the corpus measured is **49 %** — but that population is dominated by boundary candidates and structurally excludes the direction it gets right, so it understates the advisor | §3.14 |
+| **Coverage, not placement, decided more outcomes.** Tracer gaps put roughly half the corpus's op cost outside it — 97 % of one model's | §3.5 |
+| The corpus's **largest single cost** — 191 ms/model — is a graph-shape choice **no layout advisor could reach** | §3.18–3.19 |
+
+**The honest reading.** In v2 the binding constraint on the advisor's usefulness was **not the advisor** — it was
+the stage's use of it (10 cheap defects) plus tracer coverage. That is an encouraging place to be, because both
+are more tractable than the advisor's own cost model. But the 82 %-vs-99.4 % gap is real and is the thing to
+watch: **until `LayoutScore` prices latency, the advisor should be trusted for *where* to look and *which
+direction* to move, and its specific core count treated as one rung on a ladder to sweep, not as an answer.**
 
 **The one-sentence version:** the advisor is a **defect detector with a broken cost model** — no latency term
-anywhere in its objective — and the stage listens to it selectively enough that half of what it does find is
-never tested.
+anywhere in its objective — and v2 listened to it selectively enough that half of what it did find was never
+tested.
 
 ---
 
