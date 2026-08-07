@@ -8,8 +8,15 @@ vLLM/plugin PR. Everything Laguna-specific lives here in the tt-metal branch.
 - The plugin hooks that used to require the fork (engine-core/launcher class injection, host-device handling)
   are **upstreamed into vLLM 0.24.0** — the public plugin runs on stock vLLM.
 - The `poolside_v1` **tool + reasoning parsers are built into vLLM 0.24.0** (`vllm/tool_parsers/__init__.py`
-  and `vllm/reasoning/__init__.py`), so nothing to vendor — just pass `--tool-call-parser poolside_v1
-  --reasoning-parser poolside_v1`.
+  and `vllm/reasoning/__init__.py`) — pass `--tool-call-parser poolside_v1 --reasoning-parser poolside_v1`.
+  **One catch (fixed here):** the *stock* `poolside_v1` tool parser's detail regex requires a newline after the
+  function name (`<tool_call>NAME\n...`), but this Laguna checkpoint emits the arg tags immediately after the
+  name (`<tool_call>NAME<arg_key>...`, no newline) — so stock `auto` tool-calling silently returns
+  `finish_reason=stop` with the raw `<tool_call>` left in `content`. The tiny installable package
+  `laguna_vllm_ext/` (this dir) fixes it: a `vllm.general_plugins` entry point that eagerly re-registers
+  `poolside_v1` with a **newline-tolerant** regex (parses both grammars). No stock/plugin edit, no vendored
+  parser copy — just `pip install -e` this dir into the serving env (step below). The reasoning parser is
+  unaffected.
 - The public plugin registers out-of-tree models via **`EXTRA_MODELS_DIR`**: a dir of bundle folders, each with
   a `vllm_metadata.json` (`arch` + `main_class`). It registers `TT<arch>` and appends the bundle to `sys.path`.
   So Laguna registration is just the bundle below — no plugin source change.
@@ -23,7 +30,14 @@ In a tt-metal `python_env` (provides torch + ttnn). This installs **stock PyPI v
 git clone https://github.com/tenstorrent/vllm-tt-plugin && cd vllm-tt-plugin
 source docs/install-vllm-tt.sh          # VLLM_TARGET_DEVICE=empty vllm==0.24.0 (stock) + the plugin
 python -c "import vllm; print(vllm.__version__)"          # -> 0.24.0
-python -c "from vllm.tool_parsers import ToolParserManager as M; print('poolside_v1' in M.tool_parsers)"  # True
+
+# Install the tt-metal vLLM extension (newline-tolerant poolside_v1 tool-parser override).
+pip install -e /home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/vllm_ext
+python - <<'EOF'   # override resolves via vLLM's real plugin loader
+from vllm.plugins import load_general_plugins; load_general_plugins()
+from vllm.tool_parsers import ToolParserManager as M
+print(M.get_tool_parser("poolside_v1").__module__)   # -> laguna_vllm_ext
+EOF
 ```
 > Do NOT install this into the current `.tenstorrent-venv` (which carries the fork build) — use a dedicated
 > tt-metal env so the fork stack stays intact until cutover.
