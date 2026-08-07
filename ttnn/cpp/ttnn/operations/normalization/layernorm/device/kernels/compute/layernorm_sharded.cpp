@@ -19,6 +19,10 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
+#ifdef IDLE_CORE
+    return;
+#endif
+
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
