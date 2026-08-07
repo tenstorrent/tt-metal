@@ -2051,3 +2051,37 @@ produces degradation.
 160 runs at delay 150/100 with `NO_STATIC_TLB=1`: **2 hangs** (run 30 @ 150, run 90 @ 100), 0 degradation,
 ack 367-471 ns throughout. An early "hung after 2 runs on dynamic" reading was coincidence — the full block
 puts the dynamic-path rate at ~1.2%, indistinguishable from static.
+
+## §N+17 — POLL PRESSURE IS REFUTED, and §N+16's "the timeout suppresses the hang" is in serious doubt
+
+Three-arm test at the knee (delay 150), 100 runs each, **randomized order** (not alternating -- §N+16
+showed a fixed rotation mis-attributes a boundary-straddling wedge):
+
+| arm | timeout | yield in CQ poll | device progress read | hangs / 100 |
+|---|---|---|---|---|
+| `stock` | off | no | no | **3** |
+| `yield` | off | **yes** (`TT_METAL_CQ_POLL_YIELD=1`) | no | **4** |
+| `noprog` | on | yes | interval 3.6e6 ms = never | **3** |
+
+**The poll-pressure theory is dead.** Adding `std::this_thread::yield()` to the stock completion-queue poll
+-- the single mechanical difference the theory rested on -- changes nothing: 4/100 vs 3/100. The host is not
+wedging the endpoint by hammering the hugepage.
+
+**And the timeout does not suppress the hang.** `noprog` has the timeout armed and hangs at exactly the stock
+rate. So §N+16's headline (0/179 armed vs 5/125 unarmed, Fisher p ~ 0.02) does not reproduce at delay 150.
+
+Two candidate explanations remain, and they are being separated by a fourth arm:
+
+1. **Block A's 0/179 was a lucky streak.** At the 3.3% rate measured here, P(0 in 179) ~ 0.0025 -- a 1-in-400
+   coincidence, unlikely but not impossible, and exactly the kind of run this file has been fooled by before.
+2. **The periodic device progress read is the active ingredient, not the yield.** `noprog` deliberately
+   removed that read; block A had it at the default 100 ms. A fourth arm (timeout armed, DEFAULT interval,
+   delay 150, 100 runs) is the missing cell. Clean => the read matters; ~3 hangs => explanation 1.
+
+Note the two blocks also differed in delay (A/B at 500, this test at 150), so an interaction is not excluded
+either. Do not quote §N+16 as established until the fourth arm lands.
+
+**Method note that finally worked:** randomize arm order and record each run's PRECEDING arm. The hang detail
+shows `prev` scattered across all three arms (`prev=stock`, `prev=yield`, `prev=noprog`), which is what the
+alternating design could never produce -- under alternation the wedge always appeared to belong to whichever
+arm followed. Randomization converts that bias into noise.
