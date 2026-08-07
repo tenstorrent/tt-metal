@@ -259,9 +259,13 @@ supported route instead of inventing a private flag.
 All five declared the op in `report.json`'s `uncapturable` field, which is the supported mechanism and which all
 five used correctly. The difference is entirely in **where they chose to stop**.
 
-**Was the flag the right call? No, on two counts.** A documented remedy existed and a cell in the same corpus
-used it to capture roughly **twice** as much of the layer. And even the simpler in-script truncation north-mini B
-chose captured more, without adding a mechanism that exists in exactly one cell.
+**Was the flag the right call?** The *truncation* was unavoidable — tested: neither tracer can capture
+north-mini's decode, because their gaps are disjoint (emit lacks `sparse_matmul`, interception lacks
+`rotary_embedding_hf`, both lack `paged_fused_update_cache`), and no cell ever passed the `--tracer` flag that
+would have been the documented escape hatch. **But the stopping point was a choice, and a poor one:** a
+documented remedy existed and a cell in the same corpus used it to capture roughly **twice** as much of the
+layer, while even north-mini B's simpler in-script truncation captured more without a private mechanism.
+→ [`CAPTURE-VARIANCE`](ADVCHAL-V2-CAPTURE-VARIANCE.md).
 
 The flag itself is harmless — it is the truncation *point* that costs. Stopping before the MLP means onA's sparse
 kinds carry **no MLP placement advice at all**, where gemma's do. Its untraced shares, 76.6 % and 77.2 %, are

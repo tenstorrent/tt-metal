@@ -3,6 +3,12 @@
 The capture is the advisor's **only** input (see [`FINDINGS`](ADVCHAL-V2-FINDINGS.md) §3.5). What a capture
 script does therefore bounds what the advice can possibly be, and what the cell can possibly measure.
 
+**A note on what is authoritative here.** The skills, `ttnn-jit` and the capture scripts are all young code; a
+comment in them explains what the code does, not necessarily a considered design. Where this file quotes them —
+the `--tracer` help, the "loud fail" rationale — treat it as *what happens*, not as *what was intended*. The
+tt-mlir optimizer is the stable component, and claims about it (`OpModelExempt`, `LayoutScore`) are read from its
+source.
+
 Fifteen cells wrote fifteen capture scripts from one template. **Nothing in the skill or the gate compares
 them**, so differences in capture scope read downstream as differences in the advisor's usefulness. This file is
 the comparison.
@@ -93,15 +99,50 @@ The variance is only in *what that function executes*:
 methods and interleaves eleven `ttnn` calls; gemma-4-26B FN's calls nine. These are replays of the shipped path,
 not independent reconstructions.
 
-### Why they do not all just call `decode_forward`
+### Why they do not all just call `decode_forward` — tested, and the blocker is real
 
-**Because that call is all-or-nothing.** At the first terminal op the trace aborts and the capture yields
-*nothing* — no IR, no advice, for the whole layer. Transcribing lets a cell stop immediately before the terminal
-and keep everything up to it. Every transcribing cell says so in a comment:
+**Because that call is all-or-nothing.** At the first unhandled op the trace raises out of `trace_ttnn`, through
+`cli.py`, to exit 1: **no IR, no report, no advice, for the whole layer.** Verified by re-running north-mini onA's
+full `decode_forward` with its truncation flag off — exit 1, and the only artefact is a traceback.
+
+Transcribing lets a cell stop immediately before the wall and keep everything up to it. Every transcribing cell
+says so in a comment:
 
 > *"The pinned direct tracer cannot consume TracedTensor inputs in `paged_fused_update_cache`, and
 > `sparse_matmul` is terminal by contract. Preserve the real shipped path up to those tracer boundaries."*
 > — north-mini FN
+
+**Is there an escape hatch?** `ttnn-advise capture` takes `--tracer {ttnn,interception,rewrite}`, default `ttnn`,
+whose help says: *"Use **interception** only for ops not yet handled by the direct-TTNN tracer."* That is exactly
+this situation, `interception_tracer` **does** have a `sparse_matmul` handler — and **no cell ever passed
+`--tracer`.**
+
+**So I tried it. It does not work either, and for a different reason.** With `--tracer interception` on
+north-mini's full decode, the trace dies *earlier* — in `_qkv_decode`, on
+`ttnn.experimental.rotary_embedding_hf`, which the interception tracer does not handle. **The two tracers have
+disjoint gaps:**
+
+| op north-mini needs | emit tracer (`ttnn`) | interception tracer |
+|---|---|---|
+| `sparse_matmul` | **missing** | present |
+| `rotary_embedding_hf` | present | **missing** |
+| `paged_fused_update_cache` | **missing** | **missing** |
+| `ones_like` | **missing** | **missing** |
+| `topk`, `scatter` | present | present |
+
+**No tracer choice captures north-mini's decode.** Emit dies at the experts, interception dies before the
+attention even finishes, and both lack the paged-cache update that phi and north-mini FN also cite. **The
+truncation was not avoidable** — a full capture of this layer is not available at this pin by any documented
+route.
+
+That corrects the implication elsewhere in this corpus that cells truncated out of haste. What *was* avoidable is
+how much they kept: gemma-4-26B's dense-expert substitution stays inside the emit tracer's coverage and captures
+30 ops where north-mini onA's attention-boundary cut captures 14. **Getting more was possible; getting
+everything was not.**
+
+**Whose problem this is.** These are `ttnn-jit` coverage gaps — missing per-op handlers in two tracers whose
+coverage has drifted apart. Nothing about it implicates the tt-mlir optimizer, and adding the handlers is
+additive work rather than a design change.
 
 ### And the measurement: transcription does not cost coverage
 
