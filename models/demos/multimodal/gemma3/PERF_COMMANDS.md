@@ -2,8 +2,7 @@
 
 Repro commands for benchmarking Gemma3-12B / 27B decode throughput on Blackhole.
 All numbers below are **ISL 128 / OSL 128, batch-1**, traced, with on-device sampling (ODS)
-on multi-chip. Decode throughput is reported the apples-to-apples way we align with server CI:
-`decode tps = 1000 / mean_tpot`.
+on multi-chip.
 
 ## Common preamble
 
@@ -13,8 +12,8 @@ source python_env/bin/activate
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole
 MGD=$PWD/tt_metal/fabric/mesh_graph_descriptors      # mesh graph descriptor dir
 
-# Reset before each run. NOTE: reset is per-BOARD. A 2x P300 host has 2 boards
-# (indices 0 and 1), each with 2 chips -> `tt-smi -r 0 1` resets all 4 chips.
+# Reset before each run. NOTE: reset is per-BOARD.
+
 tt-smi -r 0 1
 ```
 
@@ -31,6 +30,7 @@ tt-smi -r 0 1
 ---
 
 ## TEXT-ONLY  (`text_demo.py`, `-k performance-batch-1`)
+Note : Use TT_MESH_GRAPH_DESC_PATH only if you are on multi devices box
 
 ### Gemma3-12B — 1 chip (P150)
 ```bash
@@ -39,21 +39,21 @@ TT_MESH_GRAPH_DESC_PATH=$MGD/p150_mesh_graph_descriptor.textproto \
 pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s -q
 ```
 
-### Gemma3-12B — 2 chips (1× P300) + ODS
+### Gemma3-12B — 2 chips (2× P150) + On device sampling
 ```bash
 TT_VISIBLE_DEVICES=0,1 MESH_DEVICE=P300 HF_MODEL=google/gemma-3-12b-it TT_GEMMA3_ODS=1 \
 TT_MESH_GRAPH_DESC_PATH=$MGD/p300_mesh_graph_descriptor.textproto \
 pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s -q
 ```
 
-### Gemma3-27B — 2 chips (1× P300) + ODS
+### Gemma3-27B — 2 chips (2x P150) + ODS
 ```bash
 TT_VISIBLE_DEVICES=0,1 MESH_DEVICE=P300 HF_MODEL=google/gemma-3-27b-it TT_GEMMA3_ODS=1 \
 TT_MESH_GRAPH_DESC_PATH=$MGD/p300_mesh_graph_descriptor.textproto \
 pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s -q
 ```
 
-### Gemma3-27B — 4 chips (2× P300, full box) + ODS
+### Gemma3-27B — 4 chips (2× P300) + ODS
 ```bash
 TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE=P150x4 HF_MODEL=google/gemma-3-27b-it TT_GEMMA3_ODS=1 \
 TT_MESH_GRAPH_DESC_PATH=$MGD/p300_x2_mesh_graph_descriptor.textproto \
@@ -61,7 +61,7 @@ pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1"
 ```
 - 4 Blackhole chips auto-detect as device name `P150x4` (count-based); the logical `(1,4)`
   mesh maps onto the physical 2× P300 (`p300_x2` descriptor).
-- For 12B on 4 chips, swap `HF_MODEL=google/gemma-3-12b-it`.
+- For 12B on 4 chips, you can try swapping `HF_MODEL=google/gemma-3-12b-it`.
 
 ### Measured (ISL 128 / OSL 128, batch-1, traced, +ODS on multi-chip)
 
@@ -94,10 +94,8 @@ where each bank needs to store 786432 B, but bank size is 1436800 B
 (allocated: 792832 B, free: 643968 B, largest free block: 641920 B)
 ```
 
-- Reproduces on both 27B and 12B. The vision path was never validated on Blackhole (also not
-  exercised on main), so this is a bring-up gap, not a regression from these optimizations.
 - Attempted, did **not** fully resolve: forcing SDPA output to DRAM (OOM is on the
   `nlp_concat_heads` *output*, not its input). A real fix (DRAM output + chunking the
   concat-heads/vision attention to stay under the 1.5 MB/bank L1 cap) is tracked separately.
-- So there is currently **no image (text+image) 128/128 number** on Blackhole. Text-only
+- So there is currently **no image (text+image) 128/128 number** . Text-only
   numbers above are unaffected.
