@@ -72,11 +72,16 @@ for ARMED in "${sched[@]}"; do
   card="-"; class="CLEAN"
   teardown_sig=0
   grep -q "waiting for physical cores to finish\|Continuing with cleanup" $log 2>/dev/null && teardown_sig=1
+  # How far the log got is the ROBUST discriminator. The teardown-timeout message is only emitted
+  # when the timeout is ARMED; an unarmed run hangs at the same place silently, so keying TEARDOWN
+  # off the signature alone dumps every unarmed teardown hang into OTHER.
+  reached_end=0
+  grep -q "Cluster destructor completed" $log 2>/dev/null && reached_end=1
 
   if [ $rc -ne 0 ]; then
     card=$(card_state)
     if [ "${card%%|*}" = "Unknown" ]; then class="WEDGE"; nwedge=$((nwedge+1))
-    elif [ $teardown_sig -eq 1 ]; then class="TEARDOWN"; nteardown=$((nteardown+1))
+    elif [ $teardown_sig -eq 1 ] || [ $reached_end -eq 0 ]; then class="TEARDOWN"; nteardown=$((nteardown+1))
     else class="OTHER"; nother=$((nother+1)); fi
   elif [ $teardown_sig -eq 1 ]; then
     class="MASKED"; nmasked=$((nmasked+1)); card=$(card_state)
