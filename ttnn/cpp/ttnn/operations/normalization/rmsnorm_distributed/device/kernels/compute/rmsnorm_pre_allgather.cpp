@@ -22,15 +22,6 @@
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
-
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
 // residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
 // at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
@@ -97,12 +88,16 @@ void kernel_main() {
                     tile_regs_release();
                 }
             } else {
-                ACQ();
+                tile_regs_acquire();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     pack_tile(wtr, dfb::x2, wt + wtr);
                 }
-                REL();
+                tile_regs_release();
             }
             dfb_x2.push_back(blk);
         }
