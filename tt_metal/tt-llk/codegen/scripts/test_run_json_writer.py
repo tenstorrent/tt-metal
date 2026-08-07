@@ -1219,10 +1219,13 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     pytest_bin = fake_bin / "pytest"
     pytest_bin.write_text(
         "#!/bin/bash\n"
-        'collection=""; junit=""; producer=false\n'
+        'collection=""; junit=""; producer=false; collect=false\n'
         "while [[ $# -gt 0 ]]; do\n"
         '  case "$1" in\n'
-        '    --codegen-collection-json) collection="$2"; shift 2 ;;\n'
+        "    --codegen-collection-json)\n"
+        '      [[ "${REJECT_COLLECTION_FLAG:-}" != 1 ]] || exit 4\n'
+        '      collection="$2"; shift 2 ;;\n'
+        "    --collect-only) collect=true; shift ;;\n"
         '    --junitxml) junit="$2"; shift 2 ;;\n'
         "    --compile-producer) producer=true; shift ;;\n"
         "    *) shift ;;\n"
@@ -1236,6 +1239,9 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
         '  mkdir -p "$(dirname "$junit")"\n'
         '  printf \'<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="fake"/></testsuite></testsuites>\\n\' > "$junit"\n'
         "fi\n"
+        'if [[ "$collect" == true && -z "$collection" ]]; then\n'
+        "  printf 'test_fake.py::test_fake\\n'\n"
+        "fi\n"
         'if [[ "$producer" == true ]]; then\n'
         '  printf \'%s\\n\' "$TT_LLK_ARTEFACTS_DIR" >> "$CAPTURE"\n'
         '  mkdir -p "$TT_LLK_ARTEFACTS_DIR"\n'
@@ -1244,7 +1250,7 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     )
     pytest_bin.chmod(0o755)
 
-    def make_worktree(name):
+    def make_worktree(name, *, structured_collection=True):
         worktree = tmp_path / name
         test_dir = worktree / "tests" / "python_tests"
         compiler_dir = worktree / "tests" / "sfpi" / "compiler" / "bin"
@@ -1256,6 +1262,11 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
         writer_dir.mkdir(parents=True)
         (writer_dir / "run_json_writer.py").symlink_to(SCRIPT)
         (test_dir / "test_fake.py").write_text("def test_fake(): pass\n")
+        (test_dir / "conftest.py").write_text(
+            'COLLECTION_OPTION = "--codegen-collection-json"\n'
+            if structured_collection
+            else "# historical harness without structured collection option\n"
+        )
         compiler = compiler_dir / "riscv-tt-elf-g++"
         compiler.write_bytes(b"compiler-v1")
         compiler.chmod(0o755)
@@ -1314,6 +1325,31 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     assert len(roots) == 2
     assert roots[0] != roots[1]
     assert all(Path(root).is_relative_to(managed_root / "v2") for root in roots)
+
+    historical_worktree, _ = make_worktree(
+        "historical-attempt", structured_collection=False
+    )
+    historical = subprocess.run(
+        [
+            "bash",
+            str(RUN_TEST),
+            "compile",
+            "--worktree",
+            str(historical_worktree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_fake.py",
+            "--log-dir",
+            str(tmp_path / "logs-historical"),
+        ],
+        env={**env, "REJECT_COLLECTION_FLAG": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert historical.returncode == 0, historical.stderr
+    assert "test_fake.py::test_fake" in historical.stderr
 
     original = header.stat()
     header.write_text("#define VALUE_B 1\n")  # same size; only content differs
