@@ -99,6 +99,35 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
+    // INVARIANT: all three tile sizes must be identical.
+    //
+    // `tile_size` is derived from combine_output's format, but it is also used verbatim as the
+    // `page_size` of c_1 (weights, declared with weight_cb_data_format) and c_16/c_17 (output,
+    // declared with output_cb_data_format) below. The writer kernel
+    // (kernels/deepseek_moe_post_combine_reduce_writer.cpp) sizes its transfers with
+    // CircularBuffer::get_tile_size(), which is computed from each CB's *own* data_format, not
+    // from the page_size it was allocated with. If the formats ever diverge so that
+    // get_tile_size() > page_size, then:
+    //   - the weight zero-fill loop (`w < weight_tile_size / sizeof(uint32_t)`) writes past the
+    //     end of the c_1 page,
+    //   - the weight noc.async_read of `weight_tile_size` bytes overruns the same page,
+    //   - the output noc.async_write reads `output_tile_size` bytes at
+    //     `tile_idx * output_tile_size`, walking off the end of c_16,
+    // i.e. a live L1 heap overflow. Today this cannot happen only because the device op
+    // TT_FATALs combine_output and weights to BFLOAT16 (post_combine_reduce_device_operation.cpp),
+    // making every tile 2048 B. Pin it here so a dtype relaxation fails loudly instead of
+    // silently corrupting L1. If the dtypes genuinely need to differ, give each CB its own
+    // tt::tile_size(<that CB's format>) as page_size rather than weakening this check.
+    TT_FATAL(
+        tt::tile_size(weight_cb_data_format) == tile_size && tt::tile_size(output_cb_data_format) == tile_size,
+        "post_combine_reduce: weights tile size ({} B) and output tile size ({} B) must both equal "
+        "combine_output's tile size ({} B). The weights/output CBs are allocated using combine_output's "
+        "tile size as page_size, while the writer kernel sizes its transfers from each CB's own data "
+        "format via get_tile_size(); a mismatch overruns the L1 pages.",
+        tt::tile_size(weight_cb_data_format),
+        tt::tile_size(output_cb_data_format),
+        tile_size);
+
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
     uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
