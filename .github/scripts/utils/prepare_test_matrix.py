@@ -146,8 +146,7 @@ def load_sku_config(sku_config_path):
 
 
 def strip_cmd_comments(cmd):
-    """Drop whole-line shell comments from a multi-line cmd string.
-    """
+    """Drop whole-line shell comments from a multi-line cmd string."""
     kept = [line for line in cmd.split("\n") if not line.lstrip().startswith("#")]
     return "\n".join(kept)
 
