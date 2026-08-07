@@ -14,8 +14,8 @@
 // host from an `expected_tokens` argument now happens at runtime, so no caller
 // has to know the token count in advance.
 //
-// CBs are sized on the host to the compile-time MAX shape (per_core_M = 8,
-// chunk_M_tiles = 64; a big-model L1 guard may lower the max, passed in as
+// CBs are sized on the host to the compile-time MAX shape (per_core_M = 4,
+// chunk_M_tiles = 32; a big-model L1 guard may lower the max, passed in as
 // `max_chunk`). The picker never returns more than `max_chunk`, so the runtime
 // per_core_M always fits the allocated CBs; a smaller pick simply uses fewer of
 // the reserved tiles and shrinks every M-dimension loop.

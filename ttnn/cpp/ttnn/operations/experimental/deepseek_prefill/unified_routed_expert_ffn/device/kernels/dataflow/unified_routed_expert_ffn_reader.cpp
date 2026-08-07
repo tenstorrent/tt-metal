@@ -30,7 +30,6 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "api/debug/dprint.h"  // TEMP: config dump
 #include "../adaptive_chunk.hpp"
 
 void kernel_main() {
@@ -120,6 +119,13 @@ void kernel_main() {
     constexpr uint32_t chunk_M_max = get_compile_time_arg_val(19);
     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
+    // IN1_WRITER_MCAST handshake sems, appended by the host AFTER the M-row NoC table,
+    // start_addr and the optional bias addrs, so nothing above shifts.
+#ifdef FUSE_BIAS
+    constexpr uint32_t IN1_WM_SEM_RT_OFFSET = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 4;
+#else
+    constexpr uint32_t IN1_WM_SEM_RT_OFFSET = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1;
+#endif
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
     // `up` read mode: reader_reads_up = reader does the DRAM read (LEGACY);
     // reader_mcasts_up = reader NoC-0 mcasts up (UP_SPLIT: writer reads it on
@@ -143,10 +149,22 @@ void kernel_main() {
     // WEIGHTS_ND_SHARDED (a define, see the program factory): the weights are DRAM
     // ND-sharded with a one-tile-row shard whose width is exactly this core's N slice,
     // so one request per K-row fetches the whole slice (contiguous in one bank)
-    // instead of one per tile. The shard grid's N extent is SHARD_GRID_N, so the
-    // linear ROUND_ROBIN_1D shard id is k * SHARD_GRID_N + my_nt — consecutive K-rows
+    // instead of one per tile. The shard grid's N extent is SHARD_GRID_N_{GU,D}, so the
+    // linear ROUND_ROBIN_1D shard id is k * extent + my_nt — consecutive K-rows
     // therefore land in DIFFERENT banks, which is what buys the bandwidth.
-    constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(31);
+    // The extent is ceil(N_tiles / per_core_N), NOT GRID_X: per_core_N is itself
+    // ceil(N_tiles / GRID_X), so the round trip lands back on GRID_X only when that
+    // division is tight. It does for every shipped shape, but e.g. N = 12 tiles gives
+    // per_core_N = 2 and extent = 6, where GRID_X = 11 would index the WRONG shard on
+    // every K-row after the first — silently, since the id stays in range. gate/up and
+    // down differ in general, hence two args.
+    constexpr uint32_t SHARD_GRID_N_GU = get_compile_time_arg_val(31);
+    constexpr uint32_t SHARD_GRID_N_D = get_compile_time_arg_val(32);
+    // DOWN_SPLIT: K-rows of each down block THIS RISC reads. The writer reads the
+    // rest, [down_split_k, in0_block_w_d), on NoC 1. Equals in0_block_w_d when the
+    // split is off.
+    constexpr uint32_t GU_SHARD_KROWS = get_compile_time_arg_val(33);  // gate/up shard height
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(34);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -166,7 +184,7 @@ void kernel_main() {
     // always agree. When false the matmul reads those rows and the fill stays.
     constexpr bool down_k_tail_skip = (K_down_tiles_padded - K_down_tiles) < in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 32;
+    constexpr uint32_t x_accessor_offset = 35;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -265,6 +283,10 @@ void kernel_main() {
     Semaphore<> in1_valid_sem(in1_valid_sem_id);
     Semaphore<> in0_ready_sem(in0_ready_sem_id);
     Semaphore<> in0_valid_sem(in0_valid_sem_id);
+    // COUNTS_BCAST args sit right after the two IN1_WRITER_MCAST sems.
+    constexpr uint32_t COUNTS_BCAST_RT = IN1_WM_SEM_RT_OFFSET + 2;
+    Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_SEM_RT_OFFSET));
+    Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_SEM_RT_OFFSET + 1));
     Semaphore<> act_ready_sem(act_ready_sem_id);
     Semaphore<> act_valid_sem(act_valid_sem_id);
 
@@ -284,9 +306,66 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
-    noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
-    noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
-    noc_read.async_read_barrier();
+    {
+        // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
+        // Every core needs counts/idx to derive its chunking, but all of them reading the
+        // same two DRAM pages at once serialises on a single bank (1.59 us median /
+        // 2.65 us worst core, of a 4.01 us isl-0 total). One read + one L1 multicast pays
+        // the DRAM latency once.
+        const bool is_counts_reader = get_arg_val<uint32_t>(COUNTS_BCAST_RT) != 0;
+        const uint32_t cb_nx_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 1);
+        const uint32_t cb_ny_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 2);
+        const uint32_t cb_nx_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 3);
+        const uint32_t cb_ny_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 4);
+        Semaphore<> counts_valid_sem(get_arg_val<uint32_t>(COUNTS_BCAST_RT + 5));
+        const uint32_t counts_num_receivers = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 6);
+        if (is_counts_reader) {
+            noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
+            noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
+            noc_read.async_read_barrier();
+            if (counts_num_receivers > 0) {
+                // linked=true so the valid-sem multicast is ordered behind both data
+                // multicasts on the same reserved path (same rationale as the weight mcast).
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(counts_l1),
+                    MulticastEndpoint{},
+                    counts_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = counts_l1},
+                    /*linked=*/true);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(idx_l1),
+                    MulticastEndpoint{},
+                    idx_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = idx_l1},
+                    /*linked=*/true);
+                noc.async_writes_flushed();
+                counts_valid_sem.set(1);
+                counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                    noc, cb_nx_start, cb_ny_start, cb_nx_end, cb_ny_end, counts_num_receivers);
+            }
+        } else {
+            counts_valid_sem.wait(1);
+            // Reset our own copy so this does not depend on the runtime re-initialising
+            // semaphores on every program launch. Each core waits on its OWN L1 copy, so
+            // resetting locally is safe. The rest of this kernel resets in1_valid/in1_ready
+            // every block for the same reason; matching that discipline here means a cached
+            // program cannot see a stale 1 and skip the wait (which would read the previous
+            // invocation's counts -- silently correct only while consecutive calls agree).
+            counts_valid_sem.set(0);
+        }
+    }
     cb_counts_scratch_obj.push_back(1);
     cb_idx_scratch_obj.push_back(1);
 
@@ -350,8 +429,15 @@ void kernel_main() {
     constexpr uint32_t IN1_VALID = 1;
     constexpr uint32_t IN0_VALID = 1;
 
-    // UP_SPLIT handshake counter, kept in lockstep with the writer's.
+    // UP_SPLIT handshake counter, kept in lockstep with the writer's. NOTE it advances
+    // in BOTH phase 3 (gate/up) and phase 4 (DOWN_SPLIT), so it must not be reused for a
+    // handshake that only exists in one of them.
     uint32_t up_seq = 0;
+    // IN1_WRITER_MCAST handshake counter. Separate from up_seq precisely because the
+    // weight multicast happens only in phase 3: keying it on up_seq deadlocked at the
+    // first multi-chunk ISL, since phase 4 advanced up_seq by num_blocks_d without ever
+    // setting mcast_done. Both kernels increment this once per gate/up block.
+    uint32_t mc_seq = 0;
 
 #ifdef FUSE_BIAS
     // Read this core's N-column slice of the (1, N) biases ONCE (constant across
@@ -599,8 +685,27 @@ void kernel_main() {
             }
 
             if (is_in1_sender) {
+#ifdef WRITER_MCASTS_IN1
+                // The writer multicasts, so it owns the receivers' ready handshake. Here we
+                // only need this core's own slot back: cb_in1_* is double-buffered, so the
+                // block numbered up_seq reuses the slot up_seq-2 used, and THAT block's
+                // multicast must have drained. Waiting on up_seq-2 rather than up_seq is
+                // what lets this DRAM read overlap the writer's multicast of the previous
+                // block.
+                //
+                // up_seq is a RUNNING counter across chunks (incremented once per gate/up
+                // block at the top of this loop), which is what both sides must key on. An
+                // earlier version used the per-chunk `kb`, so on chunk 1 the reader signalled
+                // 1 while the writer waited for num_blocks_gu+1 -- a deadlock on the first
+                // multi-chunk ISL, and the same cross-chunk counter trap as DOWN_SPLIT.
+                ++mc_seq;
+                if (mc_seq >= 3) {
+                    mcast_done_sem.wait_min(mc_seq - 2);
+                }
+#else
                 in1_ready_sem.wait(in1_num_receivers);
                 in1_ready_sem.set(0);
+#endif
 
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
@@ -614,12 +719,18 @@ void kernel_main() {
                     // valid last shard; those hidden columns are dropped downstream
                     // exactly as the interleaved path's zero-fill was.
                     constexpr uint32_t gate_slice_bytes = per_core_N_gu * 576;  // bfp4 tile
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        const uint32_t krow = kb * in0_block_w_gu + k;
-                        const uint64_t src =
-                            gate_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_gu, 0, noc_read.get_noc_id());
-                        noc_async_read(src, l1_w_gate, gate_slice_bytes, noc_read.get_noc_id());
-                        l1_w_gate += gate_slice_bytes;
+                    // One request per GU_SHARD_KROWS-row group: the shard holds that many
+                    // K-rows contiguously in k-major order, exactly the order the CB wants.
+                    // Cuts issue cost (~36 cy/request, and RD_GATE measured 7.32 us for
+                    // 16 requests x 14 blocks) while consecutive groups still rotate banks
+                    // (shard id steps SHARD_GRID_N_GU = 11 per group, 11 % 8 banks = 3).
+                    constexpr uint32_t gate_group_bytes = gate_slice_bytes * GU_SHARD_KROWS;
+                    for (uint32_t g = 0; g < in0_block_w_gu / GU_SHARD_KROWS; ++g) {
+                        const uint32_t krow = kb * in0_block_w_gu + g * GU_SHARD_KROWS;
+                        const uint64_t src = gate_acc.get_shard_noc_addr(
+                            (krow / GU_SHARD_KROWS) * SHARD_GRID_N_GU + my_nt_gu, 0, noc_read.get_noc_id());
+                        noc_async_read(src, l1_w_gate, gate_group_bytes, noc_read.get_noc_id());
+                        l1_w_gate += gate_group_bytes;
                     }
                 }
 #else
@@ -688,10 +799,22 @@ void kernel_main() {
                 }
                 noc_read.async_read_barrier();
 
+#ifdef WRITER_MCASTS_IN1
+                // Gate is in L1: hand this slot to the writer, which multicasts it (and
+                // `up`, which it read itself) on its own NoC 1. Signalled BEFORE the
+                // up_done wait below so the writer starts as early as possible. Keyed on the
+                // running up_seq, matching the writer's wait_min.
+                mcast_go_sem.set(mc_seq);
+#endif
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
                     up_done_sem.wait_min(up_seq);
                 }
+                cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+                if constexpr (reader_mcasts_up) {
+                    cb_in1_up_obj.push_back(g_in1_block_num_tiles);
+                }
+#ifndef WRITER_MCASTS_IN1
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
                 if (in1_num_receivers > 0) {
@@ -738,10 +861,6 @@ void kernel_main() {
                             /*linked=*/true);
                     }
                 }
-                cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
-                if constexpr (reader_mcasts_up) {
-                    cb_in1_up_obj.push_back(g_in1_block_num_tiles);
-                }
                 if (in1_num_receivers > 0) {
                     noc.async_writes_flushed();
                     in1_valid_sem.set(IN1_VALID);
@@ -753,6 +872,7 @@ void kernel_main() {
                         in1_mcast_ny_end,
                         in1_num_receivers);
                 }
+#endif  // WRITER_MCASTS_IN1
             }
 
             // Step 3: receivers wait for both valid semaphores and push.
@@ -768,6 +888,20 @@ void kernel_main() {
                 }
             }
         }
+
+#ifdef WRITER_MCASTS_IN1
+        // Drain the decoupled weight-multicast pipeline before phase 4 begins.
+        // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+        // receivers up() it in both. Once the phase-3 multicast runs on the writer it can
+        // lag into the window where receivers are already acking for phase 4, and the
+        // writer then consumes acks meant for the down multicast -- after which the
+        // reader's phase-4 mcast waits forever for acks that were eaten. Waiting for the
+        // last phase-3 mcast here costs only its tail (previously serialised anyway) and
+        // restores the invariant that the two phases never share the sem concurrently.
+        if (is_in1_sender) {
+            mcast_done_sem.wait_min(mc_seq);
+        }
+#endif
 
         // -------- PHASE 4 — down matmul feed via L1 mcast of activated + down weight mcast --
         //
@@ -794,6 +928,13 @@ void kernel_main() {
 
             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+
+            // DOWN_SPLIT: slot reserved -> release the writer to read the upper
+            // K-rows on NoC 1, concurrent with this RISC's NoC-0 read below.
+            if (down_split_k < in0_block_w_d && is_in1_sender) {
+                ++up_seq;
+                up_go_sem.set(up_seq);
+            }
 
             // Step 1: receivers ack BOTH senders (in1_down and act) at the
             // top of the K-block iter. The in1_down ack lets the in1_down
@@ -826,11 +967,11 @@ void kernel_main() {
                     // One request per K-row, as for gate above. K-rows past K_down_tiles
                     // have no shard, so they keep the interleaved path's zero-fill.
                     constexpr uint32_t down_slice_bytes = per_core_N_d * 576;  // bfp4 tile
-                    for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                    for (uint32_t k = 0; k < down_split_k; ++k) {
                         const uint32_t krow = kb * in0_block_w_d + k;
                         if (krow < K_down_tiles) {
                             const uint64_t src =
-                                down_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_d, 0, noc_read.get_noc_id());
+                                down_acc.get_shard_noc_addr(krow * SHARD_GRID_N_D + my_nt_d, 0, noc_read.get_noc_id());
                             noc_async_read(src, l1_w, down_slice_bytes, noc_read.get_noc_id());
                         } else if constexpr (!down_k_tail_skip) {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
@@ -842,7 +983,7 @@ void kernel_main() {
                     }
                 }
 #else
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                for (uint32_t k = 0; k < down_split_k; ++k) {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
@@ -879,6 +1020,11 @@ void kernel_main() {
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
+                // DOWN_SPLIT: the writer's upper K-rows must have landed before the
+                // block is multicast (or consumed locally at GRID_Y == 1).
+                if (down_split_k < in0_block_w_d) {
+                    up_done_sem.wait_min(up_seq);
+                }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {
