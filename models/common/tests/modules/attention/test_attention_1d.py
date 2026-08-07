@@ -16,6 +16,7 @@ Test coverage notes:
 - Variants: non-paged, paged, paged-chunked (3 combinations per test case).
 """
 
+import inspect
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -304,6 +305,7 @@ class HfAttentionWrapper:
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self._uses_past_key_values = "past_key_values" in inspect.signature(attention.forward).parameters
 
     def forward(self, x: torch.Tensor, start_pos: int, mask=None):
         """Run attention forward pass using rotary_emb directly."""
@@ -315,21 +317,22 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, *_ = self.attention(
-                x,
-                position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                attention_mask=mask,
+            cache_kwargs = (
+                {"past_key_values": self.past_key_value}
+                if self._uses_past_key_values
+                else {"past_key_value": self.past_key_value, "use_cache": True}
             )
+            output, *_ = self.attention(x, position_embeddings=position_embeddings, attention_mask=mask, **cache_kwargs)
         else:
-            output, _, self.past_key_value = self.attention(
-                x,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                position_ids=position_ids,
-                attention_mask=mask,
+            cache_kwargs = (
+                {"past_key_values": self.past_key_value}
+                if self._uses_past_key_values
+                else {"past_key_value": self.past_key_value, "use_cache": True}
             )
+            outputs = self.attention(x, position_ids=position_ids, attention_mask=mask, **cache_kwargs)
+            output = outputs[0]
+            if not self._uses_past_key_values and len(outputs) > 2:
+                self.past_key_value = outputs[2]
         return output
 
     def __call__(self, *args, **kwargs):
