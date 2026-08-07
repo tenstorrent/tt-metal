@@ -148,25 +148,32 @@ def _error_parts(exc: Exception) -> tuple[int, str, str]:
     return 500, f"internal server error: {exc}", "server_error"
 
 
+SAMPLER_TOP_K = 64
+
+
 def _make_sampler(temperature, top_p):
     """A logits->token sampler honouring OpenAI's ``temperature``/``top_p``, or
-    ``None`` for greedy argmax (temperature 0 with no top_p)."""
-    temperature = float(temperature) if temperature is not None else 1.0
+    ``None`` for greedy argmax when the request asks for neither.
+
+    Sampling narrows to the ``SAMPLER_TOP_K`` highest logits before normalising.
+    A softmax over the full 129k vocabulary costs ~3ms per token on the host, and
+    ~15ms once ``top_p`` sorts it, against a ~10ms decode step: the scheduler
+    thread would spend more time sampling than the device spends decoding.
+    """
+    temperature = float(temperature) if temperature is not None else 0.0
     top_p = float(top_p) if top_p is not None else None
     if temperature <= 0 and top_p is None:
         return None
 
     def sample(logits: torch.Tensor) -> int:
         t = temperature if temperature > 0 else 1.0
-        probs = torch.softmax(logits / t, dim=-1)
+        values, index = torch.topk(logits[0], min(SAMPLER_TOP_K, logits.shape[-1]))
+        probs = torch.softmax(values / t, dim=-1)
         if top_p is not None and top_p < 1.0:
-            sorted_probs, sorted_idx = torch.sort(probs, dim=-1, descending=True)
-            cumulative = torch.cumsum(sorted_probs, dim=-1)
-            keep = cumulative - sorted_probs <= top_p
-            sorted_probs[~keep] = 0.0
-            probs = torch.zeros_like(probs).scatter_(-1, sorted_idx, sorted_probs)
-            probs = probs / probs.sum(dim=-1, keepdim=True)
-        return int(torch.multinomial(probs[0], 1).item())
+            cumulative = torch.cumsum(probs, dim=-1)
+            probs = torch.where(cumulative - probs <= top_p, probs, torch.zeros_like(probs))
+            probs = probs / probs.sum()
+        return int(index[torch.multinomial(probs, 1)].item())
 
     return sample
 
