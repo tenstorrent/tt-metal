@@ -82,6 +82,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     allowed_pcc=0.99,
     addcmul_scalar=None,
     broadcast_gate=True,
+    check_correctness=True,
 ):
     torch.manual_seed(0)
 
@@ -159,23 +160,25 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
-        # Golden: per-device MM outputs (each device has different weights)
-        torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
-        mm_outputs = []
-        for d in range(num_devices):
-            mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
-            mm_outputs.append(mm_out_d)
-        torch_mm_output_per_device_list.append(mm_outputs)
+        # Golden: per-device MM outputs (each device has different weights). Skipped in perf/sweep
+        # mode (check_correctness=False) since the per-device torch.matmul is expensive and unused.
+        if check_correctness:
+            torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
+            mm_outputs = []
+            for d in range(num_devices):
+                mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
+                mm_outputs.append(mm_out_d)
+            torch_mm_output_per_device_list.append(mm_outputs)
 
-        # Golden: RS reduce (sum across devices) then scatter
-        torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
-        torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
-        if addcmul_scalar is not None:
-            torch_rs_scattered = tuple(
-                torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
-                for chunk in torch_rs_scattered
-            )
-        torch_rs_output_list.append(torch_rs_scattered)
+            # Golden: RS reduce (sum across devices) then scatter
+            torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
+            torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
+            if addcmul_scalar is not None:
+                torch_rs_scattered = tuple(
+                    torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
+                    for chunk in torch_rs_scattered
+                )
+            torch_rs_output_list.append(torch_rs_scattered)
 
         # Create device tensors
         # Input: replicated (same on all devices)
@@ -345,6 +348,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     ##### Verify results #####
+    if not check_correctness:
+        logger.info("Skipping correctness check (perf/sweep mode)")
+        return
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
     concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
