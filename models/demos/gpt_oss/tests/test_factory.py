@@ -180,6 +180,12 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
                     TRACE_MODEL_KEY_PARAM: "gpt-oss-120b",
+                    # EXPERIMENT ONLY (#52176) — do not merge. Set the reservation directly in
+                    # device_params rather than via the YAML, so conftest takes its
+                    # "Keeping trace_region_size=... (already set)" branch and the value is
+                    # provably applied. exp14 patched the YAML but logged no resolution line, so
+                    # it could not be confirmed to have taken effect.
+                    "trace_region_size": 100000000,
                 },
                 id=f"{shape[0]}x{shape[1]}",
             )
