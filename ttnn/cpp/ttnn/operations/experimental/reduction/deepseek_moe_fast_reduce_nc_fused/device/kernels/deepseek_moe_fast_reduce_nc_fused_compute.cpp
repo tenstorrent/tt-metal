@@ -12,7 +12,7 @@
 // Score tiles are kept resident and accessed by index throughout the loop.
 //
 // Initialization:
-//   init_bcast<ELWMUL, COL> handles PACK + UNPACK + hw_configure.
+//   compute_kernel_hw_startup + bcast_init<ELWMUL, COL> handle PACK + UNPACK + hw_configure.
 //   We then override the MATH init with acc_to_dest=1 so that every
 //   mul_tiles_bcast_cols call accumulates into dst rather than replacing it.
 //
@@ -41,8 +41,8 @@ void kernel_main() {
     constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
 
     // Full PACK + UNPACK + hw_configure init for ELWMUL + COL-broadcast
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
-        compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
+    compute_kernel_hw_startup(compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
+    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(compute_input_cb_id_0, compute_input_cb_id_1);
 
     // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
     // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)

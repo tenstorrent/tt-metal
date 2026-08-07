@@ -39,7 +39,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     exp_tile_init<EXP_APPROX>();
     reconfig_data_format_srcb(dfb_max);
     dfb_max_obj.wait_front(1);
-    sub_bcast_cols_init_short(dfb_in, dfb_max);
+    sub_bcast_cols_init(dfb_in, dfb_max);
     for (uint32_t wt = 0; wt < Wt; wt += ndst) {
         tile_regs_acquire();
         for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
@@ -69,7 +69,7 @@ void kernel_main() {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -119,7 +119,7 @@ void kernel_main() {
 #if FUSED_SCALE_MASK
         reconfig_data_format(dfb_in0, dfb_fused_scale);
         pack_reconfig_data_format(dfb_scale_mask);
-        mul_tiles_bcast_scalar_init_short(dfb_in0, dfb_fused_scale);
+        mul_bcast_scalar_init(dfb_in0, dfb_fused_scale);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             tile_regs_acquire();
@@ -144,9 +144,9 @@ void kernel_main() {
 #endif
 
 #ifdef CAUSAL_MASK
-        add_tiles_init(dfb_scale_mask, dfb_fused_attn);
+        add_init(dfb_scale_mask, dfb_fused_attn);
 #else
-        add_bcast_rows_init_short(dfb_scale_mask, dfb_fused_attn);
+        add_bcast_rows_init(dfb_scale_mask, dfb_fused_attn);
 #endif
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             tile_regs_acquire();
@@ -216,7 +216,7 @@ void kernel_main() {
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                     if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
                         reconfig_data_format(dfb_in0, dfb_mask_padded);
-                        add_bcast_rows_init_short(dfb_in0, dfb_mask_padded);
+                        add_bcast_rows_init(dfb_in0, dfb_mask_padded);
                         dfb_mask_padded_obj.wait_front(1);
                         add_tiles_bcast_rows(dfb_in0, dfb_mask_padded, wt8, 0, wt8);
                     } else {
@@ -298,7 +298,7 @@ void kernel_main() {
         pack_reconfig_data_format(dfb_out0);
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a cumulative wait for Wt tiles in cb_exps
-        mul_bcast_cols_init_short(dfb_exps, dfb_recipsumexps);
+        mul_bcast_cols_init(dfb_exps, dfb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             tile_regs_acquire();
             dfb_out0_obj.reserve_back(ndst);
