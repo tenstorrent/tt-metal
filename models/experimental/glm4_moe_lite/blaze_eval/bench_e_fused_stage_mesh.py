@@ -329,6 +329,24 @@ try:
 except Exception as e:
     print(f"RESULT FUSED FAIL: {str(e).split(chr(10))[0][:200]}", flush=True)
 
+# ---- MULTI-PROGRAM PROBE: the model builds 47 of these, one per layer, and hangs. Every
+# single-stage config passes (1 chip, 32 chips, trace, no trace), so "more than one program" is the
+# last untested difference. blaze_ops.py records the shared-scratch arena wedging the SECOND
+# _build_q_stage_program call, so N=2 is the interesting point and N>2 separates "the second
+# specifically" from cumulative L1/CB exhaustion.
+print("RESULT ---- multi-program probe ----", flush=True)
+for _n in range(2, 6):
+    try:
+        print(f"RESULT building program #{_n} ...", flush=True)
+        _o = l1_out(n_pad2)
+        _prog = build_fused(_o, dram_out(n_pad))
+        print(f"RESULT   #{_n} built, running ...", flush=True)
+        _prog.run()
+        print(f"RESULT   #{_n} RAN OK", flush=True)
+    except Exception as _e:
+        print(f"RESULT   #{_n} FAIL: {str(_e).split(chr(10))[0][:180]}", flush=True)
+        break
+
 # ---- ttnn running the same two matmuls, L1 in/out, 1D mcast over interleaved DRAM weights.
 # Without this the "the fused stage beats ttnn" claim rests on scaling benchmark A's 10.5 us by a
 # byte ratio, which is an estimate. Measure it.

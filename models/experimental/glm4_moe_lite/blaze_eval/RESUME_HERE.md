@@ -1371,3 +1371,37 @@ by default, but the note says the **second** program is where things break — a
 **twice** (two independent `FusedProgram`s, as separate layers would). If the second wedges, that
 is the whole bug, reproduced in a script small enough to hand to the blaze owners. Then try N=3..5
 to see whether it is "the second" specifically or cumulative L1/CB exhaustion.
+
+### Multi-program: ALSO WRONG. N=2..5 all build and run clean on the mesh.
+
+The probe appended to `bench_e_fused_stage_mesh.py` builds and runs 4 more independent fused-stage
+programs after the first. All pass. So "more than one program" is not the trigger either, at least
+to N=5.
+
+**Four hypotheses tested, four disproved:**
+
+| hypothesis | test | result |
+|---|---|---|
+| shared `_PROGRAM_SEMAPHORES` | `..._OWN_SEM=1` | still hangs |
+| Mcast broken by trace | no `--enable-trace` | still hangs |
+| Mcast broken on a mesh | mesh port of the bench | clean, PCC 0.9998 |
+| >1 program | N=2..5 in one process | all clean |
+
+### Remaining candidates, in the order I would test them
+
+1. **Core `(11,9)` is not free in the model.** The bench reports
+   `gather_receiver=mcast_sender=(11, 9)` and has the whole grid to itself. The model confines ops
+   to worker sub-core grids (`worker_sub_core_grids`, the prefetcher work) and reserves cores for
+   dispatch and SDPA. If `(11,9)` is occupied or outside the program's core set, the mcast sender
+   never runs and every consumer starves — which is *exactly* the observed signature (256 workers
+   waiting at the mcast consumer, sender silent). **Cheapest decisive test:** log the chosen
+   receiver/sender core inside `_build_q_stage_program` in a model run and compare against the
+   model's reserved grids.
+2. **Scale to 47.** N=5 passed; the model builds 47. Cumulative L1/CB exhaustion would show up
+   between 5 and 47 — extend the probe loop rather than guessing.
+3. **Activation-address-keyed program cache.** `_Q_STAGE_PROGRAM_CACHE` is keyed by
+   `(id(w), act.buffer_address())` because `TileRowReplicate` bakes `src.buffer_address()` into a
+   *compile-time* arg. If the model hands a different activation buffer than the one a cached
+   program was built against, the program reads the wrong memory.
+4. **Interleaving with ttnn ops** (SDPA, KV cache, MoE) between stage dispatches — the only
+   difference the bench structurally cannot reproduce.
