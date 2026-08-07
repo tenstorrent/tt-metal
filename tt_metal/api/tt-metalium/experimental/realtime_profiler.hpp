@@ -32,8 +32,6 @@ struct ProgramRealtimeRecord {
 
     /**
      * @brief Program execution duration.
-     *
-     * Assumes the device clock frequency is stable.
      */
     [[nodiscard]] constexpr std::chrono::duration<double, std::nano> duration() const {
         return std::chrono::duration<double, std::nano>{

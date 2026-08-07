@@ -14,7 +14,6 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 
 #include "context/context_types.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_clock_sync.hpp"
@@ -70,7 +69,8 @@ public:
     uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const override { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
-    // Records rejected at decode: an end timestamp before its start, or no retained clock probe to map onto
+    // Records rejected at decode as corrupt: an end timestamp before its start, or timestamps predating every
+    // retained clock probe
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
     // Blocking device L1 read across every chip; not for a latency-sensitive path.
     uint32_t read_ring_full_wait_count();
@@ -80,16 +80,13 @@ private:
     struct DeviceState {
         IDevice* device = nullptr;
         uint32_t chip_id = 0;
-        distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<distributed::D2HSocket> socket;
         // Keeps the BRISC+NCRISC kernels (and their tt-inspector metadata) alive for the receiver's lifetime.
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        // When this device is next due a probe even if it drained nothing. See probe_interval.
-        std::chrono::steady_clock::time_point next_probe_due_at{};
-        // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
+        // Held by pointer so moving DeviceState does not copy the sync object's 128KB probe ring.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 
         DeviceState();
@@ -105,13 +102,9 @@ private:
     // Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
-    void warm_up_device_clocks();
 
-    // Takes one probe and returns what the clock read blocked for. Called after every non-empty read, because that
-    // probe is what brackets the batch just read, and on probe_interval() otherwise, because probe spacing is chord
-    // width and chord width is the accuracy.
-    std::chrono::nanoseconds probe_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
     void report_sync_cost(std::chrono::steady_clock::time_point now);
+    void note_fifo_depth(uint32_t available);
     // Decodes `pages` and publishes them, placed against the probe history. True when anything was published, so the
     // caller knows to wake consumers. `batch` is the caller's scratch, reused so this never allocates.
     bool publish_pages(
@@ -148,7 +141,7 @@ private:
 
     std::atomic<uint32_t> peak_fifo_pages_{0};               // all-time peak D2H FIFO usage
     std::atomic<uint32_t> peak_fifo_pages_since_report_{0};  // peak since take_peak_fifo_pages()
-    uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
+    uint32_t fifo_pages_window_max_ = 0;         // peak since the last Tracy plot sample; that plot is its only reader
     std::chrono::nanoseconds pass_sync_busy_{};  // clock-read time in the pass just finished
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring

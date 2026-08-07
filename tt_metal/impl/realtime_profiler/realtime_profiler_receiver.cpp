@@ -26,6 +26,7 @@
 #endif
 
 #include <enchantum/enchantum.hpp>
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/distributed.hpp>
@@ -85,6 +86,15 @@ static_assert(
     "Host D2H FIFO must be at least as deep as the device ring (RT_PROFILER_RING_CAPACITY)");
 
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
+
+// The probe history must out-span anything still in flight: a device is probed once per drained batch and, when its
+// FIFO is empty, once per sync interval, so a record that has ended sees at most pipeline-depth / batch-size probes
+// (plus a handful racing the push) before it is decoded. This is what lets a record's end always find the pair of
+// probes around it, however far its start may reach back.
+static_assert(
+    RealtimeProfilerClockMapping::kProbeHistoryCapacity >=
+        8 * (RealtimeProfilerRuntimeSizes::fifo_pages + RT_PROFILER_RING_CAPACITY) / kMaxSocketPagesPerRead,
+    "The probe history could lap past an undecoded record's end");
 
 // Floor on how often a repeating fault is logged.
 constexpr auto kWarnInterval = std::chrono::seconds(30);
@@ -186,10 +196,6 @@ struct ProfilerKernelAddrs {
     uint32_t ring_buffer = 0;
     uint32_t msg_base = 0;
     uint32_t config_field = 0;  // where the socket config address is published
-    uint32_t dispatch_data_a = 0;
-    uint32_t dispatch_data_b = 0;
-    uint32_t dispatch_noc_x = 0;
-    uint32_t dispatch_noc_y = 0;
     bool pcie_noc_defines = false;
     uint32_t pcie_noc_x = 0;
     uint32_t pcie_noc_y = 0;
@@ -291,124 +297,80 @@ std::unique_ptr<Program> launch_profiler_kernels(
 // Evaluates against the device's owning context_id (not bare instance()) so a mock device isn't falsely enabled via
 // the silicon DEFAULT_CONTEXT_ID fallback (#38445/#39849).
 std::optional<CoreCoord> evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
-    auto device_id = device->id();
+    const auto device_id = device->id();
     auto& metal = MetalContext::instance(context_id);
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
-    // distributed::D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage, absent on mock/emulated.
-    if (cluster.is_mock_or_emulated()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: target is mock or emulated; D2H sockets "
-            "require a real PCIe hugepage that is not present in mock/emulated flows.",
-            device_id);
-        return {};
-    }
+    // The profiler turning itself off is invisible otherwise, so every refusal says what to change to re-enable it.
+    // Warning rather than debug where the configuration looks accidental rather than chosen.
+    const auto refuse = [&](std::string_view reason) {
+        log_debug(tt::LogMetal, "Real-time profiler disabled on device {}: {}", device_id, reason);
+        return std::optional<CoreCoord>{};
+    };
+    const auto refuse_loudly = [&](std::string_view reason) {
+        log_warning(tt::LogMetal, "Real-time profiler disabled on device {}: {}", device_id, reason);
+        return std::optional<CoreCoord>{};
+    };
 
+    // D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage.
+    if (cluster.is_mock_or_emulated()) {
+        return refuse("target is mock or emulated, and a D2H socket needs a real PCIe hugepage.");
+    }
     // ttsim serves a clock read far slower than silicon: bring-up burns ~30s/chip with no usable calibration.
     if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: target is Simulator; D2H sync polls "
-            "cannot meet real-time deadlines against ttsim's emulated PCIe.",
-            device_id);
-        return {};
+        return refuse("target is the simulator, whose emulated PCIe cannot serve clock reads at a usable rate.");
     }
-
     if (!device->is_mmio_capable()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: device is not MMIO-capable (remote device). "
-            "D2H sockets require the sender core to sit on a PCIe-connected chip.",
-            device_id);
-        return {};
+        return refuse("device is remote, and a D2H socket needs its sender core on a PCIe-connected chip.");
     }
-
     if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
-            "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
-            "IOMMU is currently disabled and no hugepage fallback is available. Enable IOMMU "
-            "(or run on a system that has it) to re-enable RT profiler.",
-            device_id);
-        return {};
+        return refuse(
+            "this architecture addresses the D2H socket with 64-bit PCIe, which needs host IOMMU, and there is no "
+            "hugepage fallback. Enable IOMMU to re-enable the profiler.");
     }
-
-    const auto fabric_tensix_config = metal.get_fabric_tensix_config();
-    if (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: fabric tensix datamover is enabled "
-            "(FabricTensixConfig={}, FabricUDMMode={}), and fabric_mux_core() will drain the "
-            "remaining dispatch-pool cores at fabric-init time. Reserving a tensix for the RT "
-            "profiler on top of that tips the pool into exhaustion on small-pool chips. "
-            "Disable the fabric tensix datamover to re-enable RT profiler.",
-            device_id,
-            enchantum::to_string(fabric_tensix_config),
-            enchantum::to_string(metal.get_fabric_udm_mode()));
-        return {};
+    if (metal.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED) {
+        return refuse(fmt::format(
+            "the fabric tensix datamover is enabled (FabricTensixConfig={}, FabricUDMMode={}), and fabric_mux_core() "
+            "drains the remaining dispatch-pool cores at fabric-init time. Reserving one more for the profiler tips "
+            "small-pool chips into exhaustion. Disable the fabric tensix datamover to re-enable the profiler.",
+            enchantum::to_string(metal.get_fabric_tensix_config()),
+            enchantum::to_string(metal.get_fabric_udm_mode())));
     }
-
-    std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
+    const std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
     if (!reserved.has_value()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: no tensix core could be reserved for the "
-            "RT profiler. Dispatch is configured for ETH cores, which cannot run the RT profiler "
-            "BRISC kernel. Switch to DispatchCoreConfig(DispatchCoreType::WORKER) to re-enable RT "
-            "profiler.",
-            device_id);
-        return {};
+        return refuse(
+            "no tensix could be reserved. Dispatch is configured for ETH cores, which cannot run the profiler's BRISC "
+            "kernel; switch to DispatchCoreConfig(DispatchCoreType::WORKER) to re-enable the profiler.");
+    }
+    if (metal.rtoptions().get_kernels_nullified()) {
+        return refuse(
+            "null-kernels mode is active, so the profiler kernel would be a stub that cannot answer host syncs, and "
+            "there are no real kernels to profile.");
     }
 
-    CoreCoord core(reserved->x, reserved->y);
-
-    const auto& soc = cluster.get_soc_desc(device_id);
-    CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
+    const CoreCoord core(reserved->x, reserved->y);
+    const CoreCoord tensix_grid = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     if (core.x >= tensix_grid.x || core.y >= tensix_grid.y) {
-        log_warning(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: reserved core ({}, {}) is outside the "
-            "TENSIX logical grid ({}, {}).",
-            device_id,
+        return refuse_loudly(fmt::format(
+            "reserved core ({}, {}) is outside the TENSIX logical grid ({}, {}).",
             core.x,
             core.y,
             tensix_grid.x,
-            tensix_grid.y);
-        return {};
+            tensix_grid.y));
     }
-
-    if (metal.rtoptions().get_kernels_nullified()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: null-kernels mode is active "
-            "(TT_METAL_NULL_KERNELS / set_kernels_nullified). The RT profiler kernel "
-            "would be replaced with a stub and could not respond to host syncs, and "
-            "there are no real user kernels to profile in this mode.",
-            device_id);
-        return {};
-    }
-
-    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const uint32_t core_l1_size_aligned = tt::align(RealtimeProfilerRuntimeSizes::core_l1_size, l1_alignment);
+    const uint32_t needed = tt::align(RealtimeProfilerRuntimeSizes::core_l1_size, hal.get_alignment(HalMemType::L1));
     const DeviceAddr l1_bank_size = device->allocator()->get_bank_size(BufferType::L1);
-    if (l1_bank_size < core_l1_size_aligned) {
-        log_warning(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: not enough user-allocatable L1 on the "
-            "reserved profiler core ({}, {}) for the RT-profiler L1 layout "
-            "(need {} B, L1 bank size is {} B). Increase worker_l1_size by at least {} B "
-            "(or leave it at the default) to re-enable RT profiler.",
-            device_id,
+    if (l1_bank_size < needed) {
+        return refuse_loudly(fmt::format(
+            "the reserved core ({}, {}) has {} B of user-allocatable L1 against the {} B the profiler's L1 layout "
+            "needs. Raise worker_l1_size by at least {} B, or leave it at the default, to re-enable the profiler.",
             core.x,
             core.y,
-            core_l1_size_aligned,
             l1_bank_size,
-            core_l1_size_aligned - l1_bank_size);
-        return {};
+            needed,
+            needed - l1_bank_size));
     }
 
     return core;
@@ -424,68 +386,42 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
-std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
-    DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
-    dev_state.next_probe_due_at = now + RealtimeProfilerClockSync::sync_interval();
-    const auto before = dev_state.clock_sync->cost().busy;
-    dev_state.clock_sync->resync();
-    return dev_state.clock_sync->cost().busy - before;
-}
-
 // Reports what the clock sync costs the receiver thread. `busy` is time inside resync(), which is time this thread was
 // not draining, so the fraction is the share of the drain loop the sync path takes -- the number to watch when changing
 // probe cadence or count.
 void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_point now) {
+    RealtimeProfilerClockSync::Cost total;
+    for (const auto& dev_state : devices_) {
+        total += dev_state.clock_sync->cost();
+    }
+    // The counters run from process start, so the first call only records where the window begins.
     if (last_sync_cost_report_ == std::chrono::steady_clock::time_point{}) {
         last_sync_cost_report_ = now;
-        for (const auto& dev_state : devices_) {
-            const auto cost = dev_state.clock_sync->cost();
-            sync_cost_at_last_report_.resyncs += cost.resyncs;
-            sync_cost_at_last_report_.clock_reads += cost.clock_reads;
-            sync_cost_at_last_report_.busy += cost.busy;
-        }
+        sync_cost_at_last_report_ = total;
         return;
     }
     if (now - last_sync_cost_report_ < kSyncCostReportInterval) {
         return;
     }
-
-    RealtimeProfilerClockSync::Cost total;
-    for (const auto& dev_state : devices_) {
-        const auto cost = dev_state.clock_sync->cost();
-        total.resyncs += cost.resyncs;
-        total.clock_reads += cost.clock_reads;
-        total.busy += cost.busy;
-        total.chords_placed += cost.chords_placed;
-        total.chords_with_bow_evidence += cost.chords_with_bow_evidence;
-    }
-    const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
-    const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
-    const auto busy = total.busy - sync_cost_at_last_report_.busy;
-    const uint64_t chords = total.chords_placed - sync_cost_at_last_report_.chords_placed;
-    const uint64_t with_evidence = total.chords_with_bow_evidence - sync_cost_at_last_report_.chords_with_bow_evidence;
     const auto window = now - last_sync_cost_report_;
+    const RealtimeProfilerClockSync::Cost cost = total.since(sync_cost_at_last_report_);
     sync_cost_at_last_report_ = total;
     last_sync_cost_report_ = now;
-    if (resyncs == 0) {
+    if (cost.resyncs == 0) {
         return;
     }
 
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread; {} chords placed, {:.1f}% with a third probe to "
-        "read "
-        "the clock's departure from",
+        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
-        resyncs,
-        reads,
-        static_cast<double>(reads) / static_cast<double>(resyncs),
-        std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
-        100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count(),
-        chords,
-        chords == 0 ? 0.0 : 100.0 * static_cast<double>(with_evidence) / static_cast<double>(chords));
+        cost.resyncs,
+        cost.clock_reads,
+        static_cast<double>(cost.clock_reads) / static_cast<double>(cost.resyncs),
+        std::chrono::duration<double, std::micro>{cost.busy}.count() / static_cast<double>(cost.resyncs),
+        100.0 * std::chrono::duration<double>{cost.busy}.count() / std::chrono::duration<double>{window}.count());
 }
 
 uint32_t RealtimeProfilerReceiver::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
@@ -510,15 +446,13 @@ bool RealtimeProfilerReceiver::publish_pages(
     std::chrono::steady_clock::time_point now,
     std::span<const uint32_t> pages,
     std::vector<ProgramRealtimeRecord>& batch) {
+    TTZoneScopedDN(RT_PROFILER, "PublishBatch");
     const size_t num_pages = pages.size() / RealtimeProfilerRuntimeSizes::page_words;
     constexpr uint32_t kEndWord = sizeof(::realtime_profiler_timestamp_t) / sizeof(uint32_t);
     const DataCollector* const data_collector = data_collector_;
     uint64_t rejected = 0;
     batch.clear();
 
-    // Records arrive in timestamp order, so one mapping covers a contiguous run of them and is only re-resolved when
-    // the next record passes its far anchor.
-    std::optional<RealtimeProfilerClockSync::ChordMapping> chord;
     for (size_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = pages.data() + page * RealtimeProfilerRuntimeSizes::page_words;
         const uint64_t start_timestamp = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
@@ -527,22 +461,19 @@ bool RealtimeProfilerReceiver::publish_pages(
             ++rejected;
             continue;
         }
-        if (!chord.has_value() || start_timestamp > chord->close_ticks) {
-            chord = dev_state.clock_sync->place(start_timestamp);
-            // Only with no probe retained at all, so there is no host time to map onto and no later pass that would
-            // help.
-            if (!chord.has_value()) {
-                ++rejected;
-                continue;
-            }
+        // Only fails when both timestamps predate every retained probe, which a real record cannot; see map_record.
+        const auto mapping = dev_state.clock_sync->map_record(start_timestamp, end_timestamp);
+        if (!mapping.has_value()) {
+            ++rejected;
+            continue;
         }
         batch.push_back(ProgramRealtimeRecord{
             .runtime_id = rp[2],
             .chip_id = dev_state.chip_id,
             .start_timestamp = start_timestamp,
             .end_timestamp = end_timestamp,
-            .frequency = chord->frequency,
-            .clock_sync = RealtimeProfilerClockSync::place_on_chord(*chord, start_timestamp),
+            .frequency = mapping->frequency,
+            .clock_sync = mapping->clock_sync,
             .kernel_sources = data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])),
         });
     }
@@ -553,9 +484,8 @@ bool RealtimeProfilerReceiver::publish_pages(
             last_malformed_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] Device {} dropped {} record(s) that could not be mapped -- an end timestamp "
-            "preceding "
-            "its start, or no retained clock probe at all; these were not delivered to consumers ({} in total)",
+            "[Real-time profiler] Device {} dropped {} corrupt record(s) -- an end timestamp preceding its start, or "
+            "timestamps predating every retained clock probe; these were not delivered to consumers ({} in total)",
             dev_state.chip_id,
             rejected,
             num_malformed_records_.load(std::memory_order_relaxed));
@@ -588,7 +518,11 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
-    warm_up_device_clocks();
+    // Serial: a warm-up is a few probes milliseconds apart, so a whole mesh costs milliseconds. It replaced a
+    // half-second per-device fit, which is what the concurrency here existed for.
+    for (DeviceState& dev_state : devices_) {
+        dev_state.clock_sync->warm_up();
+    }
     // Resized before being cleared, not just reserved: the pages have to be touched here, because a first-touch fault
     // on the drain thread waits on mmap_lock the same way an allocation does.
     publish_batch_.resize(kMaxSocketPagesPerRead);
@@ -666,7 +600,6 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
         DeviceState dev_state;
         dev_state.device = device;
         dev_state.chip_id = device_id;
-        dev_state.mesh_coord = coord;
         dev_state.realtime_profiler_core = realtime_profiler_core;
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
@@ -755,33 +688,24 @@ std::vector<RealtimeProfilerReceiver::DeviceState> RealtimeProfilerReceiver::ini
     return devices;
 }
 
-// Serial: a warm-up is four probes over kRateBaseline, so a whole mesh costs milliseconds. It replaced a half-second
-// per-device fit, which is what the concurrency here existed for.
-void RealtimeProfilerReceiver::warm_up_device_clocks() {
-    for (DeviceState& dev_state : devices_) {
-        // A device that throws is skipped rather than taking the others with it; its mapping keeps the commanded AICLK.
-        try {
-            dev_state.clock_sync->warm_up();
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} clock warm-up failed, continuing on the commanded AICLK: {}",
-                dev_state.chip_id,
-                e.what());
-        }
+// Three high-water marks over the same samples, because each has one reader on its own cadence and each clears what
+// it reads: all-time for "did this ever back up", one for the Tracy plot's 50ms samples, one for whatever periodic
+// report is watching. Sharing an accumulator between two of them made a reader's number mean the other's window.
+void RealtimeProfilerReceiver::note_fifo_depth(uint32_t available) {
+    // Single writer, so a load-then-store is a max.
+    if (available > peak_fifo_pages_.load(std::memory_order_relaxed)) {
+        peak_fifo_pages_.store(available, std::memory_order_relaxed);
     }
+    if (available > peak_fifo_pages_since_report_.load(std::memory_order_relaxed)) {
+        peak_fifo_pages_since_report_.store(available, std::memory_order_relaxed);
+    }
+    fifo_pages_window_max_ = std::max(fifo_pages_window_max_, available);
 }
 
 RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pages(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
-    uint32_t available = dev_state.socket->pages_available();
-    if (available > peak_fifo_pages_.load(std::memory_order_relaxed)) {
-        peak_fifo_pages_.store(available, std::memory_order_relaxed);
-    }
-    fifo_pages_window_max_ = std::max(fifo_pages_window_max_, available);
-    if (available > peak_fifo_pages_since_report_.load(std::memory_order_relaxed)) {
-        peak_fifo_pages_since_report_.store(available, std::memory_order_relaxed);
-    }
+    const uint32_t available = dev_state.socket->pages_available();
+    note_fifo_depth(available);
     if (available >= RealtimeProfilerRuntimeSizes::fifo_pages && !dev_state.fifo_reached_capacity) {
         dev_state.fifo_reached_capacity = true;
         log_warning(
@@ -794,13 +718,21 @@ RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pag
         return {};
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    dev_state.socket->read(page_buf.data(), num_pages_to_read);
+    {
+        TTZoneScopedDN(RT_PROFILER, "SocketRead");
+        TTZoneValueD(RT_PROFILER, num_pages_to_read);
+        dev_state.socket->read(page_buf.data(), num_pages_to_read);
+    }
 
     // The probe goes here, after the read and before anything is placed: every record this read returned was pushed to
     // the FIFO before the read, so it completed before the read, so this probe is past all of them, and the previous
     // one is before them. That is a bracketing pair for the whole batch obtained without waiting for anything, which is
     // the reason this path has no staging buffer, no publication gate and no deadline in it.
-    pass_sync_busy_ += probe_device(dev_state, now);
+    {
+        TTZoneScopedDN(RT_PROFILER, "ProbeAfterRead");
+        TTZoneValueD(RT_PROFILER, dev_state.chip_id);
+        pass_sync_busy_ += dev_state.clock_sync->resync();
+    }
 
     const bool published = publish_pages(
         dev_state,
@@ -820,19 +752,18 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
     auto last_pass = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
-        // The clock reads are the pass's only blocking call, so reporting what they took is what separates a stall this
-        // thread inflicted on itself from one imposed on it.
+        // Reporting what the clock reads took separates a stall spent blocked on PCIe from one spent anywhere else in
+        // the pass. It does not attribute the remainder, and the remainder is where the surprises have been.
         if (const auto gap = now - last_pass; gap >= kDrainGapReportThreshold) {
             TT_LOG_WARNING_THROTTLED(
                 last_drain_gap_warn_,
                 now,
                 kWarnInterval,
                 "[Real-time profiler] Receiver drain stalled {} us between passes, {} us of it inside clock reads; "
-                "FIFO "
-                "high-water since the last report is {} of {} pages",
+                "the FIFO has peaked at {} of {} pages this run",
                 std::chrono::duration_cast<std::chrono::microseconds>(gap).count(),
                 std::chrono::duration_cast<std::chrono::microseconds>(pass_sync_busy_).count(),
-                fifo_pages_window_max_,
+                peak_fifo_pages_.load(std::memory_order_relaxed),
                 RealtimeProfilerRuntimeSizes::fifo_pages);
         }
         last_pass = now;
@@ -844,7 +775,7 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
                 RT_PROFILER,
                 "RT profiler D2H FIFO high-water mark (pages)",
                 static_cast<int64_t>(fifo_pages_window_max_));
-            fifo_pages_window_max_ = 0;
+            fifo_pages_window_max_ = 0;  // cleared by its only reader, the plot above
             std::chrono::nanoseconds worst_sync_error{};
             for (const auto& dev_state : devices_) {
                 worst_sync_error = std::max(worst_sync_error, dev_state.clock_sync->last_published_sync_error());
@@ -883,8 +814,10 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
                 // Only re-read the clock after a drain that actually moved pages: an idle pass is too fast for the
                 // re-read to be worth its cost.
                 now = std::chrono::steady_clock::now();
-            } else if (now >= dev_state.next_probe_due_at) {
-                pass_sync_busy_ += probe_device(dev_state, now);
+            } else if (dev_state.clock_sync->due_for_probe(now)) {
+                TTZoneScopedDN(RT_PROFILER, "ProbeFloor");
+                TTZoneValueD(RT_PROFILER, dev_state.chip_id);
+                pass_sync_busy_ += dev_state.clock_sync->resync();
             }
         } catch (const std::exception& e) {
             log_warning(

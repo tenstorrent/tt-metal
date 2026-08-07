@@ -197,7 +197,7 @@ void py_device_module_types(nb::module_& m_device) {
         .def_prop_ro(
             "duration_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) { return record.duration().count(); },
-            "Program execution duration, in ns. Assumes the device clock frequency is stable")
+            "Program execution duration, in ns")
         .def_prop_ro(
             "host_start_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {

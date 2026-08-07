@@ -24,7 +24,136 @@ namespace tt::tt_metal {
 
 class IDevice;
 
-// Reads the profiler core's cycle counter and keeps the probes a record needs to be interpolated between. Nothing
+// Maps device tick timestamps onto host time by interpolating between retained clock probes. Pure arithmetic over
+// what it is fed: probes come from whoever reads the device clock -- RealtimeProfilerClockSync in production, tests
+// directly -- and nothing here touches a device.
+//
+// Single-threaded: retain() and map_record() belong to the thread draining the device.
+class RealtimeProfilerClockMapping {
+public:
+    // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
+    // them via their secant, whatever the clock did in between.
+    struct Anchor {
+        std::chrono::steady_clock::time_point host;
+        uint64_t ticks = 0;
+        std::chrono::nanoseconds bracket{};
+    };
+
+    // What one record publishes with, covering both of its timestamps.
+    //
+    // One timestamp is anchored exactly where its bracketing probes place it; the other is derived through the
+    // published rate. sync_error covers both: the anchoring reads' brackets, the measured departure of the clock from
+    // their secant, and the derived timestamp's exposure -- its distance from the anchor times the disagreement
+    // between the published rate and the pair's own. What it cannot cover is a rate step inside the bracketing pair
+    // that no probe has resolved yet; the didt suite bounds what that costs in practice.
+    struct RecordMapping {
+        experimental::ProgramRealtimeClockSync clock_sync;
+        double frequency = 0.0;
+    };
+
+    // How wide a window the published rate is measured across. Wide is what keeps the rate quiet -- a chord's own
+    // slope is uncertain by (both brackets)/span, thousands of ppm at chord width, and every duration a consumer
+    // computes divides by the published rate -- while wider still would smooth over the ~5200ppm AICLK steps the rate
+    // has to keep tracking.
+    static constexpr auto kRateBaseline = std::chrono::milliseconds(4);
+
+    // Overwrites the oldest probe when full. The pair around an undecoded record's end can never be overwritten: the
+    // receiver probes once per drained batch, and on the idle floor only when nothing is in flight, so a record sees
+    // a few dozen probes at most between ending and being decoded (asserted against the FIFO geometry in the
+    // receiver). Only a record's start can predate the ring -- a program that ran longer than the ring spans -- and
+    // that start is derived from the record's end instead of a pair of its own.
+    static constexpr size_t kProbeHistoryCapacity = 4096;
+
+    // Retains `probe`. One that does not advance both clocks past the newest retained probe is dropped -- a real
+    // counter and steady_clock cannot produce one -- so the ring is strictly monotone in host and ticks and no reader
+    // below has to check a pair's orientation.
+    void retain(const Anchor& probe);
+
+    // What to publish a record with. Nullopt only when no retained probe precedes either timestamp, which after
+    // warm-up cannot happen to a real record; the caller treats it as corruption and rejects the page.
+    //
+    // Records arrive in tick order, so the probe pair one is placed between also covers the next several; that pair
+    // is held here and refreshed when a record's start passes it.
+    [[nodiscard]] std::optional<RecordMapping> map_record(uint64_t start_ticks, uint64_t end_ticks);
+
+    // sync_error of the last record mapped, which is the bound currently standing for this device.
+    [[nodiscard]] std::chrono::nanoseconds last_sync_error() const { return last_sync_error_; }
+
+private:
+    // The probe pair around a run of records, resolved once and reused until a record's start passes `close_ticks`.
+    // The slope is inverted here because the alternative is a division per record on the drain thread.
+    struct Chord {
+        std::chrono::nanoseconds sync_error{};
+        // Measured across kRateBaseline where the history allows, this pair's own slope until then.
+        double frequency = 0.0;
+        uint64_t open_ticks = 0;
+        double open_host_ns = 0.0;
+        double inv_chord_rate = 0.0;
+        uint64_t close_ticks = 0;
+    };
+
+    // The tightest pair of retained probes around `ticks`, as a chord. Nullopt only when the ring holds nothing
+    // before `ticks`. Total otherwise, so a caller that has just probed always gets an answer and nothing is held
+    // back for a later pass -- a refusal here once stalled a device's whole data path, being re-asked about the same
+    // record with inputs that never changed.
+    [[nodiscard]] std::optional<Chord> chord_around(uint64_t ticks) const;
+
+    [[nodiscard]] static double host_ns_on(const Chord& chord, uint64_t ticks) {
+        return chord.open_host_ns +
+               (static_cast<double>(ticks) - static_cast<double>(chord.open_ticks)) * chord.inv_chord_rate;
+    }
+
+    // The mapping that restates one timestamp's placement in terms of `frequency`, so that timestamp lands exactly
+    // where it was placed whatever rate is published with it.
+    [[nodiscard]] static RecordMapping anchored(
+        double frequency, uint64_t anchor_ticks, double anchor_host_ns, std::chrono::nanoseconds error);
+
+    // What a timestamp `dur_ticks` away from the anchor is charged for riding the published rate: its distance times
+    // the disagreement between that rate and the pair's own.
+    [[nodiscard]] static std::chrono::nanoseconds rate_exposure(const Chord& chord, uint64_t dur_ticks);
+
+    // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
+    // it inherits how well those points are placed. A clock that moved within the interval adds to this; see
+    // measured_bow.
+    [[nodiscard]] static std::chrono::nanoseconds interpolation_error(const Anchor& open, const Anchor& close) {
+        return std::max(open.bracket, close.bracket) / 2;
+    }
+
+    // How far `interior` lies off the chord through `open` and `close`, less its own read noise. A probe inside a
+    // chord was not fitted to it, so this is the clock's departure at that point -- measured, where the alternative is
+    // to infer it from how much two chords' slopes differ and hope the difference was the clock rather than the reads.
+    [[nodiscard]] static std::chrono::nanoseconds departure_from_chord(
+        const Anchor& open, const Anchor& close, const Anchor& interior);
+
+    // What the retained probes say the clock did between `close_index - 1` and `close_index` that the line through
+    // them does not capture. Zero when there is no third probe to read it from, which is the absence of evidence
+    // rather than a claim of linearity.
+    [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t close_index) const;
+
+    // The rate across the retained probe history, or nullopt while it is too narrow to beat a single chord.
+    [[nodiscard]] std::optional<double> baseline_rate() const;
+
+    // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
+    // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record
+    // is what turns a backlog into a stall.
+    [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
+
+    [[nodiscard]] uint64_t oldest_probe() const {
+        return probes_end_ > kProbeHistoryCapacity ? probes_end_ - kProbeHistoryCapacity : 0;
+    }
+    [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
+
+    // Overwrites its oldest entry when full, so nothing has to be retired. Not a deque: a deque puts a block
+    // malloc/free on the drain thread every few probes, and glibc hands large blocks back with munmap, which takes
+    // mmap_lock for write and stalls every other thread in the process.
+    std::array<Anchor, kProbeHistoryCapacity> probe_history_{};
+    uint64_t probes_end_ = 0;
+
+    std::optional<Chord> chord_;
+    std::chrono::nanoseconds last_sync_error_{};
+};
+
+// Reads the profiler core's cycle counter and feeds the probes into the RealtimeProfilerClockMapping it owns. Nothing
 // runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
 // push loop.
 //
@@ -32,50 +161,42 @@ class IDevice;
 // shared and none of it needs a publication protocol.
 class RealtimeProfilerClockSync {
 public:
-    // A floor on how often each device's clock is read, under the probe every read already takes. This one number is
-    // the sync: a record is placed on the two probes either side of it, so probe spacing is the width of that pair, and
-    // a rate step inside it misplaces the record by step * width / 4. Measured under didt, where records are sparse
-    // enough that this floor is what sets the spacing, the departure ran 11us at p90 and 30us at p99 at a 5ms floor
-    // against 486ns and 570ns at this one.
-    //
-    // It cannot replace the per-read probe. Reads outrun it under load -- ~110us against 500us -- so every batch would
-    // be read before the next probe arrived, every record would sit past the newest probe, and every one would be
-    // extrapolated rather than interpolated, with nothing after it to measure whether the clock had stepped.
-    //
-    // AICLK only moves when the ARC firmware's DVFS loop runs, which is a 1ms timer (dvfs.c:DVFSChange in
-    // tt-zephyr-platforms), so a chord spanning far below that resolves a clock that provably cannot have changed
-    // within it -- measured on Blackhole under didt, p90 sync error is flat at 385-390ns from 100us all the way out to
-    // 500us and only breaks upward at the tick. 500us is where both parts sit comfortably: it is Wormhole that pins it,
-    // failing the 15us p99 limit at 1ms (17.6us) where Blackhole is still at 1.8us. Overridable via
+    using Anchor = RealtimeProfilerClockMapping::Anchor;
+    using RecordMapping = RealtimeProfilerClockMapping::RecordMapping;
+
+    // Floor on how often each device's clock is read, under the probe every non-empty read already takes. Probe
+    // spacing is the width of the pair a record is placed between, and a rate step inside that pair misplaces it by
+    // step * width / 4. AICLK only moves on the ARC firmware's 1ms DVFS timer (dvfs.c:DVFSChange in
+    // tt-zephyr-platforms), so anything well under a millisecond resolves a clock that cannot have changed within it:
+    // p90 sync error is flat from 100us out to 500us and only breaks upward at the tick. Wormhole pins the upper end,
+    // failing the didt p99 limit at 1ms where Blackhole is still at 1.8us. Overridable via
     // TT_RT_PROFILER_SYNC_INTERVAL_US.
     static std::chrono::nanoseconds sync_interval();
 
-    // Ranking a few reads and keeping the tightest holds the anchor's settling error near the read floor rather than
-    // wherever the link happened to be. It fires rarely -- reads per resync reads 1.00 to two decimals -- but the reads
-    // it does take are the wide ones, and they are what the error bound is made of: removing this moved stress sync
-    // error p99 from 0.63us to 5.05us, max from 1.28us to 25.06us, and the fitted frequency from 0.25ppm to 3.5ppm.
+    // Extra reads taken only while the bracket is still wider than reads have recently been coming back at. Fires
+    // rarely -- reads per resync reads 1.00 to two decimals -- but the ones it does take are the wide reads, and the
+    // widest bracket is what the error bound is made of: removing it moved stress sync error p99 from 0.63us to
+    // 5.05us and max from 1.28us to 25.06us.
     static constexpr int kResyncProbes = 4;
-
-    // How wide a baseline the rate a record is published with is measured across. A chord's slope is uncertain by
-    // (both brackets)/span, so the ~100us chord a record sits in carries a few thousand ppm -- measured 600ppm rms and
-    // 3800ppm p1-p99 on an 8-chip mesh -- and that lands on every duration a consumer divides out. The same probes
-    // spanning 4ms give ~500ppm, which is still an order of magnitude tighter than the ~5200ppm AICLK steps the rate
-    // has to keep tracking, so widening it further would start smoothing over real DVFS instead of noise.
-    static constexpr auto kRateBaseline = std::chrono::milliseconds(4);
 
     // What the sync path costs its caller. `busy` is wall time inside resync(), which is dominated by the blocking
     // clock read, so on the receiver thread it is time not spent draining.
     struct Cost {
         uint64_t resyncs = 0;
-        // Reads taken to satisfy those resyncs. Reported to enough precision to see the rare second read, since that is
-        // what kResyncProbes exists for.
+        // Reads taken to satisfy those resyncs. Reported to enough precision to see the rare second read, since that
+        // is what kResyncProbes exists for.
         uint64_t clock_reads = 0;
         std::chrono::nanoseconds busy{};
-        // Chords resolved, and how many had a third probe available to read the clock's departure from. The departure
-        // is silent on a settled clock, which is correct and indistinguishable from a term that never had any evidence
-        // at all -- the failure the inferred curvature it replaced went unnoticed for. Reported so the two stay apart.
-        uint64_t chords_placed = 0;
-        uint64_t chords_with_bow_evidence = 0;
+
+        Cost& operator+=(const Cost& o) {
+            resyncs += o.resyncs;
+            clock_reads += o.clock_reads;
+            busy += o.busy;
+            return *this;
+        }
+        [[nodiscard]] Cost since(const Cost& earlier) const {
+            return Cost{resyncs - earlier.resyncs, clock_reads - earlier.clock_reads, busy - earlier.busy};
+        }
     };
 
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
@@ -87,134 +208,31 @@ public:
     // which lands inside the bracket that is the whole error bound, so a device without a window is not profiled.
     [[nodiscard]] bool has_direct_clock_read() const { return mapped_clock_lo_ != nullptr; }
 
-    // Takes a few spaced probes so that baseline_rate() is already measurable when the first record arrives. Runs
-    // before the receiver thread starts; a device that cannot be probed keeps the commanded AICLK, which is what the
-    // fallback in place() is for.
+    // Takes a few spaced probes so the first record already has a pair to be placed between, and a third to read the
+    // clock's departure from. Runs before the receiver thread starts.
     void warm_up();
 
-    // Takes one probe and retains it. Cannot fail: the read is a load through an already-mapped window, and a device
-    // without one is refused at construction. So probes_end_ is kWarmUpProbes after warm_up() and only grows, which is
-    // what lets place() take a usable pair for granted.
-    void resync();
+    // Takes one probe and retains it, returning what the clock read blocked the calling thread for -- on the receiver
+    // thread that is time not spent draining. Cannot fail: the read is a load through an already-mapped window, and a
+    // device without one is refused at construction, so the probe history only grows and a caller that has just
+    // resynced can take a usable pair for granted.
+    std::chrono::nanoseconds resync();
 
-    // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
-    // them via their secant, whatever the clock did in between.
-    struct Anchor {
-        std::chrono::steady_clock::time_point host;
-        uint64_t ticks = 0;
-        std::chrono::nanoseconds bracket{};
-    };
-
-    // A rate measured across the whole retained history rather than across one chord. Its uncertainty is not carried:
-    // sync_error describes where a record starts, and placement rides the chord's slope, not this one. What this rate's
-    // uncertainty would bound is duration(), which no field reports.
-    struct BaselineRate {
-        double rate = 0.0;
-    };
-
-    // The rate across the retained probe history, or nullopt while it is too narrow to beat a single chord. Receiver
-    // thread, like the rest of the probe history.
-    [[nodiscard]] std::optional<BaselineRate> baseline_rate() const;
-
-    // What a closed interval publishes its records with. `mapping` is per record, so it is left for place_on_chord;
-    // everything else is shared by every record the chord covers.
-    struct ChordMapping {
-        experimental::ProgramRealtimeClockSync mapping;
-        // Measured across kRateBaseline, not across this chord.
-        double frequency = 0.0;
-        // Uncertainty in this chord's own slope, as a fraction: the two brackets over the span they were measured
-        // across. What a timestamp past either anchor is charged for, since only there does the slope carry.
-        double chord_rate_noise = 0.0;
-        // Enough to place a timestamp on the chord: its near anchor, and the reciprocal slope, inverted once here
-        // because the alternative is a division per record on the drain thread.
-        uint64_t open_ticks = 0;
-        double open_host_ns = 0.0;
-        double inv_chord_rate = 0.0;
-        // Not needed to place anything. It says whether a timestamp is interpolated between the two measured points or
-        // extrapolated past them, which place_on_chord charges differently, and it is where a batch stops reusing this
-        // mapping: past it a tighter pair exists, so the next record resolves its own.
-        uint64_t close_ticks = 0;
-    };
-
-    // The offset that restates a record's own interpolated placement in terms of the published `frequency`. Anchoring
-    // per record rather than once per chord is what keeps a baseline-wide rate from costing anything: the record's
-    // start lands exactly where the chord puts it, and only its duration -- microseconds, not the chord's span -- is
-    // carried at a rate that may differ from the local one.
-    [[nodiscard]] static int64_t device_cycle_offset_for(const ChordMapping& chord, uint64_t start_ticks) {
-        const double host_ns =
-            chord.open_host_ns +
-            (static_cast<double>(start_ticks) - static_cast<double>(chord.open_ticks)) * chord.inv_chord_rate;
-        return std::llround(static_cast<double>(start_ticks) - chord.frequency * host_ns);
+    // Whether this device is due a probe on the interval floor, having drained nothing to trigger one.
+    [[nodiscard]] bool due_for_probe(std::chrono::steady_clock::time_point now) const {
+        return now - last_probe_at_ >= sync_interval();
     }
 
-    // Where `start_ticks` lands on `chord`, and what that placement is worth. Between the two anchors the secant cannot
-    // be further out than the worse of them whatever its slope, so the chord's own bound stands unchanged. Past them
-    // the slope is extrapolated and its uncertainty becomes distance * noise, unbounded: a timestamp placed from a
-    // chord a second away is wrong by milliseconds, and the chord's bound would report sub-microsecond.
-    [[nodiscard]] static experimental::ProgramRealtimeClockSync place_on_chord(
-        const ChordMapping& chord, uint64_t start_ticks) {
-        uint64_t outside = 0;
-        if (start_ticks < chord.open_ticks) {
-            outside = chord.open_ticks - start_ticks;
-        } else if (start_ticks > chord.close_ticks) {
-            outside = start_ticks - chord.close_ticks;
-        }
-        const auto extrapolation = std::chrono::nanoseconds(
-            static_cast<int64_t>(static_cast<double>(outside) * chord.inv_chord_rate * chord.chord_rate_noise));
-        return experimental::ProgramRealtimeClockSync{
-            .device_cycle_offset = device_cycle_offset_for(chord, start_ticks),
-            .sync_error = chord.mapping.sync_error + extrapolation,
-        };
+    [[nodiscard]] std::optional<RecordMapping> map_record(uint64_t start_ticks, uint64_t end_ticks) {
+        return mapping_.map_record(start_ticks, end_ticks);
     }
 
-    // Chooses what a chord publishes with, or nullopt when the pair cannot be taken as a chord at all. `measured_bow`
-    // is how far the clock was seen to depart from this chord, from measured_bow(); it lands in sync_error on top of
-    // the endpoint term. Pure: no device, no clock, no state.
-    [[nodiscard]] static std::optional<ChordMapping> plan_chord_mapping(
-        const Anchor& open,
-        const Anchor& closing,
-        const std::optional<BaselineRate>& baseline,
-        std::chrono::nanoseconds measured_bow);
-
-    // What to publish `ticks` with: the tightest pair of retained probes around it, or a single anchor extrapolated
-    // from when the history does not surround it. Total except with no probe retained at all, so a caller that has just
-    // probed always gets an answer and nothing is ever held back for a later pass.
-    //
-    // Asked once per record, on the pass that read it. Never conditional on the device answering -- that is what let a
-    // refusal here stall a device's whole data path, because it was asked repeatedly about the same record with inputs
-    // that did not change between asks. Receiver thread.
-    [[nodiscard]] std::optional<ChordMapping> place(uint64_t ticks);
-
-    // sync_error of the last interval this closed, which is the bound currently standing for this device.
-    [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return last_published_sync_error_; }
-
-    // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
-    // it inherits how well those points are placed. A clock that moved within the interval adds to this; see
-    // measured_bow.
-    [[nodiscard]] static std::chrono::nanoseconds interpolation_error(const Anchor& open, const Anchor& close) {
-        return std::max(open.bracket, close.bracket) / 2;
-    }
-
-    // How far `interior` lies off the chord through `open` and `close`, less its own read noise. A probe inside a chord
-    // was not fitted to it, so this is the clock's departure at that point -- measured, where the alternative is to
-    // infer it from how much two chords' slopes differ and hope the difference was the clock rather than the reads.
-    // Pure.
-    [[nodiscard]] static std::chrono::nanoseconds departure_from_chord(
-        const Anchor& open, const Anchor& close, const Anchor& interior);
+    // sync_error of the last record mapped, which is the bound currently standing for this device.
+    [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return mapping_.last_sync_error(); }
 
     [[nodiscard]] Cost cost() const { return cost_; }
 
 private:
-    // What the retained probes say the clock did between `close_index - 1` and `close_index` that the line through them
-    // does not capture. Zero when there is no third probe to read it from, which is the absence of evidence rather than
-    // a claim of linearity.
-    [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t close_index) const;
-
-    // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
-    // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record is
-    // what turns a backlog into a stall.
-    [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
-
     void configure_clock_read_path();
     // Placed at the midpoint of its read's bracket, which is where the counter could have been read.
     Anchor probe();
@@ -242,25 +260,7 @@ private:
     std::chrono::steady_clock::time_point last_probe_at_;
     Cost cost_;
 
-    // Preallocated, and overwrites its oldest entry when full, so nothing has to be retired: the live range is always
-    // the newest kProbeHistoryCapacity probes and its start is derived. Not a deque, because a deque puts a block
-    // malloc/free on the drain thread every few probes and this thread must never touch the allocator -- glibc hands
-    // large blocks back with munmap, which takes mmap_lock for write and stalls every other thread in the process, so
-    // an allocation here couples the drain loop to whatever every consumer thread is doing.
-    //
-    // Sized far past what is needed: a probe within one interval closes a record, and the published rate spans
-    // kRateBaseline, so at any interval this is configurable to the entries either could still want are present many
-    // times over.
-    static constexpr size_t kProbeHistoryCapacity = 4096;
-    std::array<Anchor, kProbeHistoryCapacity> probe_history_{};
-    uint64_t probes_end_ = 0;
-
-    [[nodiscard]] uint64_t oldest_probe() const {
-        return probes_end_ > kProbeHistoryCapacity ? probes_end_ - kProbeHistoryCapacity : 0;
-    }
-    [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
-
-    std::chrono::nanoseconds last_published_sync_error_{};
+    RealtimeProfilerClockMapping mapping_;
 };
 
 }  // namespace tt::tt_metal

@@ -417,12 +417,13 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
             const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
-                "[RT profiler stress] t={}s replays={} published={} peak_fifo={}/{} pages mean_batch={:.1f} | "
-                "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
+                "[RT profiler stress] t={}s replays={} published={} peak_fifo={} this window, {} all-time of {} pages "
+                "mean_batch={:.1f} | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - replay_start).count(),
                 num_replays,
                 rt->num_published_records(),
                 rt->take_peak_fifo_pages(),
+                rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
                 mean_batch,
                 sync_us.p50,
@@ -755,8 +756,8 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s keeps_up: recv={} drop={} | borderline: recv={} drop={} | slow: recv={} "
-                "drop={} | peak_fifo={}/{} pages mean_batch={:.1f} | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} "
-                "max={:.2f}",
+                "drop={} | peak_fifo={} this window, {} all-time of {} pages | mean_batch={:.1f} | sync error us: "
+                "p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
                 keeps_up.received.load(),
                 keeps_up.dropped.load(),
@@ -765,6 +766,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 slow.received.load(),
                 slow.dropped.load(),
                 rt->take_peak_fifo_pages(),
+                rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
                 mean_batch,
                 sync_us.p50,
