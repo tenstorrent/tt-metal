@@ -186,8 +186,7 @@ class LTXDistilledPipeline(LTXPipeline):
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
 
-            # Programs are now compiled; let the first real decode capture a ttnn trace of
-            # decode_device and later decodes replay it (removes host-dispatch overhead).
+            # Programs are now compiled
             if self._traced and self.vae_decoder is not None:
                 self.vae_decoder._vae_traced = True
 
@@ -702,8 +701,6 @@ class LTXDistilledPipeline(LTXPipeline):
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        # (the mp4 is yuv420p either way — this only moves the color conversion onto the device
-        # and shrinks the d2h ~8x). Off → the float RGB gather feeding host-side conversion.
         yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type

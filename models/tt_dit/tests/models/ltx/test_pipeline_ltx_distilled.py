@@ -57,8 +57,9 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
         except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
             return False
     return False
-from models.tt_dit.utils.vbench import assert_vbench_quality
 
+
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.

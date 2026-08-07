@@ -118,9 +118,7 @@ LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
 _line_l1small = {**_line, "l1_small_size": 32768}
 _ring_worker_l1 = {"worker_l1_size": 1344544, **_ring}
 _line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-#   fabric_router_config (8 KB payload): the strided all-gather packs up to 4 bf16 tiles per
-#     fabric packet (scatter-write, 4 distinct dest NoC addresses). That cap degrades to
-#     whatever the payload holds, so a smaller packet silently halves it to 2 tiles.
+# fabric_router_config (8 KB payload): the strided all-gather packs up to 4 bf16 tiles per fabric packet
 _ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 LTX_DISTILLED_MESH_PARAMS_DL = [
