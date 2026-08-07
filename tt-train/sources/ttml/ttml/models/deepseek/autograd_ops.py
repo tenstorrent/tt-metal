@@ -288,6 +288,23 @@ class MoERoutingNormalize(ttml.autograd.Function):
         return grad_scores
 
 
+class ToLayout(ttml.autograd.Function):
+    """ttnn.to_layout with the inverse layout-convert as backward.
+
+    ttnn.to_layout has no autograd backward; wrap it so the gradient is
+    converted back to the input's original layout.
+    """
+
+    @staticmethod
+    def forward(ctx, input, target_layout):
+        ctx.source_layout = input.get_value().layout
+        return ttnn.to_layout(input.get_value(), target_layout)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return ttnn.to_layout(grad_output, ctx.source_layout)
+
+
 def autograd_slice(tensor, start, end):
     """Slice with autograd backward."""
     return Slice.apply(tensor, start, end)
@@ -327,3 +344,8 @@ def moe_routing_normalize(scores, mask, route_scale, eps=1e-20):
     See :class:`MoERoutingNormalize` for math and motivation.
     """
     return MoERoutingNormalize.apply(scores, mask, route_scale, eps)
+
+
+def to_layout(tensor, target_layout):
+    """ttnn.to_layout with autograd backward (see :class:`ToLayout`)."""
+    return ToLayout.apply(tensor, target_layout)

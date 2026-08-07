@@ -155,8 +155,8 @@ struct KernelSpec {
 
     // Scratchpad bindings
     // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
-    // The kernel constructs a Scratchpad from the binding token:
-    //   Scratchpad(scratch::<accessor_name>)
+    // The kernel constructs a Scratchpad from the binding token, naming the element type:
+    //   Scratchpad<uint32_t>(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
         std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
