@@ -15,6 +15,9 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).parent / "run_json_writer.py"
+STATE = Path(__file__).parent / "state.py"
+SETUP_WORKTREE = Path(__file__).parent / "setup_worktree.sh"
+ORCHESTRATOR_STEPS = Path(__file__).parent / "issue_solver" / "orchestrator_steps.sh"
 RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
 LLK_CONFTEST = Path(__file__).parents[2] / "tests" / "python_tests" / "conftest.py"
 
@@ -1572,6 +1575,155 @@ def test_init_records_audit_lane_provenance(tmp_path, monkeypatch):
     assert doc["base_commit"] == "a" * 40
     assert doc["campaign_id"] == "infra-audit"
     assert doc["attempt_id"] == "try-1"
+
+
+def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
+    repo = tmp_path / "repo"
+    llk_tests = repo / "tt_metal" / "tt-llk" / "tests"
+    llk_tests.mkdir(parents=True)
+    setup_env = llk_tests / "setup_testing_env.sh"
+    setup_env.write_text("#!/bin/bash\nexit 0\n")
+    setup_env.chmod(0o755)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    worktrees = tmp_path / "worktrees"
+    command = r"""
+source "$1"
+REPO_ROOT="$2"
+LLK_REL="tt_metal/tt-llk"
+CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-dir)"
+CODEGEN_SETUP_LOCK="${CODEGEN_GIT_DIR}/codegen-worktree-setup.lock"
+CODEGEN_WORKTREE_ROOT="$3"
+CODEGEN_BASE_COMMIT="$4"
+setup_worktree "issue-base-preflight"
+"""
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            base,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    worktree = worktrees / "issue-base-preflight-v1"
+    state = json.loads(
+        (worktree / "tt_metal" / "tt-llk" / ".codegen_run_state.json").read_text()
+    )
+    actual = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert state["EXPECTED_BASE_COMMIT"] == base
+    assert state["SETUP_BASE_COMMIT"] == base
+    assert state["BASE_COMMIT_WAS_PINNED"] is True
+    assert actual == base
+
+
+def test_validate_input_rejects_unset_changed_or_drifted_base(tmp_path):
+    worktree = tmp_path / "worktree"
+    llk = worktree / "tt_metal" / "tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".gitignore").write_text(".codegen_run_state.json\n")
+    (llk / "source.txt").write_text("base\n")
+    subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.name", "test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(worktree), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qm", "base"], check=True)
+    base = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    state = {
+        "RUN_MODE": "single",
+        "ISSUE_NUMBER": "5",
+        "ISSUE_TITLE": "Pinned base",
+        "WORKTREE_BRANCH": "test/base",
+        "TEST_BACKEND": "local",
+        "CREATE_LOCAL_BRANCH": "yes",
+        "CREATE_PR": "no",
+        "TARGET_ARCH": "blackhole",
+        "TARGET_ARCHES": "",
+        "EXPECTED_BASE_COMMIT": base,
+        "SETUP_BASE_COMMIT": base,
+        "BASE_COMMIT_WAS_PINNED": True,
+    }
+    (llk / ".codegen_run_state.json").write_text(json.dumps(state))
+    command = 'source "$1"; execute_step_validate_input "$2"'
+
+    accepted = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env={**os.environ, "CODEGEN_BASE_COMMIT": base},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert f"BASE={base}" in accepted.stdout
+
+    unset = {
+        key: value for key, value in os.environ.items() if key != "CODEGEN_BASE_COMMIT"
+    }
+    rejected_unset = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env=unset,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_unset.returncode == 1
+    assert "was unset after pinned worktree setup" in rejected_unset.stdout
+
+    rejected_changed = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env={**os.environ, "CODEGEN_BASE_COMMIT": "f" * 40},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_changed.returncode == 1
+    assert "changed after setup" in rejected_changed.stdout
+
+    (llk / "source.txt").write_text("drift\n")
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qam", "drift"], check=True)
+    rejected_drift = subprocess.run(
+        ["bash", "-c", command, "bash", str(ORCHESTRATOR_STEPS), str(worktree)],
+        env={**os.environ, "CODEGEN_BASE_COMMIT": base},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_drift.returncode == 1
+    assert "base drift before agent execution" in rejected_drift.stdout
 
 
 def test_issue_url_preserved(tmp_path):

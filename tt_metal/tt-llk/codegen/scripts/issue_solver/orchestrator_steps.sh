@@ -156,6 +156,7 @@ execute_step_validate_input() {
     cd "$wt/tt_metal/tt-llk" || { echo "REJECT: cannot cd into $wt/tt_metal/tt-llk"; return 1; }
 
     local S="$_ORCH_SCRIPTS" mode num title wb tb clb cpr arches arch dirty ok=1
+    local expected_base setup_base actual_base base_was_pinned env_base
     mode="$(python "$S/state.py" --worktree-dir "$wt" get RUN_MODE)"
     num="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_NUMBER)"
     title="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_TITLE)"
@@ -165,6 +166,11 @@ execute_step_validate_input() {
     cpr="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_PR)"
     arch="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     arches="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCHES)"
+    expected_base="$(python "$S/state.py" --worktree-dir "$wt" get EXPECTED_BASE_COMMIT)"
+    setup_base="$(python "$S/state.py" --worktree-dir "$wt" get SETUP_BASE_COMMIT)"
+    base_was_pinned="$(python "$S/state.py" --worktree-dir "$wt" get BASE_COMMIT_WAS_PINNED)"
+    actual_base="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
+    env_base="${CODEGEN_BASE_COMMIT:-}"
 
     { [ "$mode" = "single" ] || [ "$mode" = "multi" ]; } || { echo "REJECT: RUN_MODE must be single|multi (got '$mode')"; ok=0; }
     printf '%s' "$num" | grep -qE '^[0-9]+$' || { echo "REJECT: ISSUE_NUMBER must be numeric (got '$num')"; ok=0; }
@@ -178,6 +184,19 @@ execute_step_validate_input() {
     else
         [ -n "$arches" ] || { echo "REJECT: TARGET_ARCHES is empty (multi-arch run)"; ok=0; }
     fi
+    printf '%s' "$expected_base" | grep -qE '^[0-9a-f]{40}$' \
+        || { echo "REJECT: EXPECTED_BASE_COMMIT is missing or invalid (got '$expected_base')"; ok=0; }
+    [ "$setup_base" = "$expected_base" ] \
+        || { echo "REJECT: setup base mismatch: expected $expected_base, setup recorded ${setup_base:-missing}"; ok=0; }
+    [ "$actual_base" = "$expected_base" ] \
+        || { echo "REJECT: base drift before agent execution: expected $expected_base, worktree HEAD is ${actual_base:-unknown}"; ok=0; }
+    if [ "$base_was_pinned" = "true" ] && [ -z "$env_base" ]; then
+        echo "REJECT: CODEGEN_BASE_COMMIT was unset after pinned worktree setup"
+        ok=0
+    elif [ -n "$env_base" ] && [ "$env_base" != "$expected_base" ]; then
+        echo "REJECT: CODEGEN_BASE_COMMIT changed after setup: expected $expected_base, got $env_base"
+        ok=0
+    fi
     if ! dirty="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)"; then
         echo "REJECT: cannot inspect worktree status"
         ok=0
@@ -187,7 +206,7 @@ execute_step_validate_input() {
         ok=0
     fi
     [ "$ok" = 1 ] || return 1
-    echo "OK: RUN_MODE=$mode ISSUE=#$num arch=${arch:-$arches} TEST_BACKEND=$tb"
+    echo "OK: RUN_MODE=$mode ISSUE=#$num arch=${arch:-$arches} TEST_BACKEND=$tb BASE=$expected_base"
 }
 
 # ===========================================================================
