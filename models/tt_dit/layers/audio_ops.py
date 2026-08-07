@@ -921,20 +921,17 @@ def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> 
 
 
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Zero-pad along the T axis."""
+    """Zero-pad along the T axis.
+
+    ``ttnn.pad`` rather than a concat against zero tensors. Concat is the decode's single largest cost
+    -- 285.3 ms over 469 calls, 20.4 % of the whole stage in PROFILE_2026_08_06.txt, at ~608 us a call
+    against a ~142 us average op -- and this expresses the same thing. Measured 2.1-2.3x faster at
+    every tail-stage shape and bit-exact against both the concat it replaces and a CPU reference
+    (`tpad_bench.py`). The same substitution already paid off in `_pad_channels_to_aligned`.
+    """
     if pad_left == 0 and pad_right == 0:
         return x_BTC
-    B, T, C = x_BTC.shape
-    pieces = []
-    dtype = x_BTC.get_dtype()
-    if pad_left > 0:
-        zeros = _persistent_zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-        pieces.append(zeros)
-    pieces.append(x_BTC)
-    if pad_right > 0:
-        zeros = _persistent_zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-        pieces.append(zeros)
-    return ttnn.concat(pieces, dim=1)
+    return ttnn.pad(x_BTC, [(0, 0), (pad_left, pad_right), (0, 0)], value=0.0)
 
 
 def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, channel_align: int = 32) -> ttnn.Tensor:
