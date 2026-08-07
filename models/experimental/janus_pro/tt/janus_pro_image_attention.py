@@ -234,7 +234,11 @@ class TtJanusProImageAttention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # SDPA is the only consumer and reads all three back immediately, so a DRAM round
+            # trip buys nothing. This op is pure data movement -- the write is most of what it
+            # costs -- and an L1 write stays on the core. The mcast fan-out that makes L1 lose
+            # on a matmul in0 has no counterpart here, since nothing multicasts these.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv_fused)
 
