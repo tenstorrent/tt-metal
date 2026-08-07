@@ -2085,3 +2085,61 @@ either. Do not quote §N+16 as established until the fourth arm lands.
 shows `prev` scattered across all three arms (`prev=stock`, `prev=yield`, `prev=noprog`), which is what the
 alternating design could never produce -- under alternation the wedge always appeared to belong to whichever
 arm followed. Randomization converts that bias into noise.
+
+## §N+18 — FOUND IT: a periodic DEVICE READ prevents the endpoint wedge (bh-05, 2026-08-07)
+
+The fourth arm lands and the matrix is complete. All at delay 150, 100 runs each, randomized order:
+
+| arm | timeout | yield in CQ poll | periodic device progress read | hangs / 100 |
+|---|---|---|---|---|
+| `stock` | off | no | no | 3 |
+| `yield` | off | **yes** | no | 4 |
+| `noprog` | on | yes | **never** (interval 3.6e6 ms) | 3 |
+| `arm4` | on | yes | **default, every 100 ms** | **0** |
+
+**The active ingredient is the periodic device read, not the yield and not the timeout.** The three arms
+without it sit at 3-4%; the one with it is zero. `yield` vs `stock` isolates the yield (no effect), and
+`noprog` vs `arm4` isolates the read with everything else held identical (3 -> 0).
+
+Pooling with the earlier delay-500 blocks, which used the same default interval:
+
+| | hangs / runs | rate |
+|---|---|---|
+| periodic read present (block A @500 + arm4 @150) | **0 / 279** | 0% |
+| periodic read absent (stock+yield+noprog @150, block B @500) | **15 / 425** | 3.5% |
+
+Fisher p ~ 4e-4. At 3.5%, P(0 in 279) ~ 5e-5. This holds across two different delays.
+
+### What the read actually is
+
+`get_cq_dispatch_progress` (`command_queue_common.cpp:131`) reads L1 from the dispatcher core -- a small
+MMIO read to the device, issued every `dispatch_progress_update_ms` (default 100) while a completion wait
+is outstanding. It exists purely for timeout detection. Nothing about it was designed to touch the failure
+path.
+
+### Mechanism: unproven, but there is a strong hint
+
+A small periodic host->device READ keeping the endpoint alive points at an idle/quiescent-state problem
+rather than a traffic/pressure problem -- the opposite of every theory tried so far (egress bandwidth,
+ingest rate, NoC choice, dispatch contention, host poll pressure). Suggestive supporting detail: the hung
+runs log `Setting power state failed on device 0: Invalid argument`, and the driver logs
+`Failed to set initial power state: -22` on failed opens. A device dropping into a power state it cannot
+cleanly leave, kept out of it by periodic MMIO traffic, would fit every observation:
+- the wedge appears at run boundaries / teardown, when device traffic goes quiet (S N+16)
+- the link stays UP while the endpoint stops completing TLPs (S N+14)
+- AER is clean and the kernel logs nothing -- no error occurred, the endpoint just stopped answering
+- a 4 B MMIO load taking 220 ms is the leading edge (S N+16), i.e. an access that nearly did not come back
+
+**This is a hypothesis, not a measurement.** Next step is to test it directly: vary
+`dispatch_progress_update_ms` across e.g. 10 / 100 / 1000 / 10000 ms and look for a threshold, and read the
+device's power-state telemetry across a wedge.
+
+### Consequences
+
+- **A cheap workaround exists today**: `TT_METAL_OPERATION_TIMEOUT_SECONDS=<n>` (any non-zero value) with
+  the default progress interval. 0 hangs in 279 runs. It costs one 4 B device read per 100 ms.
+- **S N+16 is REPAIRED, not retracted.** Its observation (0/179 armed) was real; its attribution to the
+  yield was wrong, and S N+17 correctly killed that. The suppression is real and traces to the read.
+- **S N+17's "the timeout does not suppress" is superseded**: it does, but only with the progress read
+  enabled, which `noprog` had deliberately removed.
+- Any hang-rate figure in this file must now state whether a periodic device read was in flight.
