@@ -1,12 +1,9 @@
-# REQUEST mode (unbounded, H2D-driven) 2-stage INTRA-galaxy pipeline prefill on ONE BH galaxy.
+# 2-stage intra-galaxy pipeline prefill: one 8x4 galaxy carved into 2 Z-connected [4,4] sub-meshes; the
+# hidden state hops stage->stage over the Z-link MeshSocket. Request mode — rank 0 serves an external
+# prefill_producer. Model selected by PREFILL_MANIFEST.
 #
-# One 8x4 galaxy carved into 2 Z-connected [4,4] sub-meshes (16 chips each); hidden state hops stage->stage
-# over the Z-link MeshSocket. Per-stage EP16. REQUEST mode (no PREFILL_STANDALONE): rank 0
-# builds the H2D service and waits for an external prefill_producer.
-#
-# TT_VISIBLE_DEVICES order is authoritative from the Generate2x4SliceToPCIeDeviceMapping discovery gtest
-# (slice_to_pcie_device_mapping.yaml): mesh0 = slices {0,1} (top), mesh1 = slices {2,3}
-# (bottom). Two 2x4 slices concatenate into a contiguous 4x4; the blitz/diagonal split fails topology_mapper.
+# TT_VISIBLE_DEVICES: two 2x4 slices per mesh (mesh0 = {0,1}, mesh1 = {2,3}), ordered by the
+# Generate2x4SliceToPCIeDeviceMapping discovery gtest into a contiguous 4x4; other splits fail topology_mapper.
 
 rank_bindings:
   - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "28,29,24,25,0,4,5,1,31,26,27,30,6,7,2,3"}}
@@ -21,10 +18,7 @@ global_env:
   PREFILL_NUM_LAYERS: "60"
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
-  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
-  PREFILL_PP_FILE_BARRIER: "1"
-  # Vestigial socket L1 buffer: the activation bypasses it DRAM->DRAM, only ~12B metadata transits, so its
-  # size is L1 footprint only. 32KB (half the 64KB default) is the minimal reduction that keeps it clear of
-  # the routed-expert MoE static CBs (see 4rank).
+  # Only 12B of metadata transits the queue, so reducing it's size has no effect on transfer speed
+  # Keeping it default (64KB) clashes with the MoE FFN L1 allocation
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
   LOGURU_LEVEL: "INFO"

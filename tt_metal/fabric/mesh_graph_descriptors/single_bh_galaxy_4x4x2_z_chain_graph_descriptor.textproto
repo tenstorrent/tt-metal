@@ -1,12 +1,4 @@
-# Single BH galaxy carved into 4 Z-connected [2,4] meshes, wired as a Z-CHAIN 0->1->2->3
-# (NOT a ring). Derived from single_bh_galaxy_4x4x2_z_graph_descriptor.textproto by DROPPING the
-# ring-closing 0<->3 connection: a 4-cycle cannot carry a consistent assign_z_direction, so the
-# control plane drops the wraparound link ("Z/non-Z direction mismatch") and aborts. Pipeline-parallel
-# prefill only needs the forward chain (rank 0 -> 1 -> 2 -> 3; the last rank never sends back), so the
-# chain topology matches what PP uses and resolves cleanly.
-#
-# Each mesh is [2,4] (8 chips) -> per-stage SP2 x TP4 x EP8. Same tray layout / rank->tray order as the
-# ring MGD (QUAD {0:tr1, 1:tr3, 2:tr4, 3:tr2}), so the same rank binding + TT_VISIBLE_DEVICES apply.
+# Single BH galaxy carved into 4 Z-connected [2,4] meshes, wired as a Z-CHAIN 0->1->2->3 (no wraparound)
 
 mesh_descriptors {
   name: "M0"
