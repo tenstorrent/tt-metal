@@ -2220,3 +2220,122 @@ DRISC-x-fast-dispatch interaction as UNCONFIRMED, not established.
 from a coarse observable standing in for the thing of interest -- exit code for failure mode, wall-clock for
 health, arm label for causation. The fix each time was a finer discriminator (card state, run duration,
 randomized order), never more runs. When a result surprises, sharpen the observable before spending silicon.
+
+## §N+21 — CONSOLIDATED STATE (2026-08-07). Read this section first.
+
+Everything above is kept for audit -- five claims were retracted in one day and the reasoning that
+killed them is worth more than a tidy file. **Where this section conflicts with anything above, this
+section wins.**
+
+### A. Armed vs unarmed, 400 runs at delay 125, randomized, fully classified
+
+| arm | n | WEDGE | TEARDOWN | MASKED | CLEAN |
+|---|---|---|---|---|---|
+| UNARMED | 200 | **4** | 3 | 0 | 193 |
+| ARMED (timeout 45 s, progress interval default 100 ms) | 200 | **0** | 2 | 1 | 197 |
+
+- **Wedges 4 vs 0: Fisher p ~ 0.12. SUGGESTIVE, NOT SIGNIFICANT.** Do not quote as established.
+- Pooled across all armed blocks at default interval: **0 wedges / 479 runs** (delay 500 n=179,
+  delay 150 n=100, delay 125 n=200), against 4/200 unarmed in the one cleanly-classified block.
+- **Teardowns are MATCHED: 3 vs 3** (counting the armed arm's 1 MASKED). Arming does not change how
+  often teardown happens, only sometimes the outcome -- and **not reliably**: armed run k=338 still
+  hung 301 s. The timeout is not a fix.
+- The armed/unarmed split therefore separates cleanly: **teardown rate is a system property; wedge
+  rate may not be.**
+
+### B. The 2x2, re-run with classification (13 runs/cell, interleaved + randomized)
+
+| | fast dispatch | slow dispatch |
+|---|---|---|
+| **DRISC** | 0 WEDGE, 1 TEARDOWN / 13 | 0 WEDGE, **13 TEARDOWN / 13** |
+| **Tensix** | 0 WEDGE, 0 TEARDOWN / 13 | 0 WEDGE, **13 TEARDOWN / 13** |
+
+**Slow dispatch fails 26/26 on BOTH drainers**, deterministically, card healthy every time:
+
+```
+TT_THROW: Device 0: Timeout (45000 ms) waiting for physical cores to finish:
+          14-6, 14-7, 14-8, 14-11, 14-10, 14-9, 14-3, 14-2, 14-5, 14-4.
+terminate called ... timeout: the monitored command dumped core
+```
+
+Ten cores (the whole DRAM/DRISC column) never finish, and **this call site's throw is UNCAUGHT** --
+unlike the fast-dispatch teardown on the single core 14-3, which hits a try/catch and exits 0.
+
+Two consequences:
+
+1. **§N+11's "0/98 clean" for both slow cells cannot stand.** But note 26/26 vs 0/98 is too extreme
+   for a pure scoring artifact -- a 100% failure rate would have blown the old harness's timeout every
+   run. Something has ALSO changed since. Treat this as documenting current behaviour, not as a clean
+   refutation.
+2. **The 2x2 cannot answer the wedge question for slow dispatch, under any arming.** Slow runs abort
+   at teardown before reaching the state where a wedge could appear. "0 wedges in slow" is
+   structurally uninformative. Testing it requires FIXING the 10-core teardown first (stop the
+   resident drainer before `wait_until_cores_done`, or give that call site the catch the fast path
+   has). That is a code change, not a harness change, and it is the blocker.
+
+### C. THE WEDGE, specifically -- consolidated
+
+Distinct from TEARDOWN (healthy card, core-wait never completes) and from DEGRADED (13x MMIO latency).
+Everything below is about `card = Unknown|63` only.
+
+**Signature.** Endpoint config space reads **all `ff`**, including `max_link_speed` / `max_link_width`
+-- static capability fields that cannot change and read correctly minutes earlier. Meanwhile the
+**root port `0000:00:01.1` stays linked at 32.0 GT/s x16**. AER zero on both. So the *link* is healthy
+and the *endpoint* has stopped completing TLPs. Always read the ROOT PORT to tell these apart; the
+endpoint's own sysfs cannot.
+
+**Host symptom.** The completion-queue reader spins (state R) in `completion_queue_wait_front`, whose
+predicate compares the host read pointer against a **device-written** pointer fetched by
+`read_cq_host_ptr<true>` -> `read_sysmem` -- i.e. **host DRAM**, not device MMIO. A dead endpoint can
+never update it, so the host polls a stale host-memory word forever, touching nothing and logging
+nothing. Unarmed that loop has no timeout, no yield, no device access. Main parks on a condvar in
+`wait_for_outstanding_reads`.
+
+**NEW AND MOST PROMISING -- IOMMU page faults.** `IOMMU: enabled`, and dmesg carries:
+
+```
+tenstorrent 0000:01:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x000d address=0xb50  flags=0x0000]
+tenstorrent 0000:01:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x000d address=0x1000 flags=0x0000]
+tenstorrent 0000:01:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x000d address=0x2000 flags=0x0000]
+tenstorrent 0000:01:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x000d address=0x3000 flags=0x0000]
+```
+
+**Exactly four addresses, exactly 10 times each** = ten identical bursts. Constant domain `0x000d`,
+`flags=0x0000`. Three are consecutive 4 KB pages from `0x1000`; `0xb50` is an unaligned lead-in.
+Near-zero IOVAs repeating identically = a **stale or zeroed DMA address register**, not corruption.
+
+This explains what previously looked contradictory: link up + AER clean because it is a *translation*
+fault, not a PCIe error; endpoint stops completing because its DMA is blocked upstream. The earlier
+"kernel is completely silent" claim in §N+14 is **WRONG** -- it was checked immediately after a reboot,
+before any faults had accumulated.
+
+**NOT yet established:** fault timestamps have not been correlated against individual wedge times.
+"Accompanies" is not "causes". Next step is exactly that correlation (dmesg seconds-since-boot vs the
+harness CSV), plus reading dmesg immediately after a captured wedge.
+
+**Rate.** ~2-3% per run unarmed, across delays 125 / 150 / 500 -- no delay dependence found. The knee
+is irrelevant to it.
+
+**Recovery.** `tt-smi -r` clears it (measured 3x, box stays up, full health restored) -- seconds, not a
+3-minute reboot. A warm host reboot also works (4/4). **Neither produces degradation.**
+
+### D. Claims that are DEAD -- do not resurrect
+
+- ~~egress bandwidth is the trigger~~ (saturates ~17 GB/s; amplification cannot exceed it)
+- ~~the ingest axis / producer delay is the trigger~~ (confounded with cumulative runs)
+- ~~cumulative runs predict it~~ (150 fixed-config runs clean)
+- ~~config churn causes it~~
+- ~~NoC choice matters~~ (NoC 1 hangs identically)
+- ~~host poll pressure~~ (yield injected directly: 4/100 vs 3/100 over 300 randomized runs)
+- ~~the periodic device read prevents the wedge~~ (§N+18; the comparison was masked teardowns)
+- ~~the static TLB window is immune to degradation~~ (a static window degrades 13x)
+- ~~degradation follows a card hang~~ (it follows a BOX FREEZE + watchdog reboot; `last -x` shows
+  `crash` with no `shutdown` record)
+- ~~the knee is a safety limit~~
+
+### E. The method rule that would have prevented all of it
+
+Every wrong conclusion came from a **coarse observable standing in for the thing of interest** -- exit
+code for failure mode, wall-clock for card health, arm label for causation, a single block for a rate.
+The fix was never more runs; it was always a finer discriminator. **When a result surprises, sharpen
+the observable before spending silicon.**
