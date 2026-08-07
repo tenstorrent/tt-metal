@@ -51,8 +51,16 @@ int main(int argc, char** argv) {
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
 
+    // TT_METAL_PERF_DEBUG_NUM_CQS selects the hardware command-queue count. It exists to test whether the
+    // DRISC PCIe hang scales with how much dispatch traffic shares the PCIe tile with the drainer's egress:
+    // each CQ adds its own completion queue and its own dispatch cores driving that tile. Default 1 matches
+    // every measurement taken before this knob existed, so leaving it unset changes nothing.
+    const char* nq = std::getenv("TT_METAL_PERF_DEBUG_NUM_CQS");
+    const size_t num_cqs = (nq != nullptr && *nq != '\0') ? (size_t)std::strtoul(nq, nullptr, 10) : 1;
+
     int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(
+        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
     Program program = CreateProgram();
 
     // Clamp the requested grid to the device's compute grid; --gx 0 / --gy 0 (or an over-large value)
