@@ -91,6 +91,35 @@ follows tensor shape, not audio content.
 WAVs (source / cpu / device-post / device-pre per clip) are in `/data/rshirvani/audio_compare/clips/`
 with a README; `cpu_vs_device.py` regenerates them.
 
+### But score everything against the *source* and the picture changes
+
+The table above measures the device against the CPU decode -- fidelity to the reference. It says
+nothing about how good the reference is. The VAE is lossy, so scoring against the original input
+(`score_wavs.py`) gives the number a listener actually experiences:
+
+| clip | CPU | device post | device pre |
+|---|---|---|---|
+| voice_libri1 | 30.00 dB | 30.04 | 30.03 |
+| voice_libri2 | 29.42 dB | 29.62 | 29.68 |
+| music_trumpet | 31.40 dB | 31.47 | 31.50 |
+| music_brahms | 23.75 dB | 23.87 | 23.93 |
+| **mean** | **28.64 dB** | **28.75** | **28.78** |
+
+**The codec floor is ~28.6 dB and it dominates.** Hardware error sits ~20 dB below it, so it is under
+1 % of total error power. Against the source, pre-fix and post-fix are **indistinguishable** -- 28.78
+vs 28.75 dB, with pre-fix nominally 0.03 dB higher, i.e. noise.
+
+That is consistent rather than surprising: for uncorrelated errors, lifting the hardware term from
+45.94 to 49.45 dB against a 28.64 dB codec term predicts about **0.04 dB** of end-to-end change, which
+is below the measurement spread. So the +3.51 dB is a real improvement in *tracking the reference*,
+and is **not an audible quality gain** -- the two device WAVs sound the same because both are limited
+by the autoencoder, not by us.
+
+Worth keeping straight, because "+3.5 dB" invites the wrong conclusion. The precision work earns its
+place through what it unlocked -- exact conv1d, zero MAC fallbacks, bf16 becoming runnable, and the
+1.14x speed -- not through audible fidelity. And the device scoring marginally *above* CPU is not the
+device beating its own reference; it is small uncorrelated error, all within +-0.26 dB.
+
 ## Two different PSNRs, and why the padding fix did not move either
 
 They were conflated once (in `825cc1ffda3`) and are worth keeping apart:
