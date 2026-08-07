@@ -111,6 +111,33 @@ needs torchaudio only to resample 24 kHz to 16 kHz, so scipy's `resample_poly` i
 
 ## 3. How to run things
 
+### The one command — run this around every change
+
+```bash
+Q=models/experimental/voxtral_tts/scripts/quality_report.py
+python $Q --tier fast  --tag before      # ~3.5 min   pytest + flow + codes
+python $Q --tier full  --tag before      # ~20 min    + wiring, prefill26, codec, decode
+python $Q --tier audio --tag before      # ~50 min    + generation, WER, artifacts, MOS
+#   ... make the change ...
+python $Q --tier fast  --tag after
+python $Q --compare before after         # exits 1 if anything is worse beyond tolerance
+```
+
+**It takes TWO TAGS on purpose.** Nothing on this fork is judged against a number recorded in
+another session — `§6.15` and `§6.52` are both cases where that produced a regression that did not
+exist, and the codes gate's "10/288 vs 86/288" cost a session's worth of doubt for exactly this
+reason. Run the tier on the base commit, change something, run it again, compare the two.
+
+Tolerances are the branch's own measured noise floors (`§6.15` decode spread, `§6.52` timing floor,
+`§6.7` short-bucket WER). **A metric that fails to parse is reported as `null` and exits 2** — a
+gate whose output drifts breaks loudly instead of quietly reporting success.
+
+`--tier audio` needs the MOS venv once: `bash tests/probes/mos_setup.sh`. It installs DistillMOS
+into `/tmp/mosvenv` — **never the main venv**, because it pulls `torchaudio`, which §2 records as
+breaking `transformers` and taking the WER scorer with it. Without it, MOS is skipped and says so.
+
+The sections below are the same checks run by hand, for when you want one of them in isolation.
+
 ### Tests — 129 tests, ~70 s
 
 ```bash
@@ -145,7 +172,8 @@ change.
 
 ```bash
 python .../scripts/generate_quality_set.py --tag mychange
-python .../scripts/score_quality_set.py .../generated/resultsmychange.json
+python .../scripts/score_quality_set_scipy.py .../generated/resultsmychange.json
+#   ^ the _scipy one. The original needs torchaudio, which cannot be installed here (2).
 ```
 
 **The tag has NO underscore.** `--tag mychange` writes `resultsmychange.json`. `generated/` holds ~40

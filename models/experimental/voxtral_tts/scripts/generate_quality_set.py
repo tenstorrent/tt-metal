@@ -94,6 +94,11 @@ def main():
     ap.add_argument("--cases", default="all", help='"all" or e.g. "0,1,2"')
     ap.add_argument("--max-frames", type=int, default=0, help="0 = derive from text length")
     ap.add_argument("--tag", default="", help="suffix for WAV/results filenames")
+    # Added for scripts/quality_report.py --tier audio. Without it every "seed" of a multi-seed
+    # run is the SAME generation, which is how a 3-seed WER number can look solid while resting on
+    # one draw. STATUS.md 6.21: one process per (arm, seed), because a case's frame count depends
+    # on what ran before it in the same process.
+    ap.add_argument("--seed", type=int, default=0, help="RNG seed threaded into pipe.generate")
     args = ap.parse_args()
 
     fx = json.load(open(FIXTURE))
@@ -115,7 +120,8 @@ def main():
             print(f"\n=== case {ci}: voice={case['voice']} P={len(ids)} budget={budget} ===")
             print(f"    text: {case['text'][:70]!r}")
             t0 = time.perf_counter()
-            frames, t_pre, t_gen = pipe.generate(embeds, max_frames=budget, verbose=True)
+            frames, t_pre, t_gen = pipe.generate(embeds, max_frames=budget, seed=args.seed,
+                                                 verbose=True)
             wav = pipe.decode(frames)
             total = time.perf_counter() - t0
             audio_s = frames.shape[0] / FRAME_RATE
