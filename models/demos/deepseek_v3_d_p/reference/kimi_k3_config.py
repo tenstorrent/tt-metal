@@ -49,6 +49,12 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # The shared expert is ONE dense MLP whose intermediate is moe_intermediate_size *
+    # num_shared_experts -- upstream ``KimiSparseMoeBlock.__init__`` builds a single ``KimiMLP``
+    # rather than ``num_shared_experts`` separate ones. Verified against the checkpoint:
+    # shared_experts.gate_proj.weight is [6144, 7168]. K2.6 hides this because its 2048 * 1 == 2048,
+    # which is why ``TtMoe`` could conflate it with MOE_INTERMEDIATE_SIZE until now.
+    SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
 
     # Model architecture
     NUM_LAYERS = 93
@@ -88,9 +94,15 @@ class KimiK3Config:
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
 
-    # AttnRes / LatentMoE (out of scope for the MLA work; recorded so the deltas are not lost)
+    # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
+
+    # LatentMoE norm + SiTU-GLU activation.
     LATENT_MOE_USE_NORM = True
+    # SiTU is the checkpoint's activation everywhere (routed experts, shared expert, layer-0 dense
+    # FFN). No TT kernel implements it yet -- see issue #51335 -- so the device path currently runs
+    # SiLU and these two scalars are consumed only by the torch reference. Do NOT read them as
+    # "the device does SiTU".
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -119,7 +131,11 @@ class KimiK3Config:
 
 
 def kimi_k3_hf_config(max_seq: int = 8192):
-    """HF-attribute-style config the unified ``ttMLA`` reads (Kimi-K3 MLA dims, NoPE + output gate).
+    """HF-attribute-style config for the Kimi-K3 MLA and MoE paths.
+
+    Read by the unified ``ttMLA`` (MLA dims, NoPE + output gate) and by the MoE test harness
+    (``test_ttnn_moe.run_model`` takes ``n_group`` / ``topk_group`` / ``routed_scaling_factor`` from
+    here). See the MoE block at the bottom for the Kimi -> DeepSeek name bridge.
 
     Hand-built rather than loaded via ``AutoConfig`` because upstream ``modeling_kimi_linear.py``
     raises ``ImportError`` at module import without ``fla-core``, which is not installed here.
@@ -165,6 +181,45 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         attention_bias=False,
         attention_dropout=0.0,
         # MoE fields, under the names the TT cache-build path reads.
+        #
+        # This block is a NAME BRIDGE, and it is load-bearing. K3's own ``KimiLinearConfig`` uses
+        # Kimi names with no DeepSeek aliases -- ``num_experts``, ``num_experts_per_token``,
+        # ``moe_renormalize``, ``moe_router_activation_func``, ``num_expert_group`` -- whereas the TT
+        # MoE stack and its test harness read the DeepSeek names. ``KimiMoEGate``'s own docstring
+        # spells the correspondence out. Anything reading an HF config (rather than
+        # ``KimiK3Config``) needs the DeepSeek spelling, so supply both where they differ.
         first_k_dense_replace=KimiK3Config.NUM_DENSE_LAYERS,
         n_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        n_shared_experts=KimiK3Config.NUM_SHARED_EXPERTS,
+        # ...and the same three under K3's own names, so this namespace can also construct the
+        # vendored KimiSparseMoeBlock / KimiMoEGate. A one-way bridge is a trap: those classes read
+        # num_experts / num_experts_per_token / num_shared_experts and would otherwise die with
+        # "'types.SimpleNamespace' object has no attribute 'num_experts'".
+        num_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_token=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        num_shared_experts=KimiK3Config.NUM_SHARED_EXPERTS,
+        moe_renormalize=True,
+        moe_router_activation_func="sigmoid",
+        num_expert_group=KimiK3Config.NUM_EXPERT_GROUPS,
+        # Grouped routing is a no-op at 1/1, but ``run_model`` reads these unconditionally.
+        n_group=KimiK3Config.NUM_EXPERT_GROUPS,
+        topk_group=KimiK3Config.NUM_LIMITED_GROUPS,
+        routed_scaling_factor=KimiK3Config.ROUTE_SCALE,
+        norm_topk_prob=True,  # moe_renormalize
+        scoring_func="sigmoid",  # moe_router_activation_func
+        topk_method="noaux_tc",
+        # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
+        routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+        latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
+        # Deliberately NOT ``use_grouped_topk``: the checkpoint sets it true, but upstream
+        # ``KimiMoEGate`` never reads it (it branches on ``num_expert_group > 1``, which is False).
+        # Transcribing it would invite a reader to wire up a grouped path that does not exist.
+        #
+        # ``hidden_act`` is the checkpoint's "situ", but no TT kernel implements SiTU yet (#51335),
+        # so the device path runs SiLU. Reported honestly here rather than claiming "situ": a
+        # consumer that trusted this field would silently build the wrong activation.
+        hidden_act="silu",
+        activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )

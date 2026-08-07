@@ -17,6 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -98,6 +99,25 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
+            # Kimi-K3: 896 experts -> per_core_N = 896/32 = 28, still divisible by out_block_w=4.
+            # in0_block_w stays 56 because K3's gating_dim is hidden_size (7168), same as K2.6, so
+            # per_device_emb_dim is the same 1792 = 7168/4. Only the expert count differs -- which is
+            # exactly why this key is needed: a miss is silent (TTNN auto-picks a config and the gate
+            # matmul quietly regresses) rather than an error.
+            (4096, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -109,6 +129,11 @@ class TtMoEGateConfig:
 
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
+    # Hard ceiling on sp_dim, enforced in __post_init__. Set only by models that have one: at high
+    # expert counts moe_grouped_topk's circular buffers (sized by experts/32) stop fitting L1
+    # alongside the height-sharded scores, and the failure mode is an L1 allocation clash deep in the
+    # op rather than anything that names the sequence length. None = no known ceiling.
+    max_sp_dim: int | None = None
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     n_shared_experts: int = DeepSeekV3Config.NUM_SHARED_EXPERTS  # PREVIOUS VALUE: 2 @ddjekic to check
     n_activated_experts: int = DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN
@@ -127,6 +152,13 @@ class TtMoEGateConfig:
     )
 
     def __post_init__(self):
+        if self.max_sp_dim is not None and self.sp_dim > self.max_sp_dim:
+            raise ValueError(
+                f"sp_dim={self.sp_dim} exceeds this model's gate ceiling max_sp_dim={self.max_sp_dim} "
+                f"({self.n_routed_experts} experts). moe_grouped_topk's circular buffers scale with "
+                f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
+                f"the op-side CB work that makes it true."
+            )
         # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
         # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
         # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of

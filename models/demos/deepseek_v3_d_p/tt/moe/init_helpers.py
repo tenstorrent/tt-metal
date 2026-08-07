@@ -983,18 +983,39 @@ def create_gate_weights(
     }
 
 
+# HF key template for the MoE gate, per checkpoint family. ``{layer_idx}`` is substituted.
+#
+# DeepSeek-V3 and Kimi-K2.6/K2.7 nest the router under ``mlp.gate``. Kimi-K3 renames the MoE module
+# to ``block_sparse_moe`` AND lives under a ``language_model.`` prefix (it is a multimodal
+# checkpoint), so it needs its own template rather than a tweak to the default.
+GATE_KEY_PREFIX_DEEPSEEK = "model.layers.{layer_idx}.mlp.gate."
+GATE_KEY_PREFIX_KIMI_K3 = "language_model.model.layers.{layer_idx}.block_sparse_moe.gate."
+
+
 def load_gate_weights_from_hf(
     model_id: str,
     layer_idx: int,
     dtype: torch.dtype = torch.bfloat16,
+    key_prefix_template: str = GATE_KEY_PREFIX_DEEPSEEK,
+    bias_dtype: torch.dtype | None = None,
 ) -> dict:
     """
     Load MoE gate (router) weights from a HuggingFace checkpoint.
 
+    Only the gate is read, through a prefix-filtered ``safe_open``, so this is cheap even against a
+    multi-terabyte checkpoint (Kimi-K3's gate is ~12.8 MB out of 1.5 TB) and it never touches the
+    dequantization path -- the router is not in a quantized group in any supported checkpoint.
+
     Args:
         model_id: HuggingFace model ID or local checkpoint path
         layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
-        dtype: Target dtype for the returned tensors
+        dtype: Target dtype for the returned weight
+        key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the
+            DeepSeek/Kimi-K2.x layout; pass ``GATE_KEY_PREFIX_KIMI_K3`` for Kimi-K3.
+        bias_dtype: Target dtype for ``e_score_correction_bias``; defaults to ``dtype``. The
+            checkpoints store it as fp32 and the device gate accepts an fp32 bias, so pass
+            ``torch.float32`` to keep the routing correction at full precision -- it matters more as
+            the expert count grows, since the bias only affects which experts win top-k.
 
     Returns dict matching MoEGate / ``create_gate_weights`` format:
         "weight": (n_routed_experts, dim) — HF convention
@@ -1006,11 +1027,11 @@ def load_gate_weights_from_hf(
     """
     from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-    prefix = f"model.layers.{layer_idx}.mlp.gate."
+    prefix = key_prefix_template.format(layer_idx=layer_idx)
     state_dict = load_hf_state_dict_filtered(model_id, [prefix])
 
-    weight_key = f"model.layers.{layer_idx}.mlp.gate.weight"
-    bias_key = f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"
+    weight_key = f"{prefix}weight"
+    bias_key = f"{prefix}e_score_correction_bias"
 
     if weight_key not in state_dict:
         raise KeyError(f"Gate weight not found at {weight_key}. Layer {layer_idx} may not be an MoE layer.")
@@ -1018,7 +1039,7 @@ def load_gate_weights_from_hf(
         raise KeyError(f"Gate bias not found at {bias_key}. Layer {layer_idx} may not be an MoE layer.")
 
     gate_weight = state_dict[weight_key].to(dtype)
-    gate_bias = state_dict[bias_key].to(dtype)
+    gate_bias = state_dict[bias_key].to(dtype if bias_dtype is None else bias_dtype)
 
     logger.info(
         f"Loaded gate weights from {model_id} layer {layer_idx}: weight={gate_weight.shape}, bias={gate_bias.shape}"
