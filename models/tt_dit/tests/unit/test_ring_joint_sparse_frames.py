@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the sparse-frames extension to `ring_joint_scaled_dot_product_attention`.
+
+"""Unit tests for sparse attention.
 
 The extension adds three optional kwargs (`tokens_per_frame`, `num_frames_padded`, `sparse_frame_mask`) that
 enable frame-block-sparse attention inside the ring op: each Q frame attends only to a chosen
 subset of K frames (e.g. a centered window + one reference frame).
 
-The tests exercise the op directly with a synthetic windowed pattern (window=5, add_last_frame)
-at shapes representative of video-DiT sparse-attention workloads:
-  * 720p-scale: fsl=3840 tokens/frame, nf=21 (padded to 24), N=92160 padded
-  * Smaller synthetic shapes for correctness across mesh sizes
+The tests exercise the op directly with a synthetic windowed pattern
+at shapes representative of sparse-attention workloads
 
 Golden = pytorch SDPA with an additive `[N, N]` block-mask matching sparse_frame_mask. Ring output must
 PCC-match the golden.
@@ -108,7 +107,7 @@ def _sparse_frame_mask(num_frames: int, num_frames_padded: int, window: int, add
 
 def _pack_sparse_frame_mask(allow: torch.Tensor) -> list:
     """Bitpack the [nf, nf] uint8 allow table into uint32 words, matching the packing convention
-    used by the ring_joint SDPA sparse-frames extension."""
+    used by sparse ring_joint SDPA."""
     nf = allow.shape[0]
     total_bits = nf * nf
     num_words = (total_bits + 31) // 32
@@ -118,9 +117,8 @@ def _pack_sparse_frame_mask(allow: torch.Tensor) -> list:
             if allow[q, k]:
                 bit_idx = q * nf + k
                 words[bit_idx // 32] |= 1 << (bit_idx % 32)
-    # Padded Q rows stay honestly all-zero. A device whose Q shard is entirely padded (e.g. frames
-    # 21-23 on device 7 at nf_real=21/nf_padded=24) has an all-zero allow region; the op detects
-    # this per-shard (reader `shard_attends_nothing`) and has that device participate fully in K/V
+    # Padded Q rows stay all-zero. A device whose Q shard is entirely padded has an all-zero allow region;
+    # the op detects this per-shard (reader `shard_attends_nothing`) and has that device participate fully in K/V
     # data movement while compute skips the matmul — so no allow-table fixup is needed.
     return words
 
@@ -130,17 +128,14 @@ def _torch_sdpa_ref(
     k: torch.Tensor,
     v: torch.Tensor,
     allow: torch.Tensor,
-    num_frames_real: int,
     tokens_per_frame: int,
 ) -> torch.Tensor:
-    """Block-sparse pytorch reference for frame-block-sparse attention.
-
+    """Block-sparse pytorch reference.
     Computing this densely would materialize the full [n_pad, n_pad] score matrix PER HEAD, which
-    at 720p (n_pad=92160) is ~34 GB/head of fp32 — it OOM-kills the process. Instead we compute the
-    output one Q-frame block at a time, running SDPA against ONLY the K frames that Q frame attends.
+    could OOM-kill the process. Instead compute the output one Q-frame block at a time,
+    running SDPA against ONLY the K frames that Q frame attends.
     softmax over the attended-only positions is numerically identical to softmax over all positions
-    with the disallowed ones set to -inf (masked entries contribute exp(-inf)=0 to both numerator
-    and denominator), so this is exact — it just never allocates the dense mask or score matrix.
+    with the disallowed ones set to -inf, so this is exact — it just never allocates the dense mask or score matrix.
     Heads are processed in chunks sized to hold peak score memory near a fixed budget regardless of
     shape (a windowed Q attends a few frames; a dense/allow-all Q attends all of them)."""
     b, nh, n_pad, d = q.shape
@@ -173,7 +168,7 @@ def _torch_sdpa_ref(
 
 
 # ---------------------------------------------------------------------------
-# The runner.
+# Runner.
 # ---------------------------------------------------------------------------
 
 
@@ -202,18 +197,8 @@ def _run_sparse_frames_op(
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
 ):
-    """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
+    """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref."""
 
-    q_chunk_size_tokens / k_chunk_size_tokens (in TOKENS — SDPAProgramConfig's chunk sizes are
-    tokens, see sdpa_device_operation.cpp's `% TILE_WIDTH == 0` check) default to `tokens_per_frame`
-    so each SDPA chunk == one frame. Override with a divisor of tokens_per_frame to exercise the
-    sub-frame chunk path (multiple chunks per frame — needed at large fsl to fit L1 CB budgets).
-
-    sparse_frames_enabled=False disables the sparse-frames extension: the op runs plain dense
-    ring_joint SDPA (no sparse_frame_mask bitmask, no tokens_per_frame), and the golden reference uses an
-    all-ones allow (every Q attends every K). Diagnostic: if a sub-frame chunk test hangs with
-    sparse_frames_enabled=True but passes with False, the bug is in the sparse-frames overlay;
-    if it hangs both ways, the bug is in the general ring_joint path at sub-frame chunks."""
     assert num_frames_padded % sp_factor == 0, "num_frames_padded must be a multiple of sp_factor"
     assert tokens_per_frame % ttnn.TILE_SIZE == 0, "tokens_per_frame must be tile-aligned"
     n_pad = num_frames_padded * tokens_per_frame
@@ -245,18 +230,10 @@ def _run_sparse_frames_op(
         allow = _sparse_frame_mask(num_frames_real, num_frames_padded, window, add_last_frame)
     else:
         # Dense-equivalent allow (every real Q attends every real K), used for both
-        # sparse_frames_enabled=False and force_allow_all=True. With force_allow_all the op still
-        # runs the full sparse setup but never skips a chunk — isolating setup bugs from skip bugs.
+        # sparse_frames_enabled=False and force_allow_all=True.
         allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
         allow[:num_frames_real, :num_frames_real] = 1
-    gt = _torch_sdpa_ref(
-        padded_Q,
-        padded_K,
-        padded_V,
-        allow,
-        num_frames_real=num_frames_real,
-        tokens_per_frame=tokens_per_frame,
-    )[:, :, :real_n, :]
+    gt = _torch_sdpa_ref(padded_Q, padded_K, padded_V, allow, tokens_per_frame=tokens_per_frame)[:, :, :real_n, :]
 
     # ------- Set up the ring op on device --------------------------------
     full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -296,9 +273,7 @@ def _run_sparse_frames_op(
     tt_K = _to_dev(padded_K, input_shard_dims)
     tt_V = _to_dev(padded_V, input_shard_dims)
 
-    # The golden (gt) is computed and Q/K/V are now on device, so the host-side f32 copies
-    # (~1-2 GB each at 720p) are dead. Free them before the op runs to keep peak host RAM low
-    # when 720p cases run back-to-back (they were OOM-killing the process otherwise).
+    # The golden (gt) is computed and Q/K/V are now on device.
     del padded_Q, padded_K, padded_V, Q, K, V
     gc.collect()
 
@@ -310,13 +285,6 @@ def _run_sparse_frames_op(
     kv_out_shard_dims[tp_axis] = 1
     ag_output_shape = (b, nh, n_pad, d)
 
-    # Persistent output buffers are scratch (overwritten by the op's internal AllGather). Their
-    # initial values don't matter. At 720p (nh=40, n_pad=92160, d=128) the naive
-    # `ttnn.from_torch(torch.zeros(...))` allocates ~944 MB of float32 on host, then converts
-    # to bfloat16, tilizes (single-threaded), and DMAs 32 shards to devices — this can take
-    # several minutes per buffer. Speed it up by (a) using bfloat16 zeros to skip the f32→bf16
-    # conversion, and (b) uploading in ROW_MAJOR layout then tilizing on device (much faster
-    # than host tilize for large tensors).
     def _make_persistent_output_buffer():
         rm_tensor = ttnn.from_torch(
             torch.zeros(ag_output_shape, dtype=torch.bfloat16),
@@ -333,10 +301,6 @@ def _run_sparse_frames_op(
     persistent_output_buffer_k = _make_persistent_output_buffer()
     persistent_output_buffer_v = _make_persistent_output_buffer()
 
-    # Bitpack sparse_frame_mask into up to 32 uint32 words — passed to the op as a plain host vector
-    # (sparse_frame_mask kwarg). No device tensor / no DMA / no CB required.
-    # When sparse-frames is disabled, we pass an empty vector and None for the other extension
-    # kwargs, which routes the op through the plain (non-sparse) ring_joint SDPA path.
     sparse_frame_mask = _pack_sparse_frame_mask(allow) if sparse_frames_enabled else []
 
     program_config = ttnn.SDPAProgramConfig(
@@ -375,15 +339,12 @@ def _run_sparse_frames_op(
         subdevice_id=worker_sub_device_id,
         ccl_core_grid_offset=ccl_core_grid_offset,
         is_causal=False,
-        # The extension: enable frame-block-sparse pattern. sparse_frames_enabled=False routes
-        # through the plain ring_joint path by passing None + empty vector.
         tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
         num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
         sparse_frame_mask=sparse_frame_mask,
     )
 
-    # Gather output back (sharded seq on sp, heads on tp). Detilize on device first — host-side
-    # detilize inside to_torch is single-threaded per tensor and slow for 720p (~944 MB output).
+    # Gather output back (sharded seq on sp, heads on tp).
     tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
     out = ttnn.to_torch(
         tt_out,
@@ -397,35 +358,25 @@ def _run_sparse_frames_op(
     # Degenerate pattern: if any REAL Q frame attends zero K frames, the torch reference is a
     # fully-masked softmax row (which PyTorch collapses to 0/undefined), while the kernel's
     # `_pack_sparse_frame_mask` workaround forces those all-zero rows to attend-all so the reader chain
-    # stays in sync — so the two diverge by construction and PCC is meaningless. Only the drain_all
-    # pattern hits this; real windowed patterns always attend at least the diagonal. Just verify the
-    # device didn't hang and produced finite output.
+    # stays in sync — so the two diverge by construction and PCC is meaningless.
     if bool((allow[:num_frames_real].sum(dim=1) == 0).any()):
         assert torch.isfinite(
             out
-        ).all(), "sparse-frames ring SDPA produced non-finite output for a fully-drained (degenerate) pattern"
+        ).all(), "sparse ring SDPA produced non-finite output for a fully-drained (degenerate) pattern"
         logger.info(
-            f"[sparse-frames ring] degenerate allow (a Q frame attends no K) — skipped PCC, verified "
+            f"[sparse ring] degenerate allow (a Q frame attends no K) — skipped PCC, verified "
             f"finite output. sp={sp_factor} tp={tp_factor}"
         )
         return
 
-    gt_f = gt.reshape(gt.shape[0], gt.shape[1], num_frames_real, tokens_per_frame, gt.shape[-1])
-    out_f = out.reshape(out.shape[0], out.shape[1], num_frames_real, tokens_per_frame, out.shape[-1])
-    for fi in range(num_frames_real):
-        _, fpcc = comp_pcc(gt_f[:, :, fi], out_f[:, :, fi])
-        logger.info(f"[per-frame] frame {fi:3d}: pcc={fpcc}")
-
     passing, pcc = comp_pcc(gt, out, pcc_threshold)
     logger.info(
-        f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={tokens_per_frame} "
+        f"[sparse ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={tokens_per_frame} "
         f"window={window} add_last={add_last_frame} sp={sp_factor} tp={tp_factor} pcc={pcc}"
     )
-    # Free the golden + gathered output (~1-2 GB each at 720p) BEFORE the assert, so a failing 720p
-    # case doesn't keep them resident through teardown into the next test's setup.
-    del gt, out, gt_f, out_f
+    del gt, out
     gc.collect()
-    assert passing, f"sparse-frames ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
+    assert passing, f"sparse ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
 
 
 # ---------------------------------------------------------------------------
@@ -434,10 +385,18 @@ def _run_sparse_frames_op(
 
 
 class TestSparseFramesRing:
-    """Sparse-frames ring SDPA correctness across BH 4x8, WH 2x4, WH 4x8, Line + Ring."""
+    """Sparse ring SDPA correctness across BH 4x8, WH 2x4, WH 4x8, Line + Ring."""
 
     @_MESH_TOPOLOGY
-    def test_small_windowed(
+    @pytest.mark.parametrize(
+        ("nf_real_fn", "nf_padded_fn", "tokens_per_frame", "window", "add_last_frame"),
+        [
+            pytest.param(lambda sp: 8 if sp == 8 else 6, lambda sp: 8, 32, 5, True, id="small_windowed"),
+            pytest.param(lambda sp: 2, lambda sp: sp, 64, 3, True, id="padded_frames"),
+            pytest.param(lambda sp: sp, lambda sp: sp, 64, 5, False, id="no_add_last_frame"),
+        ],
+    )
+    def test_windowed_patterns(
         self,
         mesh_device,
         num_links,
@@ -448,13 +407,12 @@ class TestSparseFramesRing:
         device_params,
         all_gather_topology,
         reset_seeds,
+        nf_real_fn,
+        nf_padded_fn,
+        tokens_per_frame,
+        window,
+        add_last_frame,
     ):
-        """Small fsl=32 (1 tile per frame) exercises the wiring end-to-end quickly.
-
-        `nf_real=8 -> nf_padded=8` at sp=8 (already aligned): the simplest case, no padding rows.
-        At sp=4 (WH 2x4): `nf_real=6 -> nf_padded=8` — exercises the padding-frame case."""
-        nf_real = 8 if sp_factor == 8 else 6
-        nf_padded = 8
         _run_sparse_frames_op(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -462,79 +420,14 @@ class TestSparseFramesRing:
             tp_axis=tp_axis,
             tp_factor=tp_factor,
             num_links=num_links,
-            num_frames_real=nf_real,
-            num_frames_padded=nf_padded,
-            tokens_per_frame=32,
+            num_frames_real=nf_real_fn(sp_factor),
+            num_frames_padded=nf_padded_fn(sp_factor),
+            tokens_per_frame=tokens_per_frame,
             b=1,
             nh=8,
             d=128,
-            window=5,
-            add_last_frame=True,
-            all_gather_topology=all_gather_topology,
-        )
-
-    @_MESH_TOPOLOGY
-    def test_padded_frames(
-        self,
-        mesh_device,
-        num_links,
-        sp_axis,
-        sp_factor,
-        tp_axis,
-        tp_factor,
-        device_params,
-        all_gather_topology,
-        reset_seeds,
-    ):
-        """Padded-frames case: nf_real=1 (or 2) with nf_padded=sp_factor (7-6 extra padded frames)."""
-        _run_sparse_frames_op(
-            mesh_device=mesh_device,
-            sp_axis=sp_axis,
-            sp_factor=sp_factor,
-            tp_axis=tp_axis,
-            tp_factor=tp_factor,
-            num_links=num_links,
-            num_frames_real=2,
-            num_frames_padded=sp_factor,
-            tokens_per_frame=64,
-            b=1,
-            nh=8,
-            d=128,
-            window=3,
-            add_last_frame=True,
-            all_gather_topology=all_gather_topology,
-        )
-
-    @_MESH_TOPOLOGY
-    def test_no_add_last_frame(
-        self,
-        mesh_device,
-        num_links,
-        sp_axis,
-        sp_factor,
-        tp_axis,
-        tp_factor,
-        device_params,
-        all_gather_topology,
-        reset_seeds,
-    ):
-        """Purely centered window (no reference-frame span) — catches kernel logic that assumes
-        the two-range case (window + last)."""
-        _run_sparse_frames_op(
-            mesh_device=mesh_device,
-            sp_axis=sp_axis,
-            sp_factor=sp_factor,
-            tp_axis=tp_axis,
-            tp_factor=tp_factor,
-            num_links=num_links,
-            num_frames_real=sp_factor,
-            num_frames_padded=sp_factor,
-            tokens_per_frame=64,
-            b=1,
-            nh=8,
-            d=128,
-            window=5,
-            add_last_frame=False,
+            window=window,
+            add_last_frame=add_last_frame,
             all_gather_topology=all_gather_topology,
         )
 
@@ -544,8 +437,6 @@ class TestSparseFramesRing:
         [
             pytest.param(True, False, id="sparse"),
             pytest.param(False, False, id="dense"),
-            # Full sparse setup but every (q_frame, k_frame) allowed — nothing skipped. Isolates
-            # sparse-setup bugs from skip/drain bugs.
             pytest.param(True, True, id="sparse_allow_all"),
         ],
     )
@@ -563,14 +454,7 @@ class TestSparseFramesRing:
         sparse_frames_enabled,
         force_allow_all,
     ):
-        """720p-scale geometry: fsl=3840, nf_real=21 -> nf_padded=sp_multiple, window=5,
-        add_last_frame=True. n_head=40, dim=128 — representative of a real video-DiT workload.
-
-        `sparse_frames_enabled` parametrize: sparse routes through the extension; dense routes
-        through the plain ring_joint SDPA. Comparing the two at nh=40 isolates whether hangs
-        are sparse-specific or exist in the base ring_joint path at this shape.
-
-        On WH 2x4 (sp=4) nf_padded=24; on sp=8 nf_padded=24 too (21 rounded to 24)."""
+        """720p-scale geometry representative of a real workload."""
         nf_real = 21
         nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
         _run_sparse_frames_op(
@@ -584,17 +468,13 @@ class TestSparseFramesRing:
             num_frames_padded=nf_padded,
             tokens_per_frame=3840,
             b=1,
-            nh=40,  # production value; runner shards on tp_axis (nh must divide tp_factor)
+            nh=40,
             d=128,
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
-            # fsl=3840 with chunk=fsl blows L1 CBs (~40 MB vs 1.5 MB budget). Ring-joint has extra
-            # CB overhead vs plain SDPA (rotation buffers + joint tensor slots), so shrink chunks
-            # into divisors of fsl that fit. (10, 12) tile chunks matches Wan dense-SDPA's (288, 512)
-            # shape closely within the sparse-frames divisor constraint (chunk must divide fsl).
-            q_chunk_size_tokens=320,  # 320 tokens = 10 tiles; fsl/12 = 3840/12
-            k_chunk_size_tokens=384,  # 384 tokens = 12 tiles; fsl/10 = 3840/10
+            q_chunk_size_tokens=320,  # 320 tokens = 10 tiles
+            k_chunk_size_tokens=384,  # 384 tokens = 12 tiles
             sparse_frames_enabled=sparse_frames_enabled,
             force_allow_all=force_allow_all,
         )
@@ -622,14 +502,7 @@ class TestSparseFramesRing:
         force_allow_all,
     ):
         """Same 720p multi-Q-per-core regime as test_720p_shape, but nf_real chosen so that
-        MULTIPLE whole SP shards are padding (fully out-of-bounds). At sp=8, nf_real=18 ->
-        nf_padded=24 (3 frames/shard) leaves shards 6 and 7 entirely padding, so each device sees
-        TWO inactive ring iters. On the upper devices those holes fall mid-sequence and are
-        sometimes non-adjacent (e.g. device 4's ring_id order [4,5,3,6,2,7,1,0] has holes at iters
-        3 and 5) or adjacent at the front (device 6's [6,7,5,4,3,2,1,0] has holes at iters 0,1).
-        This is the toughest case for the writer's cross-ring prefetch look-ahead, which must skip
-        over an arbitrary run of inactive iters to the next active one; a single-hole shape
-        (test_720p_shape) doesn't exercise multi-hole / leading-hole skips."""
+        multiple whole SP shards are padding (fully out-of-bounds)."""
         nf_real = 18
         nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
         _run_sparse_frames_op(
@@ -660,7 +533,6 @@ class TestSparseFramesRing:
         [
             pytest.param(True, False, id="sparse"),
             pytest.param(False, False, id="dense"),
-            # Extension enabled but every (q_frame, k_frame) allowed — isolates the drain path.
             pytest.param(True, True, id="sparse_allow_all"),
         ],
     )
@@ -692,13 +564,7 @@ class TestSparseFramesRing:
     ):
         """Sub-frame chunks: q_chunk_size = fsl/N (and k likewise). The device op requires each
         chunk to sit inside one frame (never straddle a boundary), so chunk sizes must divide
-        tokens_per_frame. Motivation: at large fsl (720p = 3840 tokens/frame) chunk=fsl blows L1
-        CBs (~40 MB vs 1.5 MB budget); dropping to fsl/5..fsl/8 fits.
-
-        Uses fsl=64 so both symmetric (fsl/2, fsl/4 = 32, 16 tokens... wait, chunks must be
-        multiples of TILE_SIZE=32 too) — use fsl=128 so fsl/2=64, fsl/4=32 are both valid.
-        Asymmetric cases prove q and k chunk sizes are independent — the sparse_frame_mask indexing
-        walks each independently (compute_streaming.hpp:2417 for k, 2474 for q)."""
+        tokens_per_frame."""
         tokens_per_frame = 128  # supports fsl/1 (128), fsl/2 (64), fsl/4 (32); all tile-aligned
         assert tokens_per_frame % q_chunk_div == 0 and (tokens_per_frame // q_chunk_div) % ttnn.TILE_SIZE == 0
         assert tokens_per_frame % k_chunk_div == 0 and (tokens_per_frame // k_chunk_div) % ttnn.TILE_SIZE == 0
@@ -744,10 +610,7 @@ class TestSparseFramesRing:
         reset_seeds,
         drain_pattern,
     ):
-        """Exercises the drain path by the shape of the allow pattern (every Q frame gets the same
-        mask): tail (trailing K frames drained), head (leading drained), middle (alternating),
-        drain_all (everything drained — degenerate), and single-frame drops. Confirms the drain
-        fires correctly before/after/interleaved with processing."""
+        """Exercises the drain path"""
         tokens_per_frame = 128  # 4 tiles/frame, small
         nf_real = 8
         nf_padded = 8
@@ -781,7 +644,7 @@ class TestSparseFramesRing:
             b=1,
             nh=8,
             d=128,
-            window=5,  # ignored — allow_override supersedes the built pattern
+            window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
             sparse_frames_enabled=True,
