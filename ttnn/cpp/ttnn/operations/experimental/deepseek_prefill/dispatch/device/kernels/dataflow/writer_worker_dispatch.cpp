@@ -407,4 +407,13 @@ void kernel_main() {
 
     // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
     noc_async_full_barrier();
+
+    // NOC_PACKET_TAG is a STICKY per-cmd-buf register: the noc_async_write_one_packet_with_trid()
+    // calls above leave TRID_NON_LOCAL_WRITE latched in it.  Firmware only zeroes it once, at init
+    // (brisc.cc: noc_clear_all_packet_tags() sits before the while(1) dispatch loop), NOT between
+    // kernels -- so a non-zero tag leaks into every subsequent kernel on this core until reset.
+    // The next kernel's implicit-transaction-id users would then start from a non-zero id, which
+    // the firmware flags as "invalid NOC command buffer state before starting the next kernel".
+    // Safe here because the full barrier above has drained every outstanding transaction.
+    noc_clear_all_packet_tags();
 }
