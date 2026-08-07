@@ -26,6 +26,241 @@ def _run(log_dir, *args):
     )
 
 
+def _required_manifest(tmp_path, analysis, plan, *extra, check=True):
+    worktree = tmp_path / "worktree"
+    llk_tests = worktree / "tt_metal" / "tt-llk" / "tests" / "python_tests"
+    llk_tests.mkdir(parents=True, exist_ok=True)
+    (llk_tests / "test_reduce.py").write_text("def test_reduce(): pass\n")
+    (llk_tests / "perf_reduce.py").write_text("def test_reduce(): pass\n")
+    metal = worktree / "tests" / "tt_metal" / "tt_metal" / "llk"
+    metal.mkdir(parents=True, exist_ok=True)
+    (metal / "test_reduce.cpp").write_text("// test\n")
+    analysis_path = tmp_path / "analysis.md"
+    plan_path = tmp_path / "plan.md"
+    analysis_path.write_text(analysis)
+    plan_path.write_text(plan)
+    output = tmp_path / "required_verification_manifest.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "required-verification",
+            "--log-dir",
+            str(tmp_path),
+            "--output",
+            str(output),
+            "--analysis",
+            str(analysis_path),
+            "--plan",
+            str(plan_path),
+            "--worktree",
+            str(worktree),
+            "--run-id",
+            "run-1",
+            "--expected-base-sha",
+            "a" * 40,
+            "--architectures-json",
+            '["blackhole"]',
+            "--backend",
+            "local",
+            *extra,
+        ],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+    return proc, output
+
+
+def test_required_verification_seals_independent_suites_and_perf_measurement(
+    tmp_path,
+):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: partial
+llk_coverage: existing
+metal_verification:
+  target: unit_tests_llk
+  coverage: added
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: 'LLKFixture.Reduce'
+  dispatch: fast
+"""
+    plan = """\
+## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: tests/python_tests/test_reduce.py::test_reduce
+regression_tests:
+- arch: blackhole
+  test: perf_reduce.py
+  coverage: existing
+  reason: determinism needs N>=3 independent reloads
+"""
+    proc, output = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(output.read_text())
+    assert proc.returncode == 0
+    assert manifest["revision"] == 1
+    assert manifest["attempt_id"] == "attempt-001"
+    assert manifest["waivers"] == []
+    assert [item["requirement_id"] for item in manifest["requirements"]] == [
+        "blackhole:llk:1",
+        "blackhole:metal:1",
+        "blackhole:perf:1",
+    ]
+    llk, metal, perf = manifest["requirements"]
+    assert llk["selector"] == {
+        "test": "test_reduce.py",
+        "test_id": "test_reduce.py::test_reduce",
+        "k": None,
+    }
+    assert metal["selector"]["test"] == "LLKFixture.Reduce"
+    assert {llk["backend"], metal["backend"], perf["backend"]} == {"silicon"}
+    assert perf["minimum_executed"] == 3
+    assert perf["required_measurements"] == ["cycle_comparison", "repeatability"]
+    expected = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in manifest.items() if key != "manifest_id"},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    assert manifest["manifest_id"] == expected
+
+
+def test_required_verification_revisions_are_immutable_and_linked(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: yes
+llk_coverage: existing
+"""
+    plan = """\
+## Test Strategy
+reproduction_tests:
+- arch: all
+  test: test_reduce.py -k reduce
+"""
+    _, output = _required_manifest(tmp_path, analysis, plan)
+    revision_one = (
+        tmp_path / "required_verification_manifests" / "revision-001.json"
+    ).read_bytes()
+    failed, _ = _required_manifest(tmp_path, analysis, plan, check=False)
+    assert failed.returncode != 0
+    assert "superseding manifest requires --supersedes-reason" in failed.stderr
+    _required_manifest(
+        tmp_path,
+        analysis,
+        plan,
+        "--supersedes-reason",
+        "functional retry after candidate failure",
+    )
+    current = json.loads(output.read_text())
+    first = json.loads(revision_one)
+    assert current["revision"] == 2
+    assert current["parent_manifest_id"] == first["manifest_id"]
+    assert current["supersedes_reason"] == "functional retry after candidate failure"
+    assert (
+        tmp_path / "required_verification_manifests" / "revision-001.json"
+    ).read_bytes() == revision_one
+
+
+def test_required_verification_preserves_old_schema_llk_without_metal(tmp_path):
+    analysis = """\
+## Scope
+in_scope: true
+## Verification
+verifiable_in_llk_suite: yes
+## Test Candidates
+- test: tests/python_tests/test_reduce.py::test_reduce
+  arch: blackhole
+"""
+    plan = "## Test Strategy\ncompile_checks:\n- none\n"
+    _, output = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(output.read_text())
+    assert [(r["suite"], r["selector"]["test"]) for r in manifest["requirements"]] == [
+        ("llk", "test_reduce.py")
+    ]
+
+
+def test_required_verification_infers_llk_from_old_plan_without_verification_section(
+    tmp_path,
+):
+    analysis = "## Scope\nin_scope: true\n"
+    plan = """\
+## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: test_reduce.py::test_reduce
+"""
+    _, output = _required_manifest(tmp_path, analysis, plan)
+    requirement = json.loads(output.read_text())["requirements"][0]
+    assert requirement["requirement_id"] == "blackhole:llk:1"
+    assert requirement["selector"]["test_id"] == "test_reduce.py::test_reduce"
+
+
+def test_required_verification_retains_perf_when_hypothesis_is_refuted(tmp_path):
+    analysis = """\
+## Scope
+in_scope: true
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: yes
+llk_coverage: add_required
+"""
+    plan = """\
+## Primary Hypothesis
+status: refuted
+## Test Strategy
+regression_tests:
+- arch: blackhole
+  test: perf_reduce.py
+  coverage: existing
+"""
+    _, output = _required_manifest(tmp_path, analysis, plan, "--performance-only")
+    requirements = json.loads(output.read_text())["requirements"]
+    assert len(requirements) == 1
+    assert requirements[0]["suite"] == "perf"
+    assert requirements[0]["required_measurements"] == ["cycle_comparison"]
+
+
+@pytest.mark.parametrize(
+    ("analysis", "plan", "reason"),
+    [
+        (
+            "## Scope\nin_scope: true\n## Verification\nverification_required: yes\n"
+            "verifiable_in_llk_suite: yes\nllk_coverage: add_required\n",
+            "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n"
+            "  test: test_reduce.py\n",
+            "coverage must be existing|added",
+        ),
+        (
+            "## Scope\nin_scope: true\n## Verification\nverification_required: yes\n"
+            "verifiable_in_llk_suite: yes\nllk_coverage: existing\n",
+            "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n"
+            "  test: test_missing.py\n",
+            "names a missing file",
+        ),
+    ],
+)
+def test_required_verification_rejects_unexecutable_coverage(
+    tmp_path, analysis, plan, reason
+):
+    proc, output = _required_manifest(tmp_path, analysis, plan, check=False)
+    assert proc.returncode != 0
+    assert reason in proc.stderr
+    assert not output.exists()
+
+
 def _write_verification_inputs(
     tmp_path, *, selected=1, junit_tests=1, log="", collection_returncode=None
 ):
@@ -312,7 +547,51 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     compile_in(first_worktree, tmp_path / "logs-one")
     assert capture.read_text().splitlines()[-1] == changed_root
 
-    result_path = tmp_path / "logs-one" / "verification-result.json"
+    bound_log = tmp_path / "logs-one"
+    required_path = bound_log / "required_verification_manifest.json"
+    required = {
+        "schema": "tt.issue-solver.required-verification",
+        "version": 1,
+        "manifest_id": "0" * 64,
+        "run_id": "run-bound",
+        "attempt_id": "attempt-004",
+        "expected_base_sha": subprocess.run(
+            ["git", "-C", str(first_worktree), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "revision": 4,
+        "parent_manifest_id": "1" * 64,
+        "supersedes_reason": "fixture retry",
+        "requirements": [
+            {
+                "requirement_id": "blackhole:llk:2",
+                "architecture": "blackhole",
+                "suite": "llk",
+                "backend": "silicon",
+                "selector": {"test": "test_fake.py", "test_id": None, "k": None},
+                "minimum_selected": 1,
+                "minimum_executed": 1,
+                "required_measurements": [],
+            }
+        ],
+        "waivers": [],
+    }
+    required["manifest_id"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in required.items() if key != "manifest_id"},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    required_path.write_text(json.dumps(required))
+    (bound_log / "state.json").write_text(
+        json.dumps({"REQUIRED_VERIFICATION_MANIFEST": str(required_path)})
+    )
+    result_path = bound_log / "verification-result.json"
     completed = subprocess.run(
         [
             "bash",
@@ -338,6 +617,9 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     local_result = json.loads(result_path.read_text())
     assert local_result["schema"] == "tt.issue-solver.verification-result"
     assert local_result["classification"] == "success"
+    assert local_result["run_id"] == "run-bound"
+    assert local_result["attempt_id"] == "attempt-004"
+    assert local_result["requirement_id"] == "blackhole:llk:2"
     assert local_result["execution"]["executed"] == 1
     assert local_result["provenance"]["artifact_set_sha256"] == (
         local_result["provenance"]["executed_artifact_sha256"]

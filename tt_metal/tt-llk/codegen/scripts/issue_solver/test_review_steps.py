@@ -7,8 +7,10 @@
 Covers the two helpers a review round cannot be correct without:
 
 * ``execute_step_seed_review_state`` — the round inherits its scope, arches, and
-  verification route from the solve that produced the PR. Getting that wrong means
-  verifying the wrong thing on the wrong hardware.
+    verification route from the solve that produced the PR. Getting that wrong means
+    verifying the wrong thing on the wrong hardware.
+* ``execute_step_route_verification`` — the executable route is derived from a
+  checksummed manifest before either tester can start.
 * ``execute_step_record_review_dispositions`` — the gate that stops a reply the
   addresser never actually thought about from reaching a reviewer.
 * ``execute_step_combine_verification_results`` — the deterministic backstop
@@ -45,11 +47,11 @@ def _bash(
 
 @pytest.fixture
 def worktree(tmp_path: Path) -> Path:
-    """A minimal fake worktree: <wt>/tt_metal/tt-llk with a codegen/ symlink."""
+    """A minimal fake worktree: <wt>/tt_metal/tt-llk with local artifacts."""
     wt = tmp_path / "wt"
     llk = wt / "tt_metal" / "tt-llk"
     llk.mkdir(parents=True)
-    (llk / "codegen").symlink_to(CODEGEN)
+    (llk / "codegen" / "artifacts").mkdir(parents=True)
     return wt
 
 
@@ -258,6 +260,92 @@ def test_setup_review_run_requires_the_analysis_artifact(
     r = _bash("execute_step_setup_review_run", llk)
     assert r.returncode != 0
     assert "missing issue_36142_analysis.md" in r.stdout + r.stderr
+
+
+# ── execute_step_route_verification ──────────────────────────────────────────
+def _route_case(tmp_path, worktree, *, missing_test=False):
+    log_dir = tmp_path / "route-log"
+    log_dir.mkdir()
+    state = {
+        "LOG_DIR": str(log_dir),
+        "RUN_ID": "run-1",
+        "ISSUE_NUMBER": "36142",
+        "GIT_COMMIT": "a" * 40,
+        "TARGET_ARCHES_JSON": ["blackhole"],
+        "TEST_BACKEND": "local",
+        "DEBUG_CYCLES": 0,
+        "REVIEW_RETRIES": 0,
+        "PERF_RETRIES": 0,
+    }
+    (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps({"LOG_DIR": str(log_dir)}), encoding="utf-8"
+    )
+    (log_dir / "run.json").write_text(
+        json.dumps({"run_id": "run-1", "current_step": "writer"}),
+        encoding="utf-8",
+    )
+    tests = llk / "tests" / "python_tests"
+    tests.mkdir(parents=True)
+    if not missing_test:
+        (tests / "test_reduce.py").write_text("def test_reduce(): pass\n")
+    metal = worktree / "tests" / "tt_metal" / "tt_metal" / "llk"
+    metal.mkdir(parents=True)
+    (metal / "test_reduce.cpp").write_text("// test\n")
+    artifacts = llk / "codegen" / "artifacts"
+    (artifacts / "issue_36142_analysis.md").write_text(
+        """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+fix_layer: mixed
+verification_required: yes
+verifiable_in_llk_suite: partial
+llk_coverage: existing
+metal_verification:
+  target: unit_tests_llk
+  coverage: added
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: LLKFixture.Reduce
+  dispatch: fast
+""",
+        encoding="utf-8",
+    )
+    selected_test = "test_missing.py" if missing_test else "test_reduce.py::test_reduce"
+    (artifacts / "issue_36142_fix_plan.md").write_text(
+        "## Test Strategy\nreproduction_tests:\n"
+        f"- arch: blackhole\n  test: {selected_test}\n",
+        encoding="utf-8",
+    )
+    return _bash("execute_step_route_verification", llk), log_dir
+
+
+def test_route_seals_manifest_before_a_tester_can_start(tmp_path, worktree):
+    result, log_dir = _route_case(tmp_path, worktree)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((log_dir / "state.json").read_text())
+    manifest_path = Path(state["REQUIRED_VERIFICATION_MANIFEST"])
+    manifest = json.loads(manifest_path.read_text())
+    assert state["VERIFY_ROUTE"] == "both"
+    assert state["REQUIRED_VERIFICATION_MANIFEST_ID"] == manifest["manifest_id"]
+    assert state["REQUIRED_VERIFICATION_ATTEMPT_ID"] == "attempt-001"
+    assert {item["suite"] for item in manifest["requirements"]} == {"llk", "metal"}
+    assert not (log_dir / "verification-results").exists()
+    run = json.loads((log_dir / "run.json").read_text())
+    assert run["current_step"] == "writer"
+    assert run["required_verification"]["requirements"] == 2
+
+
+def test_route_rejects_a_missing_selector_before_execution(tmp_path, worktree):
+    result, log_dir = _route_case(tmp_path, worktree, missing_test=True)
+    assert result.returncode == 0
+    state = json.loads((log_dir / "state.json").read_text())
+    assert state["VERIFY_ROUTE"] == "missing"
+    assert state["REQUIRED_VERIFICATION_MANIFEST"] == ""
+    assert "names a missing file" in result.stdout + result.stderr
+    assert not (log_dir / "required_verification_manifest.json").exists()
 
 
 # ── execute_step_combine_verification_results ────────────────────────────────

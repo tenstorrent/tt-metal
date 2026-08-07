@@ -33,6 +33,8 @@ Subcommands:
                     one per-arch run.json under a shared issue_run_id.
     artifact-manifest
                     Seal a local attempt-owned LLK artifact set before execution.
+    required-verification
+                    Normalize and seal the run's immutable verification contract.
     verification-result
                     Write a strict v2 result from collection/JUnit/artifact evidence.
     finalize        Close out the last step_history entry, set end_time, flip
@@ -59,6 +61,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -550,6 +553,499 @@ def _canonical_digest(value: Any) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+_VERIFICATION_ARCHES = {"blackhole", "wormhole", "quasar"}
+_COVERED_STATES = {"existing", "added"}
+
+
+def _markdown_section(text: str, heading: str) -> str:
+    """Return one exact level-two Markdown section without parsing prose."""
+    match = re.search(
+        rf"(?ms)^##[ \t]+{re.escape(heading)}[ \t]*\n(.*?)(?=^##[ \t]+|\Z)",
+        text,
+    )
+    return match.group(1) if match else ""
+
+
+def _markdown_value(value: str) -> str:
+    """Remove Markdown quoting and an unquoted inline comment from a scalar."""
+    quote = None
+    end = len(value)
+    for index, char in enumerate(value):
+        if char in "'\"`":
+            quote = None if quote == char else (char if quote is None else quote)
+        elif (
+            char == "#" and quote is None and (index == 0 or value[index - 1].isspace())
+        ):
+            end = index
+            break
+    cleaned = value[:end].strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "'\"`":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+def _markdown_scalar(section: str, key: str) -> str:
+    match = re.search(rf"(?mi)^[ \t]*{re.escape(key)}[ \t]*:[ \t]*([^\n]*)$", section)
+    return _markdown_value(match.group(1)) if match else ""
+
+
+def _markdown_items(section: str, group_names: set[str] | None = None) -> list[dict]:
+    """Parse the small key/value list shape used by analysis and fix plans."""
+    items: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    group = ""
+    for line in section.splitlines():
+        group_match = re.match(r"^([A-Za-z_]+)[ \t]*:[ \t]*$", line)
+        if group_match and group_names and group_match.group(1) in group_names:
+            group = group_match.group(1)
+            current = None
+            continue
+        item_match = re.match(r"^[ \t]*-[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*)$", line)
+        if item_match:
+            current = {"_group": group, "_raw": line}
+            current[item_match.group(1)] = _markdown_value(item_match.group(2))
+            items.append(current)
+            continue
+        field_match = re.match(r"^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*)$", line)
+        if current is not None and field_match:
+            current[field_match.group(1)] = _markdown_value(field_match.group(2))
+        if current is not None:
+            current["_raw"] += "\n" + line
+    return items
+
+
+def _normalize_arch_scope(scope: str, requested: list[str]) -> list[str]:
+    states: dict[str, str] = {}
+    in_arch_scope = False
+    for line in scope.splitlines():
+        if re.match(r"^arch_scope[ \t]*:[ \t]*$", line):
+            in_arch_scope = True
+            continue
+        if in_arch_scope and line and not line[0].isspace():
+            break
+        if in_arch_scope:
+            match = re.match(
+                r"^[ \t]+(blackhole|wormhole|quasar)[ \t]*:[ \t]*(in_scope|out_of_scope)[ \t]*$",
+                line,
+                re.IGNORECASE,
+            )
+            if match:
+                states[match.group(1).lower()] = match.group(2).lower()
+    if states:
+        missing = set(requested) - states.keys()
+        if missing:
+            raise ValueError(
+                "arch_scope omits requested architecture(s): "
+                + ", ".join(sorted(missing))
+            )
+    return [arch for arch in requested if states.get(arch, "in_scope") == "in_scope"]
+
+
+def _normalize_pytest_selector(
+    raw: str, arch: str, worktree: Path
+) -> dict[str, str | None]:
+    """Normalize one exact run_test.sh selector and verify its test path exists."""
+    value = _markdown_value(raw)
+    try:
+        tokens = shlex.split(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid pytest selector {raw!r}: {exc}") from exc
+    if len(tokens) == 3 and tokens[1] == "-k" and tokens[2]:
+        target, k_filter = tokens[0], tokens[2]
+    elif len(tokens) == 1:
+        target, k_filter = tokens[0], None
+    else:
+        raise ValueError(
+            f"pytest selector must be an exact path/id or 'path -k expression': {raw!r}"
+        )
+    if "::" in target:
+        test_path, node = target.split("::", 1)
+        if not node:
+            raise ValueError(f"pytest selector has an empty node id: {raw!r}")
+    else:
+        test_path, node = target, None
+    test_path = test_path.removeprefix("./").removeprefix("tt_metal/tt-llk/")
+    tests_root = Path("tests/python_tests")
+    arch_root = tests_root / "quasar" if arch == "quasar" else tests_root
+    if test_path.startswith("tests/python_tests/"):
+        relative = Path(test_path).relative_to(tests_root)
+        if arch == "quasar":
+            try:
+                relative = relative.relative_to("quasar")
+            except ValueError as exc:
+                raise ValueError(
+                    f"Quasar selector must be under tests/python_tests/quasar: {raw!r}"
+                ) from exc
+    elif "/" not in test_path or test_path.startswith("ai_gen/"):
+        relative = Path(test_path)
+    else:
+        raise ValueError(f"pytest selector is outside the LLK suite: {raw!r}")
+    if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".py":
+        raise ValueError(f"pytest selector has an invalid test path: {raw!r}")
+    actual = worktree / "tt_metal" / "tt-llk" / arch_root / relative
+    if not actual.is_file():
+        raise ValueError(f"pytest selector names a missing file: {actual}")
+    test = relative.as_posix()
+    return {
+        "test": test,
+        "test_id": f"{test}::{node}" if node else None,
+        "k": k_filter,
+    }
+
+
+def _is_performance_selector(raw: str) -> bool:
+    value = _markdown_value(raw).split("::", 1)[0]
+    return Path(value.split()[0]).name.startswith("perf_")
+
+
+def _is_llk_pytest_selector(raw: str) -> bool:
+    try:
+        target = shlex.split(_markdown_value(raw))[0].split("::", 1)[0]
+    except (IndexError, ValueError):
+        return False
+    target = target.removeprefix("./").removeprefix("tt_metal/tt-llk/")
+    return target.endswith(".py") and (
+        "/" not in target
+        or target.startswith("tests/python_tests/")
+        or target.startswith("ai_gen/")
+    )
+
+
+def _verification_backend(backend: str, arch: str) -> str:
+    if backend == "ttsim":
+        return "ttsim"
+    if backend != "local":
+        raise ValueError(f"unsupported verification backend: {backend!r}")
+    return "quasar" if arch == "quasar" else "silicon"
+
+
+def _requirement_count(item: dict, field: str, default: int = 1) -> int:
+    raw = item.get(field, "")
+    if not raw:
+        return default
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f"{field} must be a positive integer (got {raw!r})")
+    return int(raw)
+
+
+def _required_measurements(item: dict) -> list[str]:
+    raw = item.get("required_measurements", "")
+    if not raw or raw == "[]":
+        return []
+    try:
+        values = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError("required_measurements must be a JSON string array") from exc
+    allowed = {"cycle_comparison", "repeatability"}
+    if (
+        not isinstance(values, list)
+        or not values
+        or any(not isinstance(value, str) or value not in allowed for value in values)
+        or len(set(values)) != len(values)
+    ):
+        raise ValueError(
+            f"required_measurements must be a unique subset of {sorted(allowed)}"
+        )
+    return values
+
+
+def _load_required_manifest(path: Path) -> dict[str, Any]:
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(doc, dict)
+        or doc.get("schema") != "tt.issue-solver.required-verification"
+        or doc.get("version") != 1
+        or doc.get("manifest_id")
+        != _canonical_digest(
+            {key: value for key, value in doc.items() if key != "manifest_id"}
+        )
+    ):
+        raise ValueError(f"invalid required-verification manifest: {path}")
+    if doc.get("waivers") != []:
+        raise ValueError("agent-created verification waivers are unsupported")
+    return doc
+
+
+def cmd_required_verification(args: argparse.Namespace) -> None:
+    """Normalize the current analysis/plan into one immutable manifest revision."""
+    worktree = Path(args.worktree).resolve(strict=True)
+    analysis = Path(args.analysis).read_text(encoding="utf-8")
+    plan = Path(args.plan).read_text(encoding="utf-8")
+    if not _SHA40_RE.fullmatch(args.expected_base_sha):
+        raise ValueError("expected_base_sha must be 40 lowercase hex")
+    requested = json.loads(args.architectures_json)
+    if (
+        not isinstance(requested, list)
+        or not requested
+        or any(arch not in _VERIFICATION_ARCHES for arch in requested)
+        or len(set(requested)) != len(requested)
+    ):
+        raise ValueError("architectures_json must be a unique nonempty supported list")
+
+    scope = _markdown_section(analysis, "Scope")
+    arches = _normalize_arch_scope(scope, requested)
+    if not arches:
+        raise ValueError("required-verification manifest has no in-scope architecture")
+    verification = _markdown_section(analysis, "Verification")
+    candidates = _markdown_items(_markdown_section(analysis, "Test Candidates"))
+    strategy = _markdown_section(plan, "Test Strategy")
+    plan_tests = _markdown_items(strategy, {"reproduction_tests", "regression_tests"})
+
+    verify_required = _markdown_scalar(verification, "verification_required")
+    verifiable = _markdown_scalar(verification, "verifiable_in_llk_suite")
+    llk_coverage = _markdown_scalar(verification, "llk_coverage")
+    metal_match = re.search(
+        r"(?ms)^metal_verification[ \t]*:[^\n]*\n(.*?)(?=^[^ \t\n]|\Z)",
+        verification,
+    )
+    metal = metal_match.group(1) if metal_match else ""
+    metal_target = _markdown_scalar(metal, "target")
+    metal_coverage = _markdown_scalar(metal, "coverage")
+    metal_test_file = _markdown_scalar(metal, "test_file")
+    metal_filter = _markdown_scalar(metal, "gtest_filter")
+    metal_dispatch = _markdown_scalar(metal, "dispatch")
+
+    applicable_candidates = [
+        item
+        for item in candidates
+        if item.get("arch", "all") in {*arches, "all"}
+        and item.get("test")
+        and _is_llk_pytest_selector(item["test"])
+        and not _is_performance_selector(item["test"])
+    ]
+    # Old analysis revisions had only verifiable_in_llk_suite plus Test Candidates.
+    # Preserve their applicable LLK route instead of treating the absent Metal block
+    # or later-added coverage keys as permission to skip verification.
+    llk_applicable = verify_required != "no" and verifiable in {"yes", "partial"}
+    if not verifiable and verify_required != "no" and applicable_candidates:
+        llk_applicable = True
+    if llk_applicable and not llk_coverage:
+        candidate_states = {item.get("coverage", "") for item in applicable_candidates}
+        if "add_required" in candidate_states:
+            llk_coverage = "add_required"
+        elif applicable_candidates and candidate_states <= {"", *_COVERED_STATES}:
+            llk_coverage = "existing"
+
+    functional_plan = [
+        item
+        for item in plan_tests
+        if item.get("test") and not _is_performance_selector(item["test"])
+    ]
+    performance_plan = [
+        item
+        for item in plan_tests
+        if item.get("test") and _is_performance_selector(item["test"])
+    ]
+    if not llk_applicable and verify_required != "no" and functional_plan:
+        llk_applicable = True
+    if llk_applicable and not llk_coverage:
+        plan_states = {item.get("coverage", "") for item in functional_plan}
+        if "add_required" in plan_states:
+            llk_coverage = "add_required"
+        elif functional_plan and plan_states <= {"", *_COVERED_STATES}:
+            llk_coverage = "existing"
+    if args.performance_only:
+        llk_applicable = False
+    if llk_applicable and llk_coverage not in _COVERED_STATES:
+        raise ValueError(
+            f"LLK coverage must be existing|added before execution (got {llk_coverage or 'missing'})"
+        )
+    if not args.performance_only and any(
+        item.get("coverage") == "add_required" for item in plan_tests
+    ):
+        raise ValueError("required test coverage remains add_required")
+
+    requirements: list[dict[str, Any]] = []
+    counters: dict[tuple[str, str], int] = {}
+
+    def add_requirement(
+        arch: str,
+        suite: str,
+        backend: str,
+        selector: dict[str, str | None],
+        minimum_selected: int = 1,
+        minimum_executed: int = 1,
+        measurements: list[str] | None = None,
+    ) -> None:
+        key = (arch, suite)
+        if any(
+            item["architecture"] == arch
+            and item["suite"] == suite
+            and item["selector"] == selector
+            for item in requirements
+        ):
+            raise ValueError(f"duplicate {suite} selector for {arch}: {selector!r}")
+        counters[key] = counters.get(key, 0) + 1
+        requirements.append(
+            {
+                "requirement_id": f"{arch}:{suite}:{counters[key]}",
+                "architecture": arch,
+                "suite": suite,
+                "backend": backend,
+                "selector": selector,
+                "minimum_selected": minimum_selected,
+                "minimum_executed": minimum_executed,
+                "required_measurements": measurements or [],
+            }
+        )
+
+    if llk_applicable:
+        source_items = functional_plan or applicable_candidates
+        for arch in arches:
+            selected = [
+                item
+                for item in source_items
+                if item.get("arch", "all") in {arch, "all"}
+            ]
+            if not selected:
+                raise ValueError(f"missing exact LLK selector for {arch}")
+            for item in selected:
+                add_requirement(
+                    arch,
+                    "llk",
+                    _verification_backend(args.backend, arch),
+                    _normalize_pytest_selector(item["test"], arch, worktree),
+                    _requirement_count(item, "minimum_selected"),
+                    _requirement_count(item, "minimum_executed"),
+                    _required_measurements(item),
+                )
+
+    metal_applicable = not args.performance_only and metal_target not in {"", "none"}
+    if metal_applicable:
+        if metal_target != "unit_tests_llk" or metal_coverage not in _COVERED_STATES:
+            raise ValueError("Metal verification target/coverage is not executable")
+        if not metal_filter or metal_filter in {"*", "'*'", '"*"'}:
+            raise ValueError("Metal verification requires a tight gtest_filter")
+        if metal_dispatch not in {"slow", "fast"}:
+            raise ValueError("Metal verification dispatch must be slow|fast")
+        metal_path = metal_test_file.removeprefix("./")
+        if not metal_path or metal_path == "none":
+            raise ValueError("Metal verification requires a test_file")
+        if not (worktree / metal_path).is_file():
+            raise ValueError(
+                f"Metal selector names a missing file: {worktree / metal_path}"
+            )
+        for arch in arches:
+            add_requirement(
+                arch,
+                "metal",
+                _verification_backend(args.backend, arch),
+                {"test": metal_filter, "test_id": None, "k": None},
+            )
+    elif (
+        not args.performance_only
+        and verifiable in {"no", "partial"}
+        and verify_required == "yes"
+    ):
+        if not llk_applicable:
+            raise ValueError(
+                "required Metal route has no executable verification section"
+            )
+        if verifiable == "partial":
+            raise ValueError("partial verification route is missing its Metal section")
+
+    for arch in arches:
+        selected = [
+            item
+            for item in performance_plan
+            if item.get("arch", "all") in {arch, "all"}
+        ]
+        for item in selected:
+            backend = _verification_backend(args.backend, arch)
+            if backend != "silicon":
+                raise ValueError(
+                    f"performance requirement for {arch} requires silicon, got {backend}"
+                )
+            repetitions = [
+                int(value)
+                for value in re.findall(r"(?i)\bN\s*(?:>=|≥)\s*(\d+)\b", item["_raw"])
+            ]
+            lowered = item["_raw"].casefold()
+            deterministic = "determinism" in lowered or "deterministic" in lowered
+            measurements = _required_measurements(item) or ["cycle_comparison"]
+            if deterministic and "repeatability" not in measurements:
+                measurements.append("repeatability")
+            add_requirement(
+                arch,
+                "perf",
+                backend,
+                _normalize_pytest_selector(item["test"], arch, worktree),
+                _requirement_count(item, "minimum_selected"),
+                max([*repetitions, _requirement_count(item, "minimum_executed")]),
+                measurements,
+            )
+
+    if verify_required == "yes" and not requirements:
+        raise ValueError(
+            "verification is required but no executable requirement exists"
+        )
+    if not requirements and verify_required != "no":
+        raise ValueError("unsupported or missing verification route")
+
+    output = Path(args.output)
+    revisions = output.parent / "required_verification_manifests"
+    prior_paths = list(revisions.glob("revision-*.json")) if revisions.exists() else []
+    numbered = []
+    for path in prior_paths:
+        match = re.fullmatch(r"revision-(\d+)\.json", path.name)
+        if not match:
+            raise ValueError(f"invalid manifest revision filename: {path}")
+        numbered.append((int(match.group(1)), path))
+    numbered.sort()
+    previous = None
+    for expected_revision, (revision, path) in enumerate(numbered, 1):
+        if revision != expected_revision:
+            raise ValueError(
+                "required-verification manifest revisions are not contiguous"
+            )
+        current = _load_required_manifest(path)
+        if current.get("revision") != revision:
+            raise ValueError(f"manifest revision number contradicts filename: {path}")
+        expected_parent = previous["manifest_id"] if previous else None
+        if current.get("parent_manifest_id") != expected_parent:
+            raise ValueError(f"manifest revision chain is broken at {path}")
+        previous = current
+    if previous:
+        if previous["run_id"] != args.run_id:
+            raise ValueError("cannot supersede a manifest from another run")
+        if previous["expected_base_sha"] != args.expected_base_sha:
+            raise ValueError(
+                "cannot change expected_base_sha across manifest revisions"
+            )
+        if not args.supersedes_reason:
+            raise ValueError("a superseding manifest requires --supersedes-reason")
+    revision = int(previous["revision"]) + 1 if previous else 1
+    doc = {
+        "schema": "tt.issue-solver.required-verification",
+        "version": 1,
+        "manifest_id": "0" * 64,
+        "run_id": args.run_id,
+        "attempt_id": f"attempt-{revision:03d}",
+        "expected_base_sha": args.expected_base_sha,
+        "revision": revision,
+        "parent_manifest_id": previous["manifest_id"] if previous else None,
+        "supersedes_reason": args.supersedes_reason or None,
+        "requirements": requirements,
+        "waivers": [],
+    }
+    doc["manifest_id"] = _canonical_digest(
+        {key: value for key, value in doc.items() if key != "manifest_id"}
+    )
+    revision_path = revisions / f"revision-{revision:03d}.json"
+    if revision_path.exists():
+        raise ValueError(f"manifest revision already exists: {revision_path}")
+    _atomic_write(revisions, doc, destination=revision_path)
+    _atomic_write(output.parent, doc, destination=output)
+    suites = {item["suite"] for item in requirements}
+    functional = suites & {"llk", "metal"}
+    route = "both" if functional == {"llk", "metal"} else next(iter(functional), "none")
+    print(
+        f"required-verification: route={route} revision={revision} "
+        f"attempt_id={doc['attempt_id']} manifest_id={doc['manifest_id']} "
+        f"requirements={len(requirements)} output={output}"
+    )
 
 
 def _artifact_records(root: Path) -> list[dict[str, Any]]:
@@ -1100,6 +1596,27 @@ def _build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--source-tree-sha256", required=True)
     manifest.add_argument("--compiler-sha256", required=True)
     manifest.set_defaults(func=cmd_artifact_manifest)
+
+    required = sub.add_parser(
+        "required-verification",
+        help="Normalize analysis and fix-plan selectors into an immutable manifest",
+    )
+    _add_common(required)
+    required.add_argument("--output", required=True)
+    required.add_argument("--analysis", required=True)
+    required.add_argument("--plan", required=True)
+    required.add_argument("--worktree", required=True)
+    required.add_argument("--run-id", required=True)
+    required.add_argument("--expected-base-sha", required=True)
+    required.add_argument("--architectures-json", required=True)
+    required.add_argument("--backend", required=True, choices=["local", "ttsim"])
+    required.add_argument("--supersedes-reason", default=None)
+    required.add_argument(
+        "--performance-only",
+        action="store_true",
+        help="seal only explicit perf leaves when a hypothesis was refuted",
+    )
+    required.set_defaults(func=cmd_required_verification)
 
     result = sub.add_parser(
         "verification-result",
