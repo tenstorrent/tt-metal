@@ -272,4 +272,14 @@ Tensor polyval(
     const std::vector<float>& coeffs,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+// Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * up, with up
+// optionally softcapped by beta2. beta2 == nullopt leaves up untransformed. gate and
+// up are supplied pre-split; the caller decides how to extract them.
+Tensor situ_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float beta1,
+    std::optional<float> beta2 = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
 }  // namespace ttnn

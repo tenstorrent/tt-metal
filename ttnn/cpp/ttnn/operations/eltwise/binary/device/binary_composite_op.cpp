@@ -886,4 +886,22 @@ Tensor bias_gelu(
         resolved_sub_core_grids);
 }
 
+Tensor situ_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float beta1,
+    std::optional<float> beta2,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    using namespace operations::unary;
+    // gate half: beta1 * tanh(gate / beta1) * sigmoid(gate).
+    Tensor situ_a = ttnn::multiply(
+        ttnn::softcap(gate, beta1, output_mem_config),
+        ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    // up half: softcapped by beta2 when provided, otherwise left untouched.
+    Tensor up_half = beta2.has_value() ? ttnn::softcap(up, *beta2, output_mem_config) : up;
+    return ttnn::multiply(situ_a, up_half, std::nullopt, output_mem_config);
+}
+
 }  // namespace ttnn
