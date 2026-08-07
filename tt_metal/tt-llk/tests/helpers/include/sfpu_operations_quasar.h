@@ -36,13 +36,14 @@
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
-// comparison and max/min enumerators were added to it in llk_defs.h).
+// comparison, max/min, and atan2 enumerators were added to it in ckernel_defs.h).
 //
 // To add a new Quasar binary SFPU op:
 // 1. Include its ckernel header below.
-// 2. Add the enumerator to ckernel::BinaryOp (llk_defs.h) if it is not there.
+// 2. Add the enumerator to ckernel::BinaryOp (tt_llk_quasar/common/inc/ckernel_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
+#include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_quant.h"          // quant_family / quant_family_init (quant/requant/dequant)
@@ -363,6 +364,8 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  * @brief Run the per-operation init step for a Quasar binary SFPU op.
  *
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode. Must match the calculate step;
+ *         atan2 uses it to select the reciprocal variant its polynomial expects.
  * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
  *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
  * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
@@ -370,7 +373,7 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
-template <ckernel::BinaryOp OP, bool SIGN_MAGNITUDE_FORMAT = false>
+template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en, bool SIGN_MAGNITUDE_FORMAT = false>
 void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (OP == BinaryOp::MUL)
@@ -389,6 +392,13 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         // One op-templated quant kernel; DEQUANT's caller passes bits of -zero_point.
         quant_family_init<quant_variant_of<OP>(), SIGN_MAGNITUDE_FORMAT>(zero_point);
+    }
+    else if constexpr (OP == BinaryOp::ATAN2)
+    {
+        // Programs the Newton-Raphson reciprocal constant. is_fp32_dest_acc_en must be the
+        // same value the calculate step uses — it picks both the minimax degree and the
+        // reciprocal variant.
+        calculate_sfpu_atan2_init<false /*APPROX*/, is_fp32_dest_acc_en>();
     }
     // ADD / SUB / GT / LT / LE / GE are stateless — no init.
 }
@@ -497,6 +507,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             is_fp32_dest_acc_en,
             calculate_sfpu_binary,
             (false /*APPROX*/, BinaryOp::DIV, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::ATAN2)
+    {
+        // atan2(y, x): src0 = y, src1 = x. is_fp32_dest_acc_en must match the init's.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_atan2,
+            (false /*APPROX*/, ITERATIONS, is_fp32_dest_acc_en),
             src0_tile,
             src1_tile,
             dst_tile,

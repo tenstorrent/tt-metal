@@ -295,7 +295,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div, atan2). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -325,8 +325,14 @@ def _get_valid_float_formats_dest_acc():
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
     """Map [0,1) uniform stimuli into op-appropriate ranges (div: ±[0.25,4] + special
-    lanes; add/sub/mul: ±250)."""
+    lanes; atan2: ±5; add/sub/mul: ±250)."""
     torch_format = format_dict[data_format]
+    if mathop == MathOperation.SfpuAtan2:
+        # atan2(y, x): y = tile src0_idx, x = tile src1_idx. Signed ±5 gives mixed
+        # signs on both operands, so all four quadrants and the |y| >= |x| / x < 0
+        # branches are exercised; the minimax approximation is matched under PCC.
+        scaled = ((src_A.to(torch.float32) - 0.5) * 10.0).to(torch_format)
+        return scaled.flatten().reshape(scaled.shape)
     if mathop == MathOperation.SfpuElwdiv:
         scaled = (src_A.to(torch.float32) - 0.5) * 8.0
         sign = torch.where(scaled >= 0, torch.tensor(1.0), torch.tensor(-1.0))
@@ -344,7 +350,8 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
 
 def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
     """Float stimuli: uniform [0,1) mapped to op-appropriate ranges by
-    _prepare_float_inputs (div: ±[0.25,4] + special lanes; add/sub/mul: ±250)."""
+    _prepare_float_inputs (div: ±[0.25,4] + special lanes; atan2: ±5;
+    add/sub/mul: ±250)."""
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -377,6 +384,7 @@ _FLOAT_OPS = [
     ("SUB", MathOperation.SfpuElwsub),
     ("MUL", MathOperation.SfpuElwmul),
     ("DIV", MathOperation.SfpuElwdiv),
+    ("ATAN2", MathOperation.SfpuAtan2),
 ]
 
 
@@ -403,7 +411,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div)."""
+    """Binary SFPU float ops (add, sub, mul, div, atan2)."""
     formats, dest_acc = formats_dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
