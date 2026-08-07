@@ -544,7 +544,30 @@ def session_first_last_analysis(riscData, analysis):
 
 
 def op_first_last_analysis(riscData, analysis):
-    return first_last_analysis(riscData["timeseries"], analysis)
+    # Per-core pairing: on Blackhole, different cores have different clock counter
+    # base offsets (~35B cycles apart). The mixed-core timeseries sorted by timestamp
+    # interleaves markers from cores with different bases, so the first start may come
+    # from a low-offset core and the last end from a high-offset core — producing a
+    # fake duration equal to the inter-core offset. Pair within each core, then report
+    # the median per-core duration as the op's aggregate (not max, which picks outliers).
+    timeseries = riscData["timeseries"]
+    if timeseries and len(timeseries[0]) >= 5:
+        core_ts = {}
+        for ts in timeseries:
+            core = ts[4] if len(ts) >= 5 else None
+            if core is not None:
+                core_ts.setdefault(core, []).append(ts)
+        if len(core_ts) > 1:
+            valid = []
+            for core, cts in core_ts.items():
+                ret = first_last_analysis(cts, analysis)
+                if ret and ret[0]["duration_cycles"] >= 0:
+                    valid.append(ret[0])
+            if valid:
+                valid.sort(key=lambda d: d["duration_cycles"])
+                return [valid[len(valid) // 2]]
+            return []
+    return first_last_analysis(timeseries, analysis)
 
 
 def op_core_first_last_analysis(riscData, analysis):
