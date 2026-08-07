@@ -43,10 +43,10 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 # (maxabsdiff==0 vs auto for both fp32 and bf16 inputs).
 #
 # Applied only when B==2; a B=1 PCC-test call falls back to auto.
-def _diff_b2_cfg(cx, cy, pn):
+def _diff_b2_cfg(cx, cy, pn, ibw=2):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
-        in0_block_w=2,
+        in0_block_w=ibw,
         out_subblock_h=1,
         out_subblock_w=2,
         per_core_M=2,
@@ -57,7 +57,11 @@ def _diff_b2_cfg(cx, cy, pn):
     )
 
 
-_DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=1536, N=4608)
+# gate / up / head-layer modulation (K=1536, N=4608).  in0_block_w=4 (12 K-blocks) vs the prior ib2:
+# -11 us/op in the deployed frame (84 calls => -0.95 ms).  NOTE: isolation timing showed this flat —
+# only the in-model device profiler surfaces it.  maxabsdiff==0 for both the bf8b gate/up and the
+# fp32-act modulation (in0_block_w is K-stream granularity only, fp32 dest -> byte-identical).
+_DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2, ibw=4)
 # swiglu down (K=4608, N=1536): the 8x3=24-core / in0_block_w=2 config above ran at 74.4 us =
 # 190 GB/s, less than half the 379 GB/s its same-weight-size sibling (_DIFF_N4608_B2) reaches.
 # Widening the K-streaming granularity to in0_block_w=4 AND spreading N over 48 cores
