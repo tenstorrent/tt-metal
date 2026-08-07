@@ -31,6 +31,10 @@ Subcommands:
     link-siblings   Patch issue_run_id and sibling_runs on an existing run.json.
                     Kept for historical multi-arch issue-solver runs that used
                     one per-arch run.json under a shared issue_run_id.
+    artifact-manifest
+                    Seal a local attempt-owned LLK artifact set before execution.
+    verification-result
+                    Write a strict v2 result from collection/JUnit/artifact evidence.
     finalize        Close out the last step_history entry, set end_time, flip
                     status to a terminal value, merge in any remaining summary
                     fields passed via --patch-json.
@@ -51,10 +55,13 @@ Idempotency:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -87,10 +94,12 @@ def _load(log_dir: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def _atomic_write(log_dir: Path, doc: dict[str, Any]) -> None:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    path = _run_json_path(log_dir)
-    fd, tmp = tempfile.mkstemp(prefix=".run.json.", suffix=".tmp", dir=log_dir)
+def _atomic_write(
+    log_dir: Path, doc: dict[str, Any], *, destination: Path | None = None
+) -> None:
+    path = destination or _run_json_path(log_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(doc, f, indent=2)
@@ -510,6 +519,374 @@ def cmd_link_siblings(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------
+# Immutable local artifacts and strict verification results
+# --------------------------------------------------------------------------
+
+
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_INFRASTRUCTURE_MARKERS_V1 = (
+    ("tt_fatal", "TT_FATAL"),
+    ("gtest_suite_setup_failed", "SetUpTestSuite or TearDownTestSuite"),
+    ("device_count_failed", "GetNumAvailableDevices"),
+    ("runtime_root_unset", "Root Directory is not set"),
+    ("firmware_initialization_failed", "failed to initialize FW"),
+    ("device_initialization_failed", "failed to initialize device"),
+    ("device_initialization_failed", "device initialization failed"),
+    ("umd_initialization_failed", "UMD initialization failed"),
+    ("no_device_available", "No devices available"),
+    ("no_device_available", "No Tenstorrent device"),
+    ("tensix_timed_out", "TENSIX TIMED OUT"),
+    ("polling_timeout", "Polling brisc command timed out"),
+)
+
+
+def _canonical_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _artifact_records(root: Path) -> list[dict[str, Any]]:
+    if root.is_symlink():
+        raise ValueError(f"artifact root cannot be a symlink: {root}")
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError(f"artifact root is not a real directory: {root}")
+    records = []
+    for current, directories, files in os.walk(root):
+        current_path = Path(current)
+        for name in directories:
+            if (current_path / name).is_symlink():
+                raise ValueError(
+                    f"artifact root contains a symlink: {current_path / name}"
+                )
+        for name in files:
+            path = current_path / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"artifact root contains a nonregular file: {path}")
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            records.append(
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "size": path.stat().st_size,
+                    "sha256": digest.hexdigest(),
+                }
+            )
+    if not records:
+        raise ValueError("artifact root contains no files")
+    return sorted(records, key=lambda record: record["path"])
+
+
+def cmd_artifact_manifest(args: argparse.Namespace) -> None:
+    records = _artifact_records(Path(args.artifact_root))
+    manifest = {
+        "schema": "tt.issue-solver.local-artifact-manifest",
+        "version": 1,
+        "manifest_id": "0" * 64,
+        "owner_id": args.owner_id,
+        "build_input_digest": args.build_input_digest,
+        "source_tree_sha256": args.source_tree_sha256,
+        "compiler_sha256": args.compiler_sha256,
+        "artifact_set_sha256": _canonical_digest(records),
+        "artifacts": records,
+    }
+    for field in (
+        "build_input_digest",
+        "source_tree_sha256",
+        "compiler_sha256",
+        "artifact_set_sha256",
+    ):
+        if not _SHA256_RE.fullmatch(manifest[field]):
+            raise ValueError(
+                f"local artifact manifest {field} must be 64 lowercase hex"
+            )
+    manifest["manifest_id"] = _canonical_digest(
+        {key: value for key, value in manifest.items() if key != "manifest_id"}
+    )
+    output = Path(args.output)
+    _atomic_write(output.parent, manifest, destination=output)
+    print(f"artifact-manifest: wrote {output}")
+
+
+def _parse_junit(path: Path) -> dict[str, int]:
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise ValueError(f"invalid JUnit report: {exc}") from exc
+    suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+    if root.tag not in ("testsuite", "testsuites") or not suites:
+        raise ValueError("JUnit report contains no direct test suites")
+    totals = {field: 0 for field in ("tests", "failures", "errors", "skipped")}
+    try:
+        for suite in suites:
+            for field in totals:
+                value = int(suite.attrib.get(field, "0"))
+                if value < 0:
+                    raise ValueError
+                totals[field] += value
+    except (TypeError, ValueError) as exc:
+        raise ValueError("JUnit report contains malformed counts") from exc
+
+    xfailed = xpassed = xpassed_as_skip = 0
+    for testcase in root.iter("testcase"):
+        properties = {
+            item.attrib.get("name"): item.attrib.get("value")
+            for item in testcase.findall("./properties/property")
+        }
+        outcome = properties.get("codegen_outcome")
+        skipped = testcase.find("skipped")
+        if outcome == "xfailed" or (
+            skipped is not None and skipped.attrib.get("type") == "pytest.xfail"
+        ):
+            xfailed += 1
+        elif outcome == "xpassed" or (
+            skipped is not None
+            and skipped.attrib.get("message") == "xfail-marked test passes unexpectedly"
+        ):
+            xpassed += 1
+            xpassed_as_skip += int(skipped is not None)
+    failed = totals["failures"] + totals["errors"]
+    passed = totals["tests"] - failed - totals["skipped"] - (xpassed - xpassed_as_skip)
+    skipped = totals["skipped"] - xfailed - xpassed_as_skip
+    if min(passed, skipped) < 0:
+        raise ValueError("JUnit outcome counts contradict suite totals")
+    return {
+        "executed": passed + failed + xpassed,
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "xfailed": xfailed,
+        "xpassed": xpassed,
+    }
+
+
+def _load_local_manifest(path: Path, artifact_root: Path) -> dict[str, Any]:
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    expected = {
+        "schema",
+        "version",
+        "manifest_id",
+        "owner_id",
+        "build_input_digest",
+        "source_tree_sha256",
+        "compiler_sha256",
+        "artifact_set_sha256",
+        "artifacts",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected:
+        raise ValueError("local artifact manifest does not match the exact schema")
+    if (
+        manifest["schema"] != "tt.issue-solver.local-artifact-manifest"
+        or manifest["version"] != 1
+    ):
+        raise ValueError("unsupported local artifact manifest")
+    expected_id = _canonical_digest(
+        {key: value for key, value in manifest.items() if key != "manifest_id"}
+    )
+    if manifest["manifest_id"] != expected_id:
+        raise ValueError("local artifact manifest checksum mismatch")
+    current_records = _artifact_records(artifact_root)
+    current_digest = _canonical_digest(current_records)
+    manifest["executed_artifact_sha256"] = current_digest
+    manifest["artifact_mutated"] = (
+        current_records != manifest["artifacts"]
+        or current_digest != manifest["artifact_set_sha256"]
+    )
+    return manifest
+
+
+def cmd_verification_result(args: argparse.Namespace) -> int:
+    collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
+    expected_collection = {
+        "schema",
+        "version",
+        "selected",
+        "collected",
+        "errors",
+        "returncode",
+    }
+    if not isinstance(collection, dict) or set(collection) != expected_collection:
+        raise ValueError("collection result does not match the exact schema")
+    if (
+        collection["schema"] != "tt.issue-solver.pytest-collection"
+        or collection["version"] != 1
+    ):
+        raise ValueError("unsupported collection-result schema")
+    for field in ("selected", "collected", "errors", "returncode"):
+        value = collection[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or (field != "returncode" and value < 0)
+        ):
+            raise ValueError(f"collection {field} is invalid")
+    if collection["collected"] < collection["selected"]:
+        raise ValueError("collection selected count exceeds collected count")
+
+    marker_codes = list(args.infrastructure_code or [])
+    output = ""
+    if args.output_log:
+        try:
+            output = Path(args.output_log).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            marker_codes.append("execution_log_missing")
+    marker_codes.extend(
+        code
+        for code, marker in _INFRASTRUCTURE_MARKERS_V1
+        if marker.casefold() in output.casefold()
+    )
+    try:
+        counts = _parse_junit(Path(args.junit))
+    except ValueError:
+        counts = {
+            "executed": 0,
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "xfailed": 0,
+            "xpassed": 0,
+        }
+        marker_codes.append("result_report_missing_or_invalid")
+
+    manifest = _load_local_manifest(
+        Path(args.artifact_manifest), Path(args.artifact_root)
+    )
+    if manifest["artifact_mutated"]:
+        marker_codes.append("artifact_mutated_during_execution")
+    marker_codes = list(dict.fromkeys(marker_codes))
+    signal_number = args.signal
+    if signal_number is None and 129 <= args.returncode <= 255:
+        signal_number = args.returncode - 128
+    execution = {
+        "ran": counts["executed"] > 0,
+        **counts,
+        "returncode": args.returncode,
+        "signal": signal_number,
+        "timed_out": bool(args.timed_out),
+        "infrastructure_markers": marker_codes,
+    }
+    normalized_collection = {
+        "selected": collection["selected"],
+        "collected": collection["collected"],
+        "errors": collection["errors"],
+        "returncode": collection["returncode"],
+    }
+    if (
+        execution["executed"] + execution["skipped"] + execution["xfailed"]
+        > normalized_collection["selected"]
+    ):
+        marker_codes.append("execution_count_exceeds_selection")
+        execution["infrastructure_markers"] = list(dict.fromkeys(marker_codes))
+        marker_codes = execution["infrastructure_markers"]
+    if signal_number is not None and (
+        signal_number < 1
+        or args.returncode not in (-signal_number, 128 + signal_number)
+    ):
+        raise ValueError("signal number does not match the execution return code")
+
+    collection_nonzero = normalized_collection["returncode"] != 0 and not (
+        normalized_collection["returncode"] == 5
+        and normalized_collection["selected"] == 0
+    )
+    if execution["timed_out"]:
+        classification, reasons = "timed_out", ["execution_timed_out"]
+    elif collection_nonzero or normalized_collection["errors"] or marker_codes:
+        reasons = []
+        if collection_nonzero:
+            reasons.append("collection_nonzero_exit")
+        if normalized_collection["errors"]:
+            reasons.append("collection_error")
+        reasons.extend(marker_codes)
+        classification, reasons = "infra_error", list(dict.fromkeys(reasons))
+    elif normalized_collection["selected"] == 0:
+        classification, reasons = "coverage_error", ["zero_selected"]
+    elif execution["executed"] == 0:
+        classification, reasons = "coverage_error", ["zero_executed"]
+    elif (
+        execution["returncode"] == 0
+        and execution["failed"] == 0
+        and execution["xpassed"] == 0
+        and execution["passed"] == execution["executed"]
+    ):
+        classification, reasons = "success", []
+    elif execution["returncode"] == 1 and execution["failed"] > 0:
+        classification, reasons = "candidate_failure", ["test_failure"]
+    elif execution["returncode"] == 0:
+        classification, reasons = "candidate_failure", ["outcome_count_mismatch"]
+    elif signal_number is not None:
+        classification, reasons = "infra_error", ["execution_signalled"]
+    else:
+        classification, reasons = "infra_error", ["execution_nonzero_exit"]
+
+    for field, pattern in (
+        ("expected_base_sha", _SHA40_RE),
+        ("actual_base_sha", _SHA40_RE),
+        ("patch_sha256", _SHA256_RE),
+    ):
+        if not pattern.fullmatch(getattr(args, field)):
+            raise ValueError(f"{field} does not match the verification contract")
+    for field in (
+        "requirement_id",
+        "run_id",
+        "attempt_id",
+        "job_id",
+        "architecture",
+        "suite",
+        "backend",
+        "test",
+    ):
+        if not isinstance(getattr(args, field), str) or not getattr(args, field):
+            raise ValueError(f"{field} must be non-empty")
+    result = {
+        "schema": "tt.issue-solver.verification-result",
+        "version": 2,
+        "result_id": "0" * 64,
+        "requirement_id": args.requirement_id,
+        "run_id": args.run_id,
+        "attempt_id": args.attempt_id,
+        "job_id": args.job_id,
+        "architecture": args.architecture,
+        "suite": args.suite,
+        "backend": args.backend,
+        "selector": {"test": args.test, "test_id": args.test_id, "k": args.k},
+        "provenance": {
+            "expected_base_sha": args.expected_base_sha,
+            "actual_base_sha": args.actual_base_sha,
+            "patch_sha256": args.patch_sha256,
+            "manifest_id": manifest["manifest_id"],
+            "artifact_set_sha256": manifest["artifact_set_sha256"],
+            "executed_artifact_sha256": manifest["executed_artifact_sha256"],
+        },
+        "collection": normalized_collection,
+        "execution": execution,
+        "classification": classification,
+        "reason_codes": reasons,
+    }
+    result["result_id"] = _canonical_digest(
+        {key: value for key, value in result.items() if key != "result_id"}
+    )
+    output_path = Path(args.output)
+    _atomic_write(output_path.parent, result, destination=output_path)
+    print(f"verification-result: {classification} -> {output_path}")
+    return {
+        "success": 0,
+        "candidate_failure": 1,
+        "coverage_error": 1,
+        "infra_error": 3,
+        "timed_out": 5,
+    }[classification]
+
+
+# --------------------------------------------------------------------------
 # CLI wiring
 # --------------------------------------------------------------------------
 
@@ -712,6 +1089,49 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fz.set_defaults(func=cmd_finalize)
 
+    manifest = sub.add_parser(
+        "artifact-manifest",
+        help="Seal a local LLK artifact directory before execution",
+    )
+    manifest.add_argument("--output", required=True)
+    manifest.add_argument("--artifact-root", required=True)
+    manifest.add_argument("--owner-id", required=True)
+    manifest.add_argument("--build-input-digest", required=True)
+    manifest.add_argument("--source-tree-sha256", required=True)
+    manifest.add_argument("--compiler-sha256", required=True)
+    manifest.set_defaults(func=cmd_artifact_manifest)
+
+    result = sub.add_parser(
+        "verification-result",
+        help="Write a strict result from structured collection and JUnit evidence",
+    )
+    result.add_argument("--output", required=True)
+    result.add_argument("--collection-json", required=True)
+    result.add_argument("--junit", required=True)
+    result.add_argument("--output-log", default=None)
+    result.add_argument("--artifact-manifest", required=True)
+    result.add_argument("--artifact-root", required=True)
+    result.add_argument("--requirement-id", required=True)
+    result.add_argument("--run-id", required=True)
+    result.add_argument("--attempt-id", required=True)
+    result.add_argument("--job-id", required=True)
+    result.add_argument("--architecture", required=True)
+    result.add_argument("--suite", required=True)
+    result.add_argument(
+        "--backend", required=True, choices=["silicon", "ttsim", "quasar", "local"]
+    )
+    result.add_argument("--test", required=True)
+    result.add_argument("--test-id", default=None)
+    result.add_argument("--k", default=None)
+    result.add_argument("--expected-base-sha", required=True)
+    result.add_argument("--actual-base-sha", required=True)
+    result.add_argument("--patch-sha256", required=True)
+    result.add_argument("--returncode", required=True, type=int)
+    result.add_argument("--signal", default=None, type=int)
+    result.add_argument("--timed-out", action="store_true")
+    result.add_argument("--infrastructure-code", action="append", default=[])
+    result.set_defaults(func=cmd_verification_result)
+
     return p
 
 
@@ -719,13 +1139,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
-        args.func(args)
+        result = args.func(args)
     except SystemExit:
         raise
     except Exception as exc:
         print(f"run_json_writer error: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return int(result or 0)
 
 
 if __name__ == "__main__":

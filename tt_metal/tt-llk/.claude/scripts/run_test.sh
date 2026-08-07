@@ -52,6 +52,7 @@
 #   --lock     FILE   Global lock file (default /tmp/tt-llk-test.lock).
 #   --log-dir  DIR    Append the run's output to <DIR>/run.log (compile output to
 #                     <DIR>/compile.log).
+#   --result-json-out FILE  Write the exact structured verification result here.
 #   --stall    SECS   Log-stall seconds that mark a hang (default 180 emulator,
 #                     300 silicon). Also settable via HANG_STALL.
 #   --verbose         Print step headers to stderr.
@@ -71,6 +72,7 @@ WORKTREE="" ARCH="" TEST_FILE=""
 MAXFAIL="10" K_FILTER="" TEST_ID=""
 PORT="5556" JOBS="15"
 LOCKFILE="" SIM_PATH="" LOG_DIR=""
+RESULT_JSON_OUT=""
 NO_SPLIT="false" VERBOSE="false"
 STALL=""
 
@@ -100,6 +102,7 @@ while [[ $# -gt 0 ]]; do
     --lock)      LOCKFILE="$2";  shift 2 ;;
     --sim-path)  SIM_PATH="$2";  shift 2 ;;
     --log-dir)   LOG_DIR="$2";   shift 2 ;;
+    --result-json-out) RESULT_JSON_OUT="$2"; shift 2 ;;
     --stall)     STALL="$2";     shift 2 ;;
     --no-split)  NO_SPLIT="true"; shift ;;
     --verbose|-v) VERBOSE="true"; shift ;;
@@ -283,6 +286,31 @@ _source_tree_sha256() {
   )
 }
 
+# Hash the candidate delta separately from the complete post-patch source tree.
+# The tracked diff and every untracked, nonignored file are NUL-framed so a
+# local run has the same base/patch distinction as a dashboard-dispatched run.
+_patch_sha256() {
+  local relative path size digest tracked_digest
+  (
+    set -o pipefail
+    {
+      printf '%s\0' "tt-llk-local-patch-v1"
+      tracked_digest="$(git -C "$WORKTREE" diff --binary --full-index HEAD -- . | sha256sum | cut -d' ' -f1)"
+      printf '%s\0' "$tracked_digest"
+      while IFS= read -r -d '' relative; do
+        path="${WORKTREE}/${relative}"
+        [[ -f "$path" && ! -L "$path" ]] || {
+          echo "ERROR: unsupported untracked patch entry: ${relative}" >&2
+          return 3
+        }
+        size="$(stat -c %s "$path")"
+        digest="$(sha256sum "$path" | cut -d' ' -f1)"
+        printf '%s\0%s\0%s\0' "$relative" "$size" "$digest"
+      done < <(git -C "$WORKTREE" ls-files -z --others --exclude-standard -- .)
+    } | sha256sum | cut -d' ' -f1
+  )
+}
+
 # Derive the artifact path only after SFPI setup, so the selected compiler's
 # bytes are part of the identity. `count` uses a separate purpose namespace and
 # therefore cannot clear a compiled entry while collection initializes pytest.
@@ -291,6 +319,21 @@ _prepare_artifact_identity() {
   local compiler owner_scope selector
   compiler="${WORKTREE}/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
   SOURCE_TREE_SHA256="$(_source_tree_sha256)" || return $?
+  ACTUAL_BASE_SHA="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || return 3
+  EXPECTED_BASE_SHA="${CODEGEN_BASE_COMMIT:-$ACTUAL_BASE_SHA}"
+  [[ "$ACTUAL_BASE_SHA" =~ ^[0-9a-f]{40}$ && "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "ERROR: local verification requires exact base SHAs" >&2
+    return 3
+  }
+  [[ "$ACTUAL_BASE_SHA" == "$EXPECTED_BASE_SHA" ]] || {
+    echo "ERROR: checked-out base ${ACTUAL_BASE_SHA} does not match expected ${EXPECTED_BASE_SHA}" >&2
+    return 3
+  }
+  if [[ "${CODEGEN_PATCH_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    PATCH_SHA256="$CODEGEN_PATCH_SHA256"
+  else
+    PATCH_SHA256="$(_patch_sha256)" || return $?
+  fi
   if [[ -f "$compiler" ]]; then
     COMPILER_SHA256="$(sha256sum "$compiler" | cut -d' ' -f1)"
   elif [[ "$purpose" == "count" ]]; then
@@ -327,6 +370,32 @@ _prepare_artifact_identity() {
     echo "ERROR: cannot create managed artifact namespace: ${MANAGED_ARTIFACT_ROOT}" >&2
     return 3
   }
+  EVIDENCE_DIR="${MANAGED_ARTIFACT_ROOT}/evidence/${ARTIFACT_OWNER}/${BUILD_INPUT_DIGEST}/${CMD}-$$"
+  COLLECTION_JSON="${EVIDENCE_DIR}/collection.json"
+  PRODUCER_JUNIT="${EVIDENCE_DIR}/producer.junit.xml"
+  CONSUMER_JUNIT="${EVIDENCE_DIR}/consumer.junit.xml"
+  CONSUMER_LOG="${EVIDENCE_DIR}/consumer.log"
+  ARTIFACT_MANIFEST="${EVIDENCE_DIR}/artifact-manifest.json"
+  mkdir -p "$EVIDENCE_DIR" || {
+    echo "ERROR: cannot create evidence directory: ${EVIDENCE_DIR}" >&2
+    return 3
+  }
+  if [[ -z "$RESULT_JSON_OUT" ]]; then
+    if [[ -n "$LOG_DIR" ]]; then
+      RESULT_JSON_OUT="${LOG_DIR}/verification-results/${CMD}-${ARCH}-${BUILD_INPUT_DIGEST:0:16}-$$.json"
+    else
+      RESULT_JSON_OUT="${EVIDENCE_DIR}/verification-result.json"
+    fi
+  fi
+  RUN_IDENTITY="${CODEGEN_RUN_ID:-${RUN_ID:-manual-${ARTIFACT_OWNER:0:16}}}"
+  ATTEMPT_IDENTITY="${CODEGEN_ATTEMPT_ID:-manual}"
+  JOB_IDENTITY="${CODEGEN_JOB_ID:-local-${ARTIFACT_OWNER:0:12}-$$}"
+  REQUIREMENT_IDENTITY="${CODEGEN_REQUIREMENT_ID:-${ARCH}:llk:1}"
+  RUN_JSON_WRITER="${WORKTREE}/codegen/scripts/run_json_writer.py"
+  [[ -f "$RUN_JSON_WRITER" ]] || {
+    echo "ERROR: result writer is missing: ${RUN_JSON_WRITER}" >&2
+    return 3
+  }
   export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
   SRC_ID="${SOURCE_TREE_SHA256:0:16}"
   _vlog "artifact owner=${ARTIFACT_OWNER} build=${BUILD_INPUT_DIGEST} root=${ARTIFACT_DIR}"
@@ -352,6 +421,80 @@ _build_target() {
   else                            TARGET=("$TEST_FILE"); fi
 }
 
+# Perform a pure collection pass. conftest explicitly skips device/runtime
+# initialization when pytest is collecting only and atomically writes the
+# selected, pre-filter collected, error, and process-exit counts.
+_collect_tests() {
+  local collection_log="${EVIDENCE_DIR}/collection.log"
+  rm -f "$COLLECTION_JSON" "$collection_log"
+  ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
+      --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
+      >"$collection_log" 2>&1
+  local rc=$?
+  cat "$collection_log" >&2
+  [[ -f "$COLLECTION_JSON" ]] || {
+    echo "ERROR: pytest collection produced no structured result" >&2
+    return 3
+  }
+  return "$rc"
+}
+
+_seal_artifacts() {
+  python3 "$RUN_JSON_WRITER" artifact-manifest \
+    --output "$ARTIFACT_MANIFEST" \
+    --artifact-root "$ARTIFACT_DIR" \
+    --owner-id "$ARTIFACT_OWNER" \
+    --build-input-digest "$BUILD_INPUT_DIGEST" \
+    --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+    --compiler-sha256 "$COMPILER_SHA256" >&2
+}
+
+_emit_structured_result() {
+  local backend="${CODEGEN_VERIFICATION_BACKEND:-}"
+  if [[ -z "$backend" ]]; then
+    if [[ "$SIM_PATH" == *.so ]]; then backend="ttsim"
+    elif [[ "$ARCH" == "quasar" ]]; then backend="quasar"
+    elif [[ "$MODE" == "hardware" ]]; then backend="silicon"
+    else backend="local"; fi
+  fi
+  local -a args=(
+    verification-result
+    --output "$RESULT_JSON_OUT"
+    --collection-json "$COLLECTION_JSON"
+    --junit "$CONSUMER_JUNIT"
+    --output-log "$CONSUMER_LOG"
+    --artifact-manifest "$ARTIFACT_MANIFEST"
+    --artifact-root "$ARTIFACT_DIR"
+    --requirement-id "$REQUIREMENT_IDENTITY"
+    --run-id "$RUN_IDENTITY"
+    --attempt-id "$ATTEMPT_IDENTITY"
+    --job-id "$JOB_IDENTITY"
+    --architecture "$ARCH"
+    --suite llk
+    --backend "$backend"
+    --test "$TEST_FILE"
+    --expected-base-sha "$EXPECTED_BASE_SHA"
+    --actual-base-sha "$ACTUAL_BASE_SHA"
+    --patch-sha256 "$PATCH_SHA256"
+    --returncode "${CONSUMER_RETURN_CODE:-$_rc}"
+  )
+  [[ -n "$TEST_ID" ]] && args+=(--test-id "$TEST_ID")
+  [[ -n "$K_FILTER" ]] && args+=(--k "$K_FILTER")
+  [[ "${CONSUMER_TIMED_OUT:-false}" == "true" ]] && args+=(--timed-out)
+  [[ -n "${CONSUMER_SIGNAL:-}" ]] && args+=(--signal "$CONSUMER_SIGNAL")
+  [[ -n "${CONSUMER_INFRA_CODE:-}" ]] && args+=(--infrastructure-code "$CONSUMER_INFRA_CODE")
+  [[ "$NO_SPLIT" == "true" ]] && args+=(--infrastructure-code artifact_not_presealed)
+
+  local writer_rc=0
+  python3 "$RUN_JSON_WRITER" "${args[@]}" >&2 || writer_rc=$?
+  if [[ ! -s "$RESULT_JSON_OUT" ]]; then
+    echo "ERROR: structured verification result was not written: ${RESULT_JSON_OUT}" >&2
+    return 3
+  fi
+  _vlog "structured result ${RESULT_JSON_OUT}"
+  return "$writer_rc"
+}
+
 _emit_verdict() {
   local code="$1" phase="$2" v
   case "$code" in
@@ -372,7 +515,8 @@ _producer() {
   local prc=1 attempt
   for attempt in 1 2 3; do
     : > "$plog"
-    ( CHIP_ARCH="$ARCH" pytest --compile-producer -n "$JOBS" -x "${TARGET[@]}" ) >"$plog" 2>&1
+    ( CHIP_ARCH="$ARCH" pytest --compile-producer -n "$JOBS" -x \
+        --junitxml "$PRODUCER_JUNIT" "${TARGET[@]}" ) >"$plog" 2>&1
     prc=$?
     [[ -n "$LOG_DIR" ]] && { mkdir -p "$LOG_DIR"; cat "$plog" >> "${LOG_DIR}/compile.log"; }
     cat "$plog" >&2
@@ -408,10 +552,14 @@ _hw_hang_cleanup() {
 # remote emulator), escalating to SIGKILL if pytest ignores it. Sets/clears the
 # global CONSUMER_PID (the EXIT trap uses it). Returns the classified exit code.
 _run_consumer() {
-  local log; log="$(mktemp "${TMPDIR:-/tmp}/tt-llk-run.XXXXXX")"
+  local log="$CONSUMER_LOG"
   local hangflag="${log}.hang"
+  rm -f "$log" "$hangflag" "$CONSUMER_JUNIT"
+  : > "$log"
+  CONSUMER_RETURN_CODE="" CONSUMER_TIMED_OUT="false"
+  CONSUMER_SIGNAL="" CONSUMER_INFRA_CODE=""
 
-  local -a flags=(-rN "--maxfail=${MAXFAIL}")
+  local -a flags=(-rN "--maxfail=${MAXFAIL}" --junitxml "$CONSUMER_JUNIT")
   [[ "$MODE" == "simulator" ]] && flags+=(--run-simulator "--port=${PORT}")
   [[ "$NO_SPLIT" == "false" ]] && flags+=(--compile-consumer)
 
@@ -459,6 +607,10 @@ _run_consumer() {
   local watch_pid=$!
 
   wait "$CONSUMER_PID"; local rc=$?
+  CONSUMER_RETURN_CODE="$rc"
+  if [[ $rc -ge 128 && $rc -le 255 ]]; then
+    CONSUMER_SIGNAL="$((rc - 128))"
+  fi
   kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
 
   [[ -n "$LOG_DIR" ]] && { mkdir -p "$LOG_DIR"; cat "$log" >> "${LOG_DIR}/run.log" 2>/dev/null; }
@@ -472,6 +624,7 @@ _run_consumer() {
     # hang. Transient (emulator congestion) → ENV so the caller may retry.
     echo "[run_test] ENV: stalled before tt-exalens became ready (boot wedge)" >&2
     [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="emulator_boot_stalled"
     code=3
   elif [[ -f "$hangflag" ]]; then
     echo "[run_test] HANG: no output for ${STALL}s" >&2
@@ -480,17 +633,21 @@ _run_consumer() {
     else
       _hw_hang_cleanup
     fi
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="execution_stalled"
     code=5
   elif [[ "$MODE" == "simulator" && $rc -ne 0 ]] && ! grep -qE "$READY_RE" "$log" 2>/dev/null; then
     echo "[run_test] ENV: tt-exalens never became ready" >&2
     [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    CONSUMER_INFRA_CODE="emulator_not_ready"
     code=3
   elif [[ "$MODE" == "hardware" && $rc -ne 0 ]] && grep -qF "TENSIX TIMED OUT" "$log" 2>/dev/null; then
     echo "[run_test] HANG: TENSIX TIMED OUT" >&2
     _hw_hang_cleanup
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="tensix_timed_out"
     code=5
   elif [[ $rc -ne 0 ]] && grep -qiE "No Tenstorrent devices? (were|was)? ?detected|No Tenstorrent devices" "$log" 2>/dev/null; then
     echo "[run_test] ENV: no Tenstorrent device detected (CHIP_ARCH / device access)" >&2
+    CONSUMER_INFRA_CODE="no_device_available"
     code=3
   elif [[ $rc -eq 0 ]]; then
     code=0
@@ -499,7 +656,7 @@ _run_consumer() {
   fi
 
   CONSUMER_PID=""
-  rm -f "$log" "$hangflag" 2>/dev/null
+  rm -f "$hangflag" 2>/dev/null
   return "$code"
 }
 
@@ -509,16 +666,13 @@ _do_count() {
   _validate; _activate_venv
   _prepare_artifact_identity count || { echo "0"; return 3; }
   _lock_artifact_entry || { echo "0"; return 3; }
+  _build_target
   cd "$TEST_DIR" || { echo "0"; return 3; }
-  local out rc=0
-  if [[ -n "$K_FILTER" ]]; then
-    out="$(CHIP_ARCH="$ARCH" pytest --compile-producer --co -q -k "$K_FILTER" "$TEST_FILE" 2>&1)" || rc=$?
-  else
-    out="$(CHIP_ARCH="$ARCH" pytest --compile-producer --co -q "$TEST_FILE" 2>&1)" || rc=$?
-  fi
-  printf '%s\n' "$out" >&2
+  local rc=0
+  _collect_tests || rc=$?
   [[ $rc -ne 0 ]] && { echo "0"; return "$rc"; }
-  printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 | grep -oE '^[0-9]+' || echo "0"
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected"])' \
+    "$COLLECTION_JSON" || { echo "0"; return 3; }
 }
 
 _do_compile() {
@@ -526,9 +680,17 @@ _do_compile() {
   _prepare_artifact_identity build || return 3
   _lock_artifact_entry || return 3
   _build_target; cd "$TEST_DIR" || return 3
+  local collection_rc=0
+  _collect_tests || collection_rc=$?
+  [[ $collection_rc -eq 4 ]] && return 4
+  [[ $collection_rc -ne 0 ]] && return 2
   _vlog "compile ${TEST_FILE} (arch=${ARCH}, -n ${JOBS})"
   _producer; local rc=$?
-  [[ $rc -eq 0 ]] && { printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"; return 0; }
+  if [[ $rc -eq 0 ]]; then
+    _seal_artifacts || return 3
+    printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"
+    return 0
+  fi
   return 2
 }
 
@@ -557,6 +719,11 @@ _run_under_lock() {
     bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
   fi
 
+  local collection_rc=0
+  _collect_tests || collection_rc=$?
+  [[ $collection_rc -eq 4 ]] && return 4
+  [[ $collection_rc -ne 0 ]] && return 2
+
   # Build under the lock if forced or the stamp is not ours (a peer recompiled).
   # --no-split compiles inside the consumer, so it is skipped here.
   if [[ "$NO_SPLIT" == "false" ]]; then
@@ -569,9 +736,15 @@ _run_under_lock() {
     else
       _vlog "reusing build (stamp matches ${SRC_ID})"
     fi
+    _seal_artifacts || return 3
   fi
 
-  _run_consumer; return $?
+  local execution_rc=0
+  _run_consumer || execution_rc=$?
+  if [[ "$NO_SPLIT" == "true" ]]; then
+    _seal_artifacts || return 3
+  fi
+  return "$execution_rc"
   # The lock (fd 9) is released when the script exits.
 }
 
@@ -609,6 +782,14 @@ case "$CMD" in
   "") echo "ERROR: no command. Use: count | compile | simulate | run" >&2; exit 4 ;;
   *)  echo "ERROR: unknown command '${CMD}'. Use: count | compile | simulate | run" >&2; exit 4 ;;
 esac
+
+# Once a consumer ran, the structured classification is authoritative. This can
+# tighten an exit-0 process to coverage/infra failure but never turn a failing
+# process into success.
+if [[ "$CMD" == "simulate" || "$CMD" == "run" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
+  _emit_structured_result
+  _rc=$?
+fi
 
 # count's stdout contract is "just the integer" — no verdict line.
 case "$CMD" in compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac

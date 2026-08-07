@@ -4,11 +4,14 @@
 
 """Tests for run_json_writer.py — dashboard-compatibility schema."""
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).parent / "run_json_writer.py"
 RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
@@ -23,6 +26,179 @@ def _run(log_dir, *args):
     )
 
 
+def _write_verification_inputs(
+    tmp_path, *, selected=1, junit_tests=1, log="", collection_returncode=None
+):
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "kernel.elf").write_bytes(b"elf-v1")
+    manifest = tmp_path / "artifact-manifest.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "artifact-manifest",
+            "--output",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--owner-id",
+            "owner-1",
+            "--build-input-digest",
+            "1" * 64,
+            "--source-tree-sha256",
+            "2" * 64,
+            "--compiler-sha256",
+            "3" * 64,
+        ],
+        check=True,
+    )
+    collection = tmp_path / "collection.json"
+    collection.write_text(
+        json.dumps(
+            {
+                "schema": "tt.issue-solver.pytest-collection",
+                "version": 1,
+                "selected": selected,
+                "collected": selected,
+                "errors": 0,
+                "returncode": (
+                    collection_returncode
+                    if collection_returncode is not None
+                    else (0 if selected else 5)
+                ),
+            }
+        )
+    )
+    junit = tmp_path / "consumer.junit.xml"
+    cases = "".join(f'<testcase name="t{i}"/>' for i in range(junit_tests))
+    junit.write_text(
+        f'<testsuites><testsuite tests="{junit_tests}" failures="0" errors="0" '
+        f'skipped="0">{cases}</testsuite></testsuites>'
+    )
+    output_log = tmp_path / "consumer.log"
+    output_log.write_text(log)
+    return artifact_root, manifest, collection, junit, output_log
+
+
+def _write_verification_result(tmp_path, inputs, *extra):
+    artifact_root, manifest, collection, junit, output_log = inputs
+    output = tmp_path / "verification-result.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "verification-result",
+            "--output",
+            str(output),
+            "--collection-json",
+            str(collection),
+            "--junit",
+            str(junit),
+            "--output-log",
+            str(output_log),
+            "--artifact-manifest",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--requirement-id",
+            "blackhole:llk:1",
+            "--run-id",
+            "run-1",
+            "--attempt-id",
+            "attempt-1",
+            "--job-id",
+            "local-1",
+            "--architecture",
+            "blackhole",
+            "--suite",
+            "llk",
+            "--backend",
+            "local",
+            "--test",
+            "test.py",
+            "--expected-base-sha",
+            "4" * 40,
+            "--actual-base-sha",
+            "4" * 40,
+            "--patch-sha256",
+            "5" * 64,
+            "--returncode",
+            "0",
+            *extra,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return proc, output
+
+
+def test_verification_result_is_strict_content_addressed_success(tmp_path):
+    proc, output = _write_verification_result(
+        tmp_path, _write_verification_inputs(tmp_path)
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(output.read_text())
+    assert result["classification"] == "success"
+    assert result["collection"] == {
+        "selected": 1,
+        "collected": 1,
+        "errors": 0,
+        "returncode": 0,
+    }
+    assert result["execution"]["passed"] == 1
+    expected_id = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in result.items() if key != "result_id"},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    assert result["result_id"] == expected_id
+
+
+def test_verification_result_rejects_zero_coverage_even_with_exit_zero(tmp_path):
+    inputs = _write_verification_inputs(
+        tmp_path, selected=0, junit_tests=0, collection_returncode=0
+    )
+    proc, output = _write_verification_result(tmp_path, inputs)
+    assert proc.returncode == 1
+    result = json.loads(output.read_text())
+    assert result["classification"] == "coverage_error"
+    assert result["reason_codes"] == ["zero_selected"]
+    assert result["execution"]["ran"] is False
+
+
+@pytest.mark.parametrize("returncode", [2, 4])
+def test_verification_result_rejects_nonzero_collection(tmp_path, returncode):
+    inputs = _write_verification_inputs(tmp_path, collection_returncode=returncode)
+    proc, output = _write_verification_result(tmp_path, inputs)
+    assert proc.returncode == 3
+    result = json.loads(output.read_text())
+    assert result["classification"] == "infra_error"
+    assert result["reason_codes"] == ["collection_nonzero_exit"]
+
+
+def test_verification_result_fatal_marker_and_artifact_mutation_are_infra(tmp_path):
+    inputs = _write_verification_inputs(tmp_path, log="TT_FATAL during device init")
+    (inputs[0] / "kernel.elf").write_bytes(b"mutated")
+    proc, output = _write_verification_result(tmp_path, inputs)
+    assert proc.returncode == 3
+    result = json.loads(output.read_text())
+    assert result["classification"] == "infra_error"
+    assert result["execution"]["infrastructure_markers"] == [
+        "tt_fatal",
+        "artifact_mutated_during_execution",
+    ]
+    assert (
+        result["provenance"]["executed_artifact_sha256"]
+        != result["provenance"]["artifact_set_sha256"]
+    )
+
+
 def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -30,9 +206,28 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     pytest_bin = fake_bin / "pytest"
     pytest_bin.write_text(
         "#!/bin/bash\n"
-        'printf \'%s\\n\' "$TT_LLK_ARTEFACTS_DIR" >> "$CAPTURE"\n'
-        'mkdir -p "$TT_LLK_ARTEFACTS_DIR"\n'
-        'touch "$TT_LLK_ARTEFACTS_DIR/fake-output"\n'
+        'collection=""; junit=""; producer=false\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        '    --codegen-collection-json) collection="$2"; shift 2 ;;\n'
+        '    --junitxml) junit="$2"; shift 2 ;;\n'
+        "    --compile-producer) producer=true; shift ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        'if [[ -n "$collection" ]]; then\n'
+        '  mkdir -p "$(dirname "$collection")"\n'
+        '  printf \'{"schema":"tt.issue-solver.pytest-collection","version":1,"selected":1,"collected":1,"errors":0,"returncode":0}\\n\' > "$collection"\n'
+        "fi\n"
+        'if [[ -n "$junit" ]]; then\n'
+        '  mkdir -p "$(dirname "$junit")"\n'
+        '  printf \'<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="fake"/></testsuite></testsuites>\\n\' > "$junit"\n'
+        "fi\n"
+        'if [[ "$producer" == true ]]; then\n'
+        '  printf \'%s\\n\' "$TT_LLK_ARTEFACTS_DIR" >> "$CAPTURE"\n'
+        '  mkdir -p "$TT_LLK_ARTEFACTS_DIR"\n'
+        '  touch "$TT_LLK_ARTEFACTS_DIR/fake-output"\n'
+        "fi\n"
     )
     pytest_bin.chmod(0o755)
 
@@ -41,9 +236,12 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
         test_dir = worktree / "tests" / "python_tests"
         compiler_dir = worktree / "tests" / "sfpi" / "compiler" / "bin"
         source_dir = worktree / "tt_llk_blackhole"
+        writer_dir = worktree / "codegen" / "scripts"
         test_dir.mkdir(parents=True)
         compiler_dir.mkdir(parents=True)
         source_dir.mkdir()
+        writer_dir.mkdir(parents=True)
+        (writer_dir / "run_json_writer.py").symlink_to(SCRIPT)
         (test_dir / "test_fake.py").write_text("def test_fake(): pass\n")
         compiler = compiler_dir / "riscv-tt-elf-g++"
         compiler.write_bytes(b"compiler-v1")
@@ -113,6 +311,37 @@ def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
 
     compile_in(first_worktree, tmp_path / "logs-one")
     assert capture.read_text().splitlines()[-1] == changed_root
+
+    result_path = tmp_path / "logs-one" / "verification-result.json"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(RUN_TEST),
+            "run",
+            "--worktree",
+            str(first_worktree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_fake.py",
+            "--log-dir",
+            str(tmp_path / "logs-one"),
+            "--result-json-out",
+            str(result_path),
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    local_result = json.loads(result_path.read_text())
+    assert local_result["schema"] == "tt.issue-solver.verification-result"
+    assert local_result["classification"] == "success"
+    assert local_result["execution"]["executed"] == 1
+    assert local_result["provenance"]["artifact_set_sha256"] == (
+        local_result["provenance"]["executed_artifact_sha256"]
+    )
 
 
 def test_init_emits_dashboard_fields(tmp_path):

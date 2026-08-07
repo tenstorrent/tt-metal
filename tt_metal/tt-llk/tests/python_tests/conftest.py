@@ -130,6 +130,12 @@ def _seed_torch_rng():
 # Define the possible custom command line options
 def pytest_addoption(parser):
     parser.addoption(
+        "--codegen-collection-json",
+        action="store",
+        default=None,
+        help="Write exact selected/collected/error counts for issue-solver verification.",
+    )
+    parser.addoption(
         "--run-simulator", action="store_true", help="Run tests using the simulator."
     )
     parser.addoption(
@@ -312,6 +318,7 @@ def pytest_addoption(parser):
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
+_CODEGEN_COLLECTED: Optional[int] = None
 
 
 def pytest_configure(config):
@@ -403,6 +410,12 @@ def pytest_configure(config):
             _UNIFIED_ORDER_FILE = _RECORD_TEST_ORDER
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
+
+    # Collection is a pure selector/count operation. Stop before every
+    # check_context(), UMD/device init, simulator server, and device-log setup
+    # below; pytest_sessionfinish still writes the structured collection file.
+    if config.option.collectonly:
+        return
 
     is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     if (
@@ -560,6 +573,12 @@ def _select_tests_by_op(config, items):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    global _CODEGEN_COLLECTED
+    if config.getoption("--codegen-collection-json") and _CODEGEN_COLLECTED is None:
+        # This hook is tryfirst, so this is the complete collection before -k,
+        # --op, producer variant collapsing, or rewind selection deselects items.
+        _CODEGEN_COLLECTED = len(items)
+
     _select_tests_by_op(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
@@ -660,6 +679,15 @@ def pytest_runtest_logreport(report):
             )
             for name, content in sections
         ]
+
+    if report.when == "call" and hasattr(report, "wasxfail"):
+        props = [
+            entry
+            for entry in getattr(report, "user_properties", [])
+            if entry[0] != "codegen_outcome"
+        ]
+        props.append(("codegen_outcome", "xfailed" if report.skipped else "xpassed"))
+        report.user_properties = props
 
     # Rewrite the headline of forked-crash reports from the useless
     #   ":-1: running the test CRASHED with signal 0"
@@ -906,8 +934,30 @@ def perf_report(request, worker_id):
     temp_report.dump_csv(post_path)
 
 
-def pytest_sessionfinish(session):
+def pytest_sessionfinish(session, exitstatus):
     if hasattr(session.config, "workerinput"):
+        return
+
+    collection_path = session.config.getoption("--codegen-collection-json")
+    if collection_path:
+        selected = int(session.testscollected)
+        collected = _CODEGEN_COLLECTED if _CODEGEN_COLLECTED is not None else selected
+        record = {
+            "schema": "tt.issue-solver.pytest-collection",
+            "version": 1,
+            "selected": selected,
+            "collected": int(collected),
+            "errors": int(session.testsfailed),
+            "returncode": int(exitstatus),
+        }
+        destination = Path(collection_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+        temporary.write_text(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, destination)
         return
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
