@@ -162,6 +162,6 @@ ttnn.attach_golden_function(
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
 SliceDeviceOperation = ttnn._ttnn.operations.data_movement.SliceDeviceOperation
-SliceTileProgramFactory = ttnn._ttnn.operations.data_movement.SliceTileProgramFactory
+SliceTileProgramFactoryForPython = ttnn._ttnn.operations.data_movement.SliceTileProgramFactoryForPython
 
 __all__ = []

@@ -244,6 +244,7 @@ target_sources(
             sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.hpp
             # slice/
             slice/slice_nanobind.hpp
+            slice/slice_program_factory_tile_for_python.hpp
             slice/device/slice_device_operation.hpp
             slice/device/slice_device_operation_types.hpp
             slice/device/slice_program_factory_rm.hpp
