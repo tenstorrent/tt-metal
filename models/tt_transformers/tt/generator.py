@@ -1616,6 +1616,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+        # EXPERIMENT ONLY (#52176) — do not merge. exp11 (this baseline) is clean and issues no
+        # device compute between trace replays. Inject one NON-CCL device op per step, to test
+        # whether any interleaved device work corrupts a traced decode on multi-device Blackhole
+        # or only the CCL ops that on-device sampling performs.
+        _md = self.model_args[0].mesh_device
+        if not hasattr(self, "_exp_dummy"):
+            self._exp_dummy = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32),
+                device=_md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(_md),
+            )
+        ttnn.deallocate(ttnn.untilize(self._exp_dummy, use_multicore=True))
         return self.trace_output_decode[on_device_sampling]
 
     def sample_decode_on_device(
