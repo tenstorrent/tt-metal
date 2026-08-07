@@ -239,11 +239,25 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
-                if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
+                // Measured 2026-08-06 on a T3K (8 devices, 1 link on the gathered axis, tile and
+                // row-major, 64 KB - 100 MB gathered).
+                //
+                // Line: multicast is never beaten -- unicast is 0.5-2.4% behind at scale and 41%
+                // behind at 256 KB -- so a line always stays on multicast.
+                if (!tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
+                    use_unicast = false;
+                    break;
                 }
+                // Ring: unicast is 8-18% faster past the crossover, multicast at most ~4% faster
+                // before it, so the boundary errs toward unicast. Measured crossover per link:
+                // <0.5 MB at 256 B and 1 KB pages, ~1.4 MB at 2 KB (tile), ~1.1 MB at 4 KB.
+                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
+                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
+                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
+                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
+                const uint64_t per_link_bytes =
+                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
+                use_unicast = per_link_bytes >= std::min<uint64_t>(1'200'000, 600 * txn);
                 break;
             }
             case tt::ARCH::BLACKHOLE: {

@@ -163,6 +163,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Two is the optimum, flatly. Measured over ~1600 configs on Blackhole (8-device ring *and* line,
     // 2 links, 2 MB - 200 MB gathered, tile and row-major, page sizes 64 B - 8 KB): 2 won at every single
     // point. One worker is much worse (no mux at all: 1.8-2.3x), and it degrades monotonically above 2.
+    // Re-measured on a Wormhole T3K (1 link): same answer, though the penalties are milder there --
+    // W=1 costs 8-18% at scale (and is ~10% better at 1 MB, the one place it wins).
     // An earlier size-based ramp to 8/12 workers was calibrated against fabric mux V1 and against the
     // default row-major core placement; with V2 and the mux-per-row placement below, the extra workers
     // only add NOC contention. This also frees ~40 cores for the rest of the model.
@@ -213,6 +215,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Mux-aware placement gives each mux its own NOC row, which is worth up to 2.3x over the plain
     // row-major fill (see choose_worker_cores_alternate). Only applies when there are muxes at all;
     // falls back to choose_worker_cores() when the grid cannot give every mux its own row.
+    // The win scales with the number of muxes (2 * num_links) competing for NOC rows: it is large at
+    // 2 links (4 muxes) and measures as a no-op at 1 link (2 muxes), where there is nothing to
+    // deconflict. Keep it unconditional -- it never hurts, and multi-link Wormhole parts have the same
+    // X-first routing that makes it pay on Blackhole.
     auto mux_groups = use_mux ? ttnn::ccl::choose_worker_cores_alternate(
                                     num_links * num_directions,
                                     workers_per_dir,
@@ -461,7 +467,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // num_buffers_per_channel: only the floor matters. One slot stalls the worker on every credit
     // round-trip to the forwarder (V2 publishes the read counter from the other RISC), which costs
     // 1.3-1.6x; anything >= 2 measures flat, and very deep rings regress again (50 MB ring: 2 -> 365 us,
-    // 8 -> 365, 32 -> 381, 64 -> 406). Two is the smallest value on the plateau.
+    // 8 -> 365, 32 -> 381, 64 -> 406). Two is the smallest value on the plateau. On Wormhole the same
+    // ordering holds but the nbuf=1 penalty is only ~1.5%.
     constexpr uint8_t num_buffers_per_channel = 2;
     // channel_buffer_size_bytes: leave at the fabric maximum. It is capped at
     // packet_header + max_payload, and our payload already is max_payload, so the default is
@@ -472,8 +479,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     // forwarder_noc: must stay NOC 0. The writer kernel is NCRISC and so pushes into the mux on NOC 1;
     // putting the mux->ERISC forwarding on NOC 1 as well makes them contend head-on and costs up to 2x
-    // (ring 50 MB: 363 -> 795 us). Note this is the opposite of the fabric mux V2 microbenchmark golden,
-    // whose senders do not share NOC 1 with the forwarder the way a real CCL writer does.
+    // (ring 50 MB: 363 -> 795 us; 1.1-1.4x on Wormhole). Note this is the opposite of the fabric mux V2
+    // microbenchmark golden, whose senders do not share NOC 1 with the forwarder the way a real CCL
+    // writer does.
     constexpr tt::tt_metal::NOC mux_forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*num_channels=*/static_cast<uint8_t>(workers_per_dir),
