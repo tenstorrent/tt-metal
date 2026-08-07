@@ -459,12 +459,14 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             num_buffers_per_channel=ccl_sync_rs_buffers(),
         )
         tensor.deallocate(True)
+        # num_links/topology are deprecated-and-ignored on the new ttnn.all_gather
+        # (tt-metal 3218270556c, "New ttnn.all_gather" #48301): passing them only
+        # logs the Sep-2026 removal warning. Links/topology come from the Fabric
+        # config now — see ccl_allgather() below, which already omits them.
         result = ttnn.all_gather(
             scattered,
             dim=3,
             cluster_axis=tp_axis,
-            num_links=ccl_manager.num_links,
-            topology=topology,
             memory_config=gather_memory_config,
         )
         scattered.deallocate(True)
