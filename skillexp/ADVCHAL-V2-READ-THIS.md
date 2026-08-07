@@ -5,14 +5,13 @@ contribute to decode performance. Each cell started from a decoder already optim
 anything the advisor adds is a real gain and not a re-derivation of work already done.
 
 The accounting is strict: the incoming decoder is frozen as the control, never re-tuned, and only what the
-advisor's directions add on top is counted. **It undercounts in three measured ways** — it prices in-chain
-re-grids at zero (§3.6), records the one direction the advisor reliably gets right as `kept: 0` (§3.14), and
-never applies the advised plan as written (§3.27). So §2 gives two numbers per cell where both exist: what the
-stage credited, and what was reachable.
+advisor's directions add on top is counted. **That understates what the advisor contributed**, for three reasons
+set out in §3.6, §3.14 and §3.27. So §2 gives two numbers per cell where both exist: what the stage credited, and
+what was actually reachable.
 
 Everything below comes from the cells' own artefacts or from re-measurements on the same hardware. This is the
-short version — the evidence is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md), where a decimal reference like `§3.11`
-points; plain `§1`–`§6` are sections here. What the analysis itself got wrong is in
+short version; the detailed analysis is in [`FINDINGS`](ADVCHAL-V2-FINDINGS.md), where a reference like `§3.11`
+points — plain `§1`–`§6` are sections here. What this analysis itself got wrong is in
 [`ANALYST-PITFALLS`](ADVCHAL-V2-ANALYST-PITFALLS.md).
 
 ---
@@ -236,7 +235,7 @@ caught each one.
 | file | what's in it |
 |---|---|
 | **this file** | the verdict, the cells, the ledger — a few minutes |
-| [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the evidence: 29 findings and the method** — this is where `§3.x` lives |
+| [`ADVCHAL-V2-FINDINGS.md`](ADVCHAL-V2-FINDINGS.md) | **the detailed analysis: 29 findings and the method** — this is where `§3.x` lives |
 | [`ADVCHAL-V2-ANALYST-PITFALLS.md`](ADVCHAL-V2-ANALYST-PITFALLS.md) | **what this analysis got wrong** — 30 corrections in 7 error patterns, plus what is still unverified. Read it before doing the next analysis |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |

@@ -1,8 +1,8 @@
 # advchal-v2 — the findings in full
 
 The detailed companion to [`READ-THIS`](ADVCHAL-V2-READ-THIS.md). That file is the few-minute version: the
-verdict, the per-cell table, and the ledger of whose defect is whose. **This file is the evidence** — 29
-findings, the method, and every correction — and each finding points on to the file holding its raw data.
+verdict, the per-cell table, and the ledger of whose defect is whose. **This file is the detail** — 29 findings
+and the method — and each finding points on to the file holding its raw data.
 
 Section numbers here are the ones the other documents cite (`§3.11`, `§5`, `§8a`…); they did not change when
 this file was split out of READ-THIS.
@@ -236,7 +236,7 @@ answerable, because the py↔IR transition pins both ends to DRAM by constructio
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E11
 
-### 3.11 The stage credited the advisor with two-thirds of what it actually found
+### 3.11 The stage credited the advisor with 64 % of what it actually found — at most
 
 Comparing what each cell shipped against the best configuration reachable from the advisor's *own* directions
 on the *same* decoder (my re-measurements included):
@@ -307,7 +307,7 @@ has.)*
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E18
 
-### 3.14 Zooming out: for this win class, the advisor was not necessary
+### 3.14 For this win class, the advisor was not necessary
 
 Three independent tests of whether the advisor was needed for the wins it got credit for.
 
@@ -433,7 +433,7 @@ under `boundary`: reported, out of scope, uncredited. Honest, and enormous.
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E20–E21
 
-### 3.19 …and it is a shape choice, fixable in the decoder, that no advisor could have found
+### 3.19 That 191 ms is a shape choice, fixable in the decoder, that no advisor could have found
 
 I first called §3.18's fix "tt-metal: accept tiled input". Reading the chain and the shapes gives a better
 answer.
@@ -689,7 +689,7 @@ candidate on its own.
 
 ---
 
-### 3.25 Corpus-wide: the advisor's L1 call was followed widely, its grid once in fourteen cells
+### 3.25 Corpus-wide: the advisor's L1 call was followed widely, its grid in 3 of 9 cells
 
 §3.24 answered this for one cell. Across all 15, at chain level:
 
@@ -714,14 +714,16 @@ an *upper bound*, since it means the chain shipped, not that the advised geometr
 
 | what shipped | cells |
 |---|---|
-| the advised geometry, **verbatim** | **1** — gemma-4-26B onA (`1x88`, 88 cores) → **−12.98 %**, the corpus's largest win |
-| a **self-chosen** grid on the advisor-identified op | **3** — north-mini FN (32 vs advised 22), phi onA (32 vs 22), phi B (`[8,1]` vs 11/22) |
+| the advised sharding strategy **and** core count | **3** — gemma-4-26B onA (`width_sharded`, 88), phi onA (`height_sharded`, 32), phi B (32, on the 96-wide ops) |
+| the advised strategy, a **self-chosen grid that measured better** | **1** — north-mini FN (32 against the advised 22) |
 | buffer type / boundary only, **no grid** | **5** — gemma-4-12B, gemma-4-26B FN, gemma-4-26B B, phi FN, qwen FN |
 
-**Where a cell measured the advisor's grid head-to-head against its own, the advisor's lost.** north-mini FN
-screened the advised 22 as `advisor_moe_norm_22` and recorded it *"slower than the 32-core winner for both MoE
-kinds"*; phi B's artefacts say *"advisor core counts 11/22 alone (not recommendations)"*. So the ranking that
-gets used is `isL1` (level 1 of `LayoutScore`); the one that does not is `coreCount` (level 6 of 7) — §3.3.
+Two of those three had recorded themselves as *overriding* the advisor while agreeing with it — phi B's
+artefacts say *"advisor core counts 11/22 alone (not recommendations)"*, and 32 is what the advisor advised
+(§3.23b). **The one cell that did measure the advised grid head-to-head against its own found its own better:**
+north-mini FN screened the advised 22 as `advisor_moe_norm_22` and recorded it *"slower than the 32-core winner
+for both MoE kinds"*. So the ranking that gets used is `isL1` (level 1 of `LayoutScore`); the one that does not
+is `coreCount` (level 6 of 7) — §3.3.
 
 **Two of the three biggest wins came from cells whose own arithmetic said not to bother.** gemma-4-26B onA and
 north-mini FN both shipped a widened RMSNorm; both had layer kinds with `ceiling_us = 0`, verdict
