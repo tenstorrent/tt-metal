@@ -26,7 +26,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHIntFactory:
 
     IDevice* device{input.device()};
 
-    const auto cb_data_format{datatype_to_dataformat_converter(output.dtype())};
+    const auto dfb_data_format{datatype_to_dataformat_converter(output.dtype())};
     const auto& shape{input.padded_shape()};
 
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
@@ -80,7 +80,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHIntFactory:
         num_cols_per_core_group_1,
         num_cols_per_core_group_2);
 
-    uint32_t cb_tile_size = tile_size(cb_data_format);
+    uint32_t dfb_tile_size = tile_size(dfb_data_format);
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: the six moreh_sum factory .cpp files land in the same
@@ -104,27 +104,27 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHIntFactory:
     ////////////////////////////////////////////////////////////////////////////
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = in0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MASK_H_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = in1_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERMED0_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = intermed0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = out0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
 
     // ---- Tensor parameters (replace the Buffer* RTA + TensorAccessorArgs plumbing) ----

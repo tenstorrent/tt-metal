@@ -28,7 +28,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
 
     IDevice* device{input.device()};
 
-    const auto cb_data_format{datatype_to_dataformat_converter(output.dtype())};
+    const auto dfb_data_format{datatype_to_dataformat_converter(output.dtype())};
 
     const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
@@ -72,7 +72,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = split_work_to_cores(grid, num_output_tiles);
 
-    uint32_t cb_tile_size = tile_size(cb_data_format);
+    uint32_t dfb_tile_size = tile_size(dfb_data_format);
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: the six moreh_sum factory .cpp files land in the same
@@ -93,21 +93,21 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
     // ---- Dataflow buffers ----
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = in0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERMED0_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = intermed0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
-        .entry_size = cb_tile_size,
+        .entry_size = dfb_tile_size,
         .num_entries = out0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
     });
 
     // ---- Tensor parameters (replace the Buffer* RTA + TensorAccessorArgs plumbing) ----

@@ -52,18 +52,18 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
         fp32_dest_acc_en,
         packer_l1_acc);
 
-    DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tile_size(src0_cb_data_format);
+    DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input.dtype());
+    uint32_t src0_single_tile_size = tile_size(src0_dfb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
-    DataFormat scaler_cb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tile_size(scaler_cb_data_format);
-    DataFormat mask_w_cb_data_format = DataFormat::Float16_b;
-    uint32_t mask_w_single_tile_size = tile_size(mask_w_cb_data_format);
-    DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
-    DataFormat intermed1_cb_data_format = DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tile_size(intermed_cb_data_format);
-    DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
+    DataFormat scaler_dfb_data_format = DataFormat::Float16_b;
+    uint32_t scaler_single_tile_size = tile_size(scaler_dfb_data_format);
+    DataFormat mask_w_dfb_data_format = DataFormat::Float16_b;
+    uint32_t mask_w_single_tile_size = tile_size(mask_w_dfb_data_format);
+    DataFormat intermed_dfb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
+    DataFormat intermed1_dfb_data_format = DataFormat::Float16_b;
+    uint32_t intermed_single_tile_size = tile_size(intermed_dfb_data_format);
+    DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
 
     IDevice* device = input.device();
 
@@ -102,39 +102,39 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
         .unique_id = INPUT_DFB,
         .entry_size = src0_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = src0_cb_data_format,
+        .data_format_metadata = src0_dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = scaler_cb_data_format,
+        .data_format_metadata = scaler_dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MASK_W_DFB,
         .entry_size = mask_w_single_tile_size,
         .num_entries = 1,
-        .data_format_metadata = mask_w_cb_data_format,
+        .data_format_metadata = mask_w_dfb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = ACCUM_DST_DFB,
         .entry_size = intermed_single_tile_size,
         .num_entries = 1,
-        .data_format_metadata = intermed_cb_data_format,
+        .data_format_metadata = intermed_dfb_data_format,
     });
-    uint32_t intermed1_single_tile_size = tile_size(intermed1_cb_data_format);
+    uint32_t intermed1_single_tile_size = tile_size(intermed1_dfb_data_format);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MASKED_INPUT_DFB,
         .entry_size = intermed1_single_tile_size,
         .num_entries = 1,
-        .data_format_metadata = intermed1_cb_data_format,
+        .data_format_metadata = intermed1_dfb_data_format,
     });
     constexpr uint32_t num_output_tiles = 2;
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = dst_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = dst_cb_data_format,
+        .data_format_metadata = dst_dfb_data_format,
     });
 
     // ---- Tensor parameters (replace the Buffer* RTA + TensorAccessorArgs plumbing) ----
@@ -246,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
                 .endpoint_type = DFBEndpointType::CONSUMER,
             },
             // masked_input is packed by this kernel and immediately re-read as the matmul input: the
-            // kernel switches its `cb_input` handle over to it for the final tile of a masked row.
+            // kernel switches its `input_dfb` handle over to it for the final tile of a masked row.
             DFBBinding{
                 .dfb_spec_name = MASKED_INPUT_DFB,
                 .accessor_name = "masked_input",

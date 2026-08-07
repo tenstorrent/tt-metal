@@ -38,8 +38,8 @@ void kernel_main() {
             // Selected at runtime between the output DFB and the intermediate DFB; stays
             // uint32_t-valued, since the generated dfb:: handles share one type and convert to
             // uint32_t at compile time. Both DFBs are bound to this kernel, so both tokens exist.
-            uint32_t cb_out = (last_out) ? (dfb::out) : (dfb::intermed0);
-            pack_tile_from_dst(DataflowBuffer(cb_out), dst0);
+            uint32_t out_dfb = (last_out) ? (dfb::out) : (dfb::intermed0);
+            pack_tile_from_dst(DataflowBuffer(out_dfb), dst0);
             tile_regs_release();
             enable_reload = true;
         }
