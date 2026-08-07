@@ -107,6 +107,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
+    // SFPLOAD/SFPSTORE need an explicit register-file format in 32-bit SrcS mode. sfpmem::DEFAULT resolves
+    // the datum width from ALU_FORMAT_SPEC_REG / ACC_CTRL_SFPU_Fp32, which this isolated kernel never
+    // programs, so it misreads the 32-bit slot (garbage output). Select FP32 for 32-bit mode (this includes
+    // Tf32-widened fp16 inputs, which share Float32's 32-bit footprint); 16-bit mode keeps DEFAULT.
+    const std::uint32_t srcs_sfpmem_mode = PARAM_SRCS_32BIT_MODE ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::DEFAULT;
+
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {

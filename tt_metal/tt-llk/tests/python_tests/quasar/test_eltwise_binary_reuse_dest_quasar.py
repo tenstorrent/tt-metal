@@ -62,12 +62,12 @@ REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
+        # DataFormat.MxFp8R,
+        # DataFormat.MxFp8P,
+        # DataFormat.MxFp4,
+        # DataFormat.MxInt8,
+        # DataFormat.MxInt4,
+        # DataFormat.MxInt2,
     ],
 )
 

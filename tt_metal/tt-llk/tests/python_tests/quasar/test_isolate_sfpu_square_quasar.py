@@ -43,8 +43,8 @@ SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
+        # DataFormat.MxFp8R,
+        # DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,

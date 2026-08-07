@@ -11,7 +11,8 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / MAX_FPU_ROWS);
+static_assert(MAX_FACE_R_DIM % ELTWISE_MATH_ROWS == 0, "ELTWISE_MATH_ROWS must divide the 16-row face");
+constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / ELTWISE_MATH_ROWS);
 
 // Counter increments programmed into one matmul ADDR_MOD slot.
 struct _llk_math_matmul_step_t
@@ -89,10 +90,10 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     // operand structs instead costs 128 bytes per math kernel (measured).
     const TensorShape output_shape =
         make_tensor_shape(src_b_shape.face_r_dim, src_a_shape.face_c_dim, src_b_shape.num_faces_r_dim, src_a_shape.num_faces_c_dim);
-    const std::uint8_t face_rows          = src_b_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS : src_b_shape.face_r_dim;
+    const std::uint8_t face_rows          = src_b_shape.face_r_dim < ELTWISE_MATH_ROWS ? ELTWISE_MATH_ROWS : src_b_shape.face_r_dim;
     const std::uint16_t dst_rows_per_tile = static_cast<std::uint16_t>(output_shape.total_num_faces()) * face_rows;
     const std::uint8_t num_k_faces        = src_b_shape.num_faces_c_dim;
-    const std::uint8_t face_row_passes    = src_b_shape.face_r_dim > MAX_FPU_ROWS ? 2 : 1;
+    const std::uint8_t face_row_passes    = face_rows / ELTWISE_MATH_ROWS;
     const std::uint8_t mvmuls_per_k_face  = output_shape.total_num_faces() * face_row_passes;
 
     // Which traversal axes this shape leaves active. A face holds one or two FPU row
@@ -103,7 +104,7 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     // Keep these predicates named. Each is read two to five times, and substituting them
     // at their use sites costs 204 bytes per math kernel (measured): the compiler reloads
     // and re-compares the shape word at every site instead of once here.
-    const bool face_has_two_row_groups  = face_rows > MAX_FPU_ROWS;
+    const bool face_has_two_row_groups  = face_rows > ELTWISE_MATH_ROWS;
     const bool has_column_faces         = output_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM;
     const bool has_row_faces            = output_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
     const std::int32_t src_b_row_stride = face_rows * num_k_faces;
@@ -111,8 +112,8 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     // A single-row-group face has no SrcB row group to step, so SrcA takes the column face
     // instead. Dest advances one row group either way: every MVMUL writes eight rows.
     const std::int32_t fpu_rows_src_a = !face_has_two_row_groups && has_column_faces ? MAX_FACE_C_DIM : 0;
-    const std::int32_t fpu_rows_src_b = face_has_two_row_groups ? MAX_FPU_ROWS : 0;
-    const std::int32_t fpu_rows_dest  = face_has_two_row_groups || has_column_faces ? MAX_FPU_ROWS : 0;
+    const std::int32_t fpu_rows_src_b = face_has_two_row_groups ? ELTWISE_MATH_ROWS : 0;
+    const std::int32_t fpu_rows_dest  = face_has_two_row_groups || has_column_faces ? ELTWISE_MATH_ROWS : 0;
 
     // Slot assignment, innermost first. The column face outranks the face row. Because
     // has_row_faces implies face_has_two_row_groups, the face row is active exactly when
@@ -122,11 +123,11 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     const bool has_next_face       = next_face_is_column || next_face_is_row;
     const std::int32_t face_src_a  = next_face_is_column ? MAX_FACE_C_DIM : 0;
     const std::int32_t face_src_b  = next_face_is_row ? src_b_row_stride : 0;
-    const std::int32_t face_dest   = has_next_face ? MAX_FPU_ROWS : 0;
+    const std::int32_t face_dest   = has_next_face ? ELTWISE_MATH_ROWS : 0;
 
     const bool has_next_face_row      = has_column_faces && has_row_faces;
     const std::int32_t face_row_src_b = has_next_face_row ? src_b_row_stride : 0;
-    const std::int32_t face_row_dest  = has_next_face_row ? MAX_FPU_ROWS : 0;
+    const std::int32_t face_row_dest  = has_next_face_row ? ELTWISE_MATH_ROWS : 0;
 
     const bool has_next_k_face      = num_k_faces > 1;
     const std::int32_t k_face_src_a = has_next_k_face ? MAX_FACE_C_DIM * output_shape.num_faces_c_dim : 0;
@@ -367,7 +368,8 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  * outside the replay buffer by the MOP in @ref _llk_math_matmul_mop_config_, or directly from the
  * RISC core in the experimental no-MOP path.
  *
- * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x replay image.
+ * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x traversal (8 MVMULs) instead of the plain one
+ * (16 on Quasar, 32 on 4row_arch).
  */
 template <bool ENABLE_2X_FORMAT>
 inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
@@ -394,6 +396,7 @@ inline void _llk_math_matmul_load_replay_()
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
+    constexpr std::uint32_t ops_per_face = 16 / ELTWISE_MATH_ROWS;
 
     if constexpr (ENABLE_2X_FORMAT)
     {
@@ -421,26 +424,40 @@ inline void _llk_math_matmul_load_replay_()
     }
     else
     {
+        // Same B/A face-pair traversal as the original 16-MVMUL Quasar replay, but each pair now
+        // emits ops_per_face MVMULs (Quasar: 2, 4row_arch: 4): (ops_per_face-1) in-face steps via
+        // ADDR_MOD_0 (srca=srca, srcb+=row_incr, dest+=row_incr) followed by the face-transition
+        // addr_mod. The last MVMUL of the final pair (B3A3) is supplied by matmul_op/matmul_op_last.
         load_replay_buf<0, replay_buf_len>(
+            // Lambda function to load reply buffer
             []
             {
-                // Tiny tiles select a window and derive each transition from their geometry.
-                // For full-tile input (32x32 x 32x32), the transitions are as follows:
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca,  srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0, srcb=32, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B2A1 // srca=32/16,srcb=16, dest=0 // A1 -> A2 && srca=16 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32, srcb=48, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16, srcb=0, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8, dest+=8
+                // (ops_per_face - 1) in-face steps. ADDR_MOD_0 is a literal so the .ttinsn
+                // immediate-operand ("n") constraint is satisfied even though the *count*
+                // (ops_per_face) is parametric — only the loop bound is runtime, never the op.
+                const auto in_face_steps = []
+                {
+                    for (std::uint32_t i = 0; i < ops_per_face - 1; ++i)
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // srca=srca, srcb+=row_incr, dest+=row_incr
+                    }
+                };
+
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                in_face_steps();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                in_face_steps();
             });
     }
 }
