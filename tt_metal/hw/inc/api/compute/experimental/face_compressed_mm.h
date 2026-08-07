@@ -86,7 +86,7 @@ ALWI void face_compressed_mm_block_init_short(
 
     MATH((llk_math_face_compressed_mm_init<ct_dim>(in0_cb_id, in1_cb_id)));
 
-    consexpr bool dense_packing = true;  // only dense packing is supported
+    constexpr bool dense_packing = true;  // only dense packing is supported
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(

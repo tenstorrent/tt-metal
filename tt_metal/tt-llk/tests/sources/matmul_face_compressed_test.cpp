@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM);
 
-    _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_A);
+    _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_B);
 }
 
 #endif
