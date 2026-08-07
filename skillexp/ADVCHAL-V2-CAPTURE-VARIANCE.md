@@ -77,18 +77,63 @@ model family and the same wall.
 
 ---
 
-## Axis 3 — six of fifteen never trace the model's own `decode_forward`
+## Axis 3 — six of fifteen do not call `decode_forward`. Measured, it costs nothing
 
-gemma-4-12B, north-mini FN, phi-3.5 B and all three gemma-4-26B cells hand-write the traced path instead. That
-is sometimes necessary — it is how gemma-4-26B reaches past the sparse terminal — but it means the traced graph
-is the cell author's reconstruction of a decode step, and nothing checks it against the real one.
+First, what the choice actually is. **The advisor is always called on the traced graph** — there is no
+compiled-versus-hand-written distinction. Whatever Python the capture's `decode()` executes is what gets traced.
+The variance is only in *what that function executes*:
 
-The one check that would catch a divergence — **compare the captured op sequence against the profile's device
-rows** — is exactly what `reconcile.py` does, and its `untraced` share is the signal. But `untraced` is reported
-as a *coverage* number, never as a *fidelity* number, so a hand-written path that quietly omits an op looks
-identical to a tracer terminal.
+| pattern | cells | what `decode()` does |
+|---|---|---|
+| calls `decode_forward` | 9 | one call into the model's own decode step |
+| **transcribes it** | 5 — north-mini FN, phi-3.5 B, gemma-4-26B ×3 | replays the decode step, mostly through the model's **own** sub-methods (`self._norm_decode`, `self._linear_decode`, `self._decode_rope`, `_DECODER._dense_mlp`) |
+| shared helper | 1 — gemma-4-12B | delegates to a `common.decode` in the cell's own tree |
 
----
+"Transcribes" is the accurate word, not "hand-writes a graph". phi B's version calls seven of the model's own
+methods and interleaves eleven `ttnn` calls; gemma-4-26B FN's calls nine. These are replays of the shipped path,
+not independent reconstructions.
+
+### Why they do not all just call `decode_forward`
+
+**Because that call is all-or-nothing.** At the first terminal op the trace aborts and the capture yields
+*nothing* — no IR, no advice, for the whole layer. Transcribing lets a cell stop immediately before the terminal
+and keep everything up to it. Every transcribing cell says so in a comment:
+
+> *"The pinned direct tracer cannot consume TracedTensor inputs in `paged_fused_update_cache`, and
+> `sparse_matmul` is terminal by contract. Preserve the real shipped path up to those tracer boundaries."*
+> — north-mini FN
+
+### And the measurement: transcription does not cost coverage
+
+Untraced share per cell/kind, against what the capture did:
+
+| | kinds | untraced share |
+|---|---|---|
+| **a terminal was declared** | 14 | **38.8 % – 77.2 %** |
+| **no terminal** | 12 | **2.1 % – 14.8 %** |
+
+**Complete separation, no overlap.** Coverage is set by terminals, not by capture style. Within the no-terminal
+group the approach barely registers:
+
+| approach | kinds | mean untraced | range |
+|---|---|---|---|
+| shared helper | 2 | 3.5 % | 2.1 – 4.8 |
+| calls `decode_forward` | 9 | 7.5 % | 2.5 – 14.8 |
+| transcribed | 1 | 10.7 % | — |
+
+The cleanest comparison is **phi, four arms of one model, no terminals**: exp17 **9.1 %** (`decode_forward`),
+B **10.7 %** (transcribed), FN **13.4 %** (`decode_forward`), onA **14.8 %** (`decode_forward`). The transcribing
+arm sits mid-range and beats two of the three that called `decode_forward`.
+
+**So less hand-writing would not give more useful results.** The lever is the terminals — port the ops, or use
+the documented dense-expert substitution — not the writing style. Two caveats worth keeping:
+
+- Cross-model untraced shares are **not comparable** (a model whose MoE tail is a larger fraction of its layer
+  will show a larger share for the same wall), so the terminal-versus-no-terminal split above is the reliable
+  cut, not the ordering inside it.
+- The real risk of transcription is **silent drift** from the shipped path, and nothing checks for it. phi B
+  shows it need not materialise; it also means nobody would know if it had. That is the argument for recording
+  capture scope, not for banning transcription.
 
 ## Axis 4 — two cells invented private environment knobs
 
