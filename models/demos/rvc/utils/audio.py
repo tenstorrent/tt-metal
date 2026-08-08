@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+from io import BytesIO
+
+import av
+import numpy as np
+import torch
+
+_RVC_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIRECTORY = os.path.join(_RVC_BASE_DIR, "data")
+SPEECH_DIRECTORY = os.path.join(BASE_DIRECTORY, "speech")
+
+
+def transcode_audio(input_stream, output_stream, output_format, sample_rate):
+    """Transcode audio between formats using PyAV."""
+    codec = output_format
+    if codec == "ogg":
+        codec = "libvorbis"
+    if codec == "f32le":
+        codec = "pcm_f32le"
+
+    with av.open(input_stream, "r") as inp, av.open(output_stream, "w", format=output_format) as out:
+        ostream = out.add_stream(codec, rate=sample_rate)
+        try:
+            ostream.layout = "mono"
+        except (ValueError, AttributeError):
+            pass
+
+        for frame in inp.decode(audio=0):
+            for p in ostream.encode(frame):
+                out.mux(p)
+
+
+def _decode_audio(f, sr):
+    with BytesIO() as out:
+        transcode_audio(f, out, "f32le", sr)
+        audio = np.frombuffer(out.getvalue(), np.float32).flatten().copy()
+        return torch.from_numpy(audio)
+
+
+def load_audio(sr):
+    path = os.path.abspath(os.path.join(SPEECH_DIRECTORY, "sample-speech-0.wav"))
+    with open(path, "rb") as f:
+        audio = _decode_audio(f, sr)
+    return audio
