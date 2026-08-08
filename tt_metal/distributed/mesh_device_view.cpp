@@ -257,7 +257,7 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_line_coordinates(
     };
 
     // Lambda to get valid neighbors (not checking visited - that's done in DFS)
-    auto get_neighbors = [&](const MeshCoordinate& coord) -> std::vector<MeshCoordinate> {
+    auto get_neighbors = [num_rows, num_cols](const MeshCoordinate& coord) -> std::vector<MeshCoordinate> {
         std::vector<MeshCoordinate> neighbors;
         neighbors.reserve(4);
         const size_t row = coord[0];
