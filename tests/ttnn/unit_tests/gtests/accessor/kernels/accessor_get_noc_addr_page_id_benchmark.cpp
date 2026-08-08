@@ -22,9 +22,17 @@ void kernel_main() {
      *     * You can verify by inserting a dummy marker or removing the volatile since compiler will optimize out the
      * calls
      */
+#if INTERLEAVED_LAYOUT
+    // Interleaved accessors have no dspec(); the host pushes the page count as the
+    // compile-time arg right after the accessor args.
+    const uint32_t tensor_volume = get_compile_time_arg_val(args.next_compile_time_args_offset());
+#else
+    // Sharded layout: page count is known from the distribution spec.
+    const uint32_t tensor_volume = tensor_accessor.dspec().tensor_volume();
+#endif
     constexpr size_t loop_count = 125;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % tensor_accessor.dspec().tensor_volume();
+        auto page_id = i % tensor_volume;
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             volatile auto _ = tensor_accessor.get_noc_addr(page_id);
