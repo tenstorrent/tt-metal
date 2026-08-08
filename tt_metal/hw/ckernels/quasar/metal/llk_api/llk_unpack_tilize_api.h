@@ -139,15 +139,17 @@ inline void llk_unpack_tilizeA_B_init(
 
     // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires the following buffer descriptor configuration:
     // Overwrite the buffer descriptor configuration from llk_unpack_hw_configure for operandA.
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = get_local_dfb_interface(operandA_id).tc_slots[0].base_addr;
-    bd_val.f.format = static_cast<std::uint8_t>(unpack_src_format[operandA_id]);
-    bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-    bd_val.f.y_dim = 1;
-    bd_val.f.z_dim = 1;
-    ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
+    const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+        tensor_shape_A,
+        get_local_dfb_interface(operandA_id).tc_slots[0].base_addr,
+        unpack_src_format[operandA_id],
+        operandA_id,
+        unpack_dst_format[operandA_id]);
+    ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-    _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#if defined(REDUCE_OP)
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#endif
 }
 
 /**

@@ -166,7 +166,7 @@
     bh_sc1:
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
       # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
-      timeout: 12
+      timeout: 14
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1

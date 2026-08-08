@@ -4,11 +4,10 @@
 
 
 class PerfSchemaError(AssertionError):
-    """
-    Raised when a perf report accumulates more than one column schema in a
-    single CSV (ragged, NaN-filled rows that break strict-JSON dashboards and
-    the compare feature). Fail-loud so the contaminated CSV never ships.
-    """
+    """Raised when a perf report's columns aren't a valid, unique schema: either a
+    CSV that mixes more than one column schema, or two columns sharing a header
+    name (which pandas would mangle into a ``<name>.1`` phantom). Fail loud so the
+    bad CSV never ships."""
 
 
 MARKER = "marker"
@@ -22,6 +21,9 @@ FORMAT_HEADERS = (
     "formats.sfpu_math",
 )
 FLAG_HEADERS = ("unpack_to_dest", "dest_acc")
+
+# All fixed (non-parameter) sweep columns the pipeline always emits.
+FIXED_SWEEP_HEADERS = FORMAT_HEADERS + FLAG_HEADERS
 
 LOOP_FACTOR_COLUMN = "loop_factor"
 TILE_CNT_COLUMN = "tile_cnt"
@@ -62,12 +64,29 @@ def cycles_of(base: str) -> str:
     return f"{base}.cycles"
 
 
-# Golden CSV-header catalog
-#
-# This catalog is HAND-MAINTAINED on purpose: a header changes ONLY when someone
-# edits a set below, so a rename becomes a reviewed diff instead of a silent
-# drift. When a test legitimately adds or renames a header, update the matching
-# set below in the SAME pull request.
+def find_duplicate_columns(columns) -> list:
+    seen, dupes = set(), []
+    for c in columns:
+        if c in seen and c not in dupes:
+            dupes.append(c)
+        seen.add(c)
+    return dupes
+
+
+def assert_unique_columns(columns, context: str = "") -> None:
+    dupes = find_duplicate_columns(columns)
+    if dupes:
+        raise PerfSchemaError(
+            f"Perf report has duplicate column header(s) {dupes} in "
+            f"{context or 'report'}. Two parameters resolve to the same column "
+            f"name (they share a dataclass field name), or the same parameter "
+            f"was passed twice. Rename one field so every header is unique."
+        )
+
+
+# Golden CSV-header catalog. Hand-maintained: a header changes only when someone
+# edits a set below, so a rename shows up as a reviewed diff. When a test adds or
+# renames a header, update the matching set in the same PR.
 
 # Run-type names — mirror helpers/llk_params.py::PerfRunType.
 RUN_TYPE_NAMES = frozenset(

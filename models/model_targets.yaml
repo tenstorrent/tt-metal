@@ -245,6 +245,50 @@ targets:
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
+  gemma-2-2b:
+    aliases: ["gemma-2-2b", "google/gemma-2-2b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (90.0 / 100.0).
+      # N150 uses the same model path; CI will re-calibrate if it drifts.
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  gemma-2-9b:
+    aliases: ["gemma-2-9b", "google/gemma-2-9b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (91.8 / 99.8).
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 92
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
     skus:
@@ -606,13 +650,18 @@ targets:
       p300x2:
         entries:
           # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
-          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
-          # (b4 aggregate); accuracy is the token-matching (b1) target.
+          # token-matching (b1) accuracy check. Accuracy is the token-matching (b1) target.
+          # Perf re-seeded 2026-08-07 from the b4 data-parallel run 31146018726 after #48886
+          # (0a0510e7fc1, "Enable force_argmax fast-path on non-Galaxy") landed: measured
+          # 37.34 t/s/u / 149.35 t/s / 14.44 ms vs the old 20.88 / 83.5 / 19 targets, which
+          # tripped the validator's "much better than expected" upper bound. The 14 scheduled
+          # runs before #48886 sat at 18.9-21.3 t/s/u with no runner correlation, so this is a
+          # genuine step change from that optimization, not machine variance.
           - status: active
             perf:
-              prefill_time_to_first_token: 19
-              decode_t/s/u: 20.88
-              decode_t/s: 83.5
+              prefill_time_to_first_token: 14.4
+              decode_t/s/u: 37.3
+              decode_t/s: 149.4
             accuracy:
               top1: 90.0
               top5: 97.6
