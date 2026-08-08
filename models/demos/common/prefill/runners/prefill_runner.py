@@ -853,6 +853,49 @@ def _print_config() -> None:
     logger.info("\n" + "\n".join(lines))
 
 
+def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
+    """Fail fast when the ranks of a pipeline did not resolve the SAME model/shape config.
+
+    Every PREFILL_* knob is read from this process's environment, and tt-run only guarantees
+    per-rank delivery for what a rank binding puts in `global_env` (it auto-propagates just the
+    TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_ prefixes, and an `-x FOO` in --mpi-args lands in mpirun's
+    FIRST application context -> rank 0 only). So exporting PREFILL_MANIFEST in the launching shell
+    sets rank 0 and silently leaves every other rank on adapter.py's DEFAULT_MODEL -- a DIFFERENT,
+    perfectly valid model, whose weight cache is equally "complete". Nothing errors: the pipeline
+    just runs one model's layers into another's, and only the downstream ranks' KV fails PCC.
+
+    A one-int allgather of a config fingerprint turns that into an immediate, named failure.
+    """
+    if num_ranks <= 1:
+        return
+    import zlib
+
+    fields = {
+        "PREFILL_MODEL": os.environ.get("PREFILL_MODEL") or f"<unset -> default:{DEFAULT_MODEL}>",
+        "adapter": ADAPTER.name,
+        "num_layers": NUM_LAYERS,
+        "chunk_size": CHUNK_SIZE,
+        "max_seq_len": MAX_SEQ_LEN,
+        "num_users": NUM_USERS,
+        "mesh_shape": GLOBAL_MESH_SHAPE,
+    }
+    fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
+    digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
+    all_digests = ttnn.distributed_context_allgather_int(digest)
+    if len(set(all_digests)) == 1:
+        logger.info(f"[pp rank {rank}/{num_ranks}] config fingerprint {digest} agrees across all ranks ({fingerprint})")
+        return
+    disagreeing = [i for i, d in enumerate(all_digests) if d != all_digests[0]]
+    raise RuntimeError(
+        f"Pipeline ranks resolved DIFFERENT prefill configs: fingerprints {all_digests} "
+        f"(ranks {disagreeing} differ from rank 0). This rank ({rank}) has {fingerprint}. "
+        f"Each rank prints its own values above — compare PREFILL_MODEL first. "
+        f"Fix: pin PREFILL_MODEL (and any other PREFILL_* the run depends on) in the rank binding's "
+        f"global_env, which tt-run applies to EVERY rank. Exporting PREFILL_MANIFEST in the shell only "
+        f"reaches rank 0."
+    )
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
@@ -865,6 +908,7 @@ def main() -> None:
         ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
+    _assert_ranks_agree_on_config(rank, num_ranks)
 
     layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
@@ -1259,42 +1303,30 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    if single_rank and enable_layer_ack:
-        # Single-rank ack: both transports end at the SAME scheduler counter channel, so the scheduler
-        # sees an identical stream either way. Which one carries it depends on trace:
-        #   untraced -> D2H. The ack is a device op writing one record into a FIFO, and the
-        #     LayerAckService reader thread bumps the channel per record — nothing calls back into host
-        #     code mid-forward, so the forward needs no per-layer device sync.
-        #   traced   -> the host callback (set_layer_ack_channel). The D2H ack cannot be captured: its
-        #     record is the per-chunk socket metadata tensor, whose address changes every chunk, so a
-        #     capture would bake in a stale address (TtPrefillRuntime.prefill_chunk asserts this). The
-        #     controller instead splits the trace at each ack point.
-        _unlink_stale_shm(ack_shm_name)
-        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        if runtime.config.use_trace:
-            runtime.set_layer_ack_channel(ack_channel)
-            logger.info(
-                f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer "
-                "(host callback — traced run, D2H is not capturable)"
-            )
-        else:
-            d2h_service = ttnn.D2HStreamService(
-                mesh_device,
-                global_spec=None,
-                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
-                worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
-            )
-            layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
-            layer_ack_service.start()
-            logger.info(
-                f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per "
-                "device record (D2H)"
-            )
-    elif single_rank:
-        logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
-    else:
-        # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
+    # D2H layer-ack backend: the device sends one per-layer ack record over a metadata-only D2H socket
+    # (outbound_socket_service_sync in each block) and a LayerAckService reader thread derives a
+    # globally-dense seq per record and pushes it into the router-owned ring. This feeds the SAME
+    # LayerCompletionRouter the multi-rank host-callback path uses, so it is multi-host compatible: it
+    # works on any rank count (single-rank => world_size=1 router, local ring + counter channel, no MPI).
+    use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    # D2H is NOT trace-capturable: its ack record is the per-chunk socket metadata tensor, whose address
+    # changes every chunk, so a capture would bake in a stale one (TtPrefillRuntime.prefill_chunk asserts
+    # the same thing). Reject the combination up front rather than replay a trace that silently emits no
+    # acks -- and reject rather than quietly downgrade, since PREFILL_LAYER_ACK_D2H=1 is an explicit ask.
+    # The host-callback backends DO work traced (the controller splits the capture at each ack point).
+    if use_d2h and runtime.config.use_trace:
+        raise ValueError(
+            "PREFILL_LAYER_ACK_D2H=1 is incompatible with PREFILL_USE_TRACE=1: the D2H ack record is a "
+            "per-chunk socket tensor whose address cannot be captured, so the replay would emit no acks. "
+            "Run untraced for the D2H backend, or leave PREFILL_LAYER_ACK_D2H unset to ack under trace."
+        )
+    # The router path covers: (a) any multi-rank run (each rank owns only a layer slice, so it can't
+    # inject the scheduler channel directly and must route to the master), and (b) the D2H backend on
+    # any rank count (its LayerAckService is a pure producer into the ring). The single-rank non-D2H
+    # path keeps the original direct-inject wiring.
+    use_router = (not single_rank) or (use_d2h and enable_layer_ack)
+
+    if use_router:
         # Imported here (not at module top) so single-rank / no-extension builds never need the
         # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
         from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
@@ -1309,6 +1341,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             _unlink_stale_shm(ack_shm_name)
         # The router owns the host-local ring (and, on the master, the scheduler counter channel,
         # which it inject()s in order). Subordinate ranks MPI-forward completions to the master.
+        # Constructed BEFORE the ring source below: the router creates the ring, the source connects.
         router = LayerCompletionRouter(
             rank=rank,
             world_size=num_ranks,
@@ -1316,20 +1349,56 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             ring_shm_name=ring_shm_name,
             scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
         )
-        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
-        # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
-        # arriving at the sink is already global; the chunk index is bound per prefill() call as
-        # request_id (passed by _compute_and_send), so the sink reads no shared mutable state.
-        runtime.set_layer_completion_sink(
-            build_layer_completion_sink(
-                producer,
+        if use_d2h:
+            # Device-record source. The reader thread reconstructs (chunk, global-layer) from a per-rank
+            # record counter — valid because each rank emits exactly its layer-slice count (num_my_layers)
+            # of records per chunk, in layer order. d2h_service is threaded into the request loop so
+            # prefill_chunk drives the device-side send on every rank.
+            #
+            # MUST pass the adapter's split boundaries: seq = chunk * NUM_LAYERS + first_layer_idx + k, so
+            # first_layer_idx/num_my_layers have to be the split the MODEL was actually built with (main(),
+            # which snaps the even split onto ADAPTER.layer_split_boundaries). For a dense model boundaries
+            # are None and this equals the even split; for a DSA/cross-layer-reuse model (GLM) the snapped
+            # split differs, and an unsnapped one here would hand the router overlapping/gapped seqs, which
+            # its reorder buffer cannot sequence — it would stall head-of-line instead of failing loudly.
+            first_layer_idx, num_my_layers = compute_layer_split(
+                NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+            )[rank]
+            d2h_service = ttnn.D2HStreamService(
+                mesh_device,
+                global_spec=None,
+                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+                worker_cores=SYNC_WORKER_CORES,
+                metadata_size_bytes=METADATA_SIZE_BYTES,
+            )
+            layer_ack_service = ttnn.LayerAckService(
+                d2h_service,
+                ring_shm_name,
                 source_rank=rank,
                 num_layers=NUM_LAYERS,
+                first_layer_idx=first_layer_idx,
+                local_layers=num_my_layers,
             )
-        )
+            layer_ack_service.start()  # connects to the router-owned ring (created above)
+            source_desc = "D2H device records"
+        else:
+            # Host-callback source: the runtime fires on_layer_complete(layer_idx, request_id) per layer
+            # and the sink pushes into the ring (no device D2H). seq stride is the GLOBAL layer total
+            # (NUM_LAYERS), NOT this rank's slice; layer_idx arriving at the sink is already global; the
+            # chunk index is bound per prefill() call as request_id (passed by _compute_and_send), so the
+            # sink reads no shared mutable state.
+            producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+            runtime.set_layer_completion_sink(
+                build_layer_completion_sink(
+                    producer,
+                    source_rank=rank,
+                    num_layers=NUM_LAYERS,
+                )
+            )
+            source_desc = "host on_layer_complete callback"
         logger.info(
-            f"[migration] pipelined layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
-            f"ring={ring_shm_name} "
+            f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+            f"ring={ring_shm_name} source={source_desc} "
             + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
 
@@ -1337,6 +1406,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             from models.demos.common.prefill.runners.scheduler_standins import CompletionCheckConsumer
 
             completion_check = CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
+    elif single_rank and enable_layer_ack:
+        # Single-rank non-D2H direct path: the runtime owns + inject()s the scheduler counter channel
+        # directly (on_layer_complete fires per layer inside the model). Works traced or untraced.
+        _unlink_stale_shm(ack_shm_name)
+        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        runtime.set_layer_ack_channel(ack_channel)
+        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+    elif single_rank:
+        logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
 
     # Interleaved migration self-test: rank 0 stands in for the scheduler — consume the per-layer ack
     # channel and migrate each chunk as its layers complete, overlapping later chunks' prefill (replaces
@@ -1480,7 +1558,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
         import gc
 
-        # Join the D2H reader thread BEFORE its D2H service / ack channel drop, or it reads a freed FIFO.
+        # Stop the D2H LayerAckService reader thread first (D2H backend only): it reads the D2H
+        # service's sockets and pushes into the router-owned ring, so it must be joined before the
+        # D2H service is dropped AND before router.stop() drains the ring (so the last records land).
+        # No-op under the host-callback / direct-inject backends (layer_ack_service stays None).
         if layer_ack_service is not None:
             layer_ack_service.stop()
             layer_ack_service = None
