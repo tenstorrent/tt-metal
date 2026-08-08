@@ -293,7 +293,10 @@ class TPGatedDeltaNet:
         if tpc.is_blackhole():
             return B
         per_user = self.Nv * self.Dk * self.Dv * 4  # fp32 state, one user
-        max_b = max(1, self._DECODE_STATE_L1_BUDGET // max(1, per_user))
+        # x2: the decode kernel holds the pre-decay state AND the freshly-decayed copy of it live at
+        # once (recurrent_gated_delta_rule_decode_ttnn's `h = ttnn.multiply(h, decay_bhkv, ...)` does
+        # not free the original `h` first) -- the budget must cover both, not just one copy.
+        max_b = max(1, self._DECODE_STATE_L1_BUDGET // (2 * max(1, per_user)))
         if max_b >= B:
             return B
         # Prefer an even split into equal power-of-2-friendly slices (B is always a power of 2 here).
@@ -434,11 +437,25 @@ class TPGatedDeltaNet:
         MAC FIR (which is what Wormhole did unconditionally before the native conv1d was enabled).
 
         Blackhole has a larger L1 and was validated on this path, so it always qualifies.
+
+        CHANNEL WIDTH is the other axis the CB size depends on (act_block_w = qkv_dim_tp * K,
+        per the docstring above) and this function used to ignore it, silently assuming the
+        TP=4 reference width (qkv_dim_tp=4096, "already near the limit at one tile"). At TP=2
+        (N300) qkv_dim_tp DOUBLES to 8192 since fewer devices share the same total channel
+        width -- same one-tile-per-core grid, but act_block_w now overflows L1 the same way
+        the docstring's "2 tiles per core" example does, just via width instead of tile count.
+        MEASURED: test_gdn_tp_prefill (T=128, N300) hit exactly this -- "Statically allocated
+        circular buffers ... clash with L1 buffers" -- because qkv_dim_tp*K (8192*4=32768) is
+        2x the validated 4096*4=16384 reference point. Cap on that reference product directly
+        rather than re-deriving a new threshold: it's the same one tile/core CB budget that
+        was already shown to fit at 4096*4 and overflow at higher per-core activation width.
         """
         if tpc.is_blackhole():
             return True
         grid = self.mesh.compute_with_storage_grid_size()
-        return -(-T // tpc.TILE_SIZE) <= grid.x * grid.y
+        _fits_grid = -(-T // tpc.TILE_SIZE) <= grid.x * grid.y
+        _fits_channel_width = self.qkv_dim_tp * self.K <= 4096 * 4
+        return _fits_grid and _fits_channel_width
 
     def _conv1d_prefill(self, qkv, T, conv_state, _force_splice=False):
         """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
@@ -1554,6 +1571,12 @@ class TPGatedDeltaNet:
             self.conv_states = new_conv
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
+        # Wormhole: halve the bytes through the norm/reshape/gate tail, same as forward_prefill
+        # (see the comment there) -- this path lacked the cast even though it hits the same tensors.
+        if not tpc.is_blackhole() and o.dtype == ttnn.float32 and os.environ.get("QWEN35_GDN_OUT_FP32") != "1":
+            _o_fp32 = o
+            o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(_o_fp32)
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(o)
         out_f = ttnn.reshape(out_n, (B, T, self.value_dim_tp))
