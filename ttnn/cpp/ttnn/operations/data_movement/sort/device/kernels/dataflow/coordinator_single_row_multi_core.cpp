@@ -22,10 +22,22 @@ void kernel_main() {
     const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
     const uint32_t cores_to_coordinator_ready_semaphore_arg = get_arg_val<uint32_t>(5);
     const uint32_t cores_to_coordinator_done_semaphore_arg = get_arg_val<uint32_t>(6);
-    const uint32_t number_of_dest = get_arg_val<uint32_t>(7);
-    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(8);
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(9);
-    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(10);
+    // Number of worker cores this coordinator serves.  Used as the exact-match target
+    // for `cores_to_coordinator_ready_sem.wait()` and (indirectly, via
+    // `number_of_confirmations = Wt / 2`) for the per-sub-stage done-sem waits.
+    const uint32_t number_of_workers = get_arg_val<uint32_t>(7);
+    // Number of NoC destinations for the go-signal multicast.  Must match the
+    // number of cores in the multicast rectangle (excluding the coord itself when
+    // the rect contains it).  In the partial-grid path the multicast rectangle
+    // covers a bounding box that may be strictly larger than `number_of_workers`,
+    // so this is tracked as a separate value from the worker count above — using
+    // `number_of_workers` here would drift the NoC's ack counter and hang the op.
+    // See `sort_program_factory.cpp` (SortProgramFactorySingleRowMultiCore) for
+    // the derivation of both quantities.
+    const uint32_t num_multicast_dests = get_arg_val<uint32_t>(8);
+    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(9);
+    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(10);
+    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(11);
 
     // Compile time args
     constexpr uint32_t total_work_units = get_compile_time_arg_val(0);
@@ -59,7 +71,15 @@ void kernel_main() {
     CircularBuffer index_tensor_cb(index_tensor_cb_index);
     CircularBuffer rm_coord_value_row(rm_coord_value_row_cb);
     CircularBuffer rm_coord_index_row(rm_coord_index_row_cb);
-    const uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
+    // The coordinator's TILE-branch passthrough DMAs data raw from the input DRAM
+    // buffer into c_0 and back out to the output DRAM buffer.  For UINT16 inputs
+    // c_0 is a Float32 CB (see SortProgramFactorySingleRowMultiCore), so
+    // get_tile_size(c_0) returns the enlarged 4KB Float32 page size — but the
+    // DRAM tiles are still UInt16 (2KB).  Using c_0's page size for the DMA byte
+    // count would overrun the source/destination tile boundary.  Derive the raw
+    // input tile byte count from W_tile_bytes (already sized for the raw input
+    // dtype) so the passthrough copies the correct number of bytes in every mode.
+    constexpr uint32_t raw_input_tile_bytes = TILE_H * W_tile_bytes;
     const uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
 
     // Semaphore setup
@@ -161,7 +181,7 @@ void kernel_main() {
                 noc.async_read(
                     input_tensor_addr_ger,
                     input_tensor_cb,
-                    input_tensor_tile_size,
+                    raw_input_tile_bytes,
                     {.page_id = h * Wt + w, .offset_bytes = 0},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
@@ -171,7 +191,7 @@ void kernel_main() {
                 noc.async_write(
                     input_tensor_cb,
                     output_tensor_addr_gen,
-                    input_tensor_tile_size,
+                    raw_input_tile_bytes,
                     {.offset_bytes = 0},
                     {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
@@ -180,7 +200,7 @@ void kernel_main() {
         }  // Wt loop
 
         // Wait until all cores are ready to start
-        cores_to_coordinator_ready_sem.wait(number_of_dest);
+        cores_to_coordinator_ready_sem.wait(number_of_workers);
         cores_to_coordinator_ready_sem.set(0);  // Reset the semaphore
 
         // Set signal to start processing
@@ -190,7 +210,7 @@ void kernel_main() {
             start_core_physical_coord_y,
             end_core_physical_coord_x,
             end_core_physical_coord_y,
-            number_of_dest);
+            num_multicast_dests);
         noc.async_write_barrier();
 
         // Calculate sorting stages
@@ -208,7 +228,7 @@ void kernel_main() {
                     start_core_physical_coord_y,
                     end_core_physical_coord_x,
                     end_core_physical_coord_y,
-                    number_of_dest);
+                    num_multicast_dests);
                 noc.async_write_barrier();
 
                 // Wait until cores will process and save data
