@@ -95,3 +95,333 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }
+
+// STEP 0 empirical gate for the full-grid test campaign:
+//  (a) report compute_with_storage_grid_size() -> expect 8x4 (=32 nodes)
+//  (b) host-side write+read L1 on EVERY node from origin {0,0} -> confirms extent, origin, and
+//      per-node L1 addressability across the whole grid, with per-node diagnostics on failure.
+TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator.";
+    }
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
+
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    std::cout << "[STEP0] compute_with_storage_grid_size = " << grid.x << " x " << grid.y
+              << "  (nodes=" << (grid.x * grid.y) << ")" << std::endl;
+
+    // This suite targets the full 8x4 Quasar sim grid. Skip (don't fail) on the smaller
+    // 1x3/2x3 CI configs so it no-ops cleanly there instead of asserting.
+    if (grid.x != 8u || grid.y != 4u) {
+        GTEST_SKIP() << "grid-test suite targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
+    }
+
+    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    uint32_t ok = 0, fail = 0;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            const experimental::NodeCoord node{x, y};
+            const uint32_t sig = x + y * grid.x;  // coord-unique signature (tile_id)
+            std::vector<uint32_t> w{sig};
+            std::vector<uint32_t> r(1, 0xdeadbeefu);
+            try {
+                tt_metal::detail::WriteToDeviceL1(dev, node, address, w);
+                tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), r);
+                if (r[0] == sig) {
+                    ++ok;
+                } else {
+                    ++fail;
+                    std::cout << "[STEP0] MISMATCH node(" << x << "," << y << ") got 0x" << std::hex << r[0]
+                              << " expected 0x" << sig << std::dec << std::endl;
+                }
+            } catch (const std::exception& e) {
+                ++fail;
+                std::cout << "[STEP0] EXCEPTION node(" << x << "," << y << "): " << e.what() << std::endl;
+            }
+        }
+    }
+    std::cout << "[STEP0] per-node host L1 write/read: ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y)
+              << std::endl;
+    EXPECT_EQ(fail, 0u);
+    EXPECT_EQ(grid.x, 8u) << "expected 8-wide grid";
+    EXPECT_EQ(grid.y, 4u) << "expected 4-tall grid";
+}
+
+// L1a (STEP 1): full-grid replicated DM->L1 smoke. Fan ONE kernel to all 32 nodes via
+// target_nodes = NodeRange{{0,0},{7,3}} with a per-node coord-unique signature RTA, then read
+// back per node and print a PASS/FAIL grid map. Exercises the (declared-but-unexercised-at-32)
+// kernel + per-node-RTA fan-out path.
+TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator.";
+    }
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    // Skip (don't fail) on the smaller 1x3/2x3 CI configs; this test targets the 8x4 grid.
+    if (grid.x != 8u || grid.y != 4u) {
+        GTEST_SKIP() << "full-grid test targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
+    }
+
+    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    auto sig_of = [&](uint32_t x, uint32_t y) -> uint32_t { return static_cast<uint32_t>(x + y * grid.x); };
+
+    // Seed every node with a sentinel so a node the kernel never reached shows up as unwritten.
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> z{0xffffffffu};
+            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, address, z);
+        }
+    }
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+
+    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .num_threads = 2,
+        .runtime_arg_schema = {.runtime_arg_names = {"address", "value"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    // Fan the SAME kernel to ALL 32 nodes.
+    const experimental::NodeRange all_nodes(
+        experimental::NodeCoord{0, 0}, experimental::NodeCoord{grid.x - 1, grid.y - 1});
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = all_nodes};
+    experimental::ProgramSpec spec{.name = "full_grid_l1a", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    // Per-node distinct signature via the per-node RTA table.
+    experimental::ProgramRunArgs params;
+    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = DM_KERNEL};
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            experimental::AddRuntimeArgsForNode(
+                kra.runtime_arg_values, experimental::NodeCoord{x, y}, {{"address", address}, {"value", sig_of(x, y)}});
+        }
+    }
+    params.kernel_run_args = {kra};
+    experimental::SetProgramRunArgs(program, params);
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    // Verify per node + print a PASS/FAIL grid map (top row = highest y).
+    uint32_t ok = 0, fail = 0;
+    std::string map_str;
+    for (int y = static_cast<int>(grid.y) - 1; y >= 0; --y) {
+        std::string row;
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> r(1, 0xdeadbeefu);
+            tt_metal::detail::ReadFromDeviceL1(
+                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+            const uint32_t sig = sig_of(x, static_cast<uint32_t>(y));
+            if (r[0] == sig) {
+                row += ". ";
+                ++ok;
+            } else {
+                row += "X ";
+                ++fail;
+                std::cout << "[L1a] FAIL node(" << x << "," << y << ") got 0x" << std::hex << r[0] << " expected 0x"
+                          << sig << std::dec << std::endl;
+            }
+        }
+        map_str += "[L1a] y=" + std::to_string(y) + "  " + row + "\n";
+    }
+    std::cout << "[L1a] " << grid.x << "x" << grid.y << " kernel-fan map (. ok / X fail):\n" << map_str;
+    std::cout << "[L1a] ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y) << std::endl;
+    EXPECT_EQ(fail, 0u);
+}
+
+// L1c (STEP 3): full-grid COMPUTE smoke. Fan the known-good risc_math compute kernel to all 32
+// nodes; every node must produce the same fixed 16-value output vector. Exercises the compute
+// datapath (UNPACK/MATH/PACK) on the whole grid.
+TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator.";
+    }
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    // Skip (don't fail) on the smaller 1x3/2x3 CI configs; this test targets the 8x4 grid.
+    if (grid.x != 8u || grid.y != 4u) {
+        GTEST_SKIP() << "full-grid test targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
+    }
+
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const std::vector<uint32_t> expected = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
+
+    // Seed every node's 16-word output slot with a sentinel that never appears in `expected`, so a
+    // node whose compute never ran (or whose output was misrouted to a different node) reads back
+    // the sentinel and FAILS rather than silently passing. Note: risc_math's output is node-
+    // independent, so this test cannot by itself distinguish WHICH node produced a value; per-node
+    // output identity is covered separately by FullGridDmL1Write_L1a's coord-unique signatures.
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> z(16, 0xC0FFEEu);
+            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, l1_address, z);
+        }
+    }
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+
+    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
+    experimental::KernelSpec compute_kernel_spec{
+        .unique_id = COMPUTE_KERNEL,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
+        .num_threads = 4,
+        .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
+        .hw_config = experimental::ComputeGen2Config{},
+    };
+
+    const experimental::NodeRange all_nodes(
+        experimental::NodeCoord{0, 0}, experimental::NodeCoord{grid.x - 1, grid.y - 1});
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {COMPUTE_KERNEL}, .target_nodes = all_nodes};
+    experimental::ProgramSpec spec{
+        .name = "full_grid_compute", .kernels = {compute_kernel_spec}, .work_units = {main_wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = COMPUTE_KERNEL};
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            experimental::AddRuntimeArgsForNode(
+                kra.runtime_arg_values, experimental::NodeCoord{x, y}, {{"l1_address", l1_address}});
+        }
+    }
+    params.kernel_run_args = {kra};
+    experimental::SetProgramRunArgs(program, params);
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    uint32_t ok = 0, fail = 0;
+    std::string map_str;
+    for (int y = static_cast<int>(grid.y) - 1; y >= 0; --y) {
+        std::string row;
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> r(16, 0xdeadbeefu);
+            tt_metal::detail::ReadFromDeviceL1(
+                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, l1_address, 16 * sizeof(uint32_t), r);
+            if (r == expected) {
+                row += ". ";
+                ++ok;
+            } else {
+                row += "X ";
+                ++fail;
+                std::cout << "[L1c] FAIL node(" << x << "," << y << ") first=" << r[0] << " (expected " << expected[0]
+                          << ")" << std::endl;
+            }
+        }
+        map_str += "[L1c] y=" + std::to_string(y) + "  " + row + "\n";
+    }
+    std::cout << "[L1c] " << grid.x << "x" << grid.y << " compute map (. ok / X fail):\n" << map_str;
+    std::cout << "[L1c] ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y) << std::endl;
+    EXPECT_EQ(fail, 0u);
+}
+
+// Grid NoC multicast fan-out: one source node (logical {0,0}) multicasts a value to the same L1
+// address on every node in the full-grid rectangle, driving the actual NoC multicast path
+// (get_noc_multicast_addr -> for_each_multicast_coordinate). Host pre-seeds a sentinel on every
+// node and reads all 32 back, printing a PASS/FAIL grid map — a dropped row/column shows up as an
+// un-updated node (guards the historical multicast column-drop bug). Non-DFB.
+TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator.";
+    }
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    if (grid.x != 8u || grid.y != 4u) {
+        GTEST_SKIP() << "full-grid test targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
+    }
+
+    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t value = 0x5eeded42u;
+    const uint32_t sentinel = 0xdeadbeefu;
+
+    // Seed every node with a sentinel so a node the multicast never reached shows as unwritten.
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> z{sentinel};
+            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, address, z);
+        }
+    }
+
+    // Source at logical {0,0}; multicast rectangle = physical coords spanning the whole 8x4 grid.
+    const experimental::NodeCoord src_node{0, 0};
+    const CoreCoord p_lo = mesh_device->worker_core_from_logical_core(experimental::NodeCoord{0, 0});
+    const CoreCoord p_hi = mesh_device->worker_core_from_logical_core(experimental::NodeCoord{grid.x - 1, grid.y - 1});
+    const uint32_t num_dests = grid.x * grid.y - 1;  // rectangle minus the (auto-excluded) source
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+
+    const experimental::KernelSpecName MCAST{"mcast_writer"};
+    experimental::KernelSpec mcast_spec{
+        .unique_id = MCAST,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/grid_multicast_writer.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"value", "result_addr", "mcast_x_start", "mcast_y_start", "mcast_x_end", "mcast_y_end", "num_dests"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::WorkUnitSpec wu{.name = "main", .kernels = {MCAST}, .target_nodes = src_node};
+    experimental::ProgramSpec spec{.name = "grid_mcast_fanout", .kernels = {mcast_spec}, .work_units = {wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = MCAST,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            src_node,
+            {{"value", value},
+             {"result_addr", address},
+             {"mcast_x_start", static_cast<uint32_t>(p_lo.x)},
+             {"mcast_y_start", static_cast<uint32_t>(p_lo.y)},
+             {"mcast_x_end", static_cast<uint32_t>(p_hi.x)},
+             {"mcast_y_end", static_cast<uint32_t>(p_hi.y)},
+             {"num_dests", num_dests}})}};
+    experimental::SetProgramRunArgs(program, params);
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    // Verify per node + print a PASS/FAIL grid map (top row = highest y).
+    uint32_t ok = 0, fail = 0;
+    std::string map_str;
+    for (int y = static_cast<int>(grid.y) - 1; y >= 0; --y) {
+        std::string row;
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> r(1, 0u);
+            tt_metal::detail::ReadFromDeviceL1(
+                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+            if (r[0] == value) {
+                row += ". ";
+                ++ok;
+            } else {
+                row += "X ";
+                ++fail;
+                std::cout << "[MCAST] FAIL node(" << x << "," << y << ") got 0x" << std::hex << r[0] << " expected 0x"
+                          << value << std::dec << std::endl;
+            }
+        }
+        map_str += "[MCAST] y=" + std::to_string(y) + "  " + row + "\n";
+    }
+    std::cout << "[MCAST] " << grid.x << "x" << grid.y << " multicast map (. ok / X fail):\n" << map_str;
+    std::cout << "[MCAST] ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y) << std::endl;
+    EXPECT_EQ(fail, 0u);
+}
