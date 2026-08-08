@@ -735,8 +735,21 @@ def _capacity_bytes():
         return None
 
 
+_MODEL_ROOT_HINT = None
+
+
 def _model_facts():
     """perf_target_inputs.json — total_params / layers / weight bytes. None if unobtainable."""
+    # the caller's model dir first: it is the only source that is right by construction
+    if _MODEL_ROOT_HINT:
+        try:
+            _p = Path(_MODEL_ROOT_HINT) / "perf_target_inputs.json"
+            if _p.is_file():
+                f = json.loads(_p.read_text())
+                if isinstance(f, dict) and f.get("total_params"):
+                    return f
+        except Exception:  # noqa: BLE001
+            pass
     m = _perf_mcp()
     if m is None:
         return None
@@ -1734,8 +1747,18 @@ def render_summary(
     finalized: bool = True,
     final_override_ms: float | None = None,
     throughput: dict | None = None,
+    model_root: str | Path = "",
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
+    # THE MODEL DIRECTORY IS PASSED, NOT DISCOVERED. perf_mcp resolves it from PERF_MCP_MODEL_ROOT or
+    # a manifest, and under the by-path load this module gets it falls back to "." -- so
+    # _load_perf_target_inputs read a directory with no perf_target_inputs.json, returned None, and
+    # both compute roofs plus the whole fidelity ladder rendered "not measured" while the file sat in
+    # the model dir the caller already knew. Everything the caller can hand over should be handed
+    # over; this module has been wrong every time it went looking for something itself.
+    global _MODEL_ROOT_HINT
+    if model_root:
+        _MODEL_ROOT_HINT = Path(model_root)
     attempts = _read_json(kernel_log_path) or []
     if not isinstance(attempts, list):
         attempts = []

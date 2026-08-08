@@ -590,3 +590,23 @@ def test_the_observed_isl_beats_the_default(monkeypatch, fid):
     # and the env still overrides nothing above it: observed wins
     monkeypatch.setenv("TT_PERF_ISL_TOKENS", "64")
     assert S._prefill_tokens() == 512
+
+
+def test_the_model_root_is_given_not_guessed(monkeypatch, fid, tmp_path):
+    """THE CALLER'S MODEL DIRECTORY WINS.
+
+    summary is loaded by file path, so perf_mcp's _MODEL_ROOT falls back to "." and
+    perf_target_inputs.json is looked for in a directory that does not have it. params came back 0,
+    and with no params there is no `2 x params x ISL`: BOTH compute roofs and the entire fidelity
+    ladder rendered "not measured" while the file sat in the model dir run.py already knew.
+
+    Third fetched input to fail this way, after the stage timings and the profile. Anything the
+    caller can hand over is handed over."""
+    (tmp_path / "perf_target_inputs.json").write_text('{"total_params": 7000000000, "layers": 32}')
+    monkeypatch.setattr(S, "_MODEL_ROOT_HINT", tmp_path)
+    assert (S._model_facts() or {}).get("total_params") == 7_000_000_000
+
+    # and with no hint it does NOT invent one
+    monkeypatch.setattr(S, "_MODEL_ROOT_HINT", tmp_path / "nonexistent")
+    monkeypatch.setattr(S, "_perf_mcp", lambda: None)
+    assert S._model_facts() is None

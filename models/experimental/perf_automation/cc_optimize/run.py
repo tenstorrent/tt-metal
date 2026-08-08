@@ -2998,6 +2998,9 @@ def _emit_summary(
         finalized=True,
         final_override_ms=_cur_ms,
         throughput=_throughput,
+        # summary cannot find the model dir on its own under the by-path load it gets, and the
+        # compute roofs need perf_target_inputs.json that lives there.
+        model_root=str(_model_root_for_report(repo_root) or ""),
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
@@ -3093,6 +3096,18 @@ def _report_baseline_for_seed(model_name: str, task: str):
         row = led.first(led.KIND_EAGER, led.PHASE_BEFORE, model_name, task)
         v = float((row or {}).get("value_ms"))
         return v if v > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _model_root_for_report(repo_root):
+    """The model directory this run is optimizing, from the run manifest. None if unknown.
+
+    summary needs it for perf_target_inputs.json (params -> the compute roofs). It cannot resolve it
+    itself: loaded by path, perf_mcp's _MODEL_ROOT falls back to "." and the lookup silently misses."""
+    try:
+        md = _latest_manifest(repo_root / PERF_DIR)
+        return Path((md or {}).get("config", {}).get("model_root") or "") or None
     except Exception:  # noqa: BLE001
         return None
 
