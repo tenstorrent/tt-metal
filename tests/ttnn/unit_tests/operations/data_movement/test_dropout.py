@@ -60,7 +60,8 @@ def test_dropout_output_tensor(device):
 
 
 @pytest.mark.parametrize("in_place", [False, True])
-def test_dropout_seed_distinguishes_cache_entries(device, in_place):
+@pytest.mark.parametrize("use_per_device_seed", [False, True])
+def test_dropout_seed_distinguishes_cache_entries(device, in_place, use_per_device_seed):
     """Regression guard for dropout's seed static/dynamic contract, on both the distinct-output and
     in-place (output_tensor==input) fast paths.
 
@@ -69,6 +70,10 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place):
       * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
       * different seed must change the dropout mask -> guards against the frozen-seed bug on the
         fast path (the in_place case is only reachable since resolve_bindings allows input==output).
+
+    Parametrized over `use_per_device_seed` so both cache-hit override hooks are exercised:
+    the mesh path (`DropoutMeshWorkloadFactory::override_runtime_arguments`, per-device seed offset)
+    and the single-program path (`DropoutProgramFactory::override_runtime_arguments`).
     """
     t = torch.ones((1, 1, 32, 64))
     tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -78,7 +83,9 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place):
 
     def run(seed):
         out_kwargs = {"output_tensor": tensor} if in_place else {}
-        out = ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=seed, **out_kwargs)
+        out = ttnn.experimental.dropout(
+            tensor, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed, **out_kwargs
+        )
         return ttnn.to_torch(out).float().clone()
 
     out_a = run(1234)
