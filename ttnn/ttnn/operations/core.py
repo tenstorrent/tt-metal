@@ -516,6 +516,9 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
+ttnn.register_python_operation(
+    name="ttnn.copy_device_to_torch",
+)(ttnn._ttnn.tensor.copy_device_to_torch)
 
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
