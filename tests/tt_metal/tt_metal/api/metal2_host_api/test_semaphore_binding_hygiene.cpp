@@ -173,13 +173,16 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
 // mask a real regression in that file.
 // Entries are anchored on '/' so a file merely CONTAINING an entry's name is not exempt.
 bool is_allowlisted(const std::string& path) {
-    // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1 addresses
-    // (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
-    // self-targeted-atomic keystone, the DM cache-line-width probe, and the NoC atomic-opcode probe.
+    // Hardware keystone probes: these deliberately issue raw NoC/RISC-V atomics at SCRATCH L1
+    // addresses (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
+    // self-targeted-atomic keystone, the DM cache-line-width probe, the NoC atomic-opcode probe,
+    // and the two CAS keystones (cached 32-bit LR/SC drain; NoC CAS-lock drain).
     // Raw access is the thing under test, so they must stay raw.
     if (path.find("/dm_cacheline_probe.cpp") != std::string::npos ||
         path.find("/noc_self_atomic.cpp") != std::string::npos ||
-        path.find("/noc_atomic_ops_probe.cpp") != std::string::npos) {
+        path.find("/noc_atomic_ops_probe.cpp") != std::string::npos ||
+        path.find("/dm_cas32.cpp") != std::string::npos ||
+        path.find("/noc_self_cas_drain.cpp") != std::string::npos) {
         return true;
     }
     // Residency instrumentation: sem_census_probe deliberately reads its OWN declared semaphore's

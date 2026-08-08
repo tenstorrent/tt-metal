@@ -827,6 +827,54 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     }
 }
 
+// Quasar NoC CAS is a 4-BIT compare-and-swap on one 32-bit lane of a 16B L1 atom:
+//   success := (word[3:0] == cmp4) && (word[31:4] == 0); on success word <- {28'b0, swap4};
+//   on failure the word is unchanged. The response returns the PRE-OP 32-bit word to the local
+//   L1 address last written to this hart's sticky SCMDBUF R_SRC_ADDR register.
+// Usable ONLY for words whose value stays in [0, 15] (locks / tiny state machines).
+// Operand encoding (RTL l1_atomic_cas_instr_t): cmp4 -> at_len[5:2], swap4 -> at_len[9:6],
+// lane -> at_len[1:0]. INLINE_DATA is not consumed; wrap does not apply.
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
+inline __attribute__((always_inline)) void noc_fast_atomic_cas4(
+    uint32_t noc,
+    uint32_t cmd_buf,  // unused on the Quasar RoCC/SCMDBUF path (API symmetry with INCR_GET)
+    uint64_t addr,
+    uint32_t vc,
+    uint32_t cmp4,
+    uint32_t swap4,
+    bool linked,
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (posted ? CMD_BUF_MISC_POSTED : 0) |
+                    (linked ? CMD_BUF_MISC_LINKED : 0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
+    if constexpr (program_ret_addr) {
+        // R_SRC_ADDR is per-hart STICKY: every later atomic on this hart returns its pre-op value
+        // to the last address written here. Pass a PRIVATE per-hart slot and read it back before
+        // this hart issues its next atomic.
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
+    }
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)(addr & 0xFFFFFFFF));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
+        (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    uint64_t at_len = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(swap4 & 0xF) << 6) | ((uint64_t)(cmp4 & 0xF) << 2) |
+                      NOC_AT_IND_32((addr >> 2) & 0x3);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)0);
+    __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+
+    if (!posted) {
+        noc_nonposted_atomics_acked[noc] += 1;
+    }
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     uint32_t noc,

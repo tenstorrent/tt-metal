@@ -48,6 +48,8 @@ protected:
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_coexist.cpp";
     const std::string kernel_path_census =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
+    const std::string kernel_path_remote =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -140,9 +142,14 @@ protected:
     }
 
     // Multi-DM concurrency proof (Quasar-only; roles gated by mhartid in the kernel).
-    // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP or
-    // PRODUCER_CONSUMER. Returns the value() the reporter/consumer read back.
-    uint32_t run_concurrent(SemaphoreScope scope, const std::string& mode_define) {
+    // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP,
+    // PRODUCER_CONSUMER or MULTI_CONSUMER. counter_access labels the counter binding for the
+    // census (MULTI_CONSUMER really down()s, so its tests pass CONSUME). Returns the value()
+    // the reporter/consumer read back.
+    uint32_t run_concurrent(
+        SemaphoreScope scope,
+        const std::string& mode_define,
+        experimental::SemaphoreAccessType counter_access = experimental::SemaphoreAccessType::INCREMENT) {
         // Sentinel prefill: the producer-consumer tests expect 0, so a zero prefill would pass
         // even if the reporter thread never ran.
         std::vector<uint32_t> sentinel(1, kNoReport);
@@ -170,7 +177,9 @@ protected:
             .num_threads = num_dms_,
             .compiler_options = {.defines = defines_obj},
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
+                  .accessor_name = "counter",
+                  .access_type = counter_access},
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
             .hw_config = experimental::DataMovementGen2Config{},
@@ -270,6 +279,92 @@ protected:
         if (result.size() < 2) {
             return {0u, 0u};
         }
+        return {result[0], result[1]};
+    }
+
+    // Remote-up run: a SENDER kernel on second_node() bumps sem::counter on `core` purely via
+    // Semaphore::up(noc, x, y, 1) while a RECEIVER kernel on `core` (OBSERVE binding: it only
+    // waits/reads) waits for the exact total, then reports {baked scope, value()}. Callers must
+    // skip-guard on has_second_node().
+    std::pair<uint32_t, uint32_t> run_remote(SemaphoreScope scope, uint32_t sender_threads, uint32_t iters) {
+        const uint32_t expected = sender_threads * iters;
+        // Sentinel prefill (same discipline as run_census): a zero prefill could hide a receiver
+        // that never reported.
+        std::vector<uint32_t> sentinel(2, kNoReport);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+
+        // The sender addresses the semaphore's node by its virtual NoC coords.
+        const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
+
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord{0, 0};
+        distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
+
+        experimental::SemaphoreSpec counter_sem{
+            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+        counter_sem.scope = scope;
+
+        const experimental::KernelSpecName SENDER{"sem_remote_sender"};
+        const experimental::KernelSpecName RECEIVER{"sem_remote_receiver"};
+        experimental::KernelSpec sender_spec{
+            .unique_id = SENDER,
+            .source = kernel_path_remote,
+            .num_threads = sender_threads,
+            .compiler_options = {.defines = {{"REMOTE_SENDER", "1"}}},
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"increment_times", "remote_noc_x", "remote_noc_y"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+        experimental::KernelSpec receiver_spec{
+            .unique_id = RECEIVER,
+            .source = kernel_path_remote,
+            .num_threads = 1,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
+                  .accessor_name = "counter",
+                  .access_type = experimental::SemaphoreAccessType::OBSERVE}},
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "expected"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+
+        experimental::WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
+        experimental::WorkUnitSpec wu_send{.name = "wu_send", .kernels = {SENDER}, .target_nodes = second_node()};
+        experimental::ProgramSpec spec{
+            .name = "sem_scope_remote",
+            .kernels = {sender_spec, receiver_spec},
+            .semaphores = {counter_sem},
+            .work_units = {wu_recv, wu_send},
+        };
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {
+            experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = SENDER,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    second_node(),
+                    {{"increment_times", iters},
+                     {"remote_noc_x", static_cast<uint32_t>(core_virtual.x)},
+                     {"remote_noc_y", static_cast<uint32_t>(core_virtual.y)}}),
+            },
+            experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = RECEIVER,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    core, {{"report_addr", report_addr}, {"expected", expected}}),
+            },
+        };
+        experimental::SetProgramRunArgs(program, params);
+        workload.add_program(device_range, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+        EXPECT_EQ(result.size(), 2u);
+        if (result.size() < 2) {
+            return {kNoReport, 0u};
+        }
+        // The receiver must have overwritten the sentinel, or the assertions pass vacuously.
+        EXPECT_NE(result[0], kNoReport) << "receiver never reported";
         return {result[0], result[1]};
     }
 
@@ -520,6 +615,39 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
 }
 
+// G3: ONE producer feeds single credits while (num_dms-1) consumers CONCURRENTLY down(iters).
+// Exact 0 proves the cached down()'s CAS retry loop never double-spends a credit (an overdraw
+// wraps unsigned -> huge nonzero report; a lost credit blocks a consumer -> 'done' never fills
+// -> RunProgram timeout). The counter binding is honestly labelled CONSUME.
+TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
+    }
+    const uint32_t observed = run_concurrent(
+        SemaphoreScope::DM_LOCAL_CACHED, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    log_info(LogTest, "DM_LOCAL_CACHED multi-consumer down value(): {} (expected 0)", observed);
+    EXPECT_EQ(observed, 0u)
+        << "Semaphore<DM_LOCAL_CACHED>::down() double-spent a credit under multi-consumer contention "
+           "(the LR/SC CAS retry loop is broken -- two consumers passed the >= check on one credit).";
+}
+
+// End-to-end proof the lifted census works: a >=2-CONSUME shape confined to ONE kernel on the
+// semaphore's node passes cached geometry, so it must BUILD (the CONSUME FATAL was moved after
+// the cached decision), resolve DM_LOCAL_CACHED, and drain exactly. No EXTERNAL variant: a
+// multi-consumer shape resolving EXTERNAL is still host-rejected.
+TEST_F(SemScopeFixture, TestAutoMultiConsumerDown) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
+    }
+    const uint32_t observed =
+        run_concurrent(SemaphoreScope::AUTO, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    log_info(LogTest, "AUTO multi-consumer down value(): {} (expected 0)", observed);
+    EXPECT_EQ(observed, 0u)
+        << "AUTO on a single-kernel multi-CONSUME shape did not drain exactly: either the census still "
+           "rejects/misroutes the cached-geometry shape, or the resolved mechanism's down() is not "
+           "multi-consumer-safe.";
+}
+
 // ---- Cached-pool / EXTERNAL coexistence ----
 
 // A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs in one
@@ -558,6 +686,58 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
     const uint32_t observed = run_scope(SemaphoreScope::AUTO);
     log_info(LogTest, "AUTO single-writer value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations) << "AUTO on a single-writer semaphore did not produce the expected count.";
+}
+
+// ---- Remote up() proofs: the first exact-count tests of Semaphore::up(noc, x, y, v). ----
+// Every earlier test drives the semaphore from its own node; these drive it from a SECOND node,
+// through the class's remote up() (a NoC atomic under every non-cached scope).
+
+// One off-node sender thread. Exact count proves remote up() reaches the semaphore's word and
+// loses nothing; the scope report proves it went through the forced mechanism.
+TEST_F(SemScopeFixture, TestExternalRemoteUpExactCount) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes for an off-node sender";
+    }
+    const auto [scope, value] = run_remote(SemaphoreScope::EXTERNAL, /*sender_threads=*/1, iterations);
+    log_info(LogTest, "EXTERNAL remote up: scope={} value={} (expected {})", scope, value, iterations);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must be the scope baked into both kernels";
+    EXPECT_EQ(value, iterations)
+        << "Semaphore::up(noc, x, y, 1) from an off-node single sender did not land the exact count -- "
+           "the remote increment hit the wrong word or was lost.";
+}
+
+// All user-DM sender threads hammer the SAME remote word. Exact count proves the remote
+// increments from independent harts stay mutually atomic through the class API.
+TEST_F(SemScopeFixture, TestExternalRemoteUpConcurrentExactCount) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes for an off-node sender";
+    }
+    const auto [scope, value] = run_remote(SemaphoreScope::EXTERNAL, num_dms_, concurrent_iterations);
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "EXTERNAL concurrent remote up: scope={} value={} (expected {})", scope, value, expected);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must be the scope baked into both kernels";
+    EXPECT_EQ(value, expected)
+        << "concurrent Semaphore::up(noc, x, y, 1) from " << num_dms_
+        << " sender threads lost updates -- the remote atomics do not serialize at the destination NIU "
+           "when issued through the class.";
+}
+
+// AUTO with an off-node multi-threaded writer: the census sees a binder outside the semaphore's
+// node, so the cached pool is off the table and AUTO must resolve EXTERNAL -- and still count
+// exactly end to end.
+TEST_F(SemScopeFixture, TestAutoRemoteWriterExternalExactCount) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes for an off-node sender";
+    }
+    const auto [scope, value] = run_remote(SemaphoreScope::AUTO, num_dms_, concurrent_iterations);
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "AUTO remote writer: scope={} value={} (expected {})", scope, value, expected);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
+        << "AUTO must demote an off-node-written semaphore to EXTERNAL (any local mechanism would split "
+           "or lose the remote increments)";
+    EXPECT_EQ(value, expected)
+        << "the AUTO-resolved mechanism lost off-node increments -- remote up() and the resolved scope "
+           "do not converge on one atomicity point.";
 }
 
 // ============================================================================
@@ -822,16 +1002,40 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
     (void)loc_count;  // deliberately non-atomic here; the count may legitimately be short
 }
 
-// The two hazard FATALs are mechanism-independent: neither the NoC atomic nor the cached AMO can make
-// a multi-consumer down() or a racing set() atomic. Nothing in the tree labels CONSUME/SET today, so
-// without these tests both guards are dead code that could rot unnoticed.
-TEST_F(SemScopeFixture, TestCensusConsumeAndSetHonestyFatals) {
-    // Two concurrent CONSUME instances (one 2-thread kernel) -> check-then-decrement is unsafe.
+// ---- CONSUME / SET honesty guards ----
+// The CONSUME guard became EXTERNAL-only when the cached down() grew its CAS retry loop: the
+// FATAL moved AFTER the cached decision, so a multi-consumer shape that passes cached geometry
+// now resolves DM_LOCAL_CACHED and runs. The SET guard stays mechanism-independent (no scope can
+// make a destructive store atomic). Nothing in the tree labels CONSUME/SET today, so without
+// these tests the guards -- and the lifted census -- could rot unnoticed.
+
+// The 2-thread single-kernel CONSUME shape passes cached_geometry_ok, so only the old
+// pre-decision FATAL could have blocked it: it must now BUILD and resolve DM_LOCAL_CACHED
+// (whose CAS down() is multi-consumer-safe).
+TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}});
+    log_info(LogTest, "census multi-consumer cached shape: scope={} count={}", scope, count);
+    EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
+        << "a multi-CONSUME shape confined to one DM kernel on the semaphore's node is CAS-safe and must "
+           "resolve DM_LOCAL_CACHED -- a different scope here means the census still rejects or misroutes "
+           "the shape the moved FATAL was supposed to unblock";
+    EXPECT_EQ(count, 2u) << "the cached AMO lost an update, or the pool was not initialised";
+}
+
+// A >=2-CONSUME shape that FAILS cached geometry (two 1-thread CONSUME kernels on one node ->
+// two binder kernels) resolves to EXTERNAL, whose down() is still single-consumer only.
+TEST_F(SemScopeFixture, TestCensusMultiConsumerExternalShapeFatals) {
     EXPECT_ANY_THROW(run_census(
         core,
-        {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}}))
-        << "a multi-consumer down() must be rejected under every mechanism";
+        {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true},
+         {.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1}}))
+        << "two CONSUME binder kernels fail cached geometry and resolve to EXTERNAL, whose down() spin "
+           "and subtract are separate steps -- the host must reject this, not silently race";
+}
 
+TEST_F(SemScopeFixture, TestCensusSetHonestyFatal) {
     // A SET racing another writer -> set() is a non-atomic destructive store under every scope.
     EXPECT_ANY_THROW(run_census(
         core,
@@ -845,10 +1049,13 @@ TEST_F(SemScopeFixture, TestCensusConsumeAndSetHonestyFatals) {
         {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 0, .reporter = true}}))
         << "a single consumer is safe and must not be rejected";
 
-    // The guards are AUTO-only: an explicitly forced scope is the user's call to make.
+    // The guards are AUTO-only: an explicitly forced scope is the user's call to make. Probed with
+    // the SET+writer shape -- the multi-CONSUME cached shape no longer throws under AUTO, so it can
+    // no longer demonstrate the bypass.
     EXPECT_NO_THROW(run_census(
         core,
-        {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}},
+        {{.num_threads = 1, .access = experimental::SemaphoreAccessType::SET, .increments = 1, .reporter = true},
+         {.num_threads = 1, .increments = 1}},
         SemaphoreScope::EXTERNAL))
         << "forced scopes bypass the AUTO-only honesty guards";
 }
