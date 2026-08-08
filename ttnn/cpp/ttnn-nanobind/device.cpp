@@ -6,6 +6,7 @@
 
 #include <tt-metalium/device_types.hpp>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -157,6 +158,18 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
 
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeClockSync>(
+        m_device, "ProgramRealtimeClockSync", "Device-to-host clock mapping for a record.")
+        .def_ro(
+            "device_cycle_offset",
+            &tt::tt_metal::experimental::ProgramRealtimeClockSync::device_cycle_offset,
+            "A device timestamp maps to time.monotonic_ns() host time as "
+            "host_ns = (timestamp - device_cycle_offset) / frequency")
+        .def_prop_ro(
+            "error_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.error.count(); },
+            "Estimated error in a host time derived from this mapping, in ns");
+
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
         .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
@@ -172,13 +185,37 @@ void py_device_module_types(nb::module_& m_device) {
             "frequency",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
+        .def_ro(
+            "clock_sync",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::clock_sync,
+            "Device-to-host clock mapping for this record")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
+        .def_prop_ro(
+            "duration_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) { return record.duration().count(); },
+            "Program execution duration, in ns")
+        .def_prop_ro(
+            "host_start_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_start().time_since_epoch())
+                    .count();
+            },
+            "When the program began executing, on the time.monotonic_ns() timeline. Error estimated by "
+            "clock_sync.error_ns")
+        .def_prop_ro(
+            "host_end_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_end().time_since_epoch())
+                    .count();
+            },
+            "When the program finished executing, on the time.monotonic_ns() timeline. Error estimated by "
+            "clock_sync.error_ns")
         .def_prop_ro(
             "kernel_sources",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID; valid until the callback returns");
+            "Kernel source paths");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")

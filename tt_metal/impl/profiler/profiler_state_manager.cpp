@@ -126,6 +126,15 @@ uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler
     return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
 }
 
+void ProfilerStateManager::set_realtime_sync_anchor(ChipId device_id, const DeviceProfiler::RealtimeSyncLine& anchor) {
+    std::lock_guard<std::recursive_mutex> lock(device_profiler_map_mutex);
+    auto it = device_profiler_map.find(device_id);
+    if (it == device_profiler_map.end()) {
+        return;
+    }
+    it->second.realtime_sync_line = anchor;
+}
+
 void ProfilerStateManager::mark_trace_begin(ChipId device_id, uint32_t trace_id) {
     TT_ASSERT(this->device_profiler_map.contains(device_id));
     std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};

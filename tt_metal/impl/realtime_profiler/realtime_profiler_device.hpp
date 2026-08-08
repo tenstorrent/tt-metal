@@ -12,6 +12,7 @@
 
 #include "context/context_types.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
+#include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
 
 namespace tt::tt_metal {
 
@@ -47,10 +48,19 @@ struct RealtimeProfilerDevice {
     uint32_t chip_id = 0;
     CoreCoord realtime_profiler_core;
     std::unique_ptr<distributed::D2HSocket> socket;
-    // Keeps the BRISC+NCRISC kernels (and their tt-inspector metadata) alive for the receiver's lifetime.
     std::unique_ptr<Program> realtime_profiler_program;
     RealtimeProfilerCoreL1Addrs core_l1;
+    std::unique_ptr<DeviceClockSync> clock_sync;
     bool fifo_capacity_warned = false;
+
+    volatile uint32_t* peek_start_a = nullptr;
+    volatile uint32_t* peek_start_b = nullptr;
+    uint64_t last_peek_device_timestamp = 0;
+
+    void configure_program_start_peek(
+        ContextId context_id, CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr);
+    // Pins the start of whatever program dispatch_s is currently waiting on.
+    void peek_running_program_start();
 
     RealtimeProfilerDevice();
     ~RealtimeProfilerDevice();
@@ -60,8 +70,7 @@ struct RealtimeProfilerDevice {
     RealtimeProfilerDevice& operator=(const RealtimeProfilerDevice&) = delete;
 };
 
-// Devices failing the eligibility gate or socket creation are skipped, so the result may be empty. Marks
-// per-device profiler init complete either way, so nothing waits on a device that bowed out.
+// Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
 std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
 

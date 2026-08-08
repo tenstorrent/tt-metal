@@ -89,7 +89,7 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // Lives for the whole process, so the spans handed to callbacks carry no lifetime caveat.
+    // Lives for the whole process, so the spans handed to RT-profiler callbacks carry no lifetime caveat.
     struct KernelSourceStore {
         std::mutex mutex;
         std::unordered_set<std::string> paths;

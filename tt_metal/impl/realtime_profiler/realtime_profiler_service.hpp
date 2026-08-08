@@ -52,14 +52,6 @@ public:
      * The producer must have stopped publishing before this is called.
      */
     virtual void wait_until_no_readers() = 0;
-
-    /**
-     * @brief Records published so far.
-     *
-     * A reader sees exactly the records published after it was made, so a consumer's accounting is
-     * `received + dropped == num_published_records() - (its value when that consumer's reader was made)`.
-     */
-    [[nodiscard]] virtual uint64_t num_published_records() const = 0;
 };
 
 // Owner of real-time profiler consumers. Producers attach themselves; each registered consumer gets its own thread
@@ -86,6 +78,7 @@ public:
     // Wakes the consumer threads after a receiver publishes records.
     void wake_consumers() noexcept;
 
+    // True if at least one program-record producer is attached.
     bool is_active() const;
 
 private:
@@ -116,7 +109,7 @@ private:
 
         std::vector<ProducerReader> readers;
 
-        // Set by a callback retiring itself.
+        // Set by a callback unregistering itself.
         std::atomic<bool> retired{false};
 
         // Cross-thread inbox. The hot loop only checks control_pending; control_mutex guards the actual resources.
@@ -127,8 +120,6 @@ private:
 
         std::jthread thread;
     };
-
-    using ConsumerMap = std::unordered_map<experimental::ProgramRealtimeProfilerCallbackHandle, ConsumerRegistration>;
 
     void run_consumer(std::stop_token stop_token, ConsumerRegistration& registration);
     void destroy_consumer(ConsumerRegistration& registration);
@@ -142,6 +133,7 @@ private:
     mutable std::mutex topology_mutex_;
     // Used to allow consumers registering later to build readers for producers that are already attached.
     std::unordered_set<ProgramRecordProducer*> attached_producers_;
+    using ConsumerMap = std::unordered_map<experimental::ProgramRealtimeProfilerCallbackHandle, ConsumerRegistration>;
     ConsumerMap consumers_;
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
 
@@ -150,7 +142,5 @@ private:
 
 // Process-wide singleton; callback registrations live until an explicit UnregisterProgramRealtimeProfilerCallback call.
 RealtimeProfilerService& realtime_profiler_service();
-
-void register_builtin_realtime_profiler_consumers();
 
 }  // namespace tt::tt_metal
