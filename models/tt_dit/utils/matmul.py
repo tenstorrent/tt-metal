@@ -874,6 +874,33 @@ fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
         # to_kv is chunks=2 -> old op). Also DISABLED for the same reason as the audio gate above:
         # in-model audio M = AUDIO_N/sp = 1 tile, which can't band under global IN0_SUB_CHUNKS=2.
         # (2048, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
+        # -----------------------------------------------------------------------------------------
+        # flux2 attn/ff shapes, K_global = 6144. Every in-model M (128 / 1024 / 1152) is smaller than
+        # N, so the factory does NOT transpose the grid: N splits across grid.x=12 and M across
+        # grid.y=8. That fixes the per-core work at N/(32*12) weight tiles and ceil(M/32/8) M tiles
+        # (1 / 4 / 5 for the three Ms), which is what the blocking below is sized against.
+        #
+        # Both entries keep N_blocks_per_core == 1. With one M block per core the factory turns on
+        # split_output_write, and that combination deadlocked at 2 N blocks/core on the LTX a2v shape
+        # above -- so a full-width N block is the safe choice, not just the faster one.
+        # Both N_blocks are even, so these also serve the fused-SwiGLU layers whose PACKED weight
+        # width is 2304/4608 (i.e. a logical out_features half that wide).
+        #
+        # N = 2304 -> 6 weight tiles/core. M_block=8 covers the largest per-core M (5 tiles) in one
+        # block. NOT SWEPT, and currently unreachable: every in-model N=2304 call is chunks=3
+        # (attention qkv, single-stream modulation), which this table does not cover. Sweep it
+        # before relying on it from another model.
+        (6144, 2304, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 8, 8, 6, 1, 3, 3, 8),
+        # N = 4608 -> 12 weight tiles/core, so N_block=12 is one block per core. M_block=5 covers the
+        # largest per-core M (1152 -> 5 tiles) in a single block, which keeps split_output_write on.
+        # An earlier M_block=4 split that into a ragged 4+1 and disabled it, costing 35% at M=1152
+        # (590.8 us vs 382.9 us).
+        #
+        # Swept on device via sweep_mm_block_sizes.py (op_kind "sagmm"): 382.9 / 358.8 / 316.6 us at
+        # M = 1152 / 1024 / 128, within 1.7% of per-M-optimal blocking over the flux2 layer mix
+        # (48 single-stream proj_mlp at M=1152, 8 each of ff / ff_context at M=1024 / 128), so a
+        # single M-independent entry is worth keeping here.
+        (6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 5, 4, 12, 1, 4, 3, 8),
     },
 }
 
@@ -889,6 +916,7 @@ def get_fabric_agmm_config(K, N, chunks, device_core_grid) -> FabricAGMMConfig |
     model back onto the old ``all_gather_minimal_matmul_async`` op. Used to get an apples-to-apples
     old-agmm-vs-strided-sagmm baseline under the same trace/fabric config.
     """
+    # print(f"K: {K}, N: {N}, chunks: {chunks}, device_core_grid: {device_core_grid}", flush=True)
     if os.environ.get("DISABLE_FABRIC_AGMM") in ("1", "true", "True"):
         return None
     return fabric_agmm_configs.get(device_core_grid, {}).get((K, N, chunks))

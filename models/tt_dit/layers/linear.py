@@ -278,6 +278,12 @@ class ColParallelLinear(Module):
         output follows the input/weight dtype rather than the caller's requested one.
         """
         mesh_axis = parallel_config.tensor_parallel.mesh_axis
+        # The op gathers on dim 3 and fatals unless padded_shape[0] and [1] are both 1, but model
+        # activations are rank 3 ([1, seq, K]), whose [1] is the sequence length. Widen here and
+        # restore the caller's rank on the way out so this stays a drop-in for the non-fabric path.
+        orig_rank = len(x.padded_shape)
+        if orig_rank != 4:
+            x = ttnn.unsqueeze_to_4D(x)
         if self.fuse_swiglu:
             # The factory partitions gate/up PAIRS across cores, so a pair must never straddle an
             # N block. N_tiles and N_tiles_per_core are even by construction of the packed weight.
@@ -318,7 +324,10 @@ class ColParallelLinear(Module):
             fuse_swiglu=self.fuse_swiglu,
         )
         # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
-        return _apply_activation_fn(outputs[1], self.activation_fn)
+        out = _apply_activation_fn(outputs[1], self.activation_fn)
+        if orig_rank != 4:
+            out = ttnn.reshape(out, tuple(out.shape)[-orig_rank:])
+        return out
 
     def forward(
         self,
@@ -354,16 +363,17 @@ class ColParallelLinear(Module):
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
-            print(f"M: {M}, K: {K}, N: {N}", flush=True)
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
             # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
             # N is the weight width, so a fused-SwiGLU layer keys on its packed [gate|up] width.
             # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
-            # path below. The op hard-requires a rank-4 input with unit batch dims and dim==3.
+            # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
+            # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
             fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
-            is_4d_unit_batch = len(x.padded_shape) == 4 and x.padded_shape[0] == 1 and x.padded_shape[1] == 1
-            if fabric_cfg is not None and self.chunks in (None, 1) and is_4d_unit_batch:
+            has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
+            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch:
+                print(f"COlParallelLinear M: {M}, K: {K}, N: {N}", flush=True)
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config)
 
             core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
@@ -671,6 +681,8 @@ class RowParallelLinear(Module):
         K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
+
+        print(f"RowParallelLinear M: {M}, K: {K}, N: {N}", flush=True)
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
