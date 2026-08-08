@@ -712,7 +712,11 @@ def prepare_generator_args(
         (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
             "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
             True,  # instruct mode
-            3,  # repeat_batches
+            # [REPRO EXPERIMENT #47820] Temporarily 1 (was 3) to test whether a single
+            # prefill->decode batch avoids the prefetcher sub-device trace_buffer fatal.
+            # DO NOT MERGE — the shifting-prompt comparison (len(batch32_outputs) > 1) is
+            # skipped at repeat_batches=1, so this only validates the trace/sub-device path.
+            1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
