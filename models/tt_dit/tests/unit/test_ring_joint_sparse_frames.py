@@ -149,9 +149,9 @@ def _torch_sdpa_ref(
         qe = min(qs + tpf, n_pad)
         attended = torch.nonzero(allow[qf], as_tuple=False).flatten().tolist()
         if not attended:
-            # Padded / fully-masked Q frame: leave zeros. Real Q frames always attend >= themselves;
-            # the only all-zero rows are padded frames whose outputs are dropped by the caller's
-            # [:real_n] slice (and the degenerate drain-all pattern is handled separately upstream).
+            # Only padding frames (q >= num_frames_real) are all-zero; their outputs are dropped by
+            # the caller's [:real_n] slice. The op rejects all-zero rows for real frames, so a real Q
+            # frame here would never have an empty attended set. Leave zeros for the padding rows.
             continue
         k_idx = torch.cat([torch.arange(kf * tpf, min((kf + 1) * tpf, n_pad)) for kf in attended])
         kb = k[:, :, k_idx, :]
@@ -353,20 +353,6 @@ def _run_sparse_frames_op(
             dims=input_shard_dims,
         ),
     )[:, :, :real_n, :]
-
-    # Degenerate pattern: if any REAL Q frame attends zero K frames, the torch reference is a
-    # fully-masked softmax row (which PyTorch collapses to 0/undefined), while the kernel's
-    # `_pack_sparse_frame_mask` workaround forces those all-zero rows to attend-all so the reader chain
-    # stays in sync — so the two diverge by construction and PCC is meaningless.
-    if bool((allow[:num_frames_real].sum(dim=1) == 0).any()):
-        assert torch.isfinite(
-            out
-        ).all(), "sparse ring SDPA produced non-finite output for a fully-drained (degenerate) pattern"
-        logger.info(
-            f"[sparse ring] degenerate allow (a Q frame attends no K) — skipped PCC, verified "
-            f"finite output. sp={sp_factor} tp={tp_factor}"
-        )
-        return
 
     passing, pcc = comp_pcc(gt, out, pcc_threshold)
     logger.info(
@@ -599,7 +585,7 @@ class TestSparseFramesRing:
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
         "drain_pattern",
-        ["tail_drain", "head_drain", "middle_drain", "drain_all", "drain_one_last", "drain_one_first"],
+        ["tail_drain", "head_drain", "middle_drain", "drain_one_last", "drain_one_first"],
     )
     def test_drain_pattern(
         self,
@@ -629,8 +615,6 @@ class TestSparseFramesRing:
                 for k in range(nf_real):
                     if k % 2 == 0:
                         allow[q, k] = 1  # even allowed, odd drained
-            elif drain_pattern == "drain_all":
-                pass  # every chunk drained — 100% drain, zero processing
             elif drain_pattern == "drain_one_last":
                 allow[q, : nf_real - 1] = 1  # all allowed except the very last K frame
             elif drain_pattern == "drain_one_first":

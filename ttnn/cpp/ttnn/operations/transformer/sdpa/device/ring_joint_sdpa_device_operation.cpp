@@ -455,6 +455,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.sparse_frame_mask.size(),
             need_words,
             nf_pad);
+        // Reject real Q frames that attend no K frames.
+        // The kernel would leave these output values un-written and it's not a realistic input.
+        const uint32_t nf_real = static_cast<uint32_t>(args.logical_n / fsl);
+        for (uint32_t qf = 0; qf < nf_real; ++qf) {
+            bool attends_any = false;
+            for (uint32_t kf = 0; kf < nf_pad; ++kf) {
+                const uint32_t bit = qf * nf_pad + kf;
+                if ((args.sparse_frame_mask[bit >> 5] >> (bit & 31u)) & 1u) {
+                    attends_any = true;
+                    break;
+                }
+            }
+            TT_FATAL(
+                attends_any,
+                "sparse_frame_mask: real Q frame {} attends no K frames; every frame < num_frames_real "
+                "({}) must attend at least one K frame",
+                qf,
+                nf_real);
+        }
     } else {
         TT_FATAL(
             args.sparse_frame_mask.empty(),
