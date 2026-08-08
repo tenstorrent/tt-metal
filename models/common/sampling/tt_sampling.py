@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import os
 import sys
 
 import torch
@@ -624,6 +625,27 @@ class TTSampling(LightweightModule):
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
+                # NOTE: do NOT pass a persistent_output_buffer here. The all_gather_async factory
+                # disables its barrier semaphore when persistent buffers are used, and the barrier
+                # is what bounds cross-invocation skew: without it a fast device's next-invocation
+                # writes/increments can reach a peer before that peer's reader has reset its
+                # out_ready semaphore, leaving residual counts that make later waits pass early
+                # (argmax then reads the previous step's logits). Under trace the fresh output
+                # allocation is frozen at capture, so the address is stable anyway.
+                barrier_accessor = getattr(
+                    self.tt_ccl,
+                    "get_sampling_barrier_semaphore_handle",
+                    self.tt_ccl.get_and_cycle_barrier_semaphore_handle,
+                )
+                # Pin the gather's worker cores to the same sub-device as the downstream
+                # untilize/argmax. Without this, all_gather_async defaults to sub-device 0, which
+                # under the galaxy prefetcher decode manager is the prefetcher/senders sub-device.
+                # Dispatch only serializes programs within a sub-device, so a gather on sub-device 0
+                # runs concurrently with the untilize on the worker sub-device: under trace replay
+                # (back-to-back go signals) the untilize/argmax read the gather output buffer before
+                # this step's writes land and return the previous step's argmax (stale tokens).
+                # Eager mode masks this because per-op host dispatch latency exceeds the gather time.
+                ag_sub_device_id = getattr(self.tt_ccl, "worker_sub_device_id", None)
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
@@ -633,14 +655,23 @@ class TTSampling(LightweightModule):
                     memory_config=x.memory_config(),
                     cluster_axis=cluster_axis,
                     topology=topology,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    barrier_semaphore=barrier_accessor(cluster_axis),
                     chunks_per_sync=self.argmax_chunks_per_sync,
                     num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
+                    subdevice_id=ag_sub_device_id,
                 )
+                if os.environ.get("TT_SAMPLING_DEBUG_ADDR") == "1":
+                    logger.info(f"force-argmax gather out addr {x.buffer_address():#x}")
+                if os.environ.get("QWEN_SAMPLING_KEEP_GATHERED") == "1":
+                    # Keep a handle to the gathered logits so tests can read the trace-resident
+                    # buffer back after replay and diff its slots against host-composed logits.
+                    self.debug_gathered = x
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
+            if os.environ.get("QWEN_SAMPLING_KEEP_GATHERED") == "1":
+                self.debug_untilized = x_untilized
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,

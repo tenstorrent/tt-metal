@@ -160,6 +160,20 @@ class TT_CCL:
                         [ttnn.create_global_semaphore(self.mesh_device, rs_worker_crs, 0) for _ in range(3)]
                     )
 
+        # Dedicated semaphores for the sampling force-argmax all-gather (Blackhole). The op maps
+        # its two global semaphores to the forward/backward ring directions, so the shared gather
+        # ring (num_cbs=2) would hand out overlapping pairs whose members swap direction roles
+        # between calls ([s0,s1] then [s1,s0]) while the same handles are simultaneously consumed
+        # as singles by the other decode CCLs. Leftover per-direction counts then desync later
+        # gathers (observed as argmax indices displaced by whole vocab chunks). Fixed-role
+        # dedicated handles avoid this.
+        self.sampling_ag_semaphore_handles = [
+            [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)] for _ in range(2)
+        ]
+        self.sampling_barrier_semaphore_handles = [
+            ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)
+        ]
+
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
@@ -215,6 +229,8 @@ class TT_CCL:
             getattr(self, "to_semaphore_handles", None),
             getattr(self, "reduce_semaphore_handles", None),
             getattr(self, "rs_min_semaphore_handles", None),
+            getattr(self, "sampling_ag_semaphore_handles", None),
+            getattr(self, "sampling_barrier_semaphore_handles", None),
         ):
             _reset(container)
         self.reset_gather_and_buffer_idx()
@@ -225,18 +241,17 @@ class TT_CCL:
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
+    def get_sampling_barrier_semaphore_handle(self, cluster_axis):
+        # Dedicated barrier for the force-argmax sampling all-gather (fixed role, never shared
+        # with the internal CCL barrier ring). See __init__ for why sharing corrupts.
+        return self.sampling_barrier_semaphore_handles[cluster_axis]
+
     def get_and_cycle_ag_semaphore_handles(self, cluster_axis):
         # All-gather semaphore accessor for the force-argmax sampling path (Blackhole).
-        # ttnn.experimental.all_gather_async requires two global semaphores; build the pair from
-        # consecutive entries of the per-axis gather semaphore ring (same construction the internal
-        # all_gather_async path uses), then advance the rotating index.
-        current_idx = self.gather_idx[cluster_axis]
-        semaphores = [
-            self.gather_semaphore_handles[cluster_axis][current_idx],
-            self.gather_semaphore_handles[cluster_axis][(current_idx + 1) % self.num_cbs],
-        ]
-        self.gather_idx[cluster_axis] = (current_idx + 1) % self.num_cbs
-        return semaphores
+        # ttnn.experimental.all_gather_async requires two global semaphores (one per ring
+        # direction); return the dedicated fixed-role pair (see __init__) rather than overlapping
+        # slices of the shared gather ring, whose members would swap direction roles between calls.
+        return list(self.sampling_ag_semaphore_handles[cluster_axis])
 
     def get_all_gather_concat_inter_buffer(self):
         if ttnn.get_arch_name().lower() == "blackhole":

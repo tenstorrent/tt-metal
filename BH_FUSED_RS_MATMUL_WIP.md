@@ -327,6 +327,39 @@ repeat a small set of junk vocab entries (脏, _CAMERA, satu, 漂) which smells 
 for specific vocab shards (lm_head gather / fast_reduce_nc path?). Needs its own investigation on
 the prefetcher baseline branch, independent of this fused-op work.
 
+## RESOLVED (2026-08-08): prefetcher-path accuracy 27% -> 89% Top-1
+
+Two independent bugs, both now fixed:
+
+1. **lm_head DRAM-sharded weights broken on BH (27% -> ~61%).** The lm_head decode ring matmul's
+   `create_dram_sharded_mem_config_lm_head` bank/offset layout is hardcoded for WH's 12 DRAM banks;
+   on BH's 8 banks the ring cores read misaligned weight slices, producing near-random logits in
+   specific vocab shards (the junk-token clusters). Fix: on BH keep the lm_head decode weight
+   DRAM-**interleaved** (`lm_head.py`), and make `LM_HEAD_OUT_RING_MEMCFG` use the input ring
+   grid's core ordering (`qwen_model_config.py`).
+
+2. **Force-argmax sampling gather raced the untilize/argmax under trace (61% -> 89%).**
+   `tt_sampling.py`'s force-argmax `all_gather_async` did not pass `subdevice_id`, so
+   `choose_worker_cores` defaulted to `get_sub_device_ids()[0]` — which, with the prefetcher
+   decode sub-device manager loaded, is the **prefetcher/senders sub-device (col 0)**, not the
+   worker sub-device where the downstream untilize/argmax run. Dispatch (and trace replay) only
+   serializes programs *within* a sub-device stream (`simple_trace_allocator.cpp` skips nodes with
+   a different `sub_device_id`), so under trace the untilize launched concurrently with the gather
+   and read the gather's output buffer before this step's writes landed -> argmax returned the
+   *previous* step's tokens (the +3-chunk "displacement" was stale data, not a permutation).
+   Eager runs masked it because per-op host dispatch latency exceeds the gather runtime.
+   Repro: `test_qwen_sampling_argmax.py` with `QWEN_SAMPLING_TEST_TRACE=1` (fails 24-32/32 rows
+   stale-by-one-iteration before the fix, deterministic with `QWEN_SAMPLING_TEST_SYNC_BEFORE=1`).
+   Fix: pass `subdevice_id=tt_ccl.worker_sub_device_id` to the gather (`tt_sampling.py`), matching
+   every other CCL call in `llama_ccl.py`.
+
+Post-fix (`test_qwen_accuracy.py`, 511 teacher-forced tokens, prefetcher on): Top-1 **89%**,
+Top-5 **~98%** (assert threshold 98% is borderline: observed 97.7-98.1 across runs). With
+`QWEN_ACC_HOST_ARGMAX=1` the on-device sampled token matched the host argmax of the logits on
+**all 511 steps** — the sampling path is now exact. The residual ~7-point Top-1 gap vs the 96%
+non-prefetcher baseline is numerics of the prefetcher compute path (bfp8 ring matmuls / CCL
+dataformats), not corruption.
+
 ## Suggested next steps (2026-08-06 list — items 1-2 RESOLVED by Breakthrough 2)
 
 1. Identify the missing program slot. Only ~3 worker programs run between token-1's PCC readback

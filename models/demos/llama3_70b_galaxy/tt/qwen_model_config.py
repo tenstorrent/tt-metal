@@ -389,9 +389,11 @@ class TtQwenModelArgs(TtModelArgs):
         # through it (with correct sub_core_grids), so force-argmax must stay disabled there.
         self.model_config["SAMPLING_AG_CONFIG"] = {
             "allow_force_argmax": self.is_blackhole,
-            "num_links": self.model_config["GALAXY_NUM_LINKS"],
-            "chunks_per_sync": 10,
-            "topology": ttnn.Topology.Ring,
+            "num_links": int(os.getenv("QWEN_SAMPLING_AG_LINKS", str(self.model_config["GALAXY_NUM_LINKS"]))),
+            "chunks_per_sync": int(os.getenv("QWEN_SAMPLING_AG_CHUNKS_PER_SYNC", "10")),
+            "topology": ttnn.Topology.Linear
+            if os.getenv("QWEN_SAMPLING_AG_TOPOLOGY", "ring").lower() == "linear"
+            else ttnn.Topology.Ring,
         }
         if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -1423,7 +1425,13 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
                 shape=(32, 19968 // LM_HEAD_RING_SIZE),  # padded shape
-                core_grid=lm_head_ring_core_output_range_set,
+                # LM_HEAD_OUTPUT_GRID's permuted order encodes the WH DRAM-sharded in1 bank mapping.
+                # Blackhole reads the decode weight DRAM-interleaved (see lm_head.py): ring core i
+                # computes global N slice i, so the output shard order must follow the INPUT ring
+                # order instead.
+                core_grid=lm_head_ring_core_input_range_set
+                if self.is_blackhole
+                else lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
