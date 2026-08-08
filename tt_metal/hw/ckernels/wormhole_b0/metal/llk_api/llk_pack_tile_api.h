@@ -33,10 +33,10 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
-template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     LLK_ASSERT(
-        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     std::uint8_t output_id = get_output_id(output);
@@ -62,7 +62,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
-template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_matmul_pack(
     std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
@@ -71,7 +71,7 @@ inline void llk_matmul_pack(
         !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
-        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     llk::san::pack_operand_check(

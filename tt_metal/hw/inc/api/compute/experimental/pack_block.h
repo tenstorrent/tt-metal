@@ -8,6 +8,7 @@
 
 #ifdef TRISC_PACK
 #include "experimental/llk_pack_block_api.h"
+#include "llk_pack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -62,6 +63,8 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
 ALWI void pack_block_contiguous(uint32_t ifrom_dst, uint32_t ocb, uint32_t num_tiles) {
     PACK((llk_pack_block_contiguous<DST_ACCUM_MODE>(ifrom_dst, ocb, num_tiles)));
 }
+
+ALWI void pack_block_contiguous_uninit() { PACK((_llk_pack_mop_config_<PackMode::Default>())); }
 
 #endif
 
