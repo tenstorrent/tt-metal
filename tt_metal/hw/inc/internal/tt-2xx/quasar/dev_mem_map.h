@@ -183,15 +183,29 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
+// Per-hart NoC-atomic return slots (EXTERNAL down()'s CAS readback). The SCMDBUF R_SRC_ADDR
+// register is per-hart sticky, so each hart needs a private word for returned pre-op values.
+// 8 harts x 4B, padded to one 64B line; accessed only via NoC responses and the uncached
+// alias (never cache-dirtied). No init needed: every use pre-writes a sentinel and polls.
+#define MEM_NOC_CAS_RET_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
+#define MEM_NOC_CAS_RET_SIZE 64
+
+// Per-semaphore EXTERNAL down() lock words (4-bit NoC-CAS spinlock; values only 0/1).
+// 16 semaphores x 4B, padded to one 64B line; touched only by NoC atomics. Zeroed once by
+// DM firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
+#define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
+#define MEM_NOC_SEM_LOCK_SIZE 64
+
 // Dedicated cached-only DM-local semaphore pool. DM_LOCAL_CACHED semaphores live HERE, in
 // node L1 but physically disjoint from (and below) the NoC-written kernel_config ring, which
 // starts at MEM_MAP_END. The pool is 64B (cache-line) aligned and a whole number of 64B
 // lines, so a DM cached-AMO's write-back line can never overlap any word written over the
 // NoC / uncached alias -> no cross-domain clobber, BY CONSTRUCTION (correctness is a static
-// address invariant, provable without emu cache-fidelity). Sized to NUM_SEMAPHORES=16 slots *
+// address invariant, provable without emu cache-fidelity; the two NoC-written regions above
+// sit in their OWN 64B lines and are never cache-dirtied). Sized to NUM_SEMAPHORES=16 slots *
 // L1_ALIGNMENT=16B = 256B (4 x 64B lines), indexed by the semaphore's normal id. See
 // tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
-#define MEM_DM_CACHED_SEM_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
+#define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
 // Real check (guards a future size edit). NOTE: a BASE % 64 guard would be a tautology -- the base is
 // defined as a 64B round-up -- so it is deliberately absent rather than kept as decoration.
