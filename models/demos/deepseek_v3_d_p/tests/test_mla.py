@@ -674,6 +674,7 @@ def _run_chunked_prefill(
         is_balanced=False,
         topology=topology,
         is_chunked=True,
+        active_seq_len=chunk_size_global,
         slot_num=num_users,
         layer_num=1,
     )

@@ -293,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
+            active_seq_len=seq_len,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
