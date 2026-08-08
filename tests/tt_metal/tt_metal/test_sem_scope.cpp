@@ -631,10 +631,6 @@ TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
            "(the LR/SC CAS retry loop is broken -- two consumers passed the >= check on one credit).";
 }
 
-// End-to-end proof the lifted census works: a >=2-CONSUME shape confined to ONE kernel on the
-// semaphore's node passes cached geometry, so it must BUILD (the CONSUME FATAL was moved after
-// the cached decision), resolve DM_LOCAL_CACHED, and drain exactly. No EXTERNAL variant: a
-// multi-consumer shape resolving EXTERNAL is still host-rejected.
 // EXTERNAL multi-consumer down(): the NoC-CAS lock serializes consumers while the producer's
 // plain increments commute. Exact 0 = no credit double-spent, none lost.
 TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
@@ -646,6 +642,9 @@ TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
     EXPECT_EQ(observed, 0u) << "EXTERNAL multi-consumer down() double-spent or lost a credit";
 }
 
+// End-to-end proof the lifted census works: a >=2-CONSUME shape confined to ONE kernel on the
+// semaphore's node passes cached geometry, so under AUTO it resolves DM_LOCAL_CACHED and must
+// drain exactly.
 TEST_F(SemScopeFixture, TestAutoMultiConsumerDown) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
@@ -1013,12 +1012,12 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
     (void)loc_count;  // deliberately non-atomic here; the count may legitimately be short
 }
 
-// ---- CONSUME / SET honesty guards ----
-// The CONSUME guard became EXTERNAL-only when the cached down() grew its CAS retry loop: the
-// FATAL moved AFTER the cached decision, so a multi-consumer shape that passes cached geometry
-// now resolves DM_LOCAL_CACHED and runs. The SET guard stays mechanism-independent (no scope can
-// make a destructive store atomic). Nothing in the tree labels CONSUME/SET today, so without
-// these tests the guards -- and the lifted census -- could rot unnoticed.
+// ---- CONSUME / SET census behavior ----
+// The CONSUME guard is gone: multi-consumer down() is safe on both atomic tiers (cached CAS
+// retry loop; EXTERNAL NoC-CAS lock), so CONSUME shapes resolve freely and these tests pin the
+// RESOLUTIONS instead. The SET guard stays mechanism-independent (no scope can make a
+// destructive store atomic). Nothing in the tree labels CONSUME/SET today, so without these
+// tests the remaining guard -- and the lifted census -- could rot unnoticed.
 
 // The 2-thread single-kernel CONSUME shape passes cached_geometry_ok, so only the old
 // pre-decision FATAL could have blocked it: it must now BUILD and resolve DM_LOCAL_CACHED

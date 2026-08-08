@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // PROBE kernel: NoC 4-bit CAS spin-lock (0 = free, 1 = held) protecting the full
-// check-then-decrement a future multi-consumer EXTERNAL down() would emit. Today's
-// EXTERNAL down() is single-consumer because its >=value spin and INCR_GET subtract
-// are separate ops (noc_semaphore.h); this lock is the staged upgrade.
+// check-then-decrement. This is the keystone-proven REFERENCE SHAPE the production Quasar-DM
+// EXTERNAL down() (noc_semaphore.h) mirrors -- keep the two in lockstep. Gen1/TRISC keep the
+// single-consumer spin+subtract path.
 //
 // Per lock-protected decrement:
 //   acquire  : CAS(lock, cmp=0, swap=1); the response returns the PRE-OP word to this
@@ -86,7 +86,7 @@ void kernel_main() {
         }
     };
 
-    // One lock-protected conditional decrement: the future EXTERNAL down(1) body.
+    // One lock-protected conditional decrement: the production EXTERNAL down(1) body.
     auto locked_decrement = [&]() {
         while (true) {
             // Cheap wait for a credit before contending; re-checked under the lock.

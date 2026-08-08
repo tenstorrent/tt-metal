@@ -126,8 +126,11 @@ struct CollectedSpecData {
         // Derived once kernel node sets exist: sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
         uint32_t writer_instance_count = 0;
-        uint32_t consuming_instance_count = 0;  // CONSUME writers only (multi-consumer down() is unsafe)
-        uint32_t setting_instance_count = 0;    // SET writers only (set() races any concurrent writer)
+        // CONSUME writers only. down() spins on the LOCAL word, so every consumer must run on the
+        // semaphore's node -- consuming_node_set backs that config-time check.
+        uint32_t consuming_instance_count = 0;
+        NodeRangeSet consuming_node_set;
+        uint32_t setting_instance_count = 0;  // SET writers only (set() races any concurrent writer)
     };
     std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo> semaphore_endpoints;
 
@@ -281,7 +284,19 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //                      safe on both atomic tiers, so CONSUME shapes resolve freely.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
-        case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
+        case SemaphoreScope::EXTERNAL: {
+            // Forced scopes skip the AUTO honesty guards, but an off-node consumer is a mechanical
+            // hang (down() spins on the LOCAL word), so it is rejected like forced-cached geometry.
+            TT_FATAL(
+                binders.consuming_instance_count == 0 ||
+                    to_node_range_set(sem.target_nodes).merge(binders.consuming_node_set).num_cores() ==
+                        to_node_range_set(sem.target_nodes).num_cores(),
+                "SemaphoreSpec '{}' is forced EXTERNAL with a CONSUME (down()) binder kernel on a node "
+                "outside the semaphore's node set; down() spins on the consumer's LOCAL word. Run "
+                "consumers on the semaphore's node(s).",
+                sem.unique_id);
+            return SemScope::EXTERNAL;
+        }
         case SemaphoreScope::DM_LOCAL_CACHED: {
             // The cached-only pool is a per-core region in the DM cache domain, so every access must
             // come from a data-movement kernel on the semaphore's one node. Violations SPLIT the
@@ -394,6 +409,16 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             // Multi-consumer down() is safe on both atomic tiers: the cached tier's CAS loop
             // (checked above) and EXTERNAL's NoC-CAS lock (keystone-proven). Each CONSUME instance
             // also counts as a writer, so >=2 CONSUME can never reach LOCAL_NONATOMIC above.
+            // down() spins on the LOCAL word, so a consumer off the semaphore's node would build
+            // and then hang at run time -- reject it here instead.
+            TT_FATAL(
+                binders.consuming_instance_count == 0 ||
+                    to_node_range_set(sem.target_nodes).merge(binders.consuming_node_set).num_cores() ==
+                        to_node_range_set(sem.target_nodes).num_cores(),
+                "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
+                "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
+                "there. Run consumers on the semaphore's node(s).",
+                sem.unique_id);
             return SemScope::EXTERNAL;
         }
     }
@@ -872,7 +897,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Derive per-semaphore writer-instance counts (needs kernel_node_set above). A writer binding's
     // instance count = num_cores(its kernel's node set) * num_threads; these drive the AUTO scope
-    // classifier (writer_instance_count) and the honesty FATALs (consuming/setting counts).
+    // classifier (writer_instance_count), the racing-SET honesty FATAL, and the off-node-consumer
+    // geometry check.
     for (auto& [sem_name, sem_info] : collected.semaphore_endpoints) {
         for (const auto& rec : sem_info.writers) {
             const uint32_t instances =
@@ -880,6 +906,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             sem_info.writer_instance_count += instances;
             if (rec.binding->access_type == SemaphoreAccessType::CONSUME) {
                 sem_info.consuming_instance_count += instances;
+                sem_info.consuming_node_set =
+                    sem_info.consuming_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
             } else if (rec.binding->access_type == SemaphoreAccessType::SET) {
                 sem_info.setting_instance_count += instances;
             }
@@ -2051,7 +2079,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         // Resolve + validate the physical-path scope at validate time (FATALs on a contradiction,
         // e.g. a forced DM_LOCAL_CACHED spanning multiple nodes, or an AUTO->EXTERNAL sem with a
-        // multi-consumer down()/racing set()). Same `collected` as the build-time call below, so the
+        // racing set(), off-node consumer). Same `collected` as the build-time call below, so the
         // decision is identical (no census drift) and any honesty FATAL surfaces here first.
         (void)ResolveSemaphoreScope(sem, SemaphoreBinders(collected, sem.unique_id));
     }

@@ -538,7 +538,7 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
 }
 
 // (6a) All user DM threads drain one word through the NoC-CAS-lock-protected
-// check-then-decrement (the full future multi-consumer EXTERNAL down() body:
+// check-then-decrement (the production multi-consumer EXTERNAL down() body:
 // acquire CAS 0->1, re-check >=1, INCR_GET(-1), release CAS 1->0). Host preloads
 // num_dms * iterations; exact 0 proves the 4-bit CAS lock grants exclusively
 // under full contention (kernel poisons the count on a bad release pre-op).
