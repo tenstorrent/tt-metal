@@ -7,42 +7,34 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto output_addr = get_arg_val<uint32_t>(i++);
-    const auto mean_addr = get_arg_val<uint32_t>(i++);
-    const auto rstd_addr = get_arg_val<uint32_t>(i++);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto num_inner_tiles = get_arg(args::num_inner_tiles);
 
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
-    const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
-
-    const auto num_groups = get_arg_val<uint32_t>(i++);
-    const auto block_size = get_arg_val<uint32_t>(i++);
-
-    constexpr bool mean_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool rstd_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr auto output_args = TensorAccessorArgs<2>();
-    constexpr auto mean_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
-
-    uint32_t cb_id{16};
-    const auto cb_id_output = cb_id++;
-    const auto cb_id_mean = cb_id++;
-    const auto cb_id_rstd = cb_id++;
+    const auto num_groups = get_arg(args::num_groups);
+    const auto block_size = get_arg(args::block_size);
 
     // output
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr);
+    DataflowBuffer dfb_output(dfb::output);
+    const uint32_t output_tile_bytes = dfb_output.get_tile_size();
+    const auto output_addrg = TensorAccessor(tensor::output);
 
     // mean
-    const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
+#ifdef MEAN_HAS_VALUE
+    DataflowBuffer dfb_mean(dfb::mean);
+    const uint32_t mean_tile_bytes = dfb_mean.get_tile_size();
+    const auto mean_addrg = TensorAccessor(tensor::mean);
+#endif
 
     // rstd
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
+#ifdef RSTD_HAS_VALUE
+    DataflowBuffer dfb_rstd(dfb::rstd);
+    const uint32_t rstd_tile_bytes = dfb_rstd.get_tile_size();
+    const auto rstd_addrg = TensorAccessor(tensor::rstd);
+#endif
 
     constexpr uint32_t onetile = 1;
 
@@ -52,9 +44,6 @@ void kernel_main() {
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
     Noc noc;
-    DataflowBuffer dfb_output(cb_id_output);
-    DataflowBuffer dfb_mean(cb_id_mean);
-    DataflowBuffer dfb_rstd(cb_id_rstd);
 
     const auto output_l1_read_ptr = dfb_output.get_read_ptr();
     uint32_t output_tile_idx;
@@ -79,7 +68,8 @@ void kernel_main() {
             get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_H, TILE_W);
 
         // mean (1, 1, N, num_groups)
-        if (mean_has_value) {
+#ifdef MEAN_HAS_VALUE
+        {
             const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
             const auto mean_l1_read_ptr = dfb_mean.get_read_ptr();
             dfb_mean.wait_front(onetile);
@@ -96,9 +86,11 @@ void kernel_main() {
             noc.async_write_barrier();
             dfb_mean.pop_front(onetile);
         }
+#endif
 
         // rstd (1, 1, N, num_groups)
-        if (rstd_has_value) {
+#ifdef RSTD_HAS_VALUE
+        {
             const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
             const auto rstd_l1_read_ptr = dfb_rstd.get_read_ptr();
             dfb_rstd.wait_front(onetile);
@@ -115,6 +107,7 @@ void kernel_main() {
             noc.async_write_barrier();
             dfb_rstd.pop_front(onetile);
         }
+#endif
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
             // output (N, C, H, W)

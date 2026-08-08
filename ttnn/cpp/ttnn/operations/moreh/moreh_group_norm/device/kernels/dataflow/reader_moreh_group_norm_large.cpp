@@ -7,30 +7,20 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto input_addr = get_arg_val<uint32_t>(i++);
-    const auto gamma_addr = get_arg_val<uint32_t>(i++);
-    const auto beta_addr = get_arg_val<uint32_t>(i++);
+    const auto scaler = get_arg(args::scaler);
+    const auto eps = get_arg(args::eps);
 
-    const auto scaler = get_arg_val<uint32_t>(i++);
-    const auto eps = get_arg_val<uint32_t>(i++);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto num_inner_tiles = get_arg(args::num_inner_tiles);
+    const auto num_channels = get_arg(args::num_channels);
 
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
-    const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
-    const auto num_channels = get_arg_val<uint32_t>(i++);
-
-    const auto origin_h = get_arg_val<uint32_t>(i++);
-    const auto origin_w = get_arg_val<uint32_t>(i++);
-    const auto block_size = get_arg_val<uint32_t>(i++);
-
-    constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool beta_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr auto input_args = TensorAccessorArgs<2>();
-    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    const auto origin_h = get_arg(args::origin_h);
+    const auto origin_w = get_arg(args::origin_w);
+    const auto block_size = get_arg(args::block_size);
 
     constexpr uint32_t onetile = 1;
 
@@ -44,51 +34,46 @@ void kernel_main() {
 
     const auto C = num_channels;
 
-    uint32_t cb_id{0};
-    const auto cb_id_input = cb_id++;
-    const auto cb_id_scaler = cb_id++;
-    const auto cb_id_eps = cb_id++;
-    const auto cb_id_gamma = cb_id++;
-    const auto cb_id_beta = cb_id++;
-    const auto cb_id_mask_h = cb_id++;
-    const auto cb_id_mask_w = cb_id++;
-
-    DataflowBuffer dfb_scaler(cb_id_scaler);
-    DataflowBuffer dfb_eps(cb_id_eps);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_eps(dfb::eps);
     fill_cb_with_value(dfb_scaler, scaler);
     fill_cb_with_value(dfb_eps, eps);
 
-    const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? origin_h % TILE_H : TILE_H;
-
-    const bool do_mask_w = (origin_w % TILE_W) != 0;
-    const auto mask_w = do_mask_w ? origin_w % TILE_W : TILE_W;
-
-    if (do_mask_h) {
-        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+#ifdef DO_MASK_H
+    {
+        const auto mask_h = origin_h % TILE_H;
+        DataflowBuffer dfb_mask_h(dfb::mask_h);
         generate_mask_h(dfb_mask_h, mask_h);
     }
-    if (do_mask_w) {
-        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+#endif
+#ifdef DO_MASK_W
+    {
+        const auto mask_w = origin_w % TILE_W;
+        DataflowBuffer dfb_mask_w(dfb::mask_w);
         generate_mask_w(dfb_mask_w, mask_w);
     }
-
-    // input
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
-
-    // gamma
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr);
-
-    // beta
-    const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
+#endif
 
     Noc noc;
-    DataflowBuffer dfb_input(cb_id_input);
-    DataflowBuffer dfb_gamma(cb_id_gamma);
-    DataflowBuffer dfb_beta(cb_id_beta);
+
+    // input
+    DataflowBuffer dfb_input(dfb::input);
+    const uint32_t input_tile_bytes = dfb_input.get_tile_size();
+    const auto input_addrg = TensorAccessor(tensor::input);
+
+    // gamma
+#ifdef GAMMA_HAS_VALUE
+    DataflowBuffer dfb_gamma(dfb::gamma);
+    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
+    const auto gamma_addrg = TensorAccessor(tensor::gamma);
+#endif
+
+    // beta
+#ifdef BETA_HAS_VALUE
+    DataflowBuffer dfb_beta(dfb::beta);
+    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
+    const auto beta_addrg = TensorAccessor(tensor::beta);
+#endif
 
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
@@ -144,7 +129,8 @@ void kernel_main() {
             // n * C + c = input_tile_idx / (Ht * Wt)
             // c = (input_tile_idx / (Ht * Wt)) % C
             // gamma (1, 1, 1, C)
-            if (gamma_has_value) {
+#ifdef GAMMA_HAS_VALUE
+            {
                 uint32_t gamma_tile_idx;
                 const auto gamma_l1_write_ptr = dfb_gamma.get_write_ptr();
                 dfb_gamma.reserve_back(block_size);
@@ -172,9 +158,11 @@ void kernel_main() {
                 }
                 dfb_gamma.push_back(block_size);
             }
+#endif
 
             // beta (1, 1, 1, C)
-            if (beta_has_value) {
+#ifdef BETA_HAS_VALUE
+            {
                 uint32_t beta_tile_idx;
                 const auto beta_l1_write_ptr = dfb_beta.get_write_ptr();
                 dfb_beta.reserve_back(block_size);
@@ -202,6 +190,7 @@ void kernel_main() {
                 }
                 dfb_beta.push_back(block_size);
             }
+#endif
         }  // inner_idx loop
     }  // outer_idx loop
 
