@@ -22,7 +22,6 @@ from typing import Optional
 
 from loguru import logger
 
-import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
@@ -75,13 +74,18 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout:
-        $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}. None if explicitly empty."""
+        $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}. None if explicitly empty.
+
+        Use ``sp * tp`` for N — not ``ttnn.get_num_devices()``. The runner calls this from
+        ``_print_config`` before ``open_mesh_device``; with co-located migration workers
+        ``GetNumAvailableDevices`` can throw ``unordered_map::at`` and abort Gate 2.
+        """
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
         arch = "bh" if is_blackhole() else "wh"
-        num_devices = ttnn.get_num_devices()
         sp, tp = mesh_shape
+        num_devices = int(sp) * int(tp)
         path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -95,11 +99,9 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         so the returned KvCaches holds just the one GptOssKVCache at index 0. The engine owns it and
         passes it into every runtime call.
 
-        NOTE: index 0 is a ``GptOssKVCache`` dataclass (holding the k + v tensors), not a single raw
-        tensor as the DeepSeek MLA KVPE cache is. The standalone/PCC path treats kv_caches[0] opaquely
-        and works. The migration path (build_kv_chunk_table) assumes a single primary tensor and is NOT
-        wired for GPT-OSS yet (TODO: split into KvCaches([k, v]) + a GQA table builder if migration is
-        needed)."""
+        Index 0 is a ``GptOssKVCache`` (``.k`` / ``.v`` tensors). Migration uses the multi-config
+        table in ``tt/runners/kv_chunk_table.py`` (config 0..N-1 = k heads, N..2N-1 = v heads).
+        """
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
         return GptOssKvCaches(
@@ -133,6 +135,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
+            first_layer_idx=params.first_layer_idx,
         )
         # TODO(P5, engine integration): this builds with state_dict={}, i.e. it relies on a
         # pre-populated TTNN weight cache (tilized weights + the MLP expert-bias sidecar) and does
