@@ -19,7 +19,13 @@
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 >
-> **§N+36 (newest): on a HEALTHY card the HOST IS NOT THE CONSTRAINT** — writer 70-83% idle, decoder ~60%,
+> **§N+37 (newest): the REAL knee is 1 drainer ~250, 2 drainers ~150 (~1.7x, not 5x).** "Knee 20" is
+> RETRACTED — it was measured on an MMIO-degraded card, where 2.3 us host WRITES stretch the serial
+> slow-dispatch launch ~13x and DESYNCHRONIZE the producers, collapsing peak concurrent rate. Forcing a
+> Gen1 link (slow reads, fast writes) does the opposite and pushes the knee past 150, which is how the
+> mechanism was identified. **Quote a knee only with the dispatch mode AND the ACK-WRITE probe value.**
+>
+> **§N+36: on a HEALTHY card the HOST IS NOT THE CONSTRAINT** — writer 70-83% idle, decoder ~60%,
 > while producers stall 22,000 times; the limit is the device's O(num_cores) sweep. Several host claims from
 > earlier the same day are RETRACTED as degraded-card artifacts (the "2.6 us ack", the reads-not-bytes
 > framing diagnosis, and "pacing gives 0 stalls at 20-125"). **Check the ACK-WRITE probe printed on every
@@ -3198,3 +3204,68 @@ pinned exactly at that value in the results means the ceiling is clipping the lo
 **Its thresholds were fitted on the degraded card and must be re-derived**, and on current evidence the
 host is not the bottleneck it was meant to relieve. Kept because the mechanism is sound and the hook was
 always intended ("the hook a pacing controller would drive"), not because the tuning is trustworthy.
+
+## §N+37 — The REAL knee on a healthy card: 1 drainer ~250, 2 drainers ~150 (~1.7x). "Knee 20" was a desynchronized-launch artifact (bh-26, 2026-08-08)
+
+### RETRACT "knee 100 -> 20, a 5x improvement" (N+34)
+
+Both of those numbers were measured AFTER the 14:01 freeze, on the MMIO-degraded card. Re-measured on a
+verified-healthy card (ack-write 171-186 ns, device-read ~790 ns), 120 cores, slow dispatch, 2 sockets,
+`NO_DECODE`, pacing off, discard + 2-3 warm per point:
+
+| delay | 1 drainer | 2 drainers |
+|---|---|---|
+| 100 | 4,623 / 5,042 | 8,378 / 7,888 |
+| 150 | 3,127 / 3,215 | **0 / 15** |
+| 200 | **0 / 312** | -- |
+| 250 | **0 / 0** | **0 / 0** |
+| 400 | 0 / 0 | 0 / 0 |
+
+**1-drainer knee ~250, 2-drainer knee ~150. The two-drainer win is ~1.7x, not 5x.** It is real, and it
+is the same direction as before -- only the magnitude was inflated.
+
+### The mechanism was NOT "a degraded card throttles the producers"
+
+That explanation was wrong and a deliberate experiment killed it. **Producers are Tensix cores running
+on-device nop loops; PCIe latency cannot slow them.**
+
+Forcing the link to Gen1 on purpose (`LnkCtl2` Target Link Speed = 1 + retrain -- a controlled,
+reversible way to degrade PCIe) produced the OPPOSITE of a fake knee:
+
+| delay | Gen1 link | healthy |
+|---|---|---|
+| 10 | 23,398 | -- |
+| 20 | 23,368 | 22,440 |
+| 60 | 23,243 | 9,997 |
+| 150 | 22,977 | 0 / 15 |
+
+Flat ~23,000 stalls at every delay, occupancy pinned 511. The knee moved PAST 150, because slow reads
+(2,735 ns) cripple the DRAINER's polling.
+
+### What actually produced the fake knee: LAUNCH SKEW
+
+The two degraded states differ in WHICH DIRECTION is slow, and that is the whole story:
+
+| state | ack (host write) | device-read |
+|---|---|---|
+| Gen1 downtrain | **184 ns (fast)** | 2,735 ns |
+| MMIO-degraded (the 14:01 one) | **2,318 ns (SLOW)** | 2,940 ns |
+
+Under slow dispatch the launch messages are host MMIO **writes**, issued serially to all 120 cores. At
+2.3 us instead of 175 ns the launch takes ~13x longer, so producers start badly SKEWED instead of firing
+together. Peak *concurrent* marker rate collapses while total markers are unchanged, and the drainer
+copes trivially -- exactly the effect [[drisc_knee_not_comparable_across_dispatch]] already documents for
+fast-vs-slow dispatch (knee 25 vs 125).
+
+**Gen1 cannot reproduce it because Gen1 leaves WRITES fast**, so launch stays synchronized and only the
+drainer suffers. Occupancy corroborates: fake-knee runs sat at occ ~350 (rings never filling, i.e. low
+peak rate) while healthy runs pin at 511.
+
+So the knee of 20 was real for a machine whose producers were desynchronized by a 13x slower launch
+path. It was never a property of the drainer.
+
+### The rule this yields
+
+**A knee is only meaningful with the card's health stated alongside the dispatch mode.** The existing rule
+was "never quote a knee without the dispatch mode"; add "and without the ACK-WRITE probe value", because
+a slow WRITE path silently desynchronizes producers and flatters every number downstream.
