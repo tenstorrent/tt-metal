@@ -54,6 +54,7 @@ def run_single_routed_expert(
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
+    pcc_threshold: float = 0.97,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -75,13 +76,13 @@ def run_single_routed_expert(
     activations, which is the only way a SiTU-GLU case actually exercises the caps rather
     than their near-linear middle.
 
-    ``weights_dtype`` defaults to the production bfloat4_b. Raise it to bfloat8_b when a
-    case deliberately saturates a capped activation: saturation turns the output nearly
-    two-level, so bf4 weight error stops passing through proportionally and instead flips
-    whole terms of the down matmul. That is a property of bf4 + saturation, not of the
-    kernel (measured: SiTU-GLU holds 0.999 PCC at every scale with bf8/bf16 weights, and
-    the SFPU op passes its own saturation-coverage test), but it would otherwise make a
-    saturation case look like an activation bug.
+    ``weights_dtype`` defaults to the production bfloat4_b; ``pcc_threshold`` defaults to
+    the usual 0.97. Both are parameters because saturating a capped activation costs
+    accuracy under bf4 specifically: saturation turns the output nearly two-level, so bf4
+    weight error stops passing through proportionally and instead flips whole terms of the
+    down matmul. That is a property of bf4 + saturation rather than of the kernel (SiTU-GLU
+    holds ~0.999 at every scale with bf8/bf16 weights, and the SFPU op passes its own
+    saturation-coverage test), so a saturated bf4 case needs its own bar to stay meaningful.
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -192,7 +193,6 @@ def run_single_routed_expert(
     logger.debug(f"PCC over active slice ({active_tokens} rows): {pcc:.6f}")
 
     # Validate
-    pcc_threshold = 0.97
     assert pcc >= pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
     assert not torch.isnan(tt_output_active).any(), "Active output contains NaN"
     assert not torch.isinf(tt_output_active).any(), "Active output contains Inf"
@@ -348,18 +348,36 @@ def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: boo
     )
 
 
-@pytest.mark.parametrize("weight_scale", [0.15, 0.4], ids=["sat_partial", "sat_deep"])
+# Saturation cases: (weight_scale, weights_dtype, pcc_threshold).
+#
+# bf8 isolates the activation -- it holds ~0.999 no matter how deep the saturation, so a
+# regression in either tanh cap shows up immediately against the 0.97 bar.
+#
+# bf4 is the production weight dtype and is kept here deliberately, at a threshold matched
+# to its measured floor (0.976 at scale 0.15, 0.968 at 0.4). Saturation makes the output
+# near two-level, so bf4 weight error stops passing through proportionally and instead
+# flips whole terms of the down matmul; that cost is real and is what K3 prefill will see,
+# so it is measured rather than excluded. The bar still catches a genuine regression -- it
+# sits just under the measured value, not at an arbitrary low number.
+_K3_SATURATION_CASES = [
+    pytest.param(0.15, ttnn.bfloat8_b, 0.97, id="sat_partial-bf8"),
+    pytest.param(0.4, ttnn.bfloat8_b, 0.97, id="sat_deep-bf8"),
+    pytest.param(0.15, ttnn.bfloat4_b, 0.97, id="sat_partial-bf4"),
+    pytest.param(0.4, ttnn.bfloat4_b, 0.96, id="sat_deep-bf4"),
+]
+
+
+@pytest.mark.parametrize("weight_scale, weights_dtype, pcc_threshold", _K3_SATURATION_CASES)
 @pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
-def test_single_routed_expert_k3_saturated(device, weight_scale: float):
+def test_single_routed_expert_k3_saturated(device, weight_scale: float, weights_dtype, pcc_threshold: float):
     """Kimi K3 SiTU-GLU driven into the saturating region of both tanh caps.
 
     The sweep above runs at the default weight scale, where gate/up land around O(1) --
     well inside the near-linear middle of tanh(x/4) and tanh(x/25). A kernel that dropped
     either cap entirely would still pass there. These cases scale the weights so the caps
-    carry the result (sat_deep reaches ~87% of gate and ~30% of up past their beta), so the
-    betas are actually under test. bfloat8_b weights keep this measuring the activation
-    rather than bf4 quantization amplified by saturation -- see run_single_routed_expert.
+    carry the result (sat_deep reaches ~87% of gate and ~30% of up past their beta), across
+    both the production bf4 weights and bf8 -- see _K3_SATURATION_CASES for why both.
     """
     run_single_routed_expert(
         device,
@@ -368,5 +386,6 @@ def test_single_routed_expert_k3_saturated(device, weight_scale: float):
         KimiK3Config.MOE_INTERMEDIATE_SIZE,
         activation=ttnn.RoutedExpertActivation.SituGlu,
         weight_scale=weight_scale,
-        weights_dtype=ttnn.bfloat8_b,
+        weights_dtype=weights_dtype,
+        pcc_threshold=pcc_threshold,
     )

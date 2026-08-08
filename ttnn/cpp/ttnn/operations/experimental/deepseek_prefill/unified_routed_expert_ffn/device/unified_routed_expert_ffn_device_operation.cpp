@@ -276,13 +276,14 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             t.gate_bias->dtype(),
             t.up_bias->dtype(),
             t.down_bias->dtype());
-        // Bias fusion is implemented only for the SwiGLU-OAI activation (gpt-oss):
-        // the kernel adds gate/up bias before the clamp and down bias after the
-        // down matmul. The SiLU path has no bias branch.
+        // Bias fusion lives in the kernel's shared binary-activation phase (FUSE_BIAS
+        // inside FUSED_BINARY_ACT): gate/up bias is added before the activation, down
+        // bias after the down matmul. That branch is activation-agnostic, so every fused
+        // binary activation supports it; only the SiLU path has no bias branch.
         TT_FATAL(
-            op.activation == RoutedExpertActivation::SwiGluOai,
-            "unified_routed_expert_ffn: expert biases are only supported with RoutedExpertActivation::SwiGluOai "
-            "(got the SiLU path).");
+            op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
+            "unified_routed_expert_ffn: expert biases require a fused binary activation "
+            "(SwiGluOai or SituGlu); the SiLU path has no bias branch.");
     }
 }
 

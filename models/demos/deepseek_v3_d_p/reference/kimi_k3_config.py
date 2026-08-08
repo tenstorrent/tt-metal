@@ -24,8 +24,7 @@ class KimiK3Config:
     MOE_LATENT_SIZE = 3584  # routed-expert input dimension (post down-projection)
     MOE_INTERMEDIATE_SIZE = 3072  # routed-expert FFN hidden dimension
 
-    # SiTU-GLU activation betas. Kept in sync with SituGluConfigKimi in
-    # situ_glu_sfpu.h (baked into the fused kernel) and with the torch reference
-    # in reference/tt/moe/expert.py.
-    SITU_BETA_GATE = 4.0
-    SITU_BETA_UP = 25.0
+    # The SiTU-GLU betas deliberately do NOT live here. The device kernel bakes them from
+    # SituGluConfigKimi (situ_glu_sfpu.h) and the torch reference reads SITU_BETA_GATE /
+    # SITU_BETA_UP from reference/tt/moe/expert.py; a third copy on this config would be
+    # read by nothing, so editing it would silently fail to change the activation.

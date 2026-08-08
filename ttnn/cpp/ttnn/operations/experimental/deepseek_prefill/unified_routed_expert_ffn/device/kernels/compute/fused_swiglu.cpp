@@ -573,7 +573,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // gpt-oss/M3 and Kimi K3 activations). Reads the raw bf16 gate & up matmul
 // accumulators (both still resident in their partials CBs) and writes the
 // activated result into activated_cb:
-//   SwiGLU-OAI: (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L))
+//   SwiGLU-OAI: (clamp(up,+/-L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L))
 //               (swiglu_sfpu.h, SwiGLUConfigGPTOSS = M3 config)
 //   SiTU-GLU:   (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up))
 //               (situ_glu_sfpu.h, SituGluConfigKimi = K3 config)

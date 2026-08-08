@@ -24,6 +24,13 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
+# Activations whose fused kernel path carries the bias branch (gate/up bias before the
+# activation, down bias after the down matmul). SiLU has no bias branch.
+_BIAS_CAPABLE_ACTIVATIONS = (
+    ttnn.RoutedExpertActivation.SwiGluOai,
+    ttnn.RoutedExpertActivation.SituGlu,
+)
+
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
@@ -313,11 +320,14 @@ class TtRoutedExpert(LightweightModule):
             )
         self.activation = activation
 
-        # Optional per-expert projection biases (gpt-oss). Only supported with
-        # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
+        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
+        # activation (the kernel adds gate/up bias before the activation and down bias
         # after the down matmul). Converted + distributed like the weights below.
-        if torch_biases is not None and activation != ttnn.RoutedExpertActivation.SwiGluOai:
-            raise ValueError("TtRoutedExpert expert biases are only supported with RoutedExpertActivation.SwiGluOai")
+        if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
+            raise ValueError(
+                "TtRoutedExpert expert biases require a fused binary activation "
+                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+            )
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
