@@ -5,12 +5,12 @@
 
 Two schemes, one env var:
 
-  * **replicated** (default) — the residual is FULL emb on every TP column: ``[1, 1, s_local, 6144]``
-    everywhere. Attention closes with an all-reduce (RS + AG), the MoE all-gathers its
-    reduce-scattered output back to full emb, and the shared expert all-reduces its own output. Norms
-    are single-op (each column normalizes the same full vector).
+  * **replicated** (``M3_SHARDED_RESIDUAL=0``) — the residual is FULL emb on every TP column:
+    ``[1, 1, s_local, 6144]`` everywhere. Attention closes with an all-reduce (RS + AG), the MoE
+    all-gathers its reduce-scattered output back to full emb, and the shared expert all-reduces its
+    own output. Norms are single-op (each column normalizes the same full vector).
 
-  * **sharded** (``M3_SHARDED_RESIDUAL=1``) — the residual is ``emb/tp``: ``[1, 1, s_local, 1536]``
+  * **sharded** (DEFAULT) — the residual is ``emb/tp``: ``[1, 1, s_local, 1536]``
     per column, the DeepSeek/Kimi/GLM layout. Full width is reconstituted only where a
     column-parallel projection needs it as its K dim: ONE all-gather per norm output, shared by every
     consumer downstream of that norm (q/k/v/index for attention; router + shared expert + dispatch
@@ -33,12 +33,16 @@ import os
 
 from loguru import logger
 
-# Default OFF: the replicated residual is the measured baseline (46a19f8). The sharded scheme measures
-# BETTER on device time (-2.2% max-across-chips, ~-165 us/layer) and on op launches (-1.0%), with
-# wall-clock neutral (-0.1%, inside the 1-2% run-to-run band) and KV PCC bit-identical -- so it is safe
-# to enable, but it buys nothing user-visible until a traced runtime converts the device saving. Left
-# off so the default path stays the one the baselines were measured on; flip with M3_SHARDED_RESIDUAL=1.
-DEFAULT_USE_SHARDED_RESIDUAL = False
+# Default ON (with DEFAULT_NORM_MODE = "gather_first"). Measured against the 46a19f8 replicated
+# baseline on the 8x4 galaxy: device time -2.2% (max-across-chips, ~-165 us/layer), op launches -1.0%,
+# wall-clock -0.1% (inside the 1-2% run-to-run band), KV PCC bit-identical. So it is better on the two
+# axes that will matter once a traced runtime converts the device saving, and neutral on the one that
+# does not. It is also the layout the sibling models (DeepSeek/Kimi/GLM) use, which keeps the shared EP
+# machinery on a single well-trodden shape.
+#
+# Set M3_SHARDED_RESIDUAL=0 for the replicated layout (the path the older baselines were measured on,
+# so it stays available for bisecting a regression against them).
+DEFAULT_USE_SHARDED_RESIDUAL = True
 
 # WHERE the per-norm all-gather sits, under a sharded residual. Both variants gather exactly once per
 # norm and hand full emb to the column-parallel consumers:
@@ -79,7 +83,7 @@ def use_sharded_residual() -> bool:
 
 
 def norm_mode() -> str:
-    """Either ``distributed`` (default) or ``gather_first`` — see DEFAULT_NORM_MODE. Only meaningful
+    """Either ``gather_first`` (default) or ``distributed`` — see DEFAULT_NORM_MODE. Only meaningful
     when the residual is sharded; the replicated scheme always norms full emb in one pass."""
     v = (os.environ.get("M3_SHARDED_RESIDUAL_NORM") or DEFAULT_NORM_MODE).strip().lower()
     if v not in _NORM_MODES:
