@@ -32,6 +32,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
+      bypass-cache: true
   create-image-tag-name:
     runs-on: ubuntu-slim
     outputs:
