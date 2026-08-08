@@ -276,9 +276,9 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
 //                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
 //                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      Hazard FATALs here: a SET racing another writer (mechanism-independent),
-//                      and >=2 concurrent CONSUME instances resolving to EXTERNAL (whose down()
-//                      is not yet multi-consumer-atomic; the cached tier's CAS down() is).
+//                      One hazard FATALs here: a SET racing another writer (mechanism-independent;
+//                      no scope can make a destructive store atomic). Multi-consumer down() is
+//                      safe on both atomic tiers, so CONSUME shapes resolve freely.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
@@ -391,19 +391,9 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
-            // Multi-consumer down() is CAS-safe on the cached tier (checked above), but EXTERNAL
-            // down()'s check and subtract are still separate steps -- the NoC-CAS lock upgrade is
-            // staged behind its hardware keystones. Reject rather than race. Each CONSUME instance
+            // Multi-consumer down() is safe on both atomic tiers: the cached tier's CAS loop
+            // (checked above) and EXTERNAL's NoC-CAS lock (keystone-proven). Each CONSUME instance
             // also counts as a writer, so >=2 CONSUME can never reach LOCAL_NONATOMIC above.
-            TT_FATAL(
-                binders.consuming_instance_count < 2,
-                "SemaphoreSpec '{}' has {} concurrent CONSUME (down()) instances and resolves to EXTERNAL, "
-                "whose down() is not multi-consumer-atomic. Confine the semaphore to one DM kernel on its "
-                "node with no other cached-binder kernel co-resident -- all cached semaphores on a node "
-                "must be bound from the SAME kernel -- (DM_LOCAL_CACHED down() is a CAS loop and "
-                "multi-consumer-safe), use a single consumer, or host-guard the drain.",
-                sem.unique_id,
-                binders.consuming_instance_count);
             return SemScope::EXTERNAL;
         }
     }

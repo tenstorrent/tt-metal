@@ -239,6 +239,13 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
+        // EXTERNAL down()'s per-semaphore NoC-CAS locks must start unlocked, and the CAS return
+        // slots clean. Zeroed once here (uncached alias: these lines are never cache-dirtied);
+        // the lock protocol keeps each word at 0 between programs. Ordered before the GO signal
+        // every other hart spins on.
+        for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE) / 4; w++) {
+            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
+        }
         // Originally initalized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
