@@ -540,3 +540,55 @@ def test_an_unmeasured_stage_says_so_rather_than_vanishing(fid, facts):
     blk = out[out.index("PREFILL") : out.index("DECODE")]
     assert "not measured" in blk and "memory" in blk, blk
     assert "✔" not in blk and "✗" not in blk, blk
+
+
+# ---------------------------------------------------------------- the stage must not vanish
+
+
+def test_the_prompt_length_is_stated_once(monkeypatch, fid):
+    """ONE LITERAL. The emitted test states the benchmark point (128 in / 128 out) because generated
+    code cannot import from its generator; everything else READS that literal rather than keeping a
+    copy. Two copies is how the roof came to price a length the run never used.
+
+    Precedence is observed, then declared, then the skeleton's own default -- so an overridden ISL is
+    priced correctly, and the untouched case is priced as the number the run is about to use."""
+    monkeypatch.delenv("TT_PERF_ISL_TOKENS", raising=False)
+    monkeypatch.delenv("TT_PERF_SEQ_LEN", raising=False)
+    monkeypatch.setattr(S, "_model_facts", lambda: {"total_params": 11_180_446_320, "layers": 48})
+    monkeypatch.setenv("PERF_MCP_ARCH", "blackhole")
+
+    import perf_mcp as _pm
+
+    from agent.perf_test_gen import DEFAULT_ISL_TOKENS, _skeleton_default
+
+    # the default is READ from the emitted test's own literal, not written twice
+    assert DEFAULT_ISL_TOKENS == _skeleton_default("TT_PERF_ISL_TOKENS") > 0
+
+    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 0, raising=False)
+    assert S._prefill_tokens() == DEFAULT_ISL_TOKENS
+    assert "PREFILL" in _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+
+    # ...and an OBSERVED length wins over it, so an overridden ISL is never priced as the default
+    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 512, raising=False)
+    assert S._prefill_tokens() == 512
+
+
+def test_the_observed_isl_beats_the_default(monkeypatch, fid):
+    """OBSERVED, NOT GUESSED. The generated test prints the prompt length it actually tokenized, so a
+    run at any ISL prices prefill at that ISL -- without anyone exporting a variable.
+
+    A hardcoded fallback alone is wrong the moment a run uses a different length, which is the whole
+    failure mode: the report would price a 512-token prefill's arithmetic as if it were 128."""
+    monkeypatch.delenv("TT_PERF_ISL_TOKENS", raising=False)
+    monkeypatch.delenv("TT_PERF_SEQ_LEN", raising=False)
+    monkeypatch.setattr(S, "_model_facts", lambda: {"total_params": 11_180_446_320, "layers": 48})
+    monkeypatch.setenv("PERF_MCP_ARCH", "blackhole")
+
+    import perf_mcp as _pm  # summary resolves it under this name when loaded top-level
+
+    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 512, raising=False)
+    assert S._prefill_tokens() == 512
+
+    # and the env still overrides nothing above it: observed wins
+    monkeypatch.setenv("TT_PERF_ISL_TOKENS", "64")
+    assert S._prefill_tokens() == 512

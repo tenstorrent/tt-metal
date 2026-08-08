@@ -740,11 +740,44 @@ def _prefill_tokens() -> int:
 
     0 when neither is declared, which WITHHOLDS the prefill compute roof rather than inventing a
     sequence length for it."""
+    # OBSERVED FIRST. The generated test prints PERF_ISL_TOKENS after tokenizing -- the length that
+    # actually reached the model -- and perf_mcp now persists it beside the stage timings. Everything
+    # below is a fallback for a report rendered before any run has measured one.
+    # Both import spellings, like every other reader here: summary is loaded as `cc_optimize.summary`
+    # by the tool and as a top-level `summary` by spec_from_file_location, and a bare relative import
+    # fails silently in the second case -- which would skip the observed value and quietly fall back
+    # to a default, the exact bug this is fixing.
+    _rd = None
+    try:
+        from .perf_mcp import read_stage_isl as _rd
+    except Exception:  # noqa: BLE001
+        try:
+            from perf_mcp import read_stage_isl as _rd  # type: ignore
+        except Exception:  # noqa: BLE001
+            _rd = None
+    if _rd is not None:
+        try:
+            _obs = int(_rd() or 0)
+            if _obs > 0:
+                return _obs
+        except Exception:  # noqa: BLE001
+            pass
     for var in ("TT_PERF_ISL_TOKENS", "TT_PERF_SEQ_LEN"):
         raw = str(os.environ.get(var) or "").strip()
         if raw.isdigit() and int(raw) > 0:
             return int(raw)
-    return 0
+    # THE GENERATOR'S OWN DEFAULT, READ FROM THE SKELETON. 128 in / 128 out is the tool's defined
+    # benchmark point, stated once as a literal in the emitted test -- which is where it has to be,
+    # since generated code cannot import from its generator. This reads that literal rather than
+    # keeping a second copy of it: two copies is how the roof came to price a length the run never
+    # used. Reached only when nothing was observed and nothing declared, which is exactly the case
+    # where the run is about to use this number.
+    try:
+        from agent.perf_test_gen import DEFAULT_ISL_TOKENS
+
+        return int(DEFAULT_ISL_TOKENS)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):

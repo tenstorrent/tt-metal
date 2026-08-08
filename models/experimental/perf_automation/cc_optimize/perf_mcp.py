@@ -2261,7 +2261,7 @@ def _stage_ms_path():
     return state_dir() / ("perf_mcp_stage_ms_%s_%s.json" % (model, task))
 
 
-def _persist_stage_ms(stage_ms: dict, stage_paths: dict | None = None) -> None:
+def _persist_stage_ms(stage_ms: dict, stage_paths: dict | None = None, stage_isl: dict | None = None) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
     Written to a file rather than threaded through _run_full_pipeline_ms's return, because that
@@ -2278,7 +2278,7 @@ def _persist_stage_ms(stage_ms: dict, stage_paths: dict | None = None) -> None:
     try:
         p = _stage_ms_path()
         tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps({"stages": stage_ms, "paths": stage_paths or {}}))
+        tmp.write_text(json.dumps({"stages": stage_ms, "paths": stage_paths or {}, "isl": stage_isl or {}}))
         os.replace(str(tmp), str(p))
     except Exception:  # noqa: BLE001
         pass
@@ -2296,6 +2296,24 @@ def read_stage_ms(state_dir_path=None, model="", task="") -> dict:
         return {k: float(v) for k, v in (doc.get("stages") or {}).items() if float(v) > 0}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def read_stage_isl(state_dir_path=None, model="", task="") -> int:
+    """The prompt length the run ACTUALLY profiled, or 0.
+
+    Read back from the same file as the stage timings, because it was measured in the same run: the
+    generated test prints it after tokenizing, so it is the length that reached the model rather than
+    the length the environment asked for."""
+    try:
+        from pathlib import Path as _P
+
+        base = _P(state_dir_path) if state_dir_path else state_dir()
+        m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
+        t = task or os.environ.get("PERF_MCP_TASK", "main")
+        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
+        return int((doc.get("isl") or {}).get("prefill") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def read_stage_paths(state_dir_path=None, model="", task="") -> dict:
@@ -2365,6 +2383,7 @@ def _run_full_pipeline_ms():
     per_tokens = []
     stage_ms = {}
     stage_paths = {}
+    stage_isl = {}
     headline_units = []
     walls = []
     prefills = []
@@ -2449,6 +2468,19 @@ def _run_full_pipeline_ms():
                             stage_paths[_nm] = line.split("path=", 1)[1].split()[0].strip()
                 except Exception:  # noqa: BLE001
                     pass
+            # THE PROMPT LENGTH THE RUN ACTUALLY PROFILED. The generated test prints it from
+            # `_prompt_ids.shape[-1]` -- after tokenization, so it is the length that reached the
+            # model, not the length anyone asked for -- and nothing read it. The report needs it to
+            # price prefill's arithmetic (2 x params x ISL), and an optimize run exports no ISL
+            # variable, so the renderer was left guessing and withheld the whole PREFILL stage.
+            # Observed beats declared beats defaulted, and this is the observed one.
+            if "PERF_ISL_TOKENS=" in line:
+                try:
+                    _iv = int(line.split("PERF_ISL_TOKENS=", 1)[1].split()[0])
+                    if _iv > 0:
+                        stage_isl["prefill"] = _iv
+                except Exception:  # noqa: BLE001
+                    pass
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
@@ -2527,7 +2559,7 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
-        _persist_stage_ms(stage_ms, stage_paths)
+        _persist_stage_ms(stage_ms, stage_paths, stage_isl)
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None

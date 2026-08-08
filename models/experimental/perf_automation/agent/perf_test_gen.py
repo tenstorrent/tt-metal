@@ -328,6 +328,26 @@ _TRACE_REGION_GROW_ROUNDS = 6
 # trace_gate.overflow_fix_loop (already mesh-safe). Matches the region assertion, not the separate
 # write-during-capture fatal (fd_mesh_command_queue.cpp).
 _MESH_TRACE_OVERFLOW_RE = re.compile(r"get_trace_buffers_size|mesh_trace\.cpp", re.I)
+
+
+def _skeleton_default(var: str) -> int:
+    """The default for `var` READ OUT OF THE EMITTED TEST, not written again here.
+
+    The generated test is standalone -- it cannot import from its generator -- so its defaults have
+    to be literals in `_SKELETON_REF`. That makes the skeleton the one place these numbers are
+    stated, and anything else that needs them (the report prices prefill as 2 x params x ISL) must
+    READ them from there rather than keep a second copy: two copies of a number is how the report
+    came to price a run's arithmetic against a length that run never used.
+
+    0 when the skeleton does not state one, which withholds rather than invents.
+    """
+    m = re.search(r'os\.environ\.get\(\s*"%s"\s*,\s*"(\d+)"\s*\)' % re.escape(var), _SKELETON_REF)
+    return int(m.group(1)) if m else 0
+
+
+DEFAULT_ISL_TOKENS = _skeleton_default("TT_PERF_ISL_TOKENS")
+DEFAULT_OSL_TOKENS = _skeleton_default("TT_PERF_OSL_TOKENS")
+
 _DEFAULT_TRACE_REGION_BYTES = 23887872
 
 
