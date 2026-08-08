@@ -148,19 +148,30 @@ class RMSNorm(nn.Module):
             # Prefill (height > 32) and the no-weight per-head norms keep the
             # plain path. Sharded config is dim-specific, so rebuild if the
             # activation width ever changes.
-            if (
+            decode_fast_path_eligible = (
                 self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
-                and not x.is_sharded()
-            ):
+            )
+            if decode_fast_path_eligible:
                 dim = x.shape[-1]
                 if self._sharded_cfg is None or self._sharded_dim != dim:
                     self._sharded_dim = dim
                     self._sharded_cfg = self._build_sharded_cfg(dim)
+
                 if self._sharded_cfg:
-                    return self._forward_sharded(x)
+                    # Input already L1 width-sharded, do the norm in place.
+                    if x.is_sharded() and x.memory_config() == self._sharded_cfg[0]:
+                        return ttnn.rms_norm(
+                            x,
+                            weight=self.tt_weight,
+                            epsilon=self.eps,
+                            program_config=self._sharded_cfg[1],
+                        )
+                    # Interleaved input, reshard and do the norm.
+                    if not x.is_sharded():
+                        return self._forward_sharded(x)
 
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
