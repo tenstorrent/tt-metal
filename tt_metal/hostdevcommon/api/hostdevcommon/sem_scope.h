@@ -48,8 +48,9 @@ enum class SemScope : uint8_t {
  *
  * AUTO = the host derives the effective SemScope from the semaphore's reach (who
  * binds it, on how many nodes). Forcing DM_LOCAL_CACHED is validated at build time
- * (a contradiction is a host FATAL); forcing EXTERNAL or LOCAL_NONATOMIC is a
- * pass-through that also skips AUTO's hazard FATALs. Host-only; not used on the device.
+ * (a contradiction is a host FATAL); forcing EXTERNAL skips AUTO's SET-race FATAL but
+ * still rejects an off-node CONSUME binder (a guaranteed hang); forcing LOCAL_NONATOMIC
+ * is a pure pass-through. Host-only; not used on the device.
  */
 enum class SemaphoreScope : uint8_t {
     AUTO = 0,

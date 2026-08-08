@@ -194,21 +194,20 @@
 // 16 semaphores x 4B, padded to one 64B line; touched only by NoC atomics. Zeroed once by
 // DM firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
 #define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
-#define MEM_NOC_SEM_LOCK_SIZE 64
+#define MEM_NOC_SEM_LOCK_SIZE 64  // keep >= NUM_SEMAPHORES * 4
 
 // Dedicated cached-only DM-local semaphore pool. DM_LOCAL_CACHED semaphores live HERE, in
 // node L1 but physically disjoint from (and below) the NoC-written kernel_config ring, which
 // starts at MEM_MAP_END. The pool is 64B (cache-line) aligned and a whole number of 64B
 // lines, so a DM cached-AMO's write-back line can never overlap any word written over the
-// NoC / uncached alias -> no cross-domain clobber, BY CONSTRUCTION (correctness is a static
-// address invariant, provable without emu cache-fidelity; the two NoC-written regions above
-// sit in their OWN 64B lines and are never cache-dirtied). Sized to NUM_SEMAPHORES=16 slots *
-// L1_ALIGNMENT=16B = 256B (4 x 64B lines), indexed by the semaphore's normal id. See
+// NoC / uncached alias -> no cross-domain clobber by construction (the CAS-ret/lock lines
+// above are never cache-dirtied). Sized to NUM_SEMAPHORES=16 slots * L1_ALIGNMENT=16B = 256B
+// (4 x 64B lines), indexed by the semaphore's normal id. See
 // tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
-// Real checks (guard future size edits). The pool base is now derived from the two regions above,
-// so its alignment is no longer true by construction.
+// Guard size edits: all three regions must stay whole, 64B-aligned cache lines
+// (a non-multiple size above would misalign the pool base).
 #if (MEM_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_NOC_SEM_LOCK_SIZE % 64 != 0) || \
     (MEM_DM_CACHED_SEM_BASE % 64 != 0) || (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
 #error "CAS-ret/lock regions and the cached semaphore pool must be whole, aligned 64B cache lines"
@@ -222,11 +221,6 @@
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
-
-// Disjointness from the NoC-written kernel_config ring holds BY CONSTRUCTION: the pool sits atop the
-// CAS-ret + lock regions (whose base is the 64B round-up of the packet-header pool's end), and
-// MEM_MAP_END (where the ring begins) is *defined* as this pool's end. The pool base's own alignment
-// is real content now and is #error-guarded above.
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

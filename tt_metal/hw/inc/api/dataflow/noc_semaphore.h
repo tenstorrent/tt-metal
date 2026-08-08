@@ -116,6 +116,7 @@ class Semaphore {
     static uint32_t cas_ret_slot() {
         uint64_t hart;
         asm volatile("csrr %0, mhartid" : "=r"(hart));
+        ASSERT(static_cast<uint32_t>(hart) * 4 < MEM_NOC_CAS_RET_SIZE);
         return MEM_NOC_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
     }
 #endif
@@ -139,7 +140,8 @@ public:
                 "semaphore id does not fit the DM cached semaphore pool (grow MEM_DM_CACHED_SEM_SIZE)");
         }
         // The lock region sits right below the cached pool, so an out-of-range id would CAS-write
-        // a live cached counter. The raw-id ctor has only the watcher ASSERT -- ids must be < 16.
+        // a live cached counter. On the raw-id path the only guard is the watcher ASSERT in
+        // external_lock_l1_offset(), hit on the first down() -- ids must be < 16.
         if constexpr (Scope == SemScope::EXTERNAL) {
             static_assert(
                 Id * 4 < MEM_NOC_SEM_LOCK_SIZE,
@@ -254,17 +256,13 @@ public:
             } while (!__atomic_compare_exchange_n(
                 word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
         } else if constexpr (Scope == SemScope::EXTERNAL) {
-            // (Emule gate: its shadow header normally replaces this file; the gate keeps a stray
-            // real-header compile on the Gen1 arm, whose primitives emule shims.)
+            // TT_EMULE_USE_L1_POOL: emule compiles the Gen1 arm (its shims cover those primitives).
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
-            // Multi-consumer-safe: a 4-bit NoC-CAS spinlock on this semaphore's lock word guards
-            // check-then-INCR_GET(-v). Producers stay plain INCR_GET (increments commute with the
-            // critical section; CAS and INCR_GET serialize mutually at the NIU -- keystone
-            // TestSelfCasLockVsIncr). Every atomic's pre-op return lands at this hart's sticky
-            // ret slot; each is consumed with a sentinel pre-write + poll (keystone
-            // TestAtomicCasReturnsPreOpValue proved the barrier also orders the return, so the
-            // polls exit on their first check). INVARIANT: the semaphore never legitimately holds
-            // 0xFFFFFFFF (the sentinel).
+            // Lock protocol and sentinel invariant: see the down() doc block. Producers bypass the
+            // lock safely: CAS and INCR_GET serialize mutually at the NIU (TestSelfCasLockVsIncr).
+            // Every atomic's pre-op return lands at this hart's sticky ret slot and is consumed by
+            // a sentinel pre-write + poll (TestAtomicCasReturnsPreOpValue: the barrier orders the
+            // return, so polls exit on their first check).
             // Drain any prior in-flight atomic on this hart FIRST: a remote up(noc,x,y,v) does not
             // barrier, and its pre-op return targets this hart's sticky ret slot once any earlier
             // down() programmed it. Landing after our acquire CAS's return would corrupt the lock
@@ -317,8 +315,8 @@ public:
                 // Credit vanished before we locked: released; back to the lock-free wait.
             }
 #else
-            // Gen1 (and TRISC, where the NoC API does not exist): the historical single-consumer
-            // path -- spin, then atomic subtract. The spin and subtract are separate steps.
+            // Gen1: the historical single-consumer path -- spin, then atomic subtract (separate
+            // steps). The TRISC leg of the gate is parse-safety only; no TRISC build reaches here.
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
