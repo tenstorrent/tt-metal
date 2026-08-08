@@ -18,6 +18,7 @@
 namespace {
 
 // out = sigmoid(w * scale + bias) [+ eps | * post_mul], computed for a single [1,H] row tile.
+// cb_bias is left in place: the same bias row serves every token this core owns.
 void fused_sigmoid_with_bias_and_scale(
     uint32_t cb_w,
     uint32_t cb_bias,
@@ -59,7 +60,6 @@ void fused_sigmoid_with_bias_and_scale(
     tile_regs_commit();
 
     cb_pop_front(cb_scratch, 1);
-    cb_pop_front(cb_bias, 1);
 
     cb_reserve_back(cb_out, 1);
     tile_regs_wait();
@@ -73,6 +73,7 @@ void fused_sigmoid_with_bias_and_scale(
 
 void kernel_main() {
     const uint32_t d_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t num_tokens = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_pre_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_post_w = get_compile_time_arg_val(1);
@@ -91,29 +92,33 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_pre, cb_hidden, cb_collapsed);
     binary_op_init_common(cb_pre_w, cb_pre_bias, cb_pre);
 
-    // pre  = sigmoid(pre_w  * pre_scale  + pre_bias) + eps   -> cb_pre   (matmul in0).
-    // post = 2 * sigmoid(post_w * post_scale + post_bias)    -> cb_post_out.
-    fused_sigmoid_with_bias_and_scale(cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
-    fused_sigmoid_with_bias_and_scale(
-        cb_post_w, cb_post_bias, cb_scratch, cb_post_out, post_scale_bits, two_bits, false, eps_bits);
+    // One pass per token this core owns; the reader streams the per-token pre_w / post_w /
+    // hidden tiles in the same order.
+    for (uint32_t token = 0; token < num_tokens; ++token) {
+        // pre  = sigmoid(pre_w  * pre_scale  + pre_bias) + eps   -> cb_pre   (matmul in0).
+        // post = 2 * sigmoid(post_w * post_scale + post_bias)    -> cb_post_out.
+        fused_sigmoid_with_bias_and_scale(cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
+        fused_sigmoid_with_bias_and_scale(
+            cb_post_w, cb_post_bias, cb_scratch, cb_post_out, post_scale_bits, two_bits, false, eps_bits);
 
-    // collapsed = pre[1,H] @ hidden[H,D] -> [1,D]. Padding rows of hidden (>= H) are zero, so
-    // the K reduction only accumulates the H valid streams regardless of pre's padding values.
-    matmul_init(cb_pre, cb_hidden);
-    cb_wait_front(cb_pre, 1);
-    cb_wait_front(cb_hidden, d_tiles);
-    for (uint32_t n = 0; n < d_tiles; ++n) {
-        tile_regs_acquire();
-        matmul_tiles(cb_pre, cb_hidden, 0, n, 0);
-        tile_regs_commit();
+        // collapsed = pre[1,H] @ hidden[H,D] -> [1,D]. Padding rows of hidden (>= H) are zero, so
+        // the K reduction only accumulates the H valid streams regardless of pre's padding values.
+        matmul_init(cb_pre, cb_hidden);
+        cb_wait_front(cb_pre, 1);
+        cb_wait_front(cb_hidden, d_tiles);
+        for (uint32_t n = 0; n < d_tiles; ++n) {
+            tile_regs_acquire();
+            matmul_tiles(cb_pre, cb_hidden, 0, n, 0);
+            tile_regs_commit();
 
-        cb_reserve_back(cb_collapsed, 1);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_collapsed);
-        pack_tile(0, cb_collapsed);
-        tile_regs_release();
-        cb_push_back(cb_collapsed, 1);
+            cb_reserve_back(cb_collapsed, 1);
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_collapsed);
+            pack_tile(0, cb_collapsed);
+            tile_regs_release();
+            cb_push_back(cb_collapsed, 1);
+        }
+        cb_pop_front(cb_pre, 1);
+        cb_pop_front(cb_hidden, d_tiles);
     }
-    cb_pop_front(cb_pre, 1);
-    cb_pop_front(cb_hidden, d_tiles);
 }

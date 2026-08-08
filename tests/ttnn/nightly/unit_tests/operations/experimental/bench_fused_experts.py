@@ -7,6 +7,17 @@ Runs the op at the real DeepSeek-V4-Flash decode shapes (H=4096, I=2048, top_k=6
 tight loop and reports the achieved DRAM read bandwidth against the Blackhole spec
 (512 GB/s), which is what the op is bound by: every step streams the selected experts'
 gate_up [H, 2I] and down [I, H] Bfp4_b weights out of DRAM.
+
+The batch sweep is what makes that bound visible. All B tokens of a step select the same
+experts here, so the union the op iterates -- and therefore the bytes it reads -- is the same
+at B=32 as at B=1, and the step time should barely move while the per-token cost falls by
+~B. That is the batching payoff: an expert several tokens share is fetched once.
+
+``--top-k`` is really "size of the union", so it also stands in for the opposite extreme: a batch
+whose tokens select *disjoint* experts, where the union grows to B*top_k (192 at B=32, top_k=6). Those
+runs need ``--experts-block`` to bound the activation block held in L1, since only a block's worth is
+resident at a time; the DRAM traffic is unchanged by blocking, so the roofline column stays the
+comparison. A block size that does not fit L1 fails at program build with the CB sizes in the message.
 """
 
 import time
@@ -43,7 +54,15 @@ def _interleave_gate_up(w, block):
     return w.reshape(k, 2, blocks, block).permute(0, 2, 1, 3).reshape(k, two_i).contiguous()
 
 
-def main(hidden=4096, intermediate=2048, num_experts=64, top_ks=(6,), iters=50):
+def main(
+    hidden=4096,
+    intermediate=2048,
+    num_experts=64,
+    top_ks=(6,),
+    batches=(1, 8, 32),
+    iters=50,
+    experts_blocks=(0,),
+):
     torch.manual_seed(0)
     two_i = 2 * intermediate
     device = ttnn.open_device(device_id=0)
@@ -56,9 +75,6 @@ def main(hidden=4096, intermediate=2048, num_experts=64, top_ks=(6,), iters=50):
         down_mc = _nd_sharded_dram_memory_config(
             intermediate, hidden, hidden // FUSED_EXPERTS_NUM_CORES, dram_core_range_set
         )
-
-        x = (torch.rand((1, 1, 1, hidden), dtype=torch.bfloat16) - 0.5).float()
-        x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
         # One host weight pair, uploaded num_experts times: the benchmark only cares about
         # the DRAM traffic, and reusing the host tensor keeps setup fast.
@@ -84,41 +100,60 @@ def main(hidden=4096, intermediate=2048, num_experts=64, top_ks=(6,), iters=50):
         print(f"H={hidden} I={intermediate} experts={num_experts}  ({iters} iters)")
         print(f"  gate_up/expert {gu_bytes / 1e6:.2f} MB   down/expert {dn_bytes / 1e6:.2f} MB")
         print(f"{'-' * 74}")
-        print(f"{'top_k':>6} {'MB/step':>9} {'us':>9} {'GB/s':>9} {'roofline us':>12} {'eff %':>8}")
+        print(
+            f"{'top_k':>6} {'batch':>6} {'block':>6} {'MB/step':>9} {'us':>9} {'us/token':>9} "
+            f"{'GB/s':>9} {'roofline us':>12} {'eff %':>7}"
+        )
 
         for num_nonzero in top_ks:
-            routing = torch.zeros((1, 1, 1, num_experts), dtype=torch.float32)
-            routing[..., :num_nonzero] = 1.0 / num_nonzero
-            routing_tt = ttnn.from_torch(routing, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            for batch in batches:
+                x = (torch.rand((1, 1, batch, hidden), dtype=torch.bfloat16) - 0.5).float()
+                x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-            def run():
-                return ttnn.experimental.deepseek.moe.fused_experts(
-                    x_tt,
-                    routing_weights=routing_tt,
-                    gate_up_weights=gate_up_tt,
-                    down_weights=down_tt,
-                    num_experts=num_nonzero,
-                    intermediate_size=intermediate,
-                    swiglu_limit=10.0,
-                )
+                # Every token selects the same experts, so the union stays top_k for any batch and
+                # the bytes read per step do not change -- only the tokens they are amortized over.
+                ids = torch.arange(num_nonzero, dtype=torch.int32).expand(1, 1, batch, num_nonzero)
+                ids_tt = ttnn.from_torch(ids, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+                scores = torch.ones((1, 1, batch, num_experts), dtype=torch.float32)
+                scores_tt = ttnn.from_torch(scores, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-            for _ in range(3):
-                run()
-            ttnn.synchronize_device(device)
+                for experts_block in experts_blocks:
 
-            t0 = time.perf_counter()
-            for _ in range(iters):
-                run()
-            ttnn.synchronize_device(device)
-            elapsed_us = (time.perf_counter() - t0) * 1e6 / iters
+                    def run(
+                        x_tt=x_tt, ids_tt=ids_tt, scores_tt=scores_tt, num_nonzero=num_nonzero, block=experts_block
+                    ):
+                        return ttnn.experimental.deepseek.moe.fused_experts(
+                            x_tt,
+                            routing_indices=ids_tt,
+                            routing_scores=scores_tt,
+                            gate_up_weights=gate_up_tt,
+                            down_weights=down_tt,
+                            num_experts=num_nonzero,
+                            intermediate_size=intermediate,
+                            swiglu_limit=10.0,
+                            top_k=num_nonzero,
+                            experts_block_size=block,
+                        )
 
-            total_bytes = num_nonzero * (gu_bytes + dn_bytes)
-            bw = total_bytes / (elapsed_us * 1e-6) / 1e9
-            roofline_us = total_bytes / (BH_DRAM_BW_GB_S * 1e9) * 1e6
-            print(
-                f"{num_nonzero:>6} {total_bytes / 1e6:>9.2f} {elapsed_us:>9.1f} "
-                f"{bw:>9.1f} {roofline_us:>12.1f} {bw / BH_DRAM_BW_GB_S * 100:>8.1f}"
-            )
+                    for _ in range(3):
+                        run()
+                    ttnn.synchronize_device(device)
+
+                    t0 = time.perf_counter()
+                    for _ in range(iters):
+                        run()
+                    ttnn.synchronize_device(device)
+                    elapsed_us = (time.perf_counter() - t0) * 1e6 / iters
+
+                    total_bytes = num_nonzero * (gu_bytes + dn_bytes)
+                    bw = total_bytes / (elapsed_us * 1e-6) / 1e9
+                    roofline_us = total_bytes / (BH_DRAM_BW_GB_S * 1e9) * 1e6
+                    print(
+                        f"{num_nonzero:>6} {batch:>6} {experts_block or num_nonzero:>6} "
+                        f"{total_bytes / 1e6:>9.2f} {elapsed_us:>9.1f} "
+                        f"{elapsed_us / batch:>9.1f} {bw:>9.1f} {roofline_us:>12.1f} "
+                        f"{bw / BH_DRAM_BW_GB_S * 100:>7.1f}"
+                    )
         print(f"{'=' * 74}\n")
     finally:
         ttnn.close_device(device)
@@ -132,6 +167,22 @@ if __name__ == "__main__":
     ap.add_argument("--intermediate", type=int, default=2048)
     ap.add_argument("--num-experts", type=int, default=64)
     ap.add_argument("--top-k", type=int, nargs="+", default=[6])
+    ap.add_argument("--batch", type=int, nargs="+", default=[1, 8, 32])
     ap.add_argument("--iters", type=int, default=50)
+    ap.add_argument(
+        "--experts-block",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="experts held in L1 at once (0 = all of them, the default single block)",
+    )
     args = ap.parse_args()
-    main(args.hidden, args.intermediate, args.num_experts, tuple(args.top_k), args.iters)
+    main(
+        args.hidden,
+        args.intermediate,
+        args.num_experts,
+        tuple(args.top_k),
+        tuple(args.batch),
+        args.iters,
+        tuple(args.experts_block),
+    )

@@ -12,10 +12,18 @@ both the same ``global_cb`` and (b) pass a prefetch ``block_count`` that matches
 what the matmul expects -- two couplings nothing enforces.
 
 ``prefetch_and_matmul_decode`` issues the pair from one call site so they cannot
-drift. ``block_count`` is always 1, in every ``matmul_decode`` mode: each
-weight-holding core owns exactly one contiguous slab and its compute kernel
-indexes in1 tiles by absolute position within that slab, so the whole slab must
-be resident for the duration and therefore has to arrive as a single GCB page.
+drift. The prefetch request's ``block_count`` and the matmul's
+``global_cb_k_blocks`` are the same number -- how many GCB pages one receiver's
+slab is cut into -- and a disagreement is a device hang rather than an error, so
+neither is exposed separately: pass ``k_blocks`` once and both sides get it.
+
+``k_blocks=1`` (the default) makes a page a whole slab, so the GCB has to hold at
+least one slab per receiver. Higher values cut the slab into that many equal
+blocks of K-rows, which the matmul streams and accumulates over. That is what
+lets a GCB be smaller than a slab, and -- because the page size is then a
+property of the page rather than of the weight -- what lets several weights with
+differently sized slabs share one GCB. Use ``matmul_decode_k_blocks`` to derive
+``k_blocks`` from the page size you want.
 
 The per-receiver slab, and the order the slabs must appear in, differ per mode:
 
@@ -41,12 +49,11 @@ normally. The pairing composes with trace capture -- pass the recording CQ as
 
 import ttnn
 
-# One GCB page per receiver per invocation, carrying that receiver's whole weight slab.
-_BLOCK_COUNT = 1
-
-# Default GCB depth in slabs. Two lets the prefetcher land the next invocation's weights
-# while the current matmul is still computing; one serializes them.
-_DEFAULT_NUM_SLABS = 2
+# Default GCB depth in pages. Two is the minimum a streamed (k_blocks > 1) weight can run on
+# -- the matmul holds one page un-acked while the next is delivered -- and with the default
+# k_blocks=1 it is two whole slabs, which lets the prefetcher land the next invocation's
+# weights while the current matmul is still computing.
+_DEFAULT_NUM_PAGES = 2
 
 
 def _resolve_slab_shape(weight, num_receivers, slab_shape):
@@ -97,8 +104,57 @@ def _slab_bytes(weight, slab_h, slab_w):
     return (slab_h // tile_h) * (slab_w // tile_w) * tile_bytes
 
 
-def make_matmul_decode_gcb(device, weight, bank_to_receivers, *, slab_shape=None, num_slabs=_DEFAULT_NUM_SLABS):
-    """Build a DRAM-sender GCB sized to hold ``num_slabs`` weight slabs per receiver.
+def _slab_k_tiles(weight, slab_h):
+    """Rows of one slab, in tiles -- the dimension a GCB page is cut along."""
+    return slab_h // weight.tile.tile_shape[0]
+
+
+def matmul_decode_k_blocks(weight, num_receivers, page_bytes, *, slab_shape=None):
+    """How many GCB pages of ``page_bytes`` one receiver's weight slab is cut into.
+
+    This is the number to hand to ``make_matmul_decode_gcb``, ``prefetch_and_matmul_decode``
+    and (if you issue the pair yourself) both the prefetch request's ``block_count`` and
+    ``matmul_decode``'s ``global_cb_k_blocks``.
+
+    Deriving it from a page size rather than picking it per weight is the point: weights that
+    agree on ``page_bytes`` can share one GCB however much their slabs differ in size, since
+    the GCB is sized and credited in pages.
+
+    Args:
+        weight: the DRAM ND-sharded weight. Only its shape/dtype are read.
+        num_receivers: GCB receiver count, used to derive the full width-sharded slab.
+        page_bytes: the wanted page size. Must divide the slab into whole pages of whole
+            K-rows.
+        slab_shape: per-receiver slab ``[height, width]`` in elements, as for
+            ``make_matmul_decode_gcb``. Defaults to full width-sharded.
+
+    Returns:
+        The page count, at least 1.
+    """
+    slab_h, slab_w = _resolve_slab_shape(weight, num_receivers, slab_shape)
+    slab_bytes = _slab_bytes(weight, slab_h, slab_w)
+    if page_bytes <= 0 or slab_bytes % page_bytes != 0:
+        raise ValueError(
+            f"a {page_bytes} B page does not divide this weight's {slab_bytes} B slab "
+            f"([{slab_h}, {slab_w}] of {weight.dtype}) into whole pages"
+        )
+    k_blocks = slab_bytes // page_bytes
+    # A page is a block of whole K-rows of the slab, so an even split in bytes is not enough:
+    # the rows have to split evenly too. They can disagree -- a 2-tile-tall slab has a byte
+    # size divisible by 4 -- and the mismatch would only surface as a rejected matmul.
+    k_tiles = _slab_k_tiles(weight, slab_h)
+    if k_tiles % k_blocks != 0:
+        raise ValueError(
+            f"a {page_bytes} B page cuts this weight's slab into {k_blocks} pages, but its "
+            f"{k_tiles} tile-rows do not divide into that many blocks of whole rows"
+        )
+    return k_blocks
+
+
+def make_matmul_decode_gcb(
+    device, weight, bank_to_receivers, *, slab_shape=None, k_blocks=1, num_pages=_DEFAULT_NUM_PAGES
+):
+    """Build a DRAM-sender GCB sized to hold ``num_pages`` weight pages per receiver.
 
     Args:
         device: the mesh device.
@@ -117,19 +173,28 @@ def make_matmul_decode_gcb(device, weight, bank_to_receivers, *, slab_shape=None
             for partial width-sharded, ``[Bc*K, Nc]`` for batched. Defaults to the full
             width-sharded ``[K, N/num_receivers]``. It must cut ``weight`` into exactly one
             shard per receiver, which is checked here.
-        num_slabs: GCB depth in whole slabs. Must be at least 1; 2 (the default) lets the
-            prefetch of the next invocation overlap the current matmul.
+        k_blocks: how many pages one slab is cut into, from ``matmul_decode_k_blocks``.
+            1 (the default) makes a page a whole slab.
+        num_pages: GCB depth in pages. 2 (the default) is one slab of run-ahead when
+            ``k_blocks`` is 1, and the minimum a streamed weight can run on otherwise --
+            the matmul holds one page un-acked while the next is delivered. Deeper rings
+            buy the prefetcher more run-ahead.
 
     Returns:
         A ``ttnn.GlobalCircularBuffer`` to pass as ``global_cb`` to both the prefetch
         request and ``matmul_decode``.
     """
-    if num_slabs < 1:
-        raise ValueError(f"num_slabs must be >= 1, got {num_slabs}")
+    if num_pages < 1:
+        raise ValueError(f"num_pages must be >= 1, got {num_pages}")
+    if k_blocks > 1 and num_pages < 2:
+        raise ValueError(f"streaming a slab as {k_blocks} pages needs a GCB of at least 2 pages, got {num_pages}")
     num_receivers = sum(crs.num_cores() for _, crs in bank_to_receivers)
     slab_h, slab_w = _resolve_slab_shape(weight, num_receivers, slab_shape)
     _check_slab_tiles_the_weight(weight, num_receivers, slab_h, slab_w)
-    size = num_slabs * _slab_bytes(weight, slab_h, slab_w)
+    slab_bytes = _slab_bytes(weight, slab_h, slab_w)
+    if slab_bytes % k_blocks != 0 or _slab_k_tiles(weight, slab_h) % k_blocks != 0:
+        raise ValueError(f"a [{slab_h}, {slab_w}] slab does not split into {k_blocks} pages of whole K-rows")
+    size = num_pages * (slab_bytes // k_blocks)
     return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, size)
 
 
@@ -138,6 +203,7 @@ def prefetch_and_matmul_decode(
     weight,
     *,
     global_cb,
+    k_blocks=1,
     cq_id=None,
     **matmul_kwargs,
 ):
@@ -155,6 +221,9 @@ def prefetch_and_matmul_decode(
             prefetch request whose ``block_count`` or tensor disagrees with what the matmul
             waits for is a device hang, not a clean error -- which is what issuing the pair
             from here prevents.
+        k_blocks: how many GCB pages one receiver's slab is cut into. Must be the value the
+            GCB was sized with; derive it with ``matmul_decode_k_blocks``. Both the prefetch
+            and the matmul are given it here, which is the coupling this function exists for.
         cq_id: command queue for the prefetch request. When that CQ is mid trace-capture
             the request is captured into the trace. Defaults to the current command queue.
         **matmul_kwargs: forwarded to ``ttnn.experimental.matmul_decode``
@@ -166,7 +235,7 @@ def prefetch_and_matmul_decode(
     device = input_tensor_a.device()
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
-        [(weight, _BLOCK_COUNT)],
+        [(weight, k_blocks)],
         global_cb=global_cb,
         cq_id=cq_id,
     )
@@ -174,5 +243,6 @@ def prefetch_and_matmul_decode(
         input_tensor_a,
         weight,
         global_cb=global_cb,
+        global_cb_k_blocks=k_blocks,
         **matmul_kwargs,
     )
