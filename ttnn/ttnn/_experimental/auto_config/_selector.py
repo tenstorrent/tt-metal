@@ -1135,13 +1135,14 @@ def _pick_out_subblock_h(per_core_m: int, out_subblock_w: int) -> int:
 def _supports_program_config_sweep(signature: AutoMatmulSignature) -> bool:
     """Eligibility for the classic 2D/1D mcast program-config sweep.
 
-    Restricted to the plain (non-transposed, non-batched) M×K · K×N case in TILE
-    layout — the regime the 2D/1D multicast factories are parameterized for here.
-    Transposed/batched shapes are left to the default heuristic candidate.
+    Non-batched M×K · K×N in TILE layout.  Transposed inputs ARE eligible:
+    ``_extract_mkn`` derives the effective M/K/N from the transposed logical
+    shapes, ttnn.matmul applies the program config after the transpose (verified
+    on device), and the correctness gate discards any config that is invalid for
+    the transposed layout.  Batched shapes are left to the default heuristic and
+    the batched families.
     """
     ttnn = _ttnn()
-    if signature.transpose_a or signature.transpose_b:
-        return False
     if signature.input_tensor_a.get("layout") != str(ttnn.TILE_LAYOUT):
         return False
     if signature.input_tensor_b.get("layout") != str(ttnn.TILE_LAYOUT):
