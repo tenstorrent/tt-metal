@@ -22,7 +22,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
     config.batch_size = training_config["batch_size"].as<uint32_t>();
-    config.num_epochs = training_config["num_epochs"].as<uint32_t>();
+    config.num_epochs = training_config["num_epochs"].as<uint32_t>(config.num_epochs);
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
