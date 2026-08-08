@@ -189,14 +189,14 @@ public:
     /**
      * @brief Decrement the semaphore by the specified value, blocking until the semaphore is sufficient.
      *
-     * DM_LOCAL_CACHED: atomic AMO subtract after a coherent spin.
+     * DM_LOCAL_CACHED: LR/SC conditional-decrement retry loop — MULTI-CONSUMER-SAFE. The >=value
+     *   check and the subtract commit atomically with respect to other consumers.
      * EXTERNAL: atomic self-targeted NoC RMW (INCR_GET with a negative increment; wrap=31 =>
-     *   32-bit modular subtract), so it serializes with concurrent producer increments at
-     *   the NIU — no lost update.
+     *   32-bit modular subtract), serialized with producer increments at the NIU — but the
+     *   >=value spin and the subtract are separate, so EXTERNAL down() is SINGLE-consumer only.
+     *   (The host rejects multi-consumer EXTERNAL shapes at build time; a NoC-CAS lock upgrade
+     *   is staged behind the CAS keystones in test_noc_self_atomic.cpp / test_noc_atomic_ops.cpp.)
      * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
-     *
-     * All scopes: the >=value spin and the decrement are separate, so down() is only
-     * single-consumer-safe; a multi-consumer down must be host-guarded or use CAS.
      *
      * @param value The value to decrement the semaphore by.
      */
@@ -209,17 +209,29 @@ public:
         auto* sem_addr = local_ptr();
         WAYPOINT("NSDW");
         if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
-            while ((*sem_addr) < value) {  // DM cores are mutually coherent; no invalidate needed
-            }
-            WAYPOINT("NSDD");
-            __atomic_sub_fetch(reinterpret_cast<uint32_t*>(l1_offset_), value, __ATOMIC_SEQ_CST);
+            // Conditional decrement via LR/SC (Zalrsc) strong CAS on the CACHED alias (LR/SC and
+            // AMOs hang uncached). A losing CAS refreshes `observed` in place and re-enters the
+            // >= check, so two consumers can never both pass the check on the same credit.
+            // NOTE a plain amo subtract after the spin is NOT multi-consumer-safe, and a
+            // compensating "subtract then add back on overdraw" is worse: the transient unsigned
+            // underflow satisfies every other waiter's >= spin.
+            auto* word = reinterpret_cast<uint32_t*>(l1_offset_);  // cached alias
+            uint32_t observed = __atomic_load_n(word, __ATOMIC_RELAXED);
+            do {
+                while (observed < value) {  // DM cores are mutually coherent; no invalidate needed
+                    observed = __atomic_load_n(word, __ATOMIC_RELAXED);
+                }
+                WAYPOINT("NSDD");
+            } while (!__atomic_compare_exchange_n(
+                word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
         } else if constexpr (Scope == SemScope::EXTERNAL) {
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
             WAYPOINT("NSDD");
             // Atomic subtract at the NIU: INCR_GET of the two's complement (wrap=31 => full
-            // 32-bit modular add); serializes with concurrent producer increments.
+            // 32-bit modular add); serializes with concurrent producer increments. Single-consumer
+            // only: the spin and the subtract are separate (see the doc block above).
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
         } else {  // LOCAL_NONATOMIC (legacy)

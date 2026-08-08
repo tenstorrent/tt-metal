@@ -21,17 +21,20 @@
  *      on Quasar). NOT atomic across concurrent writers.
  *
  *  - DM_LOCAL_CACHED: touched only by DM cores on this node. Increments use a
- *      32-bit RISC-V AMO (amoadd.w) on the *cached* alias — atomic among the
- *      node's mutually-coherent DM cores, no NoC round-trip. NoC / remote access
- *      is a compile error in this scope.
+ *      32-bit RISC-V AMO (amoadd.w) and down() an LR/SC conditional-decrement loop
+ *      (multi-consumer-safe), both on the *cached* alias — atomic among the node's
+ *      mutually-coherent DM cores, no NoC round-trip. NoC / remote access is a
+ *      compile error in this scope.
  *
  *  - EXTERNAL: touched externally (NoC / another node / chip). up() and down()
  *      go through a self-targeted NoC atomic (INCR_GET; decrement = INCR_GET of a
  *      negative value, wrap=31), serializing local and remote writers at one NIU.
  *      up() is fully atomic; down()'s decrement step is atomic but its
- *      check-then-decrement is single-consumer-only. wait()/wait_min()/value()
- *      and set() use the plain uncached alias — set() is a non-atomic destructive
- *      store, so use it init/reset-only, never concurrently with up()/down().
+ *      check-then-decrement is single-consumer-only (the host rejects multi-consumer
+ *      EXTERNAL shapes; DM_LOCAL_CACHED down() is a CAS loop and multi-consumer-safe).
+ *      wait()/wait_min()/value() and set() use the plain uncached alias — set() is a
+ *      non-atomic destructive store, so use it init/reset-only, never concurrently
+ *      with up()/down().
  */
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
