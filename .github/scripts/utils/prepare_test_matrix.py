@@ -145,6 +145,12 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
+def strip_cmd_comments(cmd):
+    """Drop whole-line shell comments from a multi-line cmd string."""
+    kept = [line for line in cmd.split("\n") if not line.lstrip().startswith("#")]
+    return "\n".join(kept)
+
+
 def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
     """
     Replace placeholders in entry["cmd"] with values from the same entry.
@@ -166,6 +172,9 @@ def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
         raise ValueError(f"cmd is missing for test '{entry.get('name', 'Unnamed Test')}'")
     if not isinstance(cmd, str):
         raise ValueError(f"cmd is not a string: {cmd}")
+
+    cmd = strip_cmd_comments(cmd)
+    entry["cmd"] = cmd
     if not cmd.strip():
         raise ValueError(f"cmd is present but empty for test '{entry.get('name', 'Unnamed Test')}'")
     for key, value in entry.items():
