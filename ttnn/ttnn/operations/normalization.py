@@ -134,6 +134,13 @@ LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
 LayerNormDeviceOperation = ttnn._ttnn.operations.normalization.LayerNormDeviceOperation
 LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
 LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
+LayerNormMultiCoreProgramFactoryForPython = (
+    ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactoryForPython
+)
+LayerNormShardedProgramFactoryForPython = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactoryForPython
+layernorm_select_program_factory_for_python = (
+    ttnn._ttnn.operations.normalization.layernorm_select_program_factory_for_python
+)
 layernorm_default_compute_config = ttnn._ttnn.operations.normalization.layernorm_default_compute_config
 rmsnorm_default_compute_config = ttnn._ttnn.operations.normalization.rmsnorm_default_compute_config
 create_layernorm_program_config = ttnn._ttnn.operations.normalization.create_layernorm_program_config
