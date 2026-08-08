@@ -11,17 +11,29 @@
 // production shape (value = 1).
 //
 // Every user DM thread decrements the SAME word `increment_times` times; host
-// preloads num_user_dms * increment_times and expects exactly 0. Nonzero =>
-// lr.w/sc.w lost or double-committed a decrement; hang => LR/SC unsupported on
-// the cached alias.
+// preloads num_user_dms * increment_times and expects exactly 0. The guarded CAS
+// can never take the word below 0, so: nonzero => a decrement was LOST; a hang
+// => a decrement was OVER-COMMITTED (word drained early, surplus threads spin)
+// or LR/SC is unsupported on the cached alias.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Cached alias (plain L1 address): LR/SC, like AMOs, hangs on the uncached alias (dev_mem_map.h).
     uint32_t* word = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(get_arg(args::sem_addr)));
     const uint32_t increment_times = get_arg(args::increment_times);
+
+#if defined(ARCH_QUASAR)
+    // Rerun safety: a previous run's flushed line may still be cache-resident and would hide
+    // the host's fresh TL1 preload. ONE thread discards it, then all rendezvous before loading
+    // (a per-thread invalidate could discard another thread's committed decrement mid-run).
+    if (get_my_thread_id() == 0u) {
+        invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(word));
+    }
+    sync_threads(0);
+#endif
 
     for (uint32_t i = 0; i < increment_times; i++) {
         // Exact production down(1) shape (noc_semaphore.h, DM_LOCAL_CACHED).

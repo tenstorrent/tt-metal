@@ -31,7 +31,9 @@
  *      negative value, wrap=31), serializing local and remote writers at one NIU.
  *      up() is fully atomic; down()'s decrement step is atomic but its
  *      check-then-decrement is single-consumer-only (the host rejects multi-consumer
- *      EXTERNAL shapes; DM_LOCAL_CACHED down() is a CAS loop and multi-consumer-safe).
+ *      shapes that AUTO-resolve to EXTERNAL; a forced EXTERNAL bypasses the guard and
+ *      the caller owns the invariant. DM_LOCAL_CACHED down() is a CAS loop and
+ *      multi-consumer-safe).
  *      wait()/wait_min()/value() and set() use the plain uncached alias — set() is a
  *      non-atomic destructive store, so use it init/reset-only, never concurrently
  *      with up()/down().

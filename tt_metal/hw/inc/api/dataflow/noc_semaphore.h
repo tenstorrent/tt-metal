@@ -194,8 +194,9 @@ public:
      * EXTERNAL: atomic self-targeted NoC RMW (INCR_GET with a negative increment; wrap=31 =>
      *   32-bit modular subtract), serialized with producer increments at the NIU — but the
      *   >=value spin and the subtract are separate, so EXTERNAL down() is SINGLE-consumer only.
-     *   (The host rejects multi-consumer EXTERNAL shapes at build time; a NoC-CAS lock upgrade
-     *   is staged behind the CAS keystones in test_noc_self_atomic.cpp / test_noc_atomic_ops.cpp.)
+     *   (The host rejects multi-consumer shapes that AUTO-resolve to EXTERNAL; a forced EXTERNAL
+     *   bypasses that guard and the caller owns the single-consumer invariant. The NoC-CAS lock
+     *   upgrade is staged behind the CAS keystones in test_noc_self_atomic.cpp.)
      * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
      *
      * @param value The value to decrement the semaphore by.
@@ -218,6 +219,9 @@ public:
             auto* word = reinterpret_cast<uint32_t*>(l1_offset_);  // cached alias
             uint32_t observed = __atomic_load_n(word, __ATOMIC_RELAXED);
             do {
+                // Re-arm the wait waypoint each retry: a starved consumer must show as waiting
+                // (NSDW), not stuck committing (NSDD), in a watcher dump.
+                WAYPOINT("NSDW");
                 while (observed < value) {  // DM cores are mutually coherent; no invalidate needed
                     observed = __atomic_load_n(word, __ATOMIC_RELAXED);
                 }

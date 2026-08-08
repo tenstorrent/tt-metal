@@ -399,8 +399,9 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 binders.consuming_instance_count < 2,
                 "SemaphoreSpec '{}' has {} concurrent CONSUME (down()) instances and resolves to EXTERNAL, "
                 "whose down() is not multi-consumer-atomic. Confine the semaphore to one DM kernel on its "
-                "node (DM_LOCAL_CACHED down() is a CAS loop and multi-consumer-safe), use a single "
-                "consumer, or host-guard the drain.",
+                "node with no other cached-binder kernel co-resident -- all cached semaphores on a node "
+                "must be bound from the SAME kernel -- (DM_LOCAL_CACHED down() is a CAS loop and "
+                "multi-consumer-safe), use a single consumer, or host-guard the drain.",
                 sem.unique_id,
                 binders.consuming_instance_count);
             return SemScope::EXTERNAL;
