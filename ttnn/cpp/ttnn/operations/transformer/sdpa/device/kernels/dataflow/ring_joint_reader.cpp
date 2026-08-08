@@ -899,8 +899,10 @@ void kernel_main() {
             // q_frame in this shard attends any of this iter's k-frames), so the in-loop first_k_for_q
             // push never fires — yet compute's zero-work fast path still pops cb_q_in. Push Q up front
             // here so cb_q_in stays balanced; suppress the in-loop push.
+            // Exclude padded chain/mcast iterations (is_padded_iter): like the attention-sink reserve above,
+            // they have no compute consumer, so pushing their out-of-range q_slice into cb_q_in would desync it.
             if constexpr (sparse_frames_enabled == 1) {
-                if (need_q_read) {
+                if (!is_padded_iter && need_q_read) {
                     push_q();
                 }
                 first_k_for_q = false;
