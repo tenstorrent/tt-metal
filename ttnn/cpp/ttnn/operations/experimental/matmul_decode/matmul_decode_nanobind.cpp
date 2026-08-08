@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::matmul_decode::detail {
 void bind_matmul_decode_operation(nb::module_& mod) {
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -56,6 +56,17 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 building the pair with
                 `ttnn._experimental.tensor_prefetcher_matmul_decode.make_matmul_decode_gcb`,
                 which derives the ring layout from the receiver grid for you.
+            global_cb_k_blocks (int, optional): how many GCB pages carry one receiver's slab.
+                Defaults to 1, one page per slab, which requires the GCB to hold a whole slab
+                per receiver. A higher value cuts the slab into that many equal K-blocks, which
+                the reader streams and the compute kernel accumulates over, so the GCB only has
+                to hold two pages -- letting one small GCB feed weights whose slabs differ in
+                size, as long as they agree on the page size.
+
+                It must equal the `block_count` of the prefetch request filling this GCB. A
+                mismatch is a device hang, not an error, so derive both from
+                `ttnn._experimental.tensor_prefetcher_matmul_decode.matmul_decode_k_blocks`
+                rather than by hand.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -67,7 +78,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
         nb::arg("output_mem_config") = nb::none(),
-        nb::arg("global_cb") = nb::none());
+        nb::arg("global_cb") = nb::none(),
+        nb::arg("global_cb_k_blocks") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::matmul_decode::detail

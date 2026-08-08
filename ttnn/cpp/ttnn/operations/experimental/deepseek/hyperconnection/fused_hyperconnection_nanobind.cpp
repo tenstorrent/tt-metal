@@ -18,8 +18,11 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         (shape ``[1, 1, T, (2+H)*H]``). The op splits ``fused_w`` into its ``pre_w`` /
         ``post_w`` / ``comb_w`` slices inside the ``fused_hyperconnection_pre_post`` device
         kernel; ``pre_w`` / ``post_w`` are consumed in-place and ``comb_w`` is returned
-        already laid out as the ``[1, 1, H, H]`` comb matrix. The RMSNorm + fn matmul that
+        already laid out as the ``[1, T, H, H]`` comb matrix. The RMSNorm + fn matmul that
         produces ``fused_w`` is NOT part of this op.
+
+        The ``T = B*S`` tokens are independent and are spread across the core grid, so
+        batched decode (``B > 1``) and multi-token prefill (``S > 1``) are supported.
 
             pre        = sigmoid(pre_w  * pre_scale  + pre_bias)  + eps
             post       = 2 * sigmoid(post_w * post_scale + post_bias)

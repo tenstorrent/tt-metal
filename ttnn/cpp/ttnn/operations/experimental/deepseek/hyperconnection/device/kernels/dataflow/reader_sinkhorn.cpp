@@ -53,6 +53,8 @@ FORCE_INLINE void generate_hxh_mask(uint32_t cb_id, uint32_t h, uint16_t value) 
 void kernel_main() {
     const uint32_t comb_w_addr = get_arg_val<uint32_t>(0);
     const uint32_t comb_bias_addr = get_arg_val<uint32_t>(1);
+    const uint32_t start_tile = get_arg_val<uint32_t>(2);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_comb_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_comb_bias = get_compile_time_arg_val(1);
@@ -81,13 +83,20 @@ void kernel_main() {
     CircularBuffer cb_b(cb_comb_bias);
 
     constexpr uint32_t one_tile = 1;
-    cb_w.reserve_back(one_tile);
-    cb_b.reserve_back(one_tile);
 
-    noc.async_read(comb_w, cb_w, cb_w.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+    // The bias is the same for every token: read it once and never pop it, so the compute
+    // kernel can re-wait on the same tile for each of its tiles.
+    cb_b.reserve_back(one_tile);
     noc.async_read(comb_bias, cb_b, cb_b.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-
-    cb_w.push_back(one_tile);
     cb_b.push_back(one_tile);
+
+    // comb_w is [1,T,H,H]: one page per token, and this core owns [start_tile, start_tile+num_tiles).
+    const uint32_t comb_w_tile_size = cb_w.get_tile_size();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        cb_w.reserve_back(one_tile);
+        noc.async_read(comb_w, cb_w, comb_w_tile_size, {.page_id = start_tile + i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_w.push_back(one_tile);
+    }
 }

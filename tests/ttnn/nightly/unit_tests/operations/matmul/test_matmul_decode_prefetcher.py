@@ -114,7 +114,9 @@ def _weight_tile_bytes(weight):
     return weight.tile.get_tile_size(weight.dtype)
 
 
-def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=True, seed=0):
+def _make_gcb_and_operands(
+    device, m, k, n, num_a_cores, num_slabs=2, build_gcb=True, seed=0, gcb_k_blocks=1, num_pages=None
+):
     """Build the activation, the DRAM receiver-contiguous weight, and the GCB.
 
     The B/receiver grid is the rectangle `_num_cores_to_rectangle_core_range_set`
@@ -134,6 +136,11 @@ def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=
     need two *different* operand sets in one test (e.g. to tell aliasing apart from
     correctness) must pass distinct seeds -- two calls with the same seed produce
     bit-identical tensors.
+
+    `gcb_k_blocks` is how many pages a slab is cut into, and `num_pages` sizes the ring in
+    those pages instead of in slabs -- together they build a GCB *smaller* than a slab,
+    which is the point of streaming. The caller must pass the same `gcb_k_blocks` to the
+    prefetch request's block_count and to matmul_decode's `global_cb_k_blocks`.
     """
     torch.manual_seed(seed)
     num_dram_banks = device.dram_grid_size().x
@@ -180,9 +187,11 @@ def _make_gcb_and_operands(device, m, k, n, num_a_cores, num_slabs=2, build_gcb=
     if not build_gcb:
         return pt_a, pt_b, a, weight, bank_to_receivers, num_b_cores
 
-    # One GCB page == one receiver's whole [K, N/num_b_cores] slab.
+    # A GCB page is a `gcb_k_blocks`-th of a receiver's [K, N/num_b_cores] slab (the whole
+    # slab at the default of 1).
     slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
-    gcb_size = num_slabs * slab_bytes
+    page_bytes = slab_bytes // gcb_k_blocks
+    gcb_size = num_pages * page_bytes if num_pages is not None else num_slabs * slab_bytes
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
     return pt_a, pt_b, a, weight, gcb, num_b_cores
 
@@ -223,6 +232,71 @@ def test_matmul_decode_prefetched_weights_pcc(device):
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
+
+
+@pytest.mark.parametrize(
+    "gcb_k_blocks, num_pages",
+    [
+        pytest.param(4, 2, id="k_blocks=4-gcb=half-a-slab"),
+        pytest.param(32, 2, id="k_blocks=32-gcb=one-sixteenth-of-a-slab"),
+        pytest.param(2, 6, id="k_blocks=2-gcb=three-slabs"),
+    ],
+)
+def test_matmul_decode_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
+    """Full width-sharded with the slab streamed in as several GCB pages.
+
+    The GCB is deliberately smaller than a weight slab in the first two cases, which is the
+    whole point of streaming: the ring is sized in pages, so the prefetcher can run ahead into
+    the next weight instead of stalling at slab granularity. Each output tile is now finished
+    across several pages with the packer accumulating into the output CB, so a dropped or
+    double-counted partial sum shows up as a PCC failure here.
+
+    The last case keeps the ring larger than a slab, so the sender is never the one throttled
+    and the reader's credit return is exercised with pages already waiting.
+    """
+    m, k, n = 32, 1024, 2048
+    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(
+        device, m, k, n, num_a_cores=32, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    )
+    ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        result = ttnn.to_torch(out).float()
+
+    assert_with_pcc(ref, result, 0.99)
+
+
+def test_matmul_decode_streamed_repeated_invocations(device):
+    """Back-to-back streamed prefetch+matmul pairs, alternating two distinct weights.
+
+    A ring smaller than a slab wraps *within* one invocation, so the read and write pointers
+    have to stay in step across invocations too. The two weights differ, so a receiver that
+    left its pointer misaligned reads the wrong page and fails PCC instead of quietly
+    re-reading identical data.
+    """
+    m, k, n = 32, 1024, 2048
+    gcb_k_blocks = 4
+    pt_a0, pt_b0, a0, w0, gcb, _ = _make_gcb_and_operands(
+        device, m, k, n, num_a_cores=32, seed=0, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    )
+    pt_a1, pt_b1, a1, w1, _, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=1, build_gcb=False)
+    assert not torch.equal(pt_b0, pt_b1), "the two weights must differ or a stale page read would go unnoticed"
+
+    operands = [
+        (a0, w0, pt_a0.to(torch.float32) @ pt_b0.to(torch.float32)),
+        (a1, w1, pt_a1.to(torch.float32) @ pt_b1.to(torch.float32)),
+    ]
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        for i in range(4):
+            act, w, ref = operands[i % 2]
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(w, gcb_k_blocks)], global_cb=gcb)
+            out = ttnn.experimental.matmul_decode(act, w, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+            assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
 
 
 def test_prefetch_and_matmul_decode_helper(device):
@@ -361,7 +435,19 @@ def _dram_nd_sharded(device, pt, slab_shape, num_dram_banks):
 
 
 def _make_partial_gcb_and_operands(
-    device, m, k, n, k_blocks, n_blocks, *, num_a_cores=32, build_gcb=True, seed=0, swap_slab_order=False
+    device,
+    m,
+    k,
+    n,
+    k_blocks,
+    n_blocks,
+    *,
+    num_a_cores=32,
+    build_gcb=True,
+    seed=0,
+    swap_slab_order=False,
+    gcb_k_blocks=1,
+    num_pages=2,
 ):
     """Operands, DRAM weight and GCB for the partial width-sharded mode.
 
@@ -418,7 +504,9 @@ def _make_partial_gcb_and_operands(
 
     if not build_gcb:
         return pt_a, pt_b, a, weight, bank_to_receivers
-    gcb = make_matmul_decode_gcb(device, weight, bank_to_receivers, slab_shape=(kc, nc))
+    gcb = make_matmul_decode_gcb(
+        device, weight, bank_to_receivers, slab_shape=(kc, nc), k_blocks=gcb_k_blocks, num_pages=num_pages
+    )
     return pt_a, pt_b, a, weight, gcb
 
 
@@ -449,6 +537,37 @@ def test_matmul_decode_partial_prefetched_weights_pcc(device, m, k, n, k_blocks,
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
         out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, global_cb=gcb)
+        result = ttnn.to_torch(out).float()
+
+    assert_with_pcc(ref, result, 0.99)
+
+
+@pytest.mark.parametrize(
+    "gcb_k_blocks, num_pages",
+    [
+        pytest.param(4, 2, id="k_blocks=4-gcb=half-a-slab"),
+        pytest.param(16, 3, id="k_blocks=16-gcb=three-sixteenths-of-a-slab"),
+    ],
+)
+def test_matmul_decode_partial_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
+    """Partial width-sharded with each [Kc, Nc] slab streamed in as several GCB pages.
+
+    Here the streamed partial sums land in the partial CB that the cross-core K-reduction then
+    consumes, so this covers the one mode where the packer accumulates into something other
+    than the final output.
+    """
+    m, k, n, k_blocks, n_blocks = 32, 1024, 1024, 2, 8
+    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(
+        device, m, k, n, k_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    )
+    ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(
+            a, weight, partial_width_sharded=True, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks
+        )
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
@@ -509,7 +628,21 @@ def test_matmul_decode_partial_prefetched_wrong_slab_order_is_wrong(device):
 
 
 def _make_batched_gcb_and_operands(
-    device, d0, d1, m, k, n, b_blocks, n_blocks, *, num_a_cores=16, build_gcb=True, seed=0, swap_slab_order=False
+    device,
+    d0,
+    d1,
+    m,
+    k,
+    n,
+    b_blocks,
+    n_blocks,
+    *,
+    num_a_cores=16,
+    build_gcb=True,
+    seed=0,
+    swap_slab_order=False,
+    gcb_k_blocks=1,
+    num_pages=2,
 ):
     """Operands, DRAM weight and GCB for the batched width-sharded mode.
 
@@ -568,7 +701,9 @@ def _make_batched_gcb_and_operands(
     ]
     if not build_gcb:
         return pt_a, pt_b, a, weight, bank_to_receivers
-    gcb = make_matmul_decode_gcb(device, weight, bank_to_receivers, slab_shape=(bc * k, nc))
+    gcb = make_matmul_decode_gcb(
+        device, weight, bank_to_receivers, slab_shape=(bc * k, nc), k_blocks=gcb_k_blocks, num_pages=num_pages
+    )
     return pt_a, pt_b, a, weight, gcb
 
 
@@ -598,6 +733,38 @@ def test_matmul_decode_batched_prefetched_weights_pcc(device, d0, d1, m, k, n, b
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         result = _run_batched_prefetched(device, a, weight, gcb)
+
+    assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
+
+
+@pytest.mark.parametrize(
+    "gcb_k_blocks, num_pages",
+    [
+        pytest.param(2, 2, id="k_blocks=2-page=one-whole-batch"),
+        pytest.param(8, 2, id="k_blocks=8-page=quarter-of-a-batch"),
+    ],
+)
+def test_matmul_decode_batched_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
+    """Batched width-sharded with each [Bc*K, Nc] slab streamed in as several GCB pages.
+
+    A batched slab is Bc batches stacked along its rows, so where a page boundary falls
+    relative to a batch boundary decides whether the compute kernel accumulates or starts a
+    fresh output tile. The two cases straddle that: at k_blocks=2 a page is exactly one batch
+    (never accumulate), at k_blocks=8 a batch spans four pages (accumulate within a batch and
+    reset at its end). Confusing the two mixes different batches' partial sums together.
+    """
+    d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 32, 512, 1024, 2, 8
+    batch = d0 * d1
+    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(
+        device, d0, d1, m, k, n, b_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    )
+    ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
 
@@ -791,12 +958,22 @@ def test_matmul_decode_global_cb_rejects_weight_without_nd_shard_spec(device, pa
         )
 
 
-def test_matmul_decode_global_cb_rejects_undersized_gcb(device, expect_error):
-    """A GCB too small to hold one whole weight slab per receiver is rejected on the host.
+@pytest.mark.parametrize(
+    "global_cb_k_blocks, gcb_pages_of_slab",
+    [
+        # A page is the whole slab, so half a slab is not even one page.
+        pytest.param(1, 0.5, id="k_blocks=1-half-a-page"),
+        # A page is a quarter slab and the GCB holds exactly one, but streaming needs two.
+        pytest.param(4, 0.25, id="k_blocks=4-one-page"),
+    ],
+)
+def test_matmul_decode_global_cb_rejects_undersized_gcb(device, expect_error, global_cb_k_blocks, gcb_pages_of_slab):
+    """A GCB too small for the page count the reader needs is rejected on the host.
 
-    One GCB page is a receiver's entire [K, N/num_receivers] slab, so a window that
-    rounds down to zero slabs cannot be used. The check lives in the program factory
-    and fires before anything is enqueued, so no prefetcher session is needed.
+    The floor is one page when the slab arrives whole and two once it is streamed, because
+    the reader holds the page compute is working on while the next one lands; a one-page ring
+    would deadlock waiting for a credit it is itself holding. The check lives in the program
+    factory and fires before anything is enqueued, so no prefetcher session is needed.
     """
     m, k, n = 32, 1024, 2048
     _, _, a, weight, bank_to_receivers, num_b_cores = _make_gcb_and_operands(
@@ -805,11 +982,30 @@ def test_matmul_decode_global_cb_rejects_undersized_gcb(device, expect_error):
 
     slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
     small_gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        device, bank_to_receivers, slab_bytes // 2
+        device, bank_to_receivers, int(slab_bytes * gcb_pages_of_slab)
     )
 
-    with expect_error(RuntimeError, "at least one weight slab per receiver"):
-        ttnn.experimental.matmul_decode(a, weight, global_cb=small_gcb)
+    with expect_error(RuntimeError, "needs a GCB of at least"):
+        ttnn.experimental.matmul_decode(a, weight, global_cb=small_gcb, global_cb_k_blocks=global_cb_k_blocks)
+
+
+def test_matmul_decode_rejects_k_blocks_not_dividing_k(device, expect_error):
+    """A page has to be a whole number of K-rows of the slab, so k_blocks must divide K in tiles."""
+    m, k, n = 32, 1024, 2048  # K is 32 tiles, so 5 pages cannot be cut from it.
+    _, _, a, weight, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+
+    with expect_error(RuntimeError, "divisible"):
+        ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=5)
+
+
+def test_matmul_decode_rejects_k_blocks_without_global_cb(device, expect_error):
+    """global_cb_k_blocks describes GCB pages, so it is meaningless without a GCB."""
+    m, k, n = 32, 1024, 2048
+    _, _, a, weight, _, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, build_gcb=False)
+    l1_weight = ttnn.to_memory_config(weight, ttnn.L1_MEMORY_CONFIG)
+
+    with expect_error(RuntimeError, "global_cb_k_blocks"):
+        ttnn.experimental.matmul_decode(a, l1_weight, global_cb_k_blocks=2)
 
 
 def test_matmul_decode_two_distinct_global_cbs(device):

@@ -197,21 +197,51 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = input_tensor_a.buffer(),
     });
-    // One GCB page is a receiver's entire [Kc, Nc] weight slab. The local alias (in1_cb_index)
-    // is tile-paged so the compute kernel can index tiles as it does today; the remote index is
-    // slab-paged so one page-credit == one whole slab.
+    // A GCB page is `num_k_blocks`-th of a receiver's [Kc, Nc] weight slab: a whole number of
+    // K-rows, contiguous in the slab. num_k_blocks == 1 makes the page the whole slab (one credit
+    // per invocation, the GCB must hold a slab); higher values stream the slab in and let the GCB
+    // be smaller than it. The local alias (in1_cb_index) stays tile-paged so the compute kernel
+    // indexes tiles within the page it is holding; the remote index is page-paged so one
+    // page-credit == one K-block.
+    const uint32_t num_k_blocks = operation_attributes.global_cb_k_blocks;
+    TT_FATAL(
+        Kc_tiles % num_k_blocks == 0,
+        "partial_width_sharded matmul_decode with global_cb_k_blocks={} requires the per-core Kc in tiles ({}) to be "
+        "divisible by it, because a GCB page is a whole number of K-rows of the weight slab",
+        num_k_blocks,
+        Kc_tiles);
+    // Streaming completes each partial tile across several pages, and the running sum lives in the
+    // partial CB because the packer accumulates into it. A block-float format cannot be read back
+    // and added to, so it has to be rejected rather than quietly dropping partial sums.
+    TT_FATAL(
+        num_k_blocks == 1 || out_data_format == tt::DataFormat::Float32 ||
+            out_data_format == tt::DataFormat::Float16_b || out_data_format == tt::DataFormat::Float16,
+        "partial_width_sharded matmul_decode with global_cb_k_blocks={} accumulates partial sums in the partial CB, "
+        "so the output dtype must be float32/bfloat16/float16, but it is {}",
+        num_k_blocks,
+        out_data_format);
+    const uint32_t in1_k_block_tiles = Kc_tiles / num_k_blocks;
     const uint32_t in1_slab_num_tiles = Kc_tiles * Nc_tiles;
     const uint32_t in1_slab_bytes = in1_slab_num_tiles * in1_tile_size;
+    const uint32_t in1_page_num_tiles = in1_k_block_tiles * Nc_tiles;
+    const uint32_t in1_page_bytes = in1_page_num_tiles * in1_tile_size;
     if (use_global_cb) {
         const auto& gcb = *operation_attributes.global_cb;
-        // Round the window down to a whole number of slabs; the remote CB requires its total
-        // size to be a multiple of its page size.
-        const uint32_t gcb_window_bytes = (gcb.size() / in1_slab_bytes) * in1_slab_bytes;
+        // Round the window down to a whole number of pages; the remote CB requires its total
+        // size to be a multiple of its page size, and the local alias only wraps in step with
+        // the remote ring if it spans whole pages too.
+        const uint32_t gcb_window_bytes = (gcb.size() / in1_page_bytes) * in1_page_bytes;
+        // Streaming keeps one page un-acked while the next is published, so the ring has to hold
+        // two. With one page it would deadlock: the reader waits for a page the sender cannot
+        // write until the reader returns the credit it is still holding.
+        const uint32_t min_pages = num_k_blocks > 1 ? 2 : 1;
         TT_FATAL(
-            gcb_window_bytes >= in1_slab_bytes,
-            "partial_width_sharded matmul_decode with global_cb needs a GCB of at least one weight slab per receiver "
-            "({} B), but the GCB holds {} B",
-            in1_slab_bytes,
+            gcb_window_bytes >= min_pages * in1_page_bytes,
+            "partial_width_sharded matmul_decode with global_cb_k_blocks={} needs a GCB of at least {} page(s) per "
+            "receiver ({} B), but the GCB holds {} B",
+            num_k_blocks,
+            min_pages,
+            min_pages * in1_page_bytes,
             gcb.size());
         desc.cbs.push_back(CBDescriptor{
             .total_size = gcb_window_bytes,
@@ -225,11 +255,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .remote_format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = remote_cb_index,
                 .data_format = in1_data_format,
-                .page_size = in1_slab_bytes,
+                .page_size = in1_page_bytes,
             }}},
             .global_circular_buffer = std::addressof(gcb),
         });
-        // Compute -> reader release signal: one 16 B page (one credit) per invocation.
+        // Compute -> reader release signal: one 16 B page (one credit) per in1 page. Deliberately
+        // one page deep -- it is what bounds compute to a single un-acked GCB page, which is the
+        // invariant the two-page ring minimum above is derived from.
         constexpr uint32_t sync_cb_page_bytes = 16;
         desc.cbs.push_back(CBDescriptor{
             .total_size = sync_cb_page_bytes,
@@ -340,9 +372,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
         in1_cb_index,
-        in1_slab_num_tiles,
+        in1_page_num_tiles,
         remote_cb_index,
         sync_cb_index,
+        num_k_blocks,
     };
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
@@ -551,6 +584,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         K_blocks,
         inA_K_tiles_per_core,
         sync_cb_index,
+        num_k_blocks,
     };
     if (use_global_cb) {
         compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
