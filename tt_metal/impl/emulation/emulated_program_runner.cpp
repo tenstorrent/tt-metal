@@ -543,7 +543,7 @@ struct Metal2BindingsSnapshot {
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
-    std::map<std::string, uint16_t> sem_accessors;
+    std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
 
@@ -555,8 +555,14 @@ struct Metal2BindingsSnapshot {
         for (const auto& [name, id] : dfb_accessors) {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
-        for (const auto& [name, id] : sem_accessors) {
-            s += ":sem:" + name + "=" + std::to_string(id);
+        for (const auto& [name, h] : sem_accessors) {
+            // Fold the baked scope and access bit too: same id under a different scope or access
+            // compiles a different token and must not reuse the first kernel's .so. ":ro" is
+            // appended only when set, so mutable bindings' keys don't carry it.
+            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
+            if (h.read_only) {
+                s += ":ro";
+            }
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -773,7 +779,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
+        [&s](const std::string& name, uint16_t id, SemScope scope, bool read_only) {
+            s.sem_accessors[name] = {id, scope, read_only};
+        });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
         // snapshot doesn't yet model per-binding runtime CRTA words, and the
@@ -819,7 +827,8 @@ static void emit_metal2_namespaces(
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
     if (!s.sem_accessors.empty()) {
-        f << "#include <cstdint>\n";
+        // SemaphoreBindingToken<Id, SemScope, ReadOnly> token header (pulls in SemScope); see genfiles.cpp.
+        f << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
@@ -869,9 +878,22 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
+        // emule does not model DM_LOCAL_CACHED (no pool seeder, no entry wrapper; only the ring
+        // slot is seeded), so a cached semaphore would read an unseeded pool word. Refuse loudly.
+        for (const auto& [name, h] : s.sem_accessors) {
+            TT_FATAL(
+                h.scope != SemScope::DM_LOCAL_CACHED,
+                "Semaphore '{}' resolved to DM_LOCAL_CACHED, which the emule backend does not model (it "
+                "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
+                "or LOCAL_NONATOMIC for this semaphore when running under emule.",
+                name);
+        }
+        // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, read_only> (see
+        // genfiles.cpp); CTAD gives the kernel's Semaphore the host-resolved mechanism and access.
         f << "namespace sem {\n";
-        for (const auto& [name, id] : s.sem_accessors) {
-            f << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+        for (const auto& [name, h] : s.sem_accessors) {
+            f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
+              << static_cast<int>(h.scope) << "), " << (h.read_only ? "true" : "false") << "> " << name << "{};\n";
         }
         f << "}  // namespace sem\n";
     }

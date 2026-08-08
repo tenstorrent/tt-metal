@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -146,10 +147,29 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the emitted binding token:
+    // Semaphore(sem::<accessor_name>) -- the token carries the host-resolved scope, which CTAD
+    // turns into the semaphore's physical mechanism.
     struct SemaphoreBinding {
+        // How this kernel accesses the semaphore. Drives the AUTO scope classifier
+        // (ResolveSemaphoreScope): writer classes count toward concurrency; OBSERVE does not.
+        //   INCREMENT: up() / inc_multicast()
+        //   CONSUME:   down()
+        //   SET:       set() / set_multicast()
+        //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
+        // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
+        // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
+        enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
+
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only raise the
+        // writer count, pushing AUTO toward an atomic mechanism, never onto the non-atomic path.
+        // Mark OBSERVE to opt a read-only binding out of the writer census. OBSERVE is compile-time
+        // enforced: the emitted sem:: token carries read_only, and every Semaphore mutator
+        // static_asserts on it -- but only through the token; the raw-id Semaphore(uint32_t) ctor
+        // bypasses it. SET and CONSUME are unenforced hints for the AUTO classifier.
+        AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -229,11 +249,15 @@ struct KernelSpec {
 // These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
+using SemaphoreAccessType = KernelSpec::SemaphoreBinding::AccessType;
 
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+// The AUTO classifier + the honesty FATALs rely on designated-init inertness of the added
+// access_type field, which requires SemaphoreBinding to stay an aggregate.
+static_assert(std::is_aggregate_v<SemaphoreBinding>);
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------

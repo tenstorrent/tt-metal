@@ -180,13 +180,36 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
+// Dedicated cached-only DM-local semaphore pool. DM_LOCAL_CACHED semaphores live HERE, in
+// node L1 but physically disjoint from (and below) the NoC-written kernel_config ring, which
+// starts at MEM_MAP_END. The pool is 64B (cache-line) aligned and a whole number of 64B
+// lines, so a DM cached-AMO's write-back line can never overlap any word written over the
+// NoC / uncached alias -> no cross-domain clobber, BY CONSTRUCTION (correctness is a static
+// address invariant, provable without emu cache-fidelity). Sized to NUM_SEMAPHORES=16 slots *
+// L1_ALIGNMENT=16B = 256B (4 x 64B lines), indexed by the semaphore's normal id. See
+// tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
+#define MEM_DM_CACHED_SEM_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
+#define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
+// Real check (guards a future size edit). NOTE: a BASE % 64 guard would be a tautology -- the base is
+// defined as a 64B round-up -- so it is deliberately absent rather than kept as decoration.
+#if (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
+#error "DM cached semaphore pool size must be a whole number of 64B cache lines"
+#endif
+
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
-// Read-write reserved memory boundary for watcher checks
-#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+// Read-write reserved memory boundary for watcher checks (cached-sem pool is read-write; it is
+// the last reserved region, so the kernel_config ring begins right after it at MEM_MAP_END).
+#define MEM_MAP_END (MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
+
+// Disjointness from the NoC-written kernel_config ring holds BY CONSTRUCTION: the pool base is the 64B
+// round-up of the previous reserved region's end, and MEM_MAP_END (where the ring begins) is *defined* as
+// this pool's end. Earlier revisions asserted both with #error guards, but those were tautologies
+// (`X > X`, `roundup64(Y) < Y`) that could never fire, so they were removed rather than left as
+// decoration that reads like enforcement.
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

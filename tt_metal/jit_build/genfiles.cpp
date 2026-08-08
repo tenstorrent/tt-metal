@@ -102,7 +102,9 @@ void write_file(const string& path, const string& content) {
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
-void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+// Returns true if the kernel binds >= 1 DM_LOCAL_CACHED semaphore (so sem::init_dm_cached() was
+// emitted and its call must be auto-injected at kernel entry on the data-movement path).
+bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
 
     // Get the DFB bindings from the settings callback
@@ -115,10 +117,23 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
-    vector<pair<string, uint16_t>> sem_entries;
+    struct SemEntry {
+        string name;
+        uint16_t id;
+        SemScope scope;
+        bool read_only;
+    };
+    vector<SemEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
-    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&sem_entries](const string& name, uint16_t id, SemScope scope, bool read_only) {
+            sem_entries.push_back({name, id, scope, read_only});
+        });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // DM_LOCAL_CACHED sems need sem::init_dm_cached() run at entry; the caller auto-injects
+    // that call (see jit_build_genfiles_kernel_include), so the flag is returned.
+    const bool has_cached_sem = std::any_of(
+        sem_entries.begin(), sem_entries.end(), [](const SemEntry& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -150,12 +165,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
-    //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
-    //    the kernel constructs a Semaphore straight from the bare id)
+    //  - Semaphore binding tokens are emitted into the sem namespace (a
+    //    SemaphoreBindingToken<id, scope, read_only>, so the kernel's Semaphore deduces the
+    //    host-chosen mechanism and access rights via CTAD rather than taking a bare id)
     //  - TensorBindings are emitted into the tensor namespace
     //  - Scratchpad binding tokens are emitted into the scratch namespace
     //
-    // NOTE: DFB tokens and semaphore ids are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB and semaphore tokens are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
     //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
@@ -176,7 +192,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
         if (!sem_entries.empty()) {
-            content << "#include <cstdint>\n";
+            // Defines SemaphoreBindingToken<Id, SemScope, ReadOnly> (and pulls in SemScope), the
+            // token each sem::<name> symbol is emitted as.
+            content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+            if (has_cached_sem) {
+                // Includes for sem::init_dm_cached()'s body, guarded exactly like that body:
+                // the pool and sync_threads are DM-only, so a compute kernel must not pull these in.
+                content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+                content << "#include \"api/dataflow/dataflow_api.h\"\n";
+                content << "#include \"api/kernel_thread_globals.h\"\n";
+                content << "#endif\n";
+            }
         }
         if (!ta_entries.empty()) {
             // This header defines TensorBindingToken, a type which can be used
@@ -199,9 +225,47 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
+            // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, read_only>. The kernel
+            // writes `Semaphore s(sem::<name>)` and CTAD picks the host-resolved mechanism and access
+            // rights. scope is emitted numerically to avoid a host<->device enumerator-name dependency.
+            if (has_cached_sem) {
+                // This kernel binds >= 1 DM_LOCAL_CACHED semaphore, so sem::init_dm_cached() exists.
+                // The call is auto-injected at kernel entry (jit_build_genfiles_kernel_include wraps
+                // kernel_main); the macro lets kernel code detect the cached path.
+                content << "#define SEM_HAS_DM_CACHED 1\n";
+            }
             content << "namespace sem {\n";
-            for (const auto& [name, id] : sem_entries) {
-                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+            for (const auto& entry : sem_entries) {
+                content << "constexpr ::SemaphoreBindingToken<" << entry.id << "u, static_cast<::SemScope>("
+                        << static_cast<int>(entry.scope) << "), " << (entry.read_only ? "true" : "false") << "> "
+                        << entry.name << "{};\n";
+            }
+            if (has_cached_sem) {
+                // Seed the cached-only pool, which the dispatcher never NoC-writes: thread 0 copies
+                // each cached sem's init value from its ring slot (uncached alias) into the pool,
+                // then a barrier so every thread sees the init before its first up(). The call is
+                // auto-injected at kernel entry by wrapping kernel_main. The body is empty off the
+                // DM+Quasar path (a DM_LOCAL_CACHED Semaphore is a compile error there), but the
+                // symbol always exists so a manual call still compiles.
+                content << "inline void init_dm_cached() {\n";
+                content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+                content << "    if (::get_my_thread_id() == 0u) {\n";
+                for (const auto& entry : sem_entries) {
+                    if (entry.scope != SemScope::DM_LOCAL_CACHED) {
+                        continue;
+                    }
+                    content << "        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
+                            << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
+                            << "u * L1_ALIGNMENT) = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
+                            << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
+                }
+                content << "    }\n";
+                // Rendezvous on the DEDICATED cached-sem-init barrier slot: slots 0/1 are the DFB
+                // producer/consumer role barriers, so sharing one with a co-resident DFB kernel
+                // deadlocks.
+                content << "    ::sync_threads(::KERNEL_BARRIER_CACHED_SEM_INIT);\n";
+                content << "#endif\n";
+                content << "}\n";
             }
             content << "}  // namespace sem\n";
         }
@@ -239,6 +303,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
     }
     write_file(path, content.str());
+    return has_cached_sem;
 }
 
 // METAL 2.0 only:
@@ -469,8 +534,9 @@ void jit_build_genfiles_kernel_include(
     // Legacy kernels created via the old host API are fenced out of this code path.
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
+    bool has_cached_sem = false;
     if (is_metal2) {
-        write_kernel_bindings_generated_header(out_dir, settings);
+        has_cached_sem = write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
@@ -483,12 +549,27 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content += "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
+
+    // AUTO-INJECT the cached-semaphore pool init: rename the kernel's entry point and define the
+    // real kernel_main() as a wrapper that calls sem::init_dm_cached() first, so a kernel can never
+    // read an unseeded pool word. Covers both a hand-written kernel_main() and the TT_KERNEL shim
+    // appended below (the macro is still in effect for it).
+    static constexpr const char* kUserEntry = "_tt_dm_cached_user_kernel_main";
+    if (has_cached_sem) {
+        kernel_header_content += string("#define kernel_main ") + kUserEntry + "\n";
+    }
+
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
     // by name and calls the user entry. It must follow the user source (so the entry is declared)
     // and the args:: header (emitted above for Metal 2.0). Empty for legacy kernels.
     kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
+
+    if (has_cached_sem) {
+        kernel_header_content += string("#undef kernel_main\nvoid kernel_main() {\n    sem::init_dm_cached();\n    ") +
+                                 kUserEntry + "();\n}\n";
+    }
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
@@ -504,7 +585,9 @@ void jit_build_genfiles_triscs_src(
     // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
     const bool is_metal2 = settings.is_metal2_kernel();
     if (is_metal2) {
-        write_kernel_bindings_generated_header(out_dir, settings);
+        // Cached-sem flag intentionally ignored: the cached pool is DM-only, so no entry wrapper
+        // on the compute/TRISC path (the emitted sem::init_dm_cached() has an empty body there).
+        (void)write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
     ////////////////////////////////////////////////////////////

@@ -314,9 +314,10 @@ void Kernel::process_dataflow_buffer_binding_handles(
 }
 
 void Kernel::process_semaphore_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
-    for (const auto& [accessor_name, semaphore_id] : this->semaphore_binding_handles_) {
-        callback(accessor_name, semaphore_id);
+    const std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, bool read_only)>
+        callback) const {
+    for (const auto& [accessor_name, handle] : this->semaphore_binding_handles_) {
+        callback(accessor_name, handle.id, handle.scope, handle.read_only);
     }
 }
 
@@ -552,7 +553,14 @@ uint64_t Kernel::compute_hash() const {
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
-        hasher.update(static_cast<uint64_t>(it->second));
+        hasher.update(static_cast<uint64_t>(it->second.id));
+        // Fold the baked scope: two kernels binding the same semaphore id under different
+        // scopes emit different tokens (different device mechanism) and must not share an artifact.
+        hasher.update(static_cast<uint64_t>(it->second.scope));
+        // Same for the access bit: same id + scope but different access must not share an
+        // artifact (read_only is baked into the token and changes which members compile);
+        // without it the collision would be silent.
+        hasher.update(static_cast<uint64_t>(it->second.read_only));
     }
     // Tensor binding handles:
     //  - stored as a std::vector (user-specified order), so no sort step needed
