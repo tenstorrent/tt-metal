@@ -61,6 +61,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided as _bank_receivers_strided,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_krow_major_weight as _make_krow_major_weight,
     tensor_prefetcher_session,
 )
 
@@ -1153,13 +1154,29 @@ def test_tensor_prefetcher_streaming_matmul(
     assert passing, f"[{name} win={window_blocks} {distribution_strategy}] PCC check failed: {output_str}"
 
 
-@pytest.mark.parametrize(
-    "distribution_strategy",
-    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
-    ids=["strided", "contiguous"],
-)
-def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
-    """Mcast-in0 consumes receiver-contiguous in1 K-blocks in natural FIFO order."""
+# Weight layouts an mcast-in0 consumer accepts. The consumer sees the same per-receiver page stream
+# either way -- recv-contig gives each receiver its own shard, while K-row-major divides a bank's shard
+# into the requested K-blocks and slices each across that bank's receivers -- so every assertion below
+# is layout-agnostic. The bank pairing has to match the shard distribution (shard index == ring
+# position); ROUND_ROBIN_1D pairs strided, CONTIGUOUS_1D and K-row-major pair contiguous.
+_MCAST_IN0_LAYOUTS = {
+    "recv_contig_strided": ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    "recv_contig_contiguous": ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    "krow_major": None,
+}
+
+
+@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_LAYOUTS), ids=list(_MCAST_IN0_LAYOUTS))
+@pytest.mark.parametrize("gcb_size_misalign_bytes", [0, 64], ids=["page_multiple", "ragged_size"])
+def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_bytes):
+    """Mcast-in0 consumes in1 K-blocks in natural FIFO order, on either DRAM weight layout.
+
+    ``block_count`` is ``K_tiles / in0_block_w``, deliberately different from the receiver count, so a
+    ring-derived block count would deliver the wrong pages rather than silently working.
+
+    ``gcb_size_misalign_bytes`` covers GCB sizes that are not a whole number of in1 K-block pages: the
+    window floors to whole pages, so the tail bytes go unused rather than raising.
+    """
     num_dram_banks = device.dram_grid_size().x
     recv_per_bank = 2
     receiver_count = num_dram_banks * recv_per_bank
@@ -1178,16 +1195,32 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
     block_count = k_tiles // in0_block_w
     assert block_count != receiver_count
 
-    torch.manual_seed(zlib.crc32(f"streaming_mcast_in0_{distribution_strategy}".encode()))
+    torch.manual_seed(zlib.crc32(f"mcast_in0_{weight_layout}_{gcb_size_misalign_bytes}".encode()))
     pt_weight = torch.randn(1, 1, K, N)
-    tt_weight = _make_recv_contig_weight(
-        device,
-        pt_weight,
-        num_dram_banks=num_dram_banks,
-        ring_size=receiver_count,
-        dtype=dtype,
-        distribution_strategy=distribution_strategy,
-    )
+    distribution_strategy = _MCAST_IN0_LAYOUTS[weight_layout]
+    if distribution_strategy is None:
+        tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks=num_dram_banks, dtype=dtype)
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        tt_weight = _make_recv_contig_weight(
+            device,
+            pt_weight,
+            num_dram_banks=num_dram_banks,
+            ring_size=receiver_count,
+            dtype=dtype,
+            distribution_strategy=distribution_strategy,
+        )
+        if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
+            bank_to_receivers = [
+                (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+            ]
+        else:
+            bank_to_receivers = [
+                (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+                for b in range(num_dram_banks)
+            ]
 
     pt_act = torch.randn(1, 1, M, K)
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -1218,23 +1251,13 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
         stream_in1=False,
     )
 
-    if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
-        bank_to_receivers = [
-            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
-        ]
-    else:
-        bank_to_receivers = [
-            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-            for b in range(num_dram_banks)
-        ]
-
     page_size_bytes = in0_block_w * program_config.per_core_N * _bytes_per_tile(dtype)
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [program_config],
         [tt_weight],
         bank_to_receivers=bank_to_receivers,
-        size=2 * page_size_bytes,
+        size=4 * page_size_bytes + gcb_size_misalign_bytes,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, N // receiver_count),
@@ -1255,11 +1278,13 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
     expected = pt_act.float() @ pt_weight.float()
 
     # Run twice so the second invocation hits the program cache and exercises
-    # override_mcast_in0_program_parameters. The receiver-contiguous weight is
-    # ND-sharded, so a naive tensor-backed CB update would TT_FATAL on the
-    # GCB-backed in1 CB during the cache-hit path.
+    # override_mcast_in0_program_parameters. A recv-contig weight is ND-sharded, so a naive
+    # tensor-backed CB update would TT_FATAL on the GCB-backed in1 CB during the cache-hit path.
     cache_entries_after_first = None
     with tensor_prefetcher_session(device):
+        assert (
+            ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, tt_weight, gcb) == block_count
+        )
         for run in range(2):
             tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
                 tt_act,
@@ -1275,8 +1300,8 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
 
             out_torch = ttnn.to_torch(tt_out)
             passing, output_str = comp_pcc(expected, out_torch, 0.999)
-            logger.info(f"[streaming_mcast_in0 {distribution_strategy} run={run}] {output_str}")
-            assert passing, f"streaming_mcast_in0 run={run} PCC failed: {output_str}"
+            logger.info(f"[mcast_in0 {weight_layout} misalign={gcb_size_misalign_bytes} run={run}] {output_str}")
+            assert passing, f"mcast_in0 {weight_layout} run={run} PCC failed: {output_str}"
 
     # The second run must reuse the cached program (no new entries), i.e. it took
     # the override path rather than rebuilding.
