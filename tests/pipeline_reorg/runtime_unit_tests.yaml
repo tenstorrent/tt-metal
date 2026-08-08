@@ -142,6 +142,13 @@
   team: runtime
 
 - name: runtime_noc_debugging
+  # NOC event logging parks each RISC in signal_host_buffer_full waiting for the host to swap
+  # profiler buffers, so these tests are host-bound and a single dispatch legitimately runs for
+  # tens of seconds -- InterleavedReadsWritesWithBarrier measures ~32s on a p100a. Its 5000
+  # iterations are load-bearing: the tracker's NOC counter is 12 bits (wraps at 4096) and this is
+  # the only test that crosses that wrap while asserting no issues, so it is the sole regression
+  # guard for wrap_ge. The 5s default hang detector fires on it long before it finishes.
+  hang_detection_timeout: 180
   cmd: ./build/test/tt_metal/unit_tests_noc_debugging
   skus:
     wh_n150_civ2:
