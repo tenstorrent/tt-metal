@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,11 +32,50 @@ inline void calculate_rdiv(const uint value) {
         }
         sfpi::vFloat result = recip * val;
 
-        if constexpr (rounding_mode == RoundingMode::Trunc) {
-            result = _trunc_body_(result);
-        } else if constexpr (rounding_mode == RoundingMode::Floor) {
-            result = _floor_body_(result);
+        if constexpr (rounding_mode != RoundingMode::None) {
+            // recip(+-inf) == 0 so `result * in` is 0*inf = NaN, and
+            // recip(subnormal) == +-inf; val = +-inf makes `val - result*in`
+            // an inf - inf. Correct only where all three are well defined.
+            sfpi::vInt e_in = sfpi::exexp(in, sfpi::ExponentMode::Biased);
+            sfpi::vInt e_res = sfpi::exexp(result, sfpi::ExponentMode::Biased);
+
+            v_if (e_in != 0 && e_in != 255 && e_res != 255) {
+                result = result + (val - result * in) * recip;
+            }
+            v_endif;
+
+            sfpi::vFloat q;
+            if constexpr (rounding_mode == RoundingMode::Trunc) {
+                q = _trunc_body_(result);
+            } else {
+                q = _floor_body_(result);
+            }
+
+            v_if (e_in != 0 && e_in != 255 && e_res != 255) {
+                // Correct at integer granularity: |r| vs |in| is exact, whereas
+                // r * recip inherits the reciprocal's error (0.99999994 vs 1.0).
+                sfpi::vFloat r = val - q * in;
+                sfpi::vFloat rq = r * recip;  // sign only
+
+                if constexpr (rounding_mode == RoundingMode::Floor) {
+                    // floor invariant: remainder shares the divisor's sign, |r| < |in|
+                    v_if (rq < 0.0f) { q = q - 1.0f; }
+                    v_elseif (sfpi::abs(r) >= sfpi::abs(in)) { q = q + 1.0f; }
+                    v_endif;
+                } else {
+                    // trunc invariant: |r| < |in|
+                    v_if (sfpi::abs(r) >= sfpi::abs(in)) {
+                        v_if (rq >= 0.0f) { q = q + 1.0f; }
+                        v_else { q = q - 1.0f; }
+                        v_endif;
+                    }
+                    v_endif;
+                }
+            }
+            v_endif;
+            result = q;
         }
+
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
