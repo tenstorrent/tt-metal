@@ -89,6 +89,13 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
     /* Fused addcmul inputs: output = addcmul_a + scalar * mm_output * addcmul_b */
     const std::optional<const Tensor> addcmul_input_tensor1 = std::nullopt;  // residual/base
     const std::optional<const Tensor> addcmul_input_tensor2 = std::nullopt;  // gate/multiplier
+
+    /* Caller-owned scratch for the per-MM-core progress counters the MM uses to signal the RS
+       (one uint32 slot per MM core, one row per core, height-sharded in L1 so the row sits at the
+       same local address everywhere). Supplying it lets one device-lifetime allocation serve every
+       MMRS program; when omitted the RS factory allocates a private array per program, which
+       permanently lowers the device's L1 floor and starves later ops of circular-buffer space. */
+    const std::optional<const Tensor> mm_progress_counters = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

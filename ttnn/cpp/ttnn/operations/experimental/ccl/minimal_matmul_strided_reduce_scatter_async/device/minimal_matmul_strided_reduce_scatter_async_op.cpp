@@ -172,6 +172,25 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
 
+    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS reader's
+    if (attributes.matmul_struct.config.has_value() &&
+        attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
+        const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
+        const uint32_t gx = grid.x;
+        const uint32_t gy = grid.y;
+        const uint32_t Mt = mm_output_shape[-2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Nt = mm_output_shape[-1] / tt::constants::TILE_WIDTH;
+        const uint32_t Mt_per_core = (Mt + gy - 1) / gy;
+        const uint32_t Nt_per_core = (Nt + gx - 1) / gx;
+        const auto mm_shard_spec = tt::tt_metal::ShardSpec(
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(gx - 1, gy - 1))),
+            {Mt_per_core * tt::constants::TILE_HEIGHT, Nt_per_core * tt::constants::TILE_WIDTH});
+        const auto mm_l1_sharded = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, mm_shard_spec};
+        mm_output_spec = tt::tt_metal::TensorSpec(
+            mm_output_shape,
+            tt::tt_metal::TensorLayout(mm_output_spec.data_type(), mm_output_spec.page_config(), mm_l1_sharded));
+    }
+
     return {mm_output_spec, rs_intermediate_spec, rs_output_spec};
 }
 
@@ -228,7 +247,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::DataType> dtype) {
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_progress_counters) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -273,7 +293,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         optional_rs_output_tensor,
         bias,
         addcmul_input_tensor1,
-        addcmul_input_tensor2};
+        addcmul_input_tensor2,
+        mm_progress_counters};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

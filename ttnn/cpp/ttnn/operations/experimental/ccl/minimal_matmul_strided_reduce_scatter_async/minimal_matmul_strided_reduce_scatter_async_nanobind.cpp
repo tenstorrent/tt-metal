@@ -63,6 +63,12 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
             * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
             * :attr:`addcmul_input_tensor2` (Optional[ttnn.Tensor]): Second additional input tensor for fused addcmul (gate/multiplier).
+            * :attr:`mm_progress_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the MM->RS
+              per-core progress counters: a uint32 ROW_MAJOR tensor of shape [num_cores, slots], L1
+              HEIGHT_SHARDED with shard [1, slots] over a core grid covering the RS worker cores, where
+              slots >= the device compute grid area. Share one such tensor across every MMRS call (see
+              CCLManager.get_mm_progress_counters_buffer); otherwise each compiled program allocates its
+              own and permanently lowers the device's L1 floor.
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
@@ -92,7 +98,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("addcmul_input_tensor1") = nb::none(),
         nb::arg("addcmul_input_tensor2") = nb::none(),
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("mm_progress_counters") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

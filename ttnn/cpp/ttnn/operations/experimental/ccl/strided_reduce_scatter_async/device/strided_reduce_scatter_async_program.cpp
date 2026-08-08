@@ -208,7 +208,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    const std::optional<const Tensor>& mm_progress_counters) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -397,7 +398,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_b_config);
     }
 
-    bool input_is_sharded = input_tensor.is_sharded();
+    [[maybe_unused]] bool input_is_sharded = input_tensor.is_sharded();  // input always via TensorAccessorArgs
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -405,9 +406,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::map<std::string, std::string> writer_compute_defines;
     std::map<std::string, std::string> reduce_compute_defines;
 
-    if (input_is_sharded) {
-        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
-    }
+    // The input (MM output) is always fed through TensorAccessorArgs (below)
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
         writer_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -433,9 +432,60 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
     bool fuse_mm_op = mm_fused_op_signaler.has_value();
+    // Per-core MM signaling: L1 array of per-MM-core progress counters, one row per RS worker core
+    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
+    uint32_t captured_mm_progress_counters_addr = 0;
     if (fuse_mm_op) {
         mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
         reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
+
+        // The counter array: one shard (row) per RS worker core, sized to the full device compute grid
+        const auto mm_grid = mesh_device->compute_with_storage_grid_size();
+        const uint32_t num_mm_core_slots = mm_grid.x * mm_grid.y;
+        const uint32_t counters_row_bytes = num_mm_core_slots * sizeof(uint32_t);
+
+        if (mm_progress_counters.has_value()) {
+            // Caller-owned array, shared across programs
+            const auto& counters = mm_progress_counters.value();
+            const auto& counters_shard_spec = counters.memory_config().shard_spec();
+            TT_FATAL(
+                counters.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                    counters_shard_spec.has_value(),
+                "mm_progress_counters must be an L1 sharded tensor so that its row lands at the same "
+                "local address on every RS worker core");
+            TT_FATAL(
+                counters_shard_spec->grid.contains(sender_worker_core_range_set),
+                "mm_progress_counters is sharded over {} which does not cover the RS worker cores {}",
+                counters_shard_spec->grid.str(),
+                sender_worker_core_range_set.str());
+            const uint32_t provided_row_bytes = counters_shard_spec->shape[1] * counters.element_size();
+            TT_FATAL(
+                provided_row_bytes >= counters_row_bytes,
+                "mm_progress_counters provides {} B per core but the MM grid needs {} slots ({} B)",
+                provided_row_bytes,
+                num_mm_core_slots,
+                counters_row_bytes);
+            mm_fused_op_signaler->mm_progress_counters_addr = static_cast<uint32_t>(counters.buffer()->address());
+        } else {
+            // BUILD-VERIFY: this is the ONE tt-metal buffer-API call to confirm against your tree
+            const uint32_t num_rs_cores = sender_worker_core_range_set.num_cores();
+            const auto counter_shard_spec = tt::tt_metal::ShardSpecBuffer(
+                sender_worker_core_range_set,
+                {1, num_mm_core_slots},
+                tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                {1, num_mm_core_slots},
+                {num_rs_cores, num_mm_core_slots});
+            mm_progress_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                .device = mesh_device,
+                .size = num_rs_cores * counters_row_bytes,
+                .page_size = counters_row_bytes,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                .shard_parameters = counter_shard_spec});
+            mm_fused_op_signaler->mm_progress_counters_addr =
+                static_cast<uint32_t>(mm_progress_counters_buffer->address());
+        }
+        captured_mm_progress_counters_addr = mm_fused_op_signaler->mm_progress_counters_addr;
     }
 
     // Kernel Runtime Args
@@ -492,11 +542,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         slice_Ht,                           // [23] slice_Ht (total height in tiles across all MM cores)
     };
 
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-    }
+    // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the reader's
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
@@ -664,9 +711,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     worker_id,                                // worker_id
                     num_workers,                              // num_workers
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-                }
+                // Input uses TensorAccessorArgs (see above) — no shard-map RT args, just the address.
                 if (intermediate_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
                 }
@@ -747,7 +792,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         num_workers_per_direction,
         num_mux_cores_per_direction_per_link,
         num_cores_per_link,
-        captured_reader_addcmul_rt_arg_offset};
+        captured_reader_addcmul_rt_arg_offset,
+        mm_progress_counters_buffer,
+        captured_mm_progress_counters_addr};
 }
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -880,7 +927,8 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunk_width_in_mm_blocks,
         std::nullopt,   // fused_ternary_scalar
         std::nullopt,   // addcmul_input_tensor1
-        std::nullopt);  // addcmul_input_tensor2
+        std::nullopt,   // addcmul_input_tensor2
+        std::nullopt);  // mm_progress_counters (fused MM->RS only)
 
     return {std::move(program), std::move(shared_vars)};
 }
