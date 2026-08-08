@@ -69,6 +69,12 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     send_recv_async/send_async_d2h/send_async_d2h.cpp
     send_recv_async/send_async_d2h/device/send_async_d2h_op_device_operation.cpp
     send_recv_async/send_async_d2h/device/send_async_d2h_op_program_factory.cpp
+    send_recv_async/send_direct_async/send_direct_async.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_device_operation.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_program_factory.cpp
+    send_recv_async/recv_direct_async/recv_direct_async.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_device_operation.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_program_factory.cpp
     neighbor_pad_async/neighbor_pad_async.cpp
     neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
     neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
@@ -144,6 +150,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     send_recv_async/recv_async/recv_async_nanobind.cpp
     send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
     send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
+    send_recv_async/send_direct_async/send_direct_async_nanobind.cpp
+    send_recv_async/recv_direct_async/recv_direct_async_nanobind.cpp
     neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     slice_reshard_async/slice_reshard_async_nanobind.cpp
     deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
