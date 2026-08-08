@@ -1,26 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for sparse attention.
-
-The extension adds three optional kwargs (`tokens_per_frame`, `num_frames_padded`, `sparse_frame_mask`) that
-enable frame-block-sparse attention inside the ring op: each Q frame attends only to a chosen
-subset of K frames (e.g. a centered window + one reference frame).
-
-The tests exercise the op directly with a synthetic windowed pattern
-at shapes representative of sparse-attention workloads
-
-Golden = pytorch SDPA with an additive `[N, N]` block-mask matching sparse_frame_mask. Ring output must
-PCC-match the golden.
-
-Meshes:
-    BH 4x8, WH 2x4, WH 4x8. Only meshes with sufficient devices for the requested sp_factor run;
-    the rest skip cleanly at collection time.
-
-Run:
-    pytest models/tt_dit/tests/unit/test_ring_joint_sparse_frames.py -k bh_4x8
-    pytest models/tt_dit/tests/unit/test_ring_joint_sparse_frames.py -k wh_2x4
-    pytest models/tt_dit/tests/unit/test_ring_joint_sparse_frames.py -k wh_4x8
+"""
+Unit tests for sparse attention, running the op with a synthetic windowed pattern
+at shapes representative of real workloads
 """
 
 from __future__ import annotations
@@ -37,14 +20,7 @@ from models.common.utility_functions import comp_pcc
 from models.tt_dit.utils.test import line_params, ring_params_8k
 
 # ---------------------------------------------------------------------------
-# Mesh + topology enumeration — one flat row per test config (mirrors
-# test_pipeline_wan_svi.py). Row fields are unpacked directly by each test.
-#
-#   * sp_factor is the RING factor (== ring_size the op sees) on sp_axis.
-#   * tp_factor shards V head-dim across the other mesh axis.
-#   * num_links: 2 for BH 4x8 galaxy, 4 for WH 4x8 galaxy, 1 for WH 2x4.
-#   * Ring topology is only emitted for 4x8 galaxies — 2x4 lacks a closed
-#     fabric loop, so (wh_2x4, ring) would fail at fabric init.
+# Mesh + topology enumeration
 # ---------------------------------------------------------------------------
 
 _SDPA_L1 = {"worker_l1_size": 1344544, "trace_region_size": 1000000}
