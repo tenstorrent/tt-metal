@@ -2836,3 +2836,63 @@ this one costs the box, and leaves it degraded afterwards.
 **Consequence for measurement hygiene:** a degraded box silently inflates every sweep and knee number
 by ~12x on small MMIO. Check the ACK-WRITE probe (healthy ~170-190 ns static) before trusting ANY
 timing measured after a freeze.
+
+## §N+31 — The 220 ms MMIO stall IS the root-port completion timeout, and the endpoint logs UnsupReq (bh-26, 2026-08-08)
+
+Two register reads that change the shape of the wedge/freeze problem.
+
+### The stall is a timeout firing, not a slow read
+
+```
+root port 00:01.1   DevCtl2: Completion Timeout: 65ms to 210ms, TimeoutDis-
+endpoint 01:00.0    DevCtl2: Completion Timeout: 50us to 50ms,  TimeoutDis+
+```
+
+The root port's completion timeout is **enabled at 65-210 ms**, and the measured MMIO hang was
+**220,212 us** (§N+26). Those are the same number. So the failing access is not slow -- **the endpoint
+never completes it**, and the root port abandons it at ~210 ms. Every "MMIO per-op timeout: 4B load
+took 220 ms" is one completion timeout. That also means the 2 ms UMD budget can never be met by a
+retry: the hardware floor for a non-completing read on this box is ~210 ms.
+
+### The endpoint IS logging PCIe errors -- and AER never showed them
+
+```
+endpoint 01:00.0    DevSta: CorrErr+ ... UnsupReq+
+```
+
+**`UnsupReq+` = Unsupported Request detected**, plus correctable errors, live on the current boot.
+
+**This is why "AER is all zero" was misleading.** `DevSta` (PCIe capability + 0x0A) is a DIFFERENT
+register from the AER capability. Every previous classification in this file read AER and concluded
+"no PCIe errors". **Read `DevSta` too** -- `sudo lspci -vvv -s 01:00.0 | grep DevSta`. Its bits are
+RW1C, so they are sticky until cleared, which also makes them a usable per-run probe.
+
+An Unsupported Request is exactly what a host access to an address the endpoint cannot service looks
+like -- and stream mode changes what an inbound DRAM-range address MEANS on a DRISC's core. That is a
+mechanism, not yet a proof.
+
+### The freeze chain this supports
+
+1. a DRISC in stream mode makes some inbound address unserviceable -> UR, or no completion
+2. host MMIO read stalls until the root port gives up at ~210 ms
+3. UMD's 2 ms budget blows -> the `MMIO per-op timeout` abort
+4. **two drainers = two such cores**, so twice the exposure and twice the rate of 210 ms stalls
+5. enough concurrent 210 ms stalls in driver paths -> box unresponsive -> external reset
+
+Consistent with 1 drainer wedging a card recoverably while 2 take the host down: same mechanism, twice
+the surface, each event parking a CPU for a fifth of a second.
+
+### Why nothing was logged when the host froze
+
+`nmi_watchdog=1`, `watchdog=1`, `hung_task_timeout_secs=120` -- **the detectors were armed and none
+fired**, `/sys/fs/pstore` is empty, and the previous boot's kernel log simply stops 11 minutes before
+the freeze with no lockup, RCU stall, AER, MCE, panic or `tenstorrent` message. `systemd-detect-virt`
+returns **none**, so this is bare metal and the physical host really did reset -- NOT the
+reservation-VM freeze pattern of [[x280_vm_freeze_churn]]. There is no watchdog device and no
+`/dev/ipmi0`, so the reset came from outside the box (IRD infrastructure) and nothing local recorded it.
+
+### Correction to the recovery matrix
+
+**A host reboot does NOT clear DEGRADED.** bh-26 rebooted at 12:17 and still measured ack-write
+2339 ns / device-read 2942 ns afterwards. Earlier revisions list "host reboot" as the DEGRADED
+recovery; that is wrong. Assume a cold power cycle or a different box.
