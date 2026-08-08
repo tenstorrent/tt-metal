@@ -2411,7 +2411,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count,
-    uint32_t base_cta_offset = 0) {
+    uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
 
