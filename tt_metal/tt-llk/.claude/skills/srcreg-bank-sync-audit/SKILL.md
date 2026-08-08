@@ -16,6 +16,24 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it enumerates the
+SrcA/SrcB data-valid handshake control points and flags the one ISA-grounded
+mechanical pattern):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks srcreg-bank
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["srcreg-bank"].findings
+
+`RAW_SETDVALID_BH` = a raw `TTI_SETDVALID` on Blackhole (ISA-unsupported — it
+corrupts `ImpliedSrcBFmt`; the supported form is `UNPACR_NOP(...,SET_DVALID,...)`);
+`DVALID_SET` / `DVALID_CLEAR` = the dvalid handshake control points to place- and
+lockstep-check. All are **candidates**, not verdicts. The tool only recalls the
+dvalid control points — it does NOT model bank-flip lockstep (the `MOV*2D` consume
+side), dvalid placement, single-thread ownership, the BH `DISABLE_IMPLIED_SRC?_FMT`
+bit, or the Quasar SrcS lane; **widen** with the method below for all of those. It
+never clears a site; you decide. If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The backend **data** memories are shared and have their own hardware flow control, distinct from config registers, Tensix semaphores, mailboxes, and CBs:
 - **`SrcA` / `SrcB`** — each has **2 banks** carrying an `AllowedClient ∈ {Unpackers, MatrixUnit}`, plus four bank-pointer bits (`MatrixUnit::SrcABank/SrcBBank`, `Unpackers[0/1]::SrcBank`). The unpacker fills a bank and hands it to the FPU (set data-valid); the FPU consumes and hands it back. The **Wait Gate enforces this in hardware**: an FPU instruction stalls until the relevant bank's `AllowedClient == MatrixUnit`; `UNPACR` can start but stalls mid-execution until `AllowedClient` is appropriate. Software must keep the two sides' bank pointers in **lockstep** and place the valid/clear at the right point.
@@ -33,10 +51,15 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 4. **Dst/LReg overwrite outside the known primitives.** A raw FPU/SFPU/pack access to `Dst`, or cross-thread `LReg`, that is NOT ordered by `MATH_PACK` / `mutex::SFPU` → flag and hand the semaphore half to `semaphore-handshake-audit`; this audit confirms the data-register access itself.
 
 ## Method
-1. Enumerate the handshake primitives and bank bookkeeping:
+1. Enumerate the handshake primitives and bank bookkeeping. **Scan the KERNEL
+   layer too, not just canonical tt-llk** — hand-written dvalid/bank/`MOV*2D`
+   sequences live in `ttnn/`/`models/` kernels (and in ttnn ops that **vendor
+   their own `tt_llk` fork** under `.../kernel_includes/tt_llk/`), which a
+   canonical-tt-llk-only search misses:
    ```bash
-   cd tt_metal/tt-llk
-   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|SrcA?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" tt_llk_* --include=*.h | grep -v /tests/
+   # from the repo root
+   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" \
+        tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.
 3. For Dst/LReg, identify the accessing threads and the mediating primitive (or its absence).
@@ -49,7 +72,19 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 - **Risk only on an experimental/unused path or value-invariant** → LATENT — say so.
 
 ## Architecture note
-WH/BH share the bank model; BH adds per-bank implied data format (`ImpliedSrcAFmt/BFmt`) written by the unpacker — verify the implied-format and the data land in the same bank the FPU will read. **On BH a raw `SETDVALID` is ISA-unsupported** (it corrupts `ImpliedSrcBFmt` to an unpredictable value); the supported form is `UNPACR_NOP(...,SET_DVALID,...)`. Flag a raw `TTI_SETDVALID` on BH, and check whether `DISABLE_IMPLIED_SRCB_FMT_Base` is set when MOVB2D/MOVA2D consume that bank. Quasar's unpack→dest path has its own semaphores (`UNPACK_TO_DEST` / the QSR semaphore map) plus HW AutoTTSync — confirm the model before extending verdicts.
+WH/BH share the bank model; BH adds per-bank implied data format (`ImpliedSrcAFmt/BFmt`) written by the unpacker — verify the implied-format and the data land in the same bank the FPU will read. **On BH a raw `SETDVALID` is ISA-unsupported** (it corrupts `ImpliedSrcBFmt` to an unpredictable value); the supported form is `UNPACR_NOP(...,SET_DVALID,...)`. Flag a raw `TTI_SETDVALID` on BH, and check the implied-format disable bit
+`DISABLE_IMPLIED_SRC?_FMT_Base` on the moves that touch that Src bank — grouped by
+**BANK, not by data direction**: **SRCA** for `MOVA2D` (SrcA→Dest) **and** `MOVD2A`
+(Dest→SrcA); **SRCB** for `MOVB2D` and `MOVD2B`. The moves differ in DATA direction
+(`A2D`/`B2D` read the bank into Dest; `D2A`/`D2B` *write* the bank from Dest — a
+bank-fill racing dvalid/bank state), but per the live ISA (`MOVD2A.md`) they BOTH
+interact with `ImpliedSrcA/BFmt` on Blackhole — the ISA in fact *recommends* setting
+`DISABLE_IMPLIED_SRC?_FMT_Base` for the `D2A`/`D2B` moves (its interaction with the
+implied format is ill-specified when the bank is invalid) — so do **not** assume the
+Dst→Src moves skip the implied-format check. (Direction grounded in the ISA
+`MOVD2A.md`/`MOVA2D.md` titles + the `D2A`/`A2D` mnemonic; `ckernel_ops.h` settles
+only existence/encoding — its MOV macros carry no direction comment and share a
+parameter list.) Quasar's unpack→dest path has its own semaphores (`UNPACK_TO_DEST` / the QSR semaphore map) plus HW AutoTTSync — confirm the model before extending verdicts.
 
 **Do NOT dismiss a Quasar-specific data lane by analogy to the WH/BH 2-bank SrcA/SrcB model.** Quasar adds a third unpacker / `SrcS` lane (`llk_srcs.h`, `UNPACKER2`): audit its dvalid lifecycle in full — both the **set** (producer, e.g. `UNPACR2`) **and** the **clear/consume** (consumer, e.g. `PACR1`) — and whether the lane's interlock fences (e.g. `*_SRCS_RDY` stall conditions) are actually *invoked*. A fence that is **defined but never used** is itself a finding (the lane is unprotected — safe only while it stays unwired/test-only), not grounds to call the lane SAFE. "It's a separate lane, so it doesn't participate in the SrcA/SrcB handshake" is a hypothesis to verify against the QSR ISA/Confluence and to trace in code — never a closure by analogy.
 

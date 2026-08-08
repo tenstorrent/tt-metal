@@ -16,6 +16,32 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it resolves every
+cfg write to its 32-bit word via cfg_defines.h, per register file, and attributes
+the thread):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks cfg-word-overlap
+    # PR-scoped: add --changed [BASE] (default main) to report only words touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
+
+`CROSS_THREAD_SHARED_WORD` = a 32-bit word ≥2 threads write — a **candidate**, not
+a race. The tool PRE-COMPUTES the bit-disjoint-masking check into the finding's
+`safety` field (`SAFE_BY_MASKING` = all cross-thread writers are byte-atomic RMW
+on disjoint bits; `POTENTIAL_CLOBBER` = a full-word/non-atomic/overlapping writer;
+`UNKNOWN` = a mask didn't resolve; `UNRESOLVED_COWRITER` = fewer than 2 known threads (a lone known thread OR all-unknown writers) + an
+unattributable co-writer, a low-confidence widen) — READ `.findings[].safety` rather than redoing
+the mask analysis; you still verify semaphore/mutex ordering and value-invariance.
+`UNRESOLVED` = a field that didn't
+resolve to an ADDR32 (resolve it by hand). `INTRA_THREAD_CLOBBER` = a full-word
+write to a multi-field word where the same thread masked-writes a sibling field
+elsewhere (pattern 3) — a candidate (an intentional whole-word set is benign).
+The tool separates `Config` vs `ThreadConfig` by the write instruction (`SETC16`
+→ `ThreadConfig`; every other write → `Config`; THCON is a sub-range of `Config`,
+not its own file) — **widen for** the multi-bank SETC16-aliasing nuances below
+and any field the ADDR32 regex missed. The tool never clears a word; you decide.
+If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The three Tensix threads (T0=unpack, T1=math, T2=pack) do **not** share GPR files, but they all write the shared **backend `Config` register file** (`Config[2][...]` at `TENSIX_CFG_BASE`). LLK addresses it by *named field* (`<REG>_ADDR32` word index + `_MASK`/`_SHAMT`). Two **differently-named** fields can occupy the **same 32-bit word** — invisible from the names alone, visible only when you resolve `_ADDR32` to a number. If different threads write the same word, you can lose one thread's field. The classic example: `STACC_RELU_*` (packer) and `ALU_ACC_CTRL_Zero_Flag_disabled_*` (math/unpack) share a word; a packer full-word write zeroes the math field.
 
@@ -26,7 +52,7 @@ From the tt-isa-docs (`RMWCIB.md`, `BackendConfiguration.md` — fetch via the t
 - **`Config` has 2 banks selected by the issuing thread's `CFG_STATE_ID`** ("any thread can access any bank"). In steady state all three threads run on bank 0 (`cfg_state_id==0`), so low words ARE physically shared. `flip_cfg_state_id`/`TTI_SETC16(CFG_STATE_ID_StateID,…)` only diverges briefly (e.g. `llk_math_fast_tilize`). Words `>= GLOBAL_CFGREG_BASE_ADDR32` are single-copy (write hits both banks).
 
 ### The patterns that can corrupt
-1. **Full-word write across a register boundary (cross-thread)** — `TTI_WRCFG(..., p_cfg::WRCFG_32b, ADDR)` or RISC `cfg[ADDR]=`/`sw` — writes all 32 bits, so it overwrites *every other field in that word owned by another thread*. This is the sharp bug.
+1. **Full-word write across a register boundary (cross-thread)** — `TTI_WRCFG(..., p_cfg::WRCFG_32b, ADDR)` or RISC `cfg[ADDR]=`/`sw` — writes all 32 bits, so it overwrites *every other field in that word owned by another thread*. This is the sharp bug. **MOP/replay-embedded form:** a `TT_OP_WRCFG(..., WRCFG_32b, ADDR)` baked into a `ckernel_template`/replay program (e.g. `llk_unpack_untilize.h`) is the SAME full-word write, executed when the MOP runs — the deterministic tool EXCLUDES `TT_OP_*` (an opcode VALUE, not a directly-issued instruction, so its runtime target isn't statically known), so these are yours to assess by MOP semantics; the grep seeds them but confirm the MOP's target word before flagging.
 2. **Two threads RMW the SAME field bits** with possibly-different values → last-writer-wins. Correct value then depends entirely on inter-thread ordering.
 3. **Intra-thread full-word clobber (no second thread needed)** — a full-word write (`WRCFG_32b`/`cfg[ADDR]=`) to a word that *the same thread* also populates elsewhere via a masked write: the full-word write builds its value from only its own field and writes 0 into the sibling field the thread set earlier. A **deterministic destructive overwrite, not a concurrency race** — so a mutex/semaphore cannot fix it; the fix is still a masked RMW. **This is exactly the pattern the "≥2 distinct threads" reduction in step 2 silently drops — hunt it with query (b) below.** Example: Quasar `THCON_PACKER1_REG0` `SRC_ADDR_OFFSET` full-word write zeroing the `INSTRN_LOOP_COUNT`/`INSTRN_COUNT` auto-loop bits set elsewhere by the same packer thread.
 
@@ -42,7 +68,9 @@ From the tt-isa-docs (`RMWCIB.md`, `BackendConfiguration.md` — fetch via the t
    - Quasar: `tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h`
    Parse `#define <X>_ADDR32 <n>`, `<X>_MASK`, `<X>_SHAMT`; resolve `*_RMW` macros (first token is the `*_ADDR32`). **Enumerate EVERY config-write mechanism — not just the masked-RMW/`WRCFG` pair.** A "no other writer" / "SAFE by disjoint masks" conclusion is itself a **negative**, so it is only valid if the write-mechanism sweep is *complete* — a writer you didn't map is a race you didn't see (ground-or-abstain applies to this negative exactly as `race-audit-all` states it). Map every access:
    - `cfg[SYM]=` / RISC `sw` →WR_FULL (mask `0xffffffff`);  `=cfg[SYM]`→RD.
+   - `cfg16[SYM]=` (via `get_cfg16_pointer()`)→a 16-bit HALF-WORD write — a MASKED co-writer of the 32-bit word (NOT a full-word clobberer), so a bare `cfg[` grep misses it (the `16` breaks the literal).
    - `cfg_reg_rmw_tensix<SYM…>` / `TTI?_RMWCIB*(...,SYM)`→byte-atomic RMW(field mask).
+   - `cfg_rmw(SYM_RMW,...)` / `cfg_rmw_gpr(...)`→**software** (RISC read-modify-write) RMW — NOT byte-atomic, so disjoint-mask does NOT make it cross-thread-safe (needs `mutex::REG_RMW`); resolve `SYM_RMW`→`SYM_ADDR32`.
    - `TTI_WRCFG(...,WRCFG_32b,SYM)`→full word (`WRCFG_128b`→four words `[SYM..SYM+3]`); also `TT_OP_WRCFG(...)` baked into a MOP/replay buffer, which a plain `TTI_WRCFG` grep misses.
    - `TTI?_REG2FLOP(size,...,SYM - THCON_CFGREG_BASE_ADDR32, gpr)`→sized (4B/2B/1B) GPR→config-flop write (target is flop-relative; resolve by adding `THCON_CFGREG_BASE_ADDR32` back).
    - `TTI?_CFGSHIFTMASK(...,SYM)`→config shift-mask write.
@@ -51,7 +79,7 @@ From the tt-isa-docs (`RMWCIB.md`, `BackendConfiguration.md` — fetch via the t
    A scripted parser is the reliable way (resolve names→numeric addr; group by addr; flag addresses written by ≥2 threads). Quick grep to spot candidates by hand:
    ```bash
    cd tt_metal/tt-llk
-   grep -rInE "cfg_reg_rmw_tensix<|TTI?_WRCFG\(|TTI?_RMWCIB|TTI?_REG2FLOP|TTI?_CFGSHIFTMASK|TTI_SETC16\(|cfg\[[A-Za-z_]" tt_llk_* --include=*.h | grep -v /tests/
+   grep -rInE "cfg_reg_rmw_tensix<|\bcfg_rmw(_gpr)?\(|TTI?_WRCFG\(|TT_OP_WRCFG\(|TTI?_RMWCIB|TTI?_REG2FLOP|TTI?_CFGSHIFTMASK|TTI?_SETC16\(|get_cfg16_pointer\(|cfg(16)?\[[A-Za-z_]" tt_llk_* --include=*.h | grep -v /tests/
    ```
    > **SETC16 aliasing — do NOT infer a race from a bare index collision.** `TTI_SETC16` writes the THREAD/local-control cfgreg file (state-id, address-mods, `SRCA_SET`, `CLR_DVALID`, `FP16A_FORCE`, `UNPACK_MISC_CFG`, …) — a **different physical register file** whose `_ADDR32` numbers *alias* the low ALU/THCON words because two files are **both based at 0** — the ALU/THCON cfg file (`ALU_CFGREG_BASE_ADDR32`) and, on arches that have one, the THREAD/local-control file (`THREAD_CFGREG_BASE_ADDR32`). **Derive every bank base from the target arch's `cfg_defines.h` at audit time** (`grep '#define .*_CFGREG_BASE_ADDR32'`) — never from baked numbers: both the values **and the set of banks** are arch-specific. *(Illustrative only — re-derive, do not trust: WH `ALU=THREAD=0, PACK0=8, UNPACK0=36, UNPACK1=44, THCON=52, GLOBAL=152`; BH shifts these to `PACK0=12, UNPACK0=44, UNPACK1=56, THCON=64, GLOBAL=180`; Quasar exposes a **different, smaller** set — only `ALU=0, THCON=12, GLOBAL=80`, with no separate PACK/UNPACK/THREAD banks.)* A numeric ADDR32 collision between a SETC16 target and an ALU/THCON field is an **index alias, not the same physical word**. The tell: `CFG_STATE_ID_StateID` sits at word 0, **bit 0** — the same word-0/bit-0 slot that `ALU_FORMAT_SPEC_REG_SrcA_val` (bits 0–3) also occupies — yet `set_cfg_state_id` rewrites it on every state flip without corrupting the ALU format. Ground any such collision in the `*_CFGREG_BASE_ADDR32` bank layout before deciding; never flag it from the index alone.
 2. **Run BOTH reductions — the second catches the intra-thread clobber the first structurally misses:**
@@ -76,9 +104,9 @@ The word→field cross-reference is best done by a deterministic script (parse c
 
 ## Reference findings (ground truth — WH/BH audit)
 - **RACE — RESOLVED (canonical full-word-clobber example):** `_llk_pack_relu_config_` (`llk_lib/llk_pack_common.h`) writes the word holding `ALU_ACC_CTRL_Zero_Flag_disabled_src/dst` (bits 0-1, written by MATH `cmath_common.h` + UNPACK reduce paths). It **used to** full-word-clobber those bits via an unmasked `TTI_WRCFG(..., WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32)`; it is now a **masked** `cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(...)` — the pattern-3 fix (see *Safe by construction*), mirroring `configure_pack` (`cpack_common.h`). **Verify the masked form is still present before flagging — do not re-report the current code as a live RACE.**
-- **LATENT / dead-writer (arch-specific — re-derive per arch, do NOT treat this line as static):** the ALU word holding `ALU_FORMAT_SPEC_REG0_SrcA` / `REG1_SrcB` / `ALU_ACC_CTRL_INT8_math_enabled` is RMW'd by MATH (`llk_math_common.h`, `llk_math_eltwise_unary_datacopy.h`, `transpose_dest`, `reduce` — none under the mutex), and for `SrcA` also by UNPACK `configure_unpack_AB` (`cunpack_common.h`, under mutex). The UNPACK-side writers of **INT8** (`enable_int8_fpu_math` / `_llk_enable_int8_fpu_math_`) and **SrcB** (`_llk_unpack_reduce_init_`) are **dead code (zero callers)** — on **WH** they are removed (PR #49637), so INT8/SrcB are **MATH-only**; on **BH** they still exist but are unreachable ⇒ **LATENT-dead-writer** (safe only because the UNPACK writer never runs). Genuine live UNPACK+MATH same-bit sharing (e.g. WH `SrcA`) is last-writer-wins, safe only because the pipeline semaphores keep format reconfig from overlapping the other thread's op. **Confirm caller-liveness and per-arch presence before flagging — never inherit this entry as ground truth.**
+- **LATENT / dead-writer (arch-specific — re-derive per arch, do NOT treat this line as static):** the ALU word holding `ALU_FORMAT_SPEC_REG0_SrcA` / `REG1_SrcB` / `ALU_ACC_CTRL_INT8_math_enabled` is RMW'd by MATH (`llk_math_common.h`, `llk_math_eltwise_unary_datacopy.h`, `transpose_dest`, `reduce` — none under the mutex), and for `SrcA` also by UNPACK `configure_unpack_AB` (`cunpack_common.h`, under mutex). The UNPACK-side writers of **INT8** (`enable_int8_fpu_math` / `_llk_enable_int8_fpu_math_`) and **SrcB** (`_llk_unpack_reduce_init_`) are **dead code (zero callers)** — on **WH** they are removed, so INT8/SrcB are **MATH-only**; on **BH** they still exist but are unreachable ⇒ **LATENT-dead-writer** (safe only because the UNPACK writer never runs). Genuine live UNPACK+MATH same-bit sharing (e.g. WH `SrcA`) is last-writer-wins, safe only because the pipeline semaphores keep format reconfig from overlapping the other thread's op. **Confirm caller-liveness and per-arch presence before flagging — never inherit this entry as ground truth.**
 - **SAFE-fragile:** word holding `ALU_FORMAT_SPEC_REG2_Dstacc` (PACK, 25-28) + `ALU_ACC_CTRL_Fp32/SFPU_Fp32` (MATH, 29-30) + `INT8` (31); and BH `THCON_SEC0_REG1` (UNPACK `Unp_LF8_4b_exp` bit22 vs PACK `Pack_L1_Acc`/`Exp_threshold`/`Pac_LF8_4b_exp`) — all disjoint masked RMWCIB → safe by byte-atomicity.
-- **Quasar (cross-thread):** no cross-thread shared-write words found — not because the layout is fully byte-per-operand (words 1/2 still pack multiple fields), but because the ALU config words are **MATH-thread-owned** (per-engine register namespacing) + AutoTTSync ordering.
+- **Quasar (cross-thread):** the **ALU config words** show no cross-thread overlap — not because the layout is fully byte-per-operand (words 1/2 still pack multiple fields), but because they are **MATH-thread-owned** (per-engine register namespacing) + AutoTTSync ordering. **But the tool DOES surface 1 `CROSS_THREAD_SHARED_WORD` / `UNRESOLVED_COWRITER`:** `RISC_DEST_ACCESS_CTRL` (word 3, `ckernel_dest.h`), where the template `set_dest_fmt<t>` writes `SEC0/SEC1/SEC2_fmt` via masked RMWCIB and the tool cannot statically resolve `t` (the thread). It is **safe by disjoint masked SEC fields** (each thread's SEC byte is distinct) — verify those masks are disjoint before dismissing, but it is not a confirmed race.
 - **Quasar (intra-thread clobber — pattern 3, found only by query (b)):** `_set_packer_dest_registers_<PACK1>` (`common/inc/ckernel_trisc_common.h`) does an unmasked full-word `cfg[THCON_PACKER1_REG0_SRC_ADDR_OFFSET_ADDR32]=…` that zeroes `INSTRN_LOOP_COUNT`/`INSTRN_COUNT` set by `_llk_pack_srcs_config_` (`llk_lib/llk_srcs.h`) on the **same packer thread**; per-tile in SyncHalf, latent until the SrcS→Packer1 path is wired (Packer0's word carries no INSTRN bits, so PACK0 is harmless). The cross-thread-only reduction reports "QSR clean" and misses this. Fix = masked `cfg_rmw`.
 
 ## Output

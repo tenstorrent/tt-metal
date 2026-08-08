@@ -1,6 +1,6 @@
 ---
 name: reconfig-stall-audit
-description: Audit LLK reconfig/uninit/config-write functions for a MISSING stall that drains the execution unit before its config registers are rewritten (packer→PACK, unpacker→UNPACK, math→MATH|WAIT_SFPU). Use after touching cpack/cunpack/cmath, *_reconfig_*, *_uninit_, set_packer_strides, or any function that writes ALU/THCON/ADDR_MOD/stride config.
+description: Audit LLK reconfig/uninit/config-write functions for a MISSING stall that drains the execution unit before its config registers are rewritten (packer→PACK, unpacker→UNPACK, math→MATH|WAIT_SFPU). Use after touching cpack/cunpack/cmath, *_reconfig_*, *_uninit, set_packer_strides, or any function that writes ALU/THCON/ADDR_MOD/stride config.
 user_invocable: true
 ---
 
@@ -16,6 +16,32 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it enumerates the
+reconfig/uninit/config-writer functions and checks each for a unit-draining stall
+before its first config write):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks reconfig-stall
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["reconfig-stall"].findings
+
+`NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
+stall that orders the GPR→cfg write but drains no execution unit; `DRAIN_REARMED`
+= a draining stall precedes the write but the unit was re-issued (UNPACR/PACR/
+matrix) between the drain and the write, so the drain no longer holds;
+`PARTIAL_MATH_DRAIN` = a **MATH** reconfig whose stall drains only ONE of the two
+MATH engines (FPU=`MATH` vs SFPU=`WAIT_SFPU`/`SFPU1`) — **code-dependent, so
+low-confidence**: it is sufficient only if the reconfig'd field is not sampled by
+the other engine, which you must confirm (e.g. `_llk_math_reconfig_data_format_`
+draining only `MATH` is a real gap iff the SFPU also reads that format). All are
+**candidates** — decide with the rule below. The tool now walks EVERY config
+write in a function (a latched first write no longer hides a later sampled one)
+and emits the first offending write. The tool models the latched-register
+exception only via a small allowlist (`L1_Dest_addr`); **widen for** other
+latched-vs-sampled registers (else you may false-positive) and for the "unit
+provably idle by handshake instead of stall" case. It never clears a site; you
+decide. If unbuilt, proceed manually.
+
 ## The rule (what a correct function does)
 When a flattened LLK function REWRITES config registers that a hardware execution unit reads *while running*, that unit must be **idle first** — otherwise you reprogram state out from under an in-flight op (a "reconfig escape"). The guard is a `TTI_STALLWAIT` (usually at the top of the function) whose **condition (2nd) operand** drains the matching unit:
 
@@ -25,7 +51,7 @@ When a flattened LLK function REWRITES config registers that a hardware executio
 | **Unpacker** config (tile descriptor, out fmt, strides, base addr) | `p_stall::UNPACK` (or `UNPACK0` for SrcA, `UNPACK1` for SrcB) | unpacker reads these during UNPACR |
 | **Math** config (ALU SrcA/SrcB fmt, INT8 enable, dest acc) | `p_stall::MATH \| p_stall::WAIT_SFPU` | the FPU **and** the SFPU share the math path — BOTH must drain |
 
-`TTI_STALLWAIT(stall_res, wait_res)`: `stall_res` = **block mask** (which instruction classes can't issue: `STALL_CFG`=B7 blocks WRCFG/RMWCIB, `STALL_PACK`/`STALL_UNPACK`/`STALL_MATH`), `wait_res` = **condition mask** (what to wait on). The block mask just needs to block the instruction that does the config write; the **condition mask is what proves the unit is drained** — that's the bit to check.
+`TTI_STALLWAIT(stall_res, wait_res)` **on WH/BH** (2-operand): `stall_res` = **block mask** (which instruction classes can't issue: `STALL_CFG`=B7 blocks WRCFG/RMWCIB, `STALL_PACK`/`STALL_UNPACK`/`STALL_MATH`), `wait_res` = **condition mask** (what to wait on). The block mask just needs to block the instruction that does the config write; the **condition mask is what proves the unit is drained** — that's the bit to check. **Quasar is 4-operand:** `TTI_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)` — the condition mask is **split across the last three operands** (operand 2 is often `0`; the real tokens, e.g. `MATH`/`WAIT_SFPU`/`PACK0`/`PACK1`, are in operands 3–4). Read all three wait operands, not just the second. Confirm the current macro arity/operand layout against `tt_llk_<arch>/common/inc/ckernel_ops.h`.
 
 ## What to flag
 A reconfig/uninit/config-writer that writes config registers with **no preceding STALLWAIT whose condition drains the matching unit**. Sub-cases:
@@ -38,10 +64,10 @@ A reconfig/uninit/config-writer that writes config registers with **no preceding
 1. **Enumerate** candidates across `tt_llk_wormhole_b0`, `tt_llk_blackhole`, `tt_llk_quasar`:
    ```bash
    cd tt_metal/tt-llk
-   grep -rInE "reconfig|reconfigure|_uninit_|set_packer_strides|set_packer_l1_offset|configure_(pack|unpack)|reconfigure_exp_threshold|reconfigure_packer_l1_acc" \
+   grep -rInE "reconfig|reconfigure|_uninit|set_packer_strides|set_packer_l1_offset|set_(packer|unpack)_config|program_packer_destination|configure_(pack|unpack)|reconfigure_exp_threshold|reconfigure_packer_l1_acc" \
      tt_llk_* --include=*.h | grep -v /tests/
    ```
-2. **For each**, read the function body. Identify config-register writes: `cfg_reg_rmw_tensix<>`, `TTI_WRCFG`/`TT_WRCFG`, `TTI_REG2FLOP`, `TTI_SETC16`, `TTI_RMWCIB*`, `TTI_SETADC*` to packer/unpacker/ADDR_MOD regs, `regfile[]=`+`REG2FLOP`, and helper calls (`set_packer_strides`, `set_packer_l1_offset`, `addr_mod_*::set`).
+2. **For each**, read the function body. Identify config-register writes: `cfg_reg_rmw_tensix<>`, `TTI?_WRCFG`, `TTI?_REG2FLOP`, `TTI?_SETC16`, `TTI?_RMWCIB*`, `TTI?_SETADC*`, `TTI?_CFGSHIFTMASK` (the `TTI?_` covers both the `TTI_` and the Quasar `TT_` prefix — the tool recalls both) to packer/unpacker/ADDR_MOD regs, `regfile[]=`+`REG2FLOP`, and helper calls (`set_packer_strides`, `set_packer_l1_offset`, `addr_mod_*::set`).
 3. **Determine which unit** reads the written register (packer / unpacker / math). Use register-name semantics; confirm against the ISA docs when non-obvious (see `arch-lookup` skill / tt-isa-docs MCP for WH/BH; register names map to `tt_metal/hw/inc/internal/.../cfg_defines.h` by similarity).
 3b. **Determine latched-at-issue vs sampled-during-execution** for that register — this is the deciding factor for whether a unit drain is needed: **sampled during execution → needs the unit drain** (`THCON | PACK` for packer, etc.); **latched at instruction-issue → no unit drain, `THCON`-only ordering suffices**.
    - **Default = sampled.** Treat every register as sampled (assume it needs the drain) **unless** the ISA doc explicitly classifies it as latched. This default is deliberately conservative because the failure modes are asymmetric: a wrong "sampled" is at worst OVER-SYNC (perf), but a wrong "latched" misses a real reconfig escape (correctness). **As of now the only register known to be latched is the packer L1 destination address (`THCON_SEC0_REG1_L1_Dest_addr`); treat all others as sampled** until the live doc says otherwise.
