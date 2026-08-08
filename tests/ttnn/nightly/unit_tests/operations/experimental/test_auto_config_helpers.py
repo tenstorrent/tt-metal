@@ -1075,3 +1075,151 @@ def test_benchmark_mode_notice_profiler_message(monkeypatch):
 
     assert len(msgs) == 1
     assert "device kernel duration" in msgs[0]
+
+
+# ---------------------------------------------------------------------------
+# Widened in0_block_w sweep + device-kernel-duration metric consistency
+# ---------------------------------------------------------------------------
+
+
+def test_in0_block_w_candidates_heuristic_first_and_valid():
+    # k_tiles=90 (K=2880).  The pre-widening heuristic collapses to 1; the sweep
+    # must additionally offer larger K blocks (the in0_block_w=6 that measured
+    # 22.5% faster on device-kernel time) while keeping the heuristic first so the
+    # candidate cap can never regress the pre-widening choice.
+    values = auto_matmul._in0_block_w_candidates(90, heuristic=1)
+    assert values[0] == 1  # heuristic first
+    assert 6 in values  # the measured winner is reachable
+    assert len(values) == len(set(values))  # deduped
+    assert all(v == 1 or 90 % v == 0 for v in values)  # valid K-block divisors
+    # The heuristic stays first even when it is not the smallest value.
+    assert auto_matmul._in0_block_w_candidates(90, heuristic=9)[0] == 9
+    # Degenerate K (single tile) yields a single candidate.
+    assert auto_matmul._in0_block_w_candidates(1, heuristic=1) == [1]
+
+
+def test_program_config_sweep_covers_grid_ibw_subblock_and_never_regresses(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda signature: False)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda signature: True)
+
+    signature = dataclasses.replace(_make_signature(), m=2048, k=2880, n=2880)  # expert_down
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=8))
+    prepared = SimpleNamespace(input_tensor_a=SimpleNamespace(device=lambda: device), bias=None)
+
+    def descriptors(monkeypatch_exhaustive):
+        if monkeypatch_exhaustive:
+            monkeypatch.setenv("TTNN_AUTO_MATMUL_EXHAUSTIVE", "1")
+        else:
+            monkeypatch.delenv("TTNN_AUTO_MATMUL_EXHAUSTIVE", raising=False)
+        return [
+            c.descriptor
+            for c in auto_matmul._build_program_config_candidates(signature, prepared, {}, base_operation=None)
+        ]
+
+    # Exhaustive (offline tune) mode returns the full valid space: scheme x grid x
+    # in0_block_w x out-subblock -- so the optimum is reachable, not "fastest of 16".
+    full = descriptors(True)
+    two_d = [d for d in full if d["mode"] == "2d_mcast"]
+    assert 6 in {d["in0_block_w"] for d in two_d}  # in0_block_w swept, incl. the measured-faster K block
+    assert (
+        len({(d["out_subblock_h"], d["out_subblock_w"]) for d in two_d}) >= 3
+    )  # out-subblock swept (the missed lever)
+    assert len(full) > auto_matmul._MAX_PROGRAM_CONFIG_CANDIDATES  # genuinely exhaustive, not capped
+
+    # Bounded (online) mode is capped but never drops the pre-widening heuristic per
+    # scheme (full grid, heuristic in0_block_w, single-pick subblock) -> no regression.
+    bounded = descriptors(False)
+    assert len(bounded) <= auto_matmul._MAX_PROGRAM_CONFIG_CANDIDATES
+    for mode in ("2d_mcast", "1d_mcast_in0", "1d_mcast_in1"):
+        assert any(d["mode"] == mode and d["grid"] == [8, 8] for d in bounded)
+
+
+def test_expected_benchmark_mode_reflects_capabilities(monkeypatch):
+    _profiler_env(monkeypatch, enabled=True)
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: _ttnn_with_profiler())
+    assert auto_matmul._expected_benchmark_mode() == "profiler"
+
+    _profiler_env(monkeypatch, enabled=False)
+    monkeypatch.setattr(
+        auto_matmul,
+        "_ttnn",
+        lambda: SimpleNamespace(begin_trace_capture=1, end_trace_capture=1, execute_trace=1, release_trace=1),
+    )
+    assert auto_matmul._expected_benchmark_mode() == "trace"
+
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace())
+    assert auto_matmul._expected_benchmark_mode() == "eager"
+
+
+def test_benchmark_candidate_propagates_profiler_failure_instead_of_wall_clock(monkeypatch, expect_error):
+    # When the profiler is active, a per-candidate profiler failure must propagate
+    # (so the caller records the candidate as errored and skips it) rather than
+    # silently degrade to wall-clock -- otherwise one candidate would be timed on
+    # device kernel duration while its rivals are on dispatch-inclusive wall-clock.
+    _profiler_env(monkeypatch, enabled=True)
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: _ttnn_with_profiler())
+
+    def _boom(candidate, device):
+        raise RuntimeError("profiler returned no data")
+
+    def _wall(*args, **kwargs):
+        raise AssertionError("must not fall back to wall-clock when the profiler is active")
+
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate_profiler", _boom)
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate_trace", _wall)
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate_eager", _wall)
+
+    candidate = auto_matmul.Candidate(descriptor={"kind": "minimal_matmul"}, run=lambda: "out")
+    with expect_error(RuntimeError, "profiler returned no data"):
+        auto_matmul._benchmark_candidate(candidate, "dev")
+
+
+def test_select_candidate_excludes_metric_mismatched_candidate(monkeypatch, tmp_path):
+    # A candidate timed by a different metric than the rest of the sweep (e.g. one
+    # that glitched onto wall-clock and reads deceptively low) must not win, and the
+    # persisted record must state the metric that actually drove selection.
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "unit-test-version")
+    auto_matmul.AutoMatmulCache.clear_runtime()
+
+    signature = _make_signature()
+    prepared = SimpleNamespace(
+        input_tensor_a=SimpleNamespace(device=lambda: "device"),
+        staged_rhs_from_host=False,
+        staged_bias_from_host=False,
+    )
+    default = auto_matmul.Candidate(descriptor={"kind": "default_matmul"}, run=lambda: None)
+    good = auto_matmul.Candidate(descriptor={"kind": "program_config", "mode": "2d_mcast"}, run=lambda: None)
+    glitched = auto_matmul.Candidate(descriptor={"kind": "program_config", "mode": "1d_mcast_in0"}, run=lambda: None)
+
+    monkeypatch.setattr(auto_matmul, "_build_candidates", lambda *args, **kwargs: [default, good, glitched])
+    monkeypatch.setattr(auto_matmul, "_compute_reference_output", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_matmul, "_expected_benchmark_mode", lambda: "profiler")
+    monkeypatch.setattr(auto_matmul, "_make_recommendations", lambda *args, **kwargs: [])
+
+    def _benchmark(candidate, device):
+        mode = candidate.descriptor.get("mode")
+        if mode == "2d_mcast":
+            return (235.0, [235.0], "profiler")
+        if mode == "1d_mcast_in0":
+            return (120.0, [120.0], "trace")  # deceptively low wall-clock reading
+        return (240.0, [240.0], "profiler")
+
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate", _benchmark)
+
+    selection = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
+
+    # The wall-clock-timed 120us candidate must NOT win despite reading fastest.
+    assert selection["winner"] == {"kind": "program_config", "mode": "2d_mcast"}
+    assert selection["selection_metric"] == "profiler"
+
+    statuses = {
+        (entry["descriptor"].get("mode") or entry["descriptor"]["kind"]): entry["status"]
+        for entry in selection["candidate_timings_us"]
+    }
+    assert statuses["1d_mcast_in0"] == "metric_mismatch"
+    assert statuses["2d_mcast"] == "ok"
+
+    # The metric that drove selection is persisted for auditability.
+    cached_record = auto_matmul.AutoMatmulCache().load(signature)
+    assert cached_record["selection_metric"] == "profiler"
