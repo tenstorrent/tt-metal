@@ -414,8 +414,10 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
         num_dms_,
         iterations);
     EXPECT_EQ(observed, 0u)
-        << "lr.w/sc.w conditional decrement overdrew or lost updates on the cached L1 alias -- the "
-           "DM_LOCAL_CACHED multi-consumer down() keystone failed.";
+        << "lr.w/sc.w conditional decrement LOST updates on the cached L1 alias -- the "
+           "DM_LOCAL_CACHED multi-consumer down() keystone failed. (An over-committed decrement "
+           "cannot show here: the guarded CAS never takes the word below 0, so that presents as "
+           "a HANG with surplus threads spinning.)";
 }
 
 // (5) DM write-back cache line width: the minimum separation at which a cached-AMO
