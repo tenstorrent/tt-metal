@@ -19,7 +19,12 @@
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 >
-> **§N+26/§N+27 (newest) kill BOTH standing wedge hypotheses.** The IOMMU page-fault lead is
+> **§N+29/§N+30 (newest): a DRISC drainer is only safe on a DRAM core in row `y == 0`** (exactly two
+> exist: `0-0`, `9-0`; y!=0 hangs at 12.8%, p~0.006). **Two drainers lower the knee 100 -> 60 (1.67x)
+> but FROZE THE HOST and left the card DEGRADED** — `kNSockets` stays at 1. Before trusting any timing
+> measured after a freeze, check the ACK-WRITE probe: healthy ~170-190 ns, degraded ~2300 ns.
+>
+> **§N+26/§N+27 kill BOTH standing wedge hypotheses.** The IOMMU page-fault lead is
 > decorrelated in both directions — do not resurrect it. The drainer/`dram_membar` subchannel collision
 > is REFUTED and inverted: bank 0 (which collides) is the safe default at 0/61, bank 1 (which does not)
 > hangs at 15.6%. **Keep `TT_METAL_PERF_DEBUG_DRISC_BANK` at 0**, and validate every bank before running
@@ -2686,3 +2691,148 @@ one drainer**, or the socket-per-DRISC work sits on a substrate that hangs ~15% 
 **Still open after two dead hypotheses** (IOMMU §N+26, subchannel collision here): DRISC-only,
 ~2% per run, `tt-smi -r` recovers, and the NIU stream-mode flip remains the only state that outlives
 the process.
+
+## §N+28 — Where the 120-core knee actually goes: the SCAN, not read and not egress (bh-26, 2026-08-08)
+
+Baseline, 120-core grid, slow dispatch, DRISC, `--iters 500`, warm runs only (run 0 discarded at every
+delay -- the JIT run's idle-sweep prelude is ~15,400 against a warm ~1,480, and at delay 100 it showed
+1,508 stalls where all three warm runs showed 0):
+
+| delay | stalls (3 warm) | occ |
+|---|---|---|
+| 50 | 21,885 / 21,721 / 21,670 | 511 |
+| 75 | 14,552 / 14,481 / 14,612 | 510 |
+| **100** | **0 / 0 / 0** | 396 |
+| 125 / 150 / 200 | 0 | 324-256 |
+
+**Knee ~100** on this box at 120 cores.
+
+### The phase split is stable across every delay -- and it says the obvious targets are the wrong ones
+
+| phase | share of busy |
+|---|---|
+| **proc** | **46%** |
+| unaccounted | 22% |
+| read | 22.7% |
+| wr-barrier | 7.2% |
+| write | 1.5% |
+| reserve(credit-wait) | 0.3% |
+
+Egress **write is 1.5%** and read is 22.7%. So NoC0/NoC1 pipelining and bulk/bucket sizing -- the
+standing optimization ideas -- attack a fifth of the cost and are capped at ~1.3x even if perfect.
+Credit-wait is ~0, so the host is not back-pressuring.
+
+### Splitting `proc` killed the obvious suspect
+
+Added a sub-split (`c_ph_head`, results word 40/41) separating the per-core head write-back from the
+local scan. On an issue-bound drainer, 120 small NoC writes per sweep is the natural suspect:
+
+```
+DRISC proc split: head-write-back 1.2% of busy (2.7% of proc) | scan 45.0% of busy
+```
+
+**The head write-back is 1.2%. The SCAN is 45%.**
+
+### Ruled out: `volatile` serialization in the scan
+
+The staged control vector is a settled snapshot -- the bulk read landed it and the read barrier already
+waited -- so `volatile` was forcing 10 strictly-ordered loads per core for nothing. Dropped it:
+
+| | scan % of busy | busy sweep |
+|---|---|---|
+| volatile | 45.0 | 70.0 us |
+| plain loads | **44.9** | **69.5 us** |
+
+No effect. The scan is not load-serialization bound.
+
+### What the scan really is: the sweep is O(num_cores), full stop
+
+~260 ns per core for ~10 L1 words of staged control vector, times 120 cores = ~31 us of scan per busy
+sweep, on top of a 271 ns/core idle poll (32.6 us per idle sweep). Busy sweep 70 us, idle 32.6 us.
+**That per-sweep latency is the knee**: a producer's 512-word ring must survive a whole sweep, and the
+sweep cost does not depend on how many cores actually have data.
+
+**So the lever is fewer cores per drainer, not faster reads.** `kNSockets` (perf_debug_profiler.hpp:90)
+is `static constexpr uint32_t kNSockets = 1`, but every other part of the multi-drainer path is already
+written for N: contiguous disjoint core slices, a D2H socket per drainer, separate L1, separate head
+mirrors, no shared device state. N drainers divide both the scan and the poll.
+
+**Blocked by §N+27**: drainer `d` takes bank `d`, and bank 1 measured 15.6% fatal, so `kNSockets = 2`
+would place drainer 1 on a known-bad bank. A bank safety sweep across all 8 banks is the prerequisite.
+
+## §N+29 — A DRISC drainer is only safe on a DRAM core in NoC row y == 0 (bh-26, 2026-08-08)
+
+Prerequisite for multi-DRISC: drainer `d` takes bank `d`, and §N+27 measured bank 1 as fatal, so
+"which banks are usable?" had to be answered before raising `kNSockets`.
+
+8 banks x 25 runs, bank order randomized across the whole block, **card reset after every non-clean
+run** so runs are independent and no cascade spans banks. Delay 125, full 120-core drain.
+
+| bank | drainer core | channel row | y | fails / 25 |
+|---|---|---|---|---|
+| **0** | `0-0` | ch0 `[0-0, 0-1, 0-11]` | **0** | **0** |
+| **3** | `9-0` | ch4 `[9-0, 9-1, 9-11]` | **0** | **0** |
+| **7** | `0-0` (same core as bank 0) | ch0 | **0** | 1 |
+| 1 | `0-3` | ch1 | 3 | 3 |
+| 2 | `0-8` | ch2 | 8 | 2 |
+| 4 | `9-2` | ch5 | 2 | 3 |
+| 5 | `9-9` | ch6 | 9 | 5 |
+| 6 | `9-5` | ch7 | 5 | 3 |
+
+**Grouped: y == 0 -> 1/75 (1.3%); y != 0 -> 16/125 (12.8%). Fisher p ~ 0.006.**
+
+**It is NOT the subchannel.** Banks 4/5/6 land on `9-2`, `9-9`, `9-5`, each of which IS subchannel 0 of
+its channel, and they hang anyway. The one property every safe placement shares is the **top DRAM row**.
+Failures are overwhelmingly `MMIO per-op timeout` -- the host's small reads stop completing.
+
+There are exactly **two** safe cores on this part, `0-0` and `9-0`, one per DRAM side. Encoded as
+`kSafeBanks[] = {0, 3}`, with a `TT_FATAL` if `kNSockets` exceeds it and
+`TT_METAL_PERF_DEBUG_DRISC_BANK` retained as a diagnostic override.
+
+**`pick_unused_dram_logical_core()` does not know any of this** -- it reserves worker and eth endpoints
+only. "Unused" means unused by workers/eth, NOT safe to repurpose. That is the same trap as §N+24,
+where the "unused" column meant unused-by-dispatch. Third time this file has been bitten by a name
+that promised more than it meant.
+
+*Why* row 0 is special is unproven. The soc descriptor notes CMFW reads DRAM telemetry through a
+particular noc0 endpoint ("to avoid SYS-1419"), which is a lead, not a finding.
+
+## §N+30 — Two DRISCs lower the knee 1.67x AND FREEZE THE HOST. Not worth it. (bh-26, 2026-08-08)
+
+With drainer 0 on `0-0` and drainer 1 on `9-0` (both §N+29-safe), cores split `[0,60)` / `[60,120)`,
+pages split evenly, 0 stalls:
+
+| metric | 1 drainer | 2 drainers | |
+|---|---|---|---|
+| idle sweep | 32.6 us | **18.4 us** | ~2x |
+| busy sweep | 70.0 us | **38.0 us** | 1.84x |
+| **worst sweep** | 81.2 us | **58.8 us** | 1.38x |
+| **knee** | **100** | **~60** | **1.67x** |
+
+The worst sweep is the metric that matters -- an earlier 2-drainer attempt left it unchanged at ~95 us
+and the knee did not move. On the safe placement it improves and the knee follows.
+
+### And then it froze the host
+
+| | 1 drainer | 2 drainers |
+|---|---|---|
+| per-run failure | ~0-1.3% (bank 0: 0/25, bank 3: 0/25) | **2/25 (~8%) at delay 125** |
+| failure mode | card wedge `Unknown\|63` | abort, then **HOST FREEZE** |
+| recovery | `tt-smi -r`, seconds | watchdog reboot, **card left DEGRADED** |
+
+Evidence chain: the stability block stopped writing at 12:16 -> host uptime 11 min at 12:28 ->
+`last -x` shows `reboot` with **no preceding `shutdown`** (the freeze signature) -> post-reboot probes
+**ack-write 188 ns -> 2339 ns, device-read 787 ns -> 2942 ns**, i.e. the DEGRADED state, which
+[[degraded_state_is_mmio_latency]] records as requiring a freeze to occur at all. The watchdog reboot
+did NOT clear it.
+
+**Each bank was 0/25 ALONE**, so this is an INTERACTION between two resident DRISCs -- two DRAM cores
+held in stream mode simultaneously -- not additive per-drainer risk. Unexplained.
+
+**`kNSockets` reverted to 1.** The code stays parameterized, so re-enabling is one line, but it needs a
+STABILITY block and not just a knee measurement. A single drainer's worst case costs a `tt-smi -r`;
+this one costs the box, and leaves it degraded afterwards.
+
+**Consequence for measurement hygiene:** a degraded box silently inflates every sweep and knee number
+by ~12x on small MMIO. Check the ACK-WRITE probe (healthy ~170-190 ns static) before trusting ANY
+timing measured after a freeze.

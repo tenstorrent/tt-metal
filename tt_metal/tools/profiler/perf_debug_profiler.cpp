@@ -231,13 +231,18 @@ bool reserve_column_env() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_DRISC_BANK: first DRAM bank the DRISC drainers take (default 0 = unchanged).
-// See the call site for why the bank matters -- banks 0 and 4-7 hand the drainer subchannel 0, which is
-// the subchannel UMD's dram_membar() barriers, while banks 1-3 hand it subchannel 2, which it does not.
-uint32_t drisc_bank_base() {
-    static const uint32_t v = [] {
+// DRAM banks a resident DRISC drainer may safely occupy. MEASURED, not derived -- see the call site
+// and FINDINGS N+29. Drainer d takes kSafeBanks[d].
+constexpr uint32_t kSafeBanks[] = {0, 3};
+constexpr uint32_t kNumSafeBanks = sizeof(kSafeBanks) / sizeof(kSafeBanks[0]);
+
+// TT_METAL_PERF_DEBUG_DRISC_BANK: DIAGNOSTIC override of the bank drainer 0 takes (drainer d then
+// takes base+d). Unset = use kSafeBanks, which is what production wants. Returns -1 when unset, so
+// that an explicit "=0" is distinguishable from the default.
+int drisc_bank_override() {
+    static const int v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_BANK");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+        return (s != nullptr && *s != '\0') ? static_cast<int>(std::strtol(s, nullptr, 10)) : -1;
     }();
     return v;
 }
@@ -728,24 +733,36 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // drainer gets subchannel 2, which the barrier never polls. That predicted bank 0 wedges and
             // bank 1 does not.
             //
-            // MEASURED (bh-26, 2026-08-08, 200 runs randomized, delay 125, full 120-core drain, scored by
-            // CASCADE-INITIATING event because a hung card fails every following run until a reset):
+            // A DRISC DRAINER IS ONLY SAFE ON A DRAM CORE IN NoC ROW y == 0. Measured, 8 banks x 25
+            // runs, randomized, resetting after every non-clean run so the runs are independent
+            // (bh-26, 2026-08-08; FINDINGS N+29):
             //
-            //     bank 0 (collides with the barrier core):  0 events / 61 informative runs   0.0%
-            //     bank 1 (clear of the barrier core):      10 events / 64 informative runs  15.6%
-            //     all 10 were MMIO per-op timeouts, spread evenly k=10..197. Fisher p ~ 0.001.
+            //   bank 0 -> core 0-0  y=0    0/25    bank 1 -> 0-3  y=3    3/25
+            //   bank 3 -> core 9-0  y=0    0/25    bank 2 -> 0-8  y=8    2/25
+            //   bank 7 -> core 0-0  y=0    1/25    bank 4 -> 9-2  y=2    3/25
+            //                                      bank 5 -> 9-9  y=9    5/25
+            //                                      bank 6 -> 9-5  y=5    3/25
+            //   grouped: y==0  1/75 (1.3%)   vs   y!=0  16/125 (12.8%)   Fisher p ~ 0.006
             //
-            // So the collision is NOT the wedge mechanism -- the colliding port is the SAFE one, and
-            // moving off it is ~15% fatal per run. Something about the subchannel that
-            // pick_unused_dram_logical_core() hands back on bank 1 (noc0 (0,3), channel 1 subchannel 2)
-            // is NOT actually free to repurpose, despite not being a worker or eth endpoint.
+            // Note it is NOT the subchannel: banks 4/5/6 are subchannel 0 of their channel and still
+            // hang. The failures are MMIO per-op timeouts -- the host's small reads stop completing.
+            // Why row 0 is special is unproven; the soc descriptor notes that CMFW reads DRAM telemetry
+            // through a particular noc0 endpoint ("to avoid SYS-1419"), which is a lead, not a finding.
             //
-            // CONSEQUENCE FOR MULTI-DRISC: drainer d takes bank d, so scaling past one drainer puts
-            // drainers on exactly the banks this measured as dangerous. Validate every bank before
-            // running more than one drainer.
+            // There are exactly two safe cores, 0-0 and 9-0, one per DRAM side -- which is what caps
+            // kNSockets at 2. pick_unused_dram_logical_core() does NOT know any of this: it reserves
+            // worker and eth endpoints only, so "unused" does not mean "safe to repurpose".
             const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
-            ctx.drisc_logical[d] =
-                mesh_device->impl().pick_unused_dram_logical_core((d + drisc_bank_base()) % nbanks);
+            const int bank_ov = drisc_bank_override();
+            const uint32_t bank = (bank_ov >= 0) ? static_cast<uint32_t>((static_cast<uint32_t>(bank_ov) + d) % nbanks)
+                                                 : kSafeBanks[d];
+            TT_FATAL(
+                bank_ov >= 0 || d < kNumSafeBanks,
+                "perf-debug: {} DRISC drainers requested but only {} DRAM banks are known safe (row y==0). "
+                "Raising kNSockets needs a bank safety sweep first -- see FINDINGS N+29.",
+                kNSockets,
+                kNumSafeBanks);
+            ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(bank);
             const CoreCoord translated =
                 soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
             const tt::umd::CoreCoord phys = soc.translate_coord_to(
@@ -1893,7 +1910,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(40, 0);
+            std::vector<uint32_t> res(44, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -1961,6 +1978,19 @@ void PerfDebugProfiler::stop() {
                 pct(c_wr),
                 pct(c_bar),
                 pct(cyc > acct ? cyc - acct : 0));
+            // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
+            // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
+            // (up to one issue per core per sweep). This drainer is issue-bound, so which half dominates
+            // decides the optimization: batch/rate-limit the write-back, or tighten the per-RISC loops.
+            const uint64_t c_ph_head = (static_cast<uint64_t>(res[41]) << 32) | res[40];
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC proc split: head-write-back {:.1f}% of busy ({:.1f}% of proc) | "
+                "scan {:.1f}% of busy -- head-write-back is {} NoC issues/sweep, scan is local L1",
+                pct(c_ph_head),
+                c_proc ? (100.0 * static_cast<double>(c_ph_head) / static_cast<double>(c_proc)) : 0.0,
+                pct(c_proc > c_ph_head ? c_proc - c_ph_head : 0),
+                ctx.core_virt.size());
             const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
             log_info(
                 tt::LogMetal,
