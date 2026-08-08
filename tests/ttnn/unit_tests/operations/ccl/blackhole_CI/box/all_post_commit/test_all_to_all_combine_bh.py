@@ -51,6 +51,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.skip(reason="Disabled by issue #45109")
 def test_all_to_all_combine_no_trace(
     bh_1d_mesh_device,
     mesh_shape,
