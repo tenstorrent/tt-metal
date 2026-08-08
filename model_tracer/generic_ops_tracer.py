@@ -1207,7 +1207,7 @@ def parse_shard_spec_string(shard_spec_str):
     The C++ bug (missing closing brace) has been fixed, but this handles old traces.
 
     Example input:
-    'ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":7}}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR}'
+    'ShardSpec(grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":7}}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR)'
 
     Returns:
     {
@@ -1218,7 +1218,7 @@ def parse_shard_spec_string(shard_spec_str):
     """
     import re
 
-    if not isinstance(shard_spec_str, str) or not shard_spec_str.startswith("ShardSpec{"):
+    if not isinstance(shard_spec_str, str) or not shard_spec_str.startswith("ShardSpec("):
         return shard_spec_str
 
     try:
@@ -1293,7 +1293,7 @@ def fix_memory_config_recursive(obj, fixed_count_ref):
             if obj["shard_spec"] == "None":
                 obj["shard_spec"] = None
                 fixed_count_ref[0] += 1
-            elif obj["shard_spec"].startswith("ShardSpec{"):
+            elif obj["shard_spec"].startswith("ShardSpec("):
                 parsed = parse_shard_spec_string(obj["shard_spec"])
                 if isinstance(parsed, dict):
                     obj["shard_spec"] = parsed
