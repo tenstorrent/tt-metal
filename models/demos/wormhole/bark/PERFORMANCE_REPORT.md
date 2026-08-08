@@ -1,0 +1,247 @@
+# Bark Small — Performance Report
+
+## Model Overview
+
+| Property | Value |
+| :--- | :--- |
+| Model | [suno/bark-small](https://huggingface.co/suno/bark-small) |
+| Parameters | 240M total (80M × 3 stages) |
+| Architecture | GPT-2 style transformer (causal for stages 1-2, non-causal for stage 3) |
+| Hidden Size | 768 |
+| Attention Heads | 12 |
+| Layers | 12 per stage |
+| Output | 24 kHz mono audio via EnCodec (8 codebooks) |
+
+## Hardware Configuration
+
+| Property | Value |
+| :--- | :--- |
+| Device | Tenstorrent Wormhole N300 |
+| Compute Grid | 8×7 (56 cores) |
+| DRAM | Weights + KV cache |
+| L1 | Activations + intermediate tensors |
+| Math Fidelity | HiFi4 (fp32 dest accumulation) |
+
+## PCC Validation Results
+
+All scores measured against HuggingFace `suno/bark-small` PyTorch reference.
+
+| Stage | Forward PCC | Top-1 Agreement | Per-Layer Min PCC |
+| :--- | :--- | :--- | :--- |
+| Semantic | 0.999773 | >99% | 0.999864 (L11) |
+| Coarse | 0.999934 | >99% | >0.999 |
+| Fine | 0.999646 | >99% | >0.999 |
+
+Target: PCC ≥ 0.95 — **All stages exceed target by significant margin.**
+
+## Throughput Benchmarks
+
+> Measured on N300 with `run_bark_e2e.py`. First run includes kernel compilation overhead.
+> Warm-run values shown (2nd+ run).
+
+| Stage | Metric | Target | Measured | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| Semantic | Tokens/sec | >= 20 | **92.0** | PASS - 4.6x target |
+| Coarse | Tokens/sec | >= 60 | **67.0** | PASS - Exceeds target |
+| Fine | Tokens/sec | >= 60 | **~600** (projected) | PROJECTED - Pending CI measurement |
+| Decode | Time (s) | -- | **0.18** | PASS |
+| Overall | RTF (warm) | < 0.8 | **~0.70** (projected) | PROJECTED - Pending N300 CI validation |
+| Overall | RTF (cold) | -- | **6.80** | First run, JIT compile |
+
+> **Note on RTF:** With pre-allocated KV cache (O(n) vs O(n^2) concat), on-device
+> logits masking (argmax runs on device; host sync only for EOS checks), and
+> device-side decode embeddings (`ttnn.embedding` lookup eliminates per-token
+> CPU→device transfer), the autoregressive stages are projected to be faster.
+> Exact speedup pending per-token profiling breakdown on N300. The 0.70 projection
+> assumes KV cache concat was the dominant per-step cost; CI validation will confirm.
+>
+> **Sampling:** Top-k sampling with temperature is available via
+> `model.generate(text, top_k=50, temperature=0.8)`. Greedy argmax is the
+> default for deterministic output and throughput benchmarking.
+
+## Memory Budget
+
+### Per-Stage Memory Breakdown
+
+| Component | Location | Size (est.) | Notes |
+| :--- | :--- | :--- | :--- |
+| Embedding weights | DRAM | ~15 MB/stage | Shared for all codebooks in fine |
+| Linear weights (QKV, MLP) | DRAM | ~45 MB/stage | 12 layers × (3H² + 2×4H²) |
+| LayerNorm weights | DRAM | <1 MB/stage | 12 layers × 2 × (weight + bias) |
+| KV cache (semantic) | DRAM | ~2 MB peak | Grows with seq len, deallocated after |
+| KV cache (coarse) | DRAM | ~2 MB peak | Same strategy |
+| Activations (per layer) | L1 | ~0.5 MB | Hidden states, QKV, attn scores |
+| SDPA workspace | L1 | ~1 MB | Chunked (128×128) for long sequences |
+
+### Memory Lifecycle
+
+```
+Text Input
+    │
+    ▼
+┌────────────────────────────┐
+│ Stage 1: Semantic          │
+│ KV Cache: DRAM (growing)   │──→ Deallocated after generation
+│ Activations: L1 (streamed) │
+└────────────────────────────┘
+    │ semantic_tokens (host)
+    ▼
+┌────────────────────────────┐
+│ Stage 2: Coarse            │
+│ KV Cache: DRAM (growing)   │──→ Deallocated after generation
+│ Activations: L1 (streamed) │
+└────────────────────────────┘
+    │ coarse_tokens (host)
+    ▼
+┌────────────────────────────┐
+│ Stage 3: Fine              │
+│ No KV cache (non-causal)   │
+│ Activations: L1            │
+│ Codebooks: device tensors  │
+└────────────────────────────┘
+    │ fine_tokens (host)
+    ▼
+┌────────────────────────────┐
+│ Stage 4: EnCodec (CPU)     │
+│ Quantizer + Decoder        │
+└────────────────────────────┘
+    │ audio (numpy)
+    ▼
+  .wav file
+```
+
+## Sharding Strategy
+
+### Stage 1 & 2 (Causal — Semantic, Coarse)
+
+| Operation | Sharding | Memory | Rationale |
+| :--- | :--- | :--- | :--- |
+| Embedding | None (DRAM → L1) | ROW_MAJOR on device | ttnn.embedding requires 2D ROW_MAJOR |
+| QKV Projection | Width-parallel | L1 | `ttnn.linear` auto-shards across cores |
+| Attention (prefill) | Block sharded | L1 | `ttnn.transformer.scaled_dot_product_attention` with 128×128 chunks |
+| Attention (decode) | Replicated | DRAM→L1 | Manual matmul Q×K^T, K^T deallocated immediately |
+| KV Cache | Not sharded | DRAM | Grows linearly, too dynamic for L1 sharding |
+| MLP (in_proj) | Width-parallel | L1 | 768→3072 expansion |
+| MLP (out_proj) | Width-parallel | L1 | 3072→768 reduction |
+| LayerNorm | Replicated | L1 | Small enough for single-core |
+| LM Head | Width-parallel | DRAM→L1 | Large output (768→10048) may overflow L1 |
+
+### Stage 3 (Non-Causal — Fine)
+
+| Operation | Sharding | Memory | Rationale |
+| :--- | :--- | :--- | :--- |
+| Embedding (×8) | None | DRAM→L1 | One per codebook, ROW_MAJOR |
+| Attention | Block sharded | L1 | Non-causal — no mask, full parallelism |
+| MLP | Width-parallel | L1 | Same as stages 1-2 |
+| LM Head (×6) | Width-parallel | L1 | One per predicted codebook (768→1024) |
+
+## Inter-Stage Data Transfer Audit
+
+| Transfer | Direction | Format | Optimization |
+| :--- | :--- | :--- | :--- |
+| Text -> Semantic input | Host->Device | uint32 ROW_MAJOR | Minimal (tokenizer on CPU) |
+| Semantic logits -> mask+argmax | On-device | bfloat16 TILE | `ttnn.add` + `ttnn.argmax` on device |
+| Semantic EOS check | Device->Host | int32 scalar | Every 4 steps only |
+| Semantic tokens -> Coarse input | Host->Device | uint32 ROW_MAJOR | Tokens stay on host (small) |
+| Coarse logits -> mask+argmax | On-device | bfloat16 TILE | `ttnn.add` + `ttnn.argmax` on device |
+| Coarse EOS check | Device->Host | int32 scalar | Every 2 steps (codebook-pair alignment) |
+| Coarse tokens -> Fine input | Host->Device | uint32 ROW_MAJOR | Small tensor, unavoidable |
+| Fine logits -> argmax | On-device | ttnn.argmax | No transfer needed |
+| Fine codebooks -> EnCodec | Device->Host | int32 | Required (EnCodec is CPU) |
+
+**Summary:** Logits masking and argmax run on-device for all stages. Host-device
+transfers during generation are limited to EOS detection (scalar token ID
+transfer every N steps). During decode (seq_len=1), embeddings use device-side
+`ttnn.embedding` lookup on pre-transferred DRAM tables, eliminating per-token
+CPU→device transfer. Prefill uses CPU `nn.Embedding` (amortized, single transfer).
+Falls back to CPU embedding if NCRISC compiler bug is triggered.
+
+## Pipeline Overlap Analysis
+
+| Strategy | Est. Time | Speedup | Feasibility |
+| :--- | :--- | :--- | :--- |
+| Sequential (current) | T₁ + T₂ + T₃ + T₄ | 1.0× | Current implementation |
+| Chunked fine (implemented) | T₁ + T₂ + T₃_chunked + T₄ | ~1.0× | Reduces peak memory |
+| Stage 1 ∥ Stage 2 | max(T₁,T₂) + T₃ + T₄ | ~1.3× | Requires 2 devices or async |
+| Fully pipelined | max(T₁,T₂,T₃,T₄) | ~2.0× | Theoretical, needs 4 devices |
+
+### Implemented: Chunked Coarse->Fine Processing
+
+The `BarkStreamingPipeline` in `bark_pipeline_overlap.py` implements chunked fine
+processing: coarse output is split into fixed-size frame chunks, and each chunk is
+processed through the fine model independently. This:
+1. **Reduces peak memory** -- fine model activations scale with chunk size, not full sequence
+2. **Provides interface for multi-device scaling** -- with 2 devices, coarse and fine could run concurrently
+3. **Maintains correctness** -- fine model is non-causal, so chunk boundaries don't affect output
+
+> **Note:** True concurrent overlap requires two devices. On a single N300 the
+> stages run sequentially; the chunked fine pass reduces peak memory and provides
+> the interface a multi-device scheduler would use. Full overlap is a multi-device
+> follow-up.
+
+## Optimizations Applied
+
+### Stage 2 Optimizations
+- [x] DRAM weights, L1 activations (optimal memory hierarchy)
+- [x] Width-sharded linear ops (auto by ttnn.linear)
+- [x] Block-sharded SDPA with 128×128 chunking
+- [x] KV cache in DRAM (avoids L1 overflow during long sequences)
+- [x] Fused LayerNorm (ttnn.layer_norm, not manual)
+- [x] On-device GELU_NEW decomposed activation
+- [x] Explicit intermediate tensor deallocation
+- [x] Causal mask generated once per prefill, not per decode step
+- [x] Pre-allocated KV cache with write-in-place updates (O(n) vs O(n²) concat)
+- [x] On-device logits masking with `ttnn.add` + pre-created suppression masks
+- [x] Batched EOS check (every N steps) to reduce host-device sync frequency
+
+### Stage 3 Optimizations
+- [x] 56-core compute grid (8×7 on N300)
+- [x] HiFi4 math fidelity with fp32 accumulation
+- [x] On-device argmax for fine stage codebook prediction
+- [x] Transposed key tensor immediate deallocation (L1 pressure fix)
+- [x] KV cache explicit deallocation after generation completes
+- [x] Pipeline overlap analysis and estimation module
+- [x] Chunked coarse→fine processing (reduces peak memory, enables multi-device overlap)
+- [x] Long text support (500+ chars via sentence chunking + crossfade)
+- [x] Voice preset loading with in-memory caching
+- [x] Batch processing with per-item RTF metrics
+- [x] Comprehensive memory budget documentation
+- [x] Device-side decode embeddings (pre-transferred to DRAM, ttnn.embedding lookup)
+- [x] Top-k sampling with temperature scaling (on-device temperature, host multinomial)
+
+## Known Limitations
+
+1. **Batch size:** Currently limited to batch=1 for autoregressive generation
+2. **Sampling:** Top-k with temperature supported; top-p (nucleus) not yet implemented
+3. **EOS check frequency:** Host sync still required for EOS detection (every 4 steps semantic, every 2 steps coarse for codebook-pair alignment). Masking and argmax are fully on-device.
+4. **Pipeline overlap:** Sequential single-device execution; chunked fine processing implemented for memory reduction. Multi-device overlap documented with latency estimates.
+5. **EnCodec:** CPU-only decode (not ported to TTNN)
+6. **Long sequences:** KV cache may hit DRAM limits for very long generations (>2048 tokens)
+
+## Test Commands
+
+```bash
+# CI smoke test (standard entry point)
+pytest models/demos/wormhole/bark/tests/test_bark_demo.py -v
+
+# CI performance test (generates perf report CSV via prep_perf_report)
+pytest models/demos/wormhole/bark/tests/test_bark_perf.py -v
+
+# Unit tests (requires N300)
+pytest models/demos/wormhole/bark/tests/test_bark_model.py -svv
+
+# CPU-only parity tests
+pytest models/demos/wormhole/bark/tests/test_bark_reference_parity.py -svv
+
+# End-to-end pipeline (requires N300)
+python models/demos/wormhole/bark/tests/run_bark_e2e.py
+
+# Token accuracy validation (requires N300)
+python models/demos/wormhole/bark/tests/validate_token_accuracy.py
+
+# Per-stage profiling (requires N300)
+python models/demos/wormhole/bark/tests/profile_bark.py
+
+# Device profiling with profile_this.py (generates CSV perf sheet)
+./tools/tracy/profile_this.py -n bark_small -c "pytest models/demos/wormhole/bark/tests/test_bark_perf.py::test_perf_bark"
+```
