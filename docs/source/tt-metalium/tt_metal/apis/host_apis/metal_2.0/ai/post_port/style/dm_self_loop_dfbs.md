@@ -167,13 +167,14 @@ uint32_t rd = 0;   // read index, in elements of T
 | `wait_front(n)` | *nothing* |
 | `get_write_ptr()` | the index `wr` **as it stands where the old call was** — the kernel accesses `stage[wr + …]` |
 | `get_read_ptr()` | the index `rd`, likewise at the point of the old call |
-| `push_back(n)` | `wr = (wr + n * entry_elems) % stage.size()` |
-| `pop_front(n)` | `rd = (rd + n * entry_elems) % stage.size()` |
+| `push_back(n)` | `wr += n * entry_elems`, then wrap — see [The wrap](#the-wrap) |
+| `pop_front(n)` | `rd += n * entry_elems`, then wrap — likewise |
 
 The two waits drop because a sole single-threaded toucher cannot usefully block on itself: either the
-space or the data is already there, or the original program would have hung. Everything else
-reproduces exactly what the FIFO was computing, which is why this is *equivalent by construction*
-rather than equivalent by argument.
+space or the data is already there, or the original program would have hung. They are *pure* waits —
+neither one moves a pointer, both only spin on the buffer's credit counters — so deleting them
+removes a stall and no state. Everything else reproduces exactly what the FIFO was computing, which
+is why this is *equivalent by construction* rather than equivalent by argument.
 
 **Substitute the index's value where the old call sat, not the variable as it reads later.** The two
 getter rows are the ones this bites. A kernel that snapshots the address into a local —
@@ -184,7 +185,7 @@ captured once and never re-derived, the index it captured is frozen at that valu
 are what [Cleanup](#cleanup) item 1 is about.
 
 **In the single-entry case — one entry, filled and drained each pass — none of this survives.** Both
-indices stay `0`, so there is no index, no stride, and no modulo: the calls simply disappear and the
+indices stay `0`, so there is no index, no stride, and no wrap: the calls simply disappear and the
 kernel indexes the scratchpad from zero.
 
 Do not *expect* that case, though. A rotating buffer is just as likely — `num_entries = 2` is a
@@ -214,13 +215,41 @@ generated header and costs nothing, so prefer adding one over reusing an argumen
 about. A stride that varies with input shape is still fine as a CTA — shape participates in the
 program-cache key, so a different shape rebuilds the kernel rather than reusing a stale constant.
 
-The wrap bound is `stage.size()`, in **elements**; `stage.size_in_bytes()` is the byte-indexed
-equivalent. Match whichever unit your indices are in. The scratchpad already knows it either way, so
-`num_entries` never needs reconstructing kernel-side.
-
 **The division must be exact.** If `entry_size % sizeof(T) != 0` then `T` is wrong for this buffer —
 the kernel is viewing it as something the entries do not align to — and every index built on the
 stride will be off. **Stop**; see [When to stop](#when-to-stop).
+
+#### The wrap
+
+The bound is `stage.size()`, in **elements**; `stage.size_in_bytes()` is the byte-indexed equivalent.
+Match whichever unit your indices are in. The scratchpad already knows it either way, so
+`num_entries` never needs reconstructing kernel-side.
+
+**The wrap is not a modulo.** Write what the FIFO wrote:
+
+```cpp
+wr += n * entry_elems;
+ASSERT(wr <= stage.size());              // the FIFO asserts exactly this
+if (wr == stage.size()) { wr = 0; }
+```
+
+That is `push_back`'s own body on a Gen1 DM kernel, minus its credit post. `pop_front` is the same
+three lines on `rd`.
+
+**Why testing for equality is enough.** A DFB requires the pushes in one trip around the buffer to
+sum to *exactly* its size. The individual pushes need not divide it — on a twelve-entry buffer
+`push_back(5)` then `push_back(7)` is correct and `push_back(7)` twice is not — so the pointer lands
+on the end exactly and never past it. That is why the FIFO compares for equality, and why a variable
+`n` needs nothing extra here. A kernel that broke the rule was already broken as a DFB; it is not a
+case your translation has to survive.
+
+**Why not `%`.** It is not what the code you are replacing did, and this translation's whole claim is
+that it replays that code. It costs a division where the original cost a compare. And it *conceals* a
+mistake: derive `entry_elems` wrongly and a modulo folds the bad index quietly back into range, so
+the op computes on the wrong entries and nothing anywhere objects — whereas the form above runs the
+index off the end, in reach of the assertion and of `operator[]`'s bounds check. Both of those are
+`ASSERT`s, compiled in only under watcher or lightweight kernel asserts, so what this buys you is a
+failure that is *detectable*, not one that is guaranteed. It is still the side to be on.
 
 > **Keep `wr` and `rd` separate while translating, however alike they look.** A loop that pushes once
 > and pops once per pass, with the same `n`, invites collapsing them into one index — and that is
@@ -363,7 +392,9 @@ the point of access:
 ```cpp
 uint32_t wr = 0, rd = 0;                       // byte offsets into the region
 …
-wr = (wr + n * entry_size) % stage.size_in_bytes();   // stride and bound both in bytes
+wr += n * entry_size;                                 // stride and bound both in bytes
+ASSERT(wr <= stage.size_in_bytes());
+if (wr == stage.size_in_bytes()) { wr = 0; }
 …
 value = stage_u16[rd / sizeof(uint16_t) + i];         // convert where the type is known
 ```
@@ -448,8 +479,8 @@ if (staged) { … }
 **Do not encode the flag as a sentinel index** (`-1`, `UINT32_MAX`). The pointer was only ever a
 flag by accident — a pointer happened to be what was in hand — and an index carrying a sentinel
 repeats that double duty in fresh code, where it has no excuse. It also forces the index signed or
-magic-valued, and the index is the thing your `% stage.size()` wrap runs on. Often there is no index
-to overload anyway: once [Cleanup](#cleanup) item 1 has run on a buffer whose update was dead, none
+magic-valued, and the index is the thing your [wrap](#the-wrap) runs on — where a sentinel is out of
+range by construction and trips the assertion. Often there is no index to overload anyway: once [Cleanup](#cleanup) item 1 has run on a buffer whose update was dead, none
 remains.
 
 Note this is a *runtime* condition and a different thing from a **conditionally bound** DFB, which
@@ -474,7 +505,7 @@ construction. The whole list assumes you have satisfied yourself *locally*, by r
 tests are only a backstop.
 
 1. **The index's value is never read after the update** → the update is dead, so delete it along
-   with the stride and the modulo. Accesses become `stage[i]` and any address is just
+   with the stride and the wrap. Accesses become `stage[i]` and any address is just
    `get_base_address()`.
 
    The question is **observability, not entry count.** A single-entry buffer reaches this
@@ -510,7 +541,7 @@ transaction-ID-scoped barriers, or simply issuing a batch of reads before one bl
 rotation doing that work looks identical to one that is pure bookkeeping — and pinning the wrong one
 lets an in-flight transfer overwrite data still being read. No error, no failing test, wrong
 results. If you believe a rotation is vestigial, **say so in your report and leave it in the code**;
-a surviving modulo is a correct outcome, not an unfinished job.
+a surviving wrap is a correct outcome, not an unfinished job.
 
 Anything you want to change beyond that list goes in your report, not in the diff. This recipe
 produces more incidental untidiness than most, which makes it the easiest one to over-clean; the list
