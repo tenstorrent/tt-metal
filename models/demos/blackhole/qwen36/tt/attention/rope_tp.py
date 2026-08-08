@@ -428,6 +428,22 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
+    #
+    # forward_prefill_paged's chunked_scaled_dot_product_attention still clashes with this at S=2048
+    # even with q_chunk_size capped to 64 (see `cap` in attention/tp.py) -- MEASURED via
+    # ttnn.dump_device_memory_state right before the SDPA call: the ONLY persistent >100KB L1
+    # allocation at that point is this function's roped Q output (196608 B at address 85696), and
+    # SDPA's static CBs are laid out starting at L1 address 0 regardless of chunk size, so ANY
+    # persistent buffer at a low allocator address clashes regardless of its own size or the CB
+    # region's size. TRIED moving this to DRAM at S>=2048 to sidestep that -- does NOT help even
+    # combined with the `cap`=64 fix (MEASURED: CB region stays exactly 1393856 whether q_chunk_size
+    # is 64 or 128 once the source is DRAM, vs 454080 when L1 -- DRAM-source SDPA apparently pays a
+    # large fixed CB cost independent of chunk size, so there is no chunk size where DRAM wins here).
+    # This is a genuine conflict between the L1 allocator's first-come placement of Q and where
+    # SDPA's CBs are laid out, not a simple memory-config choice -- needs a program-factory-level fix
+    # (e.g. don't assume L1 address 0 for CBs, or force Q's allocation to a high address) to fully
+    # resolve at S=2048 for the paged/chunked SDPA path specifically. Left at unconditional L1 (only
+    # lever that helped at all was `cap`, which shrank but did not eliminate the S=2048 overflow).
     _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]
