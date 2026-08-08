@@ -60,6 +60,10 @@ docs/doxygen_build
 # CMake build artifacts
 __cmake_systeminformation/
 
+# Build for custom platform
+/cmake/custom_platform.cmake
+install_depends_custom.sh
+
 **~
 **.swp
 **.swo
