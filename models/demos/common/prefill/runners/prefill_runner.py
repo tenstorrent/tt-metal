@@ -35,6 +35,7 @@ import json
 import os
 import signal
 import time
+from typing import Optional
 
 from loguru import logger
 
@@ -131,6 +132,10 @@ _apply_manifest_env()
 # per-chunk overhead is the persistent service's fabric/NoC presence, not the push workers).
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
+
+# The packed [1,1,1,3] uint32 message the sockets carry is `metadata_msg` everywhere; the model's
+# `metadata` is the per-element triple of [1,1,1,1] operands the device ops take. There is no device-side
+# conversion between them, so a name that blurs the two hides a required host round trip.
 
 # LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
 # one-page buffer with generous headroom for in-flight records.
@@ -382,6 +387,15 @@ def _first_rank_chunk_tokens(runtime, token_ids: list[int], kv_actual: int) -> t
     return runtime.make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
 
 
+def _decode_metadata(metadata_msg) -> dict:
+    """Read the packed [1,1,1,3] metadata device tensor to host: {slot_id, actual_start, actual_end}.
+    This is the device->host half of the round trip the traced path avoids (see _socket_next)."""
+    import torch
+
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
+    return {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+
+
 def _is_shutdown_sentinel(meta: dict) -> bool:
     """True for the all -1 end-of-stream sentinel (see SHUTDOWN_METADATA_WORD); false for every real
     chunk, whose slot_id and KV positions are non-negative and in range."""
@@ -392,17 +406,17 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service) -> tuple:
-    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
-    tt_metadata). The device metadata tensor is returned (not discarded) so it can be propagated into
-    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
-    import torch
+def _socket_next(h2d_service, *, decode_meta: bool) -> tuple:
+    """Block on the next producer push: returns (tt_tokens, meta, metadata_msg). The device metadata
+    tensor is returned (not discarded) so it can be propagated into the model's per-layer ack send.
+    Used only by the unbounded request loop (rank 0 input).
 
-    tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    decode_meta=False (traced path) skips the device->host read of the metadata: the per-chunk scalars
+    are consumed on-device straight from metadata_msg, so meta is returned None and no to_torch runs."""
+    tt_tokens, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
+    return tt_tokens, _decode_metadata(metadata_msg) if decode_meta else None, metadata_msg
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -452,57 +466,65 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
-    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
-    decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
-    feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
-    import torch
+def _d2d_recv(inbound, *, decode_meta: bool) -> tuple:
+    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor. The
+    returned tensor already has the embedding-output sharding, so it feeds runtime.prefill with no
+    reshard. Pairs with the upstream rank's _d2d_send.
 
+    decode_meta=False (traced path) skips the device->host read of the inline metadata: meta is returned
+    None and the per-chunk scalars are consumed on-device straight from metadata_msg."""
     t0 = time.perf_counter()
-    act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
-    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
-    logger.info(
-        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
-        f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
+    meta = _decode_metadata(metadata_msg) if decode_meta else None
+    where = (
+        f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}" if meta is not None else "(on-device)"
     )
-    return act, meta, metadata_device
+    logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
+    return act, meta, metadata_msg
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
+def _d2d_send(
+    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
     TT_FATALs on any spec mismatch, so no host-side relayout is needed.
+
+    metadata_msg (traced path): the packed device tensor received on this rank is forwarded downstream
+    verbatim — it is already the [1,1,1,3] uint32 replicated form the op expects, so no host rebuild
+    runs (meta may be None). When metadata_msg is None (eager path) the tensor is rebuilt from meta.
 
     deallocate=False when the activation is the traced path's persistent _trace_output buffer: the socket
     sync copies it into the sender backing on the CQ (before the next replay, which reuses the same buffer,
     is enqueued), so it must NOT be freed — the next chunk's replay writes into it in place."""
     t0 = time.perf_counter()
-    backing = outbound.get_backing_tensor()
-    import torch
 
-    words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-    # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
-    md_tensor = ttnn.from_torch(
-        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=backing.device(),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            backing.device(),
-            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-        ),
-    )
+    if metadata_msg is not None:
+        md_tensor = metadata_msg
+    else:
+        import torch
+
+        backing = outbound.get_backing_tensor()
+        words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
+        # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
+        md_tensor = ttnn.from_torch(
+            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=backing.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                backing.device(),
+                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+            ),
+        )
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
-    logger.info(
-        f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
-        f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
-    )
+    where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
+    logger.info(f"[pp rank {rank}] SEND-d2d {where} [xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms")
 
 
 def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
@@ -545,27 +567,28 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
+    runtime, kv_caches, rank: int, c: int, inp, meta: Optional[dict], d2d_out, d2h_service=None, metadata_msg=None
 ) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
-    (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
-    slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
-    compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
+    (NTP-comparable). CHUNK_START is logged BEFORE the forward, so the slot/KV-range is visible per rank
+    even if prefill_chunk hangs. The trailing metadata is kept after compute_start so the
+    c=/compute_start= fields stay parseable (plot_pipeline_trace.py). On the traced path meta is None
+    (the scalars live on-device in metadata_msg), so the range is logged as (on-device)."""
     t_start = time.time()
-    logger.info(
-        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
-        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    where = (
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
     )
+    logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
+        slot_id=meta["slot_id"] if meta is not None else None,
+        actual_start=meta["actual_start"] if meta is not None else None,
+        actual_end=meta["actual_end"] if meta is not None else None,
         request_id=c,
         d2h_service=d2h_service,
-        record_dev=record_dev,
+        metadata_msg=metadata_msg,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -574,8 +597,16 @@ def _compute_and_send(
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
-        # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
-        _d2d_send(d2d_out, out, rank, meta, deallocate=not runtime.config.use_trace)  # grant below ships it
+        # so the send copies it into the socket backing but must not free it; the received metadata_msg is
+        # forwarded verbatim (no host rebuild, meta is None). Eager: `out` is fresh — free it, rebuild md.
+        _d2d_send(
+            d2d_out,
+            out,
+            rank,
+            meta,
+            deallocate=not runtime.config.use_trace,
+            metadata_msg=metadata_msg if runtime.config.use_trace else None,
+        )  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -614,6 +645,12 @@ def run_request_loop(
     as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input — see
     run_standalone_loop for the bounded/trace variant.
 
+    Traced path (cfg.use_trace): the per-chunk metadata is consumed on-device straight from metadata_msg
+    (no device->host->device round trip), so the host never sees the scalars and the in-band shutdown
+    sentinel cannot be detected. Trace serving therefore relies ONLY on SIGTERM/SIGKILL for teardown —
+    the producer's PREFILL_SEND_SHUTDOWN sentinel is ignored. Run untraced if graceful in-band shutdown
+    is required.
+
     Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
     pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
     writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
@@ -625,9 +662,18 @@ def run_request_loop(
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
+    decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
+    # record_chunk() is host bookkeeping keyed on this chunk's slot/start/end, which the traced path never
+    # reads back. Fail here rather than skip the call: a driver that is never fed migrates nothing and the
+    # run still reports green.
+    assert migration_driver is None or decode_meta, (
+        "interleaved migration needs the host-side chunk metadata, which the traced path consumes "
+        "on-device; run untraced or disable interleaved migration"
+    )
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
-        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
+        f"metadata={'host' if decode_meta else 'on-device'})"
     )
     # Self-test bound: PREFILL_MIGRATION_SELFTEST=1 makes the loop run exactly NUM_CHUNKS chunks then
     # exit CLEANLY so the post-loop migrate + verify can run — without it the unbounded loop blocks in
@@ -648,32 +694,36 @@ def run_request_loop(
         if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
         else 0
     )
-    slot_id = 0  # last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated
+    # Last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated.
+    # Traced runs never see the scalars, so it stays 0; the bring-up producer that drives that check
+    # pushes slot 0.
+    slot_id = 0
     while not _shutdown:
         if n_selftest and c >= n_selftest:
             break
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_msg = _socket_next(h2d_service, decode_meta=decode_meta)  # slot/start/end from producer
         else:
-            inp, meta, metadata_device = _d2d_recv(d2d_in)
-        if _is_shutdown_sentinel(meta):
+            inp, meta, metadata_msg = _d2d_recv(d2d_in, decode_meta=decode_meta)
+        if meta is not None and _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
-            ttnn.deallocate(metadata_device)
+            ttnn.deallocate(metadata_msg)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        slot = meta["slot_id"]
-        slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
-        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
-        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
+        if meta is not None:
+            slot = meta["slot_id"]
+            slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
+            chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+            # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
+            # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
+            real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(
-            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
+            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
         )
         # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
         # have all acked. Acks arrive ASYNCHRONOUSLY on the D2H path (the LayerAckService reader thread
@@ -764,7 +814,7 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             # is a per-chunk socket metadata tensor, and rank 0 synthesizes its chunks locally (no inbound
             # socket, so no record) — single-rank standalone IS rank 0, so there is nothing to ack with.
             # The D2H ack path is wired in _serve_request only; PREFILL_ENABLE_LAYER_ACK is not read here.
-            inp, meta, _ = _d2d_recv(d2d_in)
+            inp, meta, _ = _d2d_recv(d2d_in, decode_meta=True)
             slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
@@ -1261,31 +1311,29 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     if single_rank and enable_layer_ack:
         # Single-rank ack: both transports end at the SAME scheduler counter channel, so the scheduler
-        # sees an identical stream either way. Which one carries it depends on trace:
-        #   untraced -> D2H. The ack is a device op writing one record into a FIFO, and the
-        #     LayerAckService reader thread bumps the channel per record — nothing calls back into host
-        #     code mid-forward, so the forward needs no per-layer device sync.
-        #   traced   -> the host callback (set_layer_ack_channel). The D2H ack cannot be captured: its
-        #     record is the per-chunk socket metadata tensor, whose address changes every chunk, so a
-        #     capture would bake in a stale address (TtPrefillRuntime.prefill_chunk asserts this). The
-        #     controller instead splits the trace at each ack point.
+        # sees an identical stream either way. D2H carries it traced and untraced — the ack is a device op
+        # writing one record into a FIFO, and the LayerAckService reader thread bumps the channel per
+        # record, so nothing calls back into host code mid-forward and the forward needs no per-layer
+        # device sync. Traced, the op is recorded inside the capture, so the service is registered up
+        # front (set_d2h_ack_service) instead of passed per chunk, and the reader starts only after the
+        # capture's warm records are drained below.
         _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
+        )
+        layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
         if runtime.config.use_trace:
-            runtime.set_layer_ack_channel(ack_channel)
+            runtime.set_d2h_ack_service(d2h_service)
             logger.info(
-                f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer "
-                "(host callback — traced run, D2H is not capturable)"
+                f"[migration] LayerAck channel ready at {ack_shm_name}; D2H ack registered for capture "
+                "(reader starts after the trace warm records are drained)"
             )
         else:
-            d2h_service = ttnn.D2HStreamService(
-                mesh_device,
-                global_spec=None,
-                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
-                worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
-            )
-            layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
             layer_ack_service.start()
             logger.info(
                 f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per "
@@ -1381,6 +1429,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # No-op if already captured. See _serve_standalone / TtPrefillRuntime.capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
+        # The capture's warm forward compiles the D2H ack programs by running them, so real records are
+        # already sitting in the FIFO. Drain them here — before the reader thread starts — or the
+        # scheduler sees a phantom chunk's worth of layer acks and migrates a slot that was never filled.
+        n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
+        for _ in range(n_warm):
+            d2h_service.read_metadata()
+        if n_warm:
+            logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
+        if layer_ack_service is not None:
+            layer_ack_service.start()
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
