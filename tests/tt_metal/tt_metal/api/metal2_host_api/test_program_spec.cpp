@@ -4168,6 +4168,7 @@ constexpr bool compile_time_varargs_match_expected() {
     return true;
 }
 void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 3u);
     static_assert(compile_time_varargs_match_expected());
     static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
@@ -4195,6 +4196,7 @@ TEST_F(ProgramSpecTestGen1, EmptyCompileTimeVarargsReadableFromKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 0u);
     static_assert(get_compile_time_varargs().size() == 0u);
 }
 )"};
@@ -4244,6 +4246,9 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 constexpr bool compile_time_varargs_are_iota() {
     constexpr auto varargs = get_compile_time_varargs();
+    if (get_num_compile_time_varargs() != 1024u) {
+        return false;
+    }
     if (varargs.size() != 1024u) {
         return false;
     }
@@ -4282,6 +4287,7 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsPrefixBeforeTensorBindingCTAs) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 2u);
     static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
     // Binding CTA_OFFSET is shifted past the CTA-vararg prefix.
