@@ -2896,3 +2896,103 @@ reservation-VM freeze pattern of [[x280_vm_freeze_churn]]. There is no watchdog 
 **A host reboot does NOT clear DEGRADED.** bh-26 rebooted at 12:17 and still measured ack-write
 2339 ns / device-read 2942 ns afterwards. Earlier revisions list "host reboot" as the DEGRADED
 recovery; that is wrong. Assume a cold power cycle or a different box.
+
+## §N+32 — UnsupReq REFUTED; the hang strikes at DRAINER BRING-UP, inside set_drisc_niu_mode (bh-26, 2026-08-08)
+
+### The UnsupReq hypothesis is dead
+
+60 runs, 2 drainers, healthy card, `DevSta` cleared before every run so its RW1C bits are a per-run probe:
+
+| class | n |
+|---|---|
+| CLEAN | 55 |
+| MMIO_HANG | 1 |
+| NOC_HUNG (cascade after it) | 4 |
+| **UnsupReq set, on ANY run** | **0** |
+
+`DevSta` read `0000` on the hang and on every cascade run. With AER already clean, **the card stops
+completing MMIO while logging no PCIe error of any kind.**
+
+**Correction to §N+31:** the `UnsupReq+` seen there was a STICKY bit on a card that had just been
+through a freeze and a Gen1 downtrain -- residue from a different event, read as a live signal. The
+per-run clear is what settled it. Sticky status bits are evidence only if you clear them first.
+
+### Two scoring facts that change how to run these blocks
+
+1. **A hung card reads HEALTHY for several runs.** `current_link_speed` stayed `32.0 GT/s` through all
+   four cascade runs and only collapsed to `Unknown` after the block ended. So `Unknown` is a LATE
+   symptom, and a harness that resets on `Unknown` (as this one did) under-resets and lets cascades
+   run. Key recovery off the PROCESS outcome, not the card state.
+2. **The rate is ~1.8%, not ~8%** -- 1 event / 56 informative runs. The earlier 2/25 was small-sample
+   noise, quoted for a while as though it were solid.
+
+### WHERE it hangs: the second drainer's bring-up
+
+```
+13:29:33.782  DRISC 0 resident on logical (0,1) [noc0 (0,0)], cores [0,60)   <- drainer 0 fine
+13:29:34.227  init failed (MMIO per-op timeout: 4B load took 220219 us)      <- 445 ms later
+              terminate ... 4B load took 198890 us
+```
+
+`ndrainers=1` on the failing run: drainer 0 up and resident, drainer 1 never reported. Two consecutive
+~200 ms non-completing reads (each one root-port completion timeout, §N+31). **The failure is in
+bring-up, not in the drain loop** -- which is a far narrower window to search.
+
+### WHY: set_drisc_niu_mode launches a PROGRAM, and LaunchProgram does a dram_barrier
+
+```cpp
+void PerfDebugProfiler::set_drisc_niu_mode(...) {
+    Program p = CreateProgram();
+    CreateKernel(p, ".../drisc_niu_mode.cpp", drisc_logical, DramConfig{...});
+    detail::CompileProgram(...);  detail::WriteRuntimeArgsToDevice(...);
+    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+}
+```
+
+Flipping the NIU mode is not a register write -- it is a **full program launch on the DRAM core**, and
+`LaunchProgram` calls `dram_barrier` (tt_metal.cpp:972), which MMIO-polls a core in EVERY DRAM channel,
+then `wait_until_cores_done` polls the launched core. So bringing up drainer 1 runs a barrier over all
+DRAM channels **while drainer 0 is already resident with its DRAM core in stream mode** -- and stream
+mode is exactly what changes the meaning of an inbound DRAM-range address on that core.
+
+This resurrects the §N+27 mechanism at a different trigger. §N+27 tested the collision by varying the
+drainer's BANK under the user workload's barrier and refuted it; it never tested the profiler's OWN
+barrier, issued during bring-up, against an already-resident stream-mode drainer. That is the untested
+case, and it is where the failure actually happens. It also explains the 1-drainer rate: the user
+workload's `LaunchProgram` barriers over the single resident drainer's stream-mode core every launch.
+
+**Candidate fix: set NIU_CFG_0 by a direct host MMIO write instead of launching a kernel.** That
+removes `dram_barrier` and `wait_until_cores_done` from the bring-up path entirely. Needs confirming
+that NIU_CFG_0 is host-writable; if it is, the whole hazardous step disappears.
+
+## §N+33 — A Gen1 downtrain is software-recoverable: force re-equalization, no cold power cycle
+
+After a warm reboot, bh-26's link came up at **2.5 GT/s (downgraded)** against a 32 GT/s LnkCap, on BOTH
+endpoint and root port, with reads ~3.5x slow and writes fine.
+
+**Diagnose with the LnkCtl2/LnkSta2 pair, not the latency probes:**
+
+```
+LnkCtl2: Target Link Speed: 32GT/s     <- nothing pinned it to Gen1, so a retrain MAY reach Gen5
+LnkSta2: EqualizationComplete- EqualizationPhase1-   <- the actual fault
+```
+
+Equalization gates training above 8 GT/s. It had failed, so the link fell back to Gen1. **Setting the
+Retrain Link bit ALONE does nothing** -- equalization must be explicitly requested:
+
+```bash
+sudo setpci -s 00:01.1 ECAP_SECPCI+04.l=0x00000001    # LnkCtl3 bit 0 = Perform Equalization
+cur=$(sudo setpci -s 00:01.1 CAP_EXP+10.w)             # then Retrain Link, on the ROOT PORT
+sudo setpci -s 00:01.1 CAP_EXP+10.w=$(printf "%04x" $((0x$cur | 0x20)))
+```
+
+Result: `LnkSta: Speed 32GT/s (ok)`, and every probe back to baseline (ack-write 2306 -> 173 ns,
+device-read 2738 -> 790 ns, worker-read 2661 -> 722 ns).
+
+**Then reset the ASIC.** Immediately after the retrain the probes read perfectly healthy while the drain
+path was still wrecked -- 12,979 stalls at delay 125 and a 276 us worst sweep. `tt-smi -r` cleared it and
+the baseline landed exactly on the pre-incident numbers (idle 18.2-18.8, busy 39.2-40.5, worst 56-60,
+0 stalls). **Clean latency probes are necessary but not sufficient; re-baseline the drain path too.**
+
+Also: **`sock-read` GB/s is not a PCIe indicator.** It read 17.28 GB/s on a Gen1 x16 link whose ceiling
+is ~4 GB/s, because it measures the host reading the D2H socket out of HOST DRAM.
