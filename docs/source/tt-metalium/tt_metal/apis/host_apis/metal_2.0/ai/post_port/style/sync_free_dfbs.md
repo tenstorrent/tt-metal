@@ -42,17 +42,24 @@ This pass turns on a semantic question: **does anything, anywhere, synchronize t
 buffer?** If nothing does, the buffer is not a FIFO and declaring it one misdescribes it. If
 something does, converting it deletes that synchronization.
 
-On Gen1, a DFB synchronizes through exactly four methods:
+On Gen1, a DFB's synchronization lives in a pair of credit counters, and six methods touch them:
 
 ```
-reserve_back   push_back   wait_front   pop_front
+reserve_back   push_back   wait_front   pop_front         // block on the credits, or post them
+pages_reservable_at_back   pages_available_at_front       // read them without blocking
 ```
+
+**The second row is the one that gets missed.** Neither name contains any of the first four as a
+substring, so a grep written from the first row alone does not see them — and they are not
+hypothetical: ported matmul readers spin on `dfb_in1.pages_reservable_at_back(...)` today. Those two
+do not block by themselves, but a kernel polling one is reading exactly the state a `wait_front`
+would have blocked on, and that is synchronization however it is spelled.
 
 Nothing else counts here. Implicit sync — NOC transfers exchanging credits without any FIFO call —
 is supported only on Gen2 DFBs, and this pass runs on Gen1 ops recently migrated to Metal 2.0, so
 every buffer you meet synchronizes explicitly or not at all.
 
-So the property is: **no kernel that binds this DFB ever causes any of those four calls on it.**
+So the property is: **no kernel that binds this DFB ever causes any of those six calls on it.**
 *Causes*, not *contains* — that distinction is way 4 below. It is a property of the DFB, holding
 across every binding kernel and every configuration the spec is built under; it is not per kernel
 and not per file.
@@ -62,7 +69,7 @@ and not per file.
 Gather evidence for the property by grepping each binding kernel:
 
 ```bash
-grep -nE "reserve_back|push_back|wait_front|pop_front" <each binding kernel>
+grep -nE "reserve_back|push_back|wait_front|pop_front|pages_reservable|pages_available" <each binding kernel>
 ```
 
 This is a good first move and it is **not** the property. It is a syntactic search standing in for a
@@ -93,8 +100,8 @@ Each of these is a real pattern, and the first two appear *side by side in a sin
 **1. A self-loop is not the same as sync-free.** A DFB bound `PRODUCER` *and* `CONSUMER` by one
 kernel is a self-loop — that is a statement about endpoints, not about synchronization. A kernel
 can absolutely run a full FIFO against itself: reserve space, fill it, push, wait, read, pop, as a
-bounded staging buffer. `moreh_fold` binds its input DFB exactly that way and it uses all four
-methods. **Not a site.** Self-loops are a good place to *look*, never a verdict.
+bounded staging buffer. `moreh_fold` binds its input DFB exactly that way and it calls every one of
+the blocking four. **Not a site.** Self-loops are a good place to *look*, never a verdict.
 
 **2. Neither pointer getter tells you anything — in either direction.** A sync-free DFB still needs
 its base address, and since nothing ever advances either pointer, `get_read_ptr()` and
@@ -102,7 +109,7 @@ its base address, and since nothing ever advances either pointer, `get_read_ptr(
 reasonably call either one, or both, and which it picked is arbitrary. Meanwhile a fully
 synchronized DFB calls them too, between its reserve and its push, because that is ordinary FIFO
 usage. The getters appear on both sides of the line and carry no information about it. **Do not
-read a pattern into which getter a kernel used.** Only the absence of the four sync methods
+read a pattern into which getter a kernel used.** Only the absence of the six credit methods
 decides.
 
 The base address does not always arrive through a getter, either. A helper taking the DFB's id —
@@ -123,7 +130,7 @@ branch, and a DFB that is sync-free on only some paths is **not a site**. If the
 host-side from something you cannot pin down, that is a case for [the safe
 default](#when-you-cannot-establish-absence-it-is-not-a-site).
 
-**4. A grep for the four methods can come back clean on a synchronized DFB.** The calls do not have
+**4. A grep for those methods can come back clean on a synchronized DFB.** The calls do not have
 to appear in the kernel you are reading — a helper can make them on its behalf, and then the buffer
 reads as untouched. Two real shapes:
 
@@ -155,11 +162,11 @@ Work from the host spec outwards; it is the only place the complete picture exis
 1. **List every `DataflowBufferSpec`** in the op's program factory (or factories).
 2. **For each, list every `DFBBinding` that names it**, and note the kernel each binding sits on.
    Include conditional bindings — a DFB bound inside an `if` still counts.
-3. **For each DFB, open every binding kernel** and search for the four sync methods *on that DFB's
+3. **For each DFB, open every binding kernel** and search for the six credit methods *on that DFB's
    handle*:
 
    ```bash
-   grep -nE "reserve_back|push_back|wait_front|pop_front" <each binding kernel>
+   grep -nE "reserve_back|push_back|wait_front|pop_front|pages_reservable|pages_available" <each binding kernel>
    ```
 
    Any hit on that handle → synchronized, not a site.
