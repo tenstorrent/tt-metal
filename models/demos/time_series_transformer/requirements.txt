@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Reference model, checkpoint loading and parity tests.
+transformers>=4.30.0
+safetensors>=0.4.0
+huggingface_hub>=0.20.0
+
+# Real Tourism observations for the demo are read from the Hub's parquet conversion via
+# huggingface_hub and pandas -- no datasets package required.
+pandas>=1.3.0
+
+# torch, numpy, pytest and loguru come from the tt-metal environment.
