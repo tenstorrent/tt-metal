@@ -16,6 +16,7 @@ Tensor fused_experts(
     uint32_t num_experts,
     uint32_t intermediate_size,
     float swiglu_limit,
+    uint32_t experts_block_size,
     const std::optional<MemoryConfig>& memory_config) {
     return ttnn::prim::fused_experts(
         input_tensor,
@@ -25,6 +26,7 @@ Tensor fused_experts(
         num_experts,
         intermediate_size,
         swiglu_limit,
+        experts_block_size,
         memory_config);
 }
 
