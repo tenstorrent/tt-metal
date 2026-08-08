@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-07",
+  "last_scan_date": "2026-08-08",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -13,7 +13,8 @@
     "30789033630",
     "30227858718",
     "30737004712",
-    "31197186569"
+    "31197186569",
+    "31229408018"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -26,7 +27,8 @@
     "single-card-demo-tests.yaml",
     "t3000-demo-tests.yaml",
     "models-t3-unit-tests.yaml",
-    "blackhole-sanity-tests.yaml"
+    "blackhole-sanity-tests.yaml",
+    "vllm-model-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -107,6 +109,12 @@
       "pattern": "Currently using mock cluster descriptor - warning fires 71x per mock-mode job",
       "status": "resolved",
       "note": "Validation run 31047265933 (runtime-unit-tests) completed/failure - unrelated MeshTensorDeviceTest failure, not the mock-cluster-descriptor line. Outcome commented and marked ready for review (2026-08-07)."
+    },
+    {
+      "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
+      "pattern": "rotary_embedding_llama sequence tile coverage mismatch warning fires every decode step (input_Ht < cos_Ht/sin_Ht by design)",
+      "status": "open-pr",
+      "note": "New PR opened this run. vllm-model-tests dispatched on branch (model=meta-llama/Llama-3.1-8B-Instruct). Awaiting validation."
     }
   ],
   "backlog_cursor": {
