@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 _TTNN_TO_TORCH_DTYPE = {
     ttnn.bfloat16: torch.bfloat16,
@@ -456,6 +456,40 @@ def test_repeat_rm_sharded_to_sharded(shape, input_factory, output_layout, devic
         input_mem_config=input_factory(device),
         output_mem_config=out_mc,
     )
+
+
+# Shard rows whose byte-size doesn't divide `get_aligned_page_size()` — repeat writes
+# with `offset=k*original_page_size_bytes` then hit `sharded_offset!=0` in the helper.
+@pytest.mark.parametrize(
+    "last_dim, num_repeats, num_cores",
+    [
+        pytest.param(56, 3, 2, id="ld56_r3_c2"),
+        pytest.param(24, 6, 2, id="ld24_r6_c2"),
+    ],
+)
+def test_repeat_rm_width_sharded_last_dim_non_page_aligned_offset(last_dim, num_repeats, num_cores, device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if num_cores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {num_cores}")
+    height = 4
+    shape = (1, 1, height, last_dim)
+    if last_dim % num_cores != 0:
+        pytest.skip(f"width {last_dim} not divisible by shard core count {num_cores}")
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+    in_spec = ttnn.ShardSpec(shard_grid, (height, last_dim // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    in_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in_spec)
+
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.repeat(
+        ttnn_in,
+        [1, 1, 1, num_repeats],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1),
+    )
+    ref = x.repeat(1, 1, 1, num_repeats)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(ref, got)
 
 
 # DRAM-sharded input -> L1 interleaved (to_memory_config fallback path).
