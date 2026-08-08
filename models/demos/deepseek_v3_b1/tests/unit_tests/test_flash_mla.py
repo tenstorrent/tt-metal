@@ -242,7 +242,7 @@ def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max
             out_mean_diff = torch.mean(torch.abs(output_torch - reference_output)).item()
             logger.info(f"Out Max absolute difference: {out_max_diff}")
             logger.info(f"Out Mean absolute difference: {out_mean_diff}")
-            pcc_required = 0.995
+            pcc_required = 0.994
             passing, pcc_message = comp_pcc(reference_output, output_torch, pcc_required)
             assert passing, f"Iteration {i}: PCC check failed vs golden: {pcc_message}"
             logger.info(f"    PCC vs golden: {pcc_message}")

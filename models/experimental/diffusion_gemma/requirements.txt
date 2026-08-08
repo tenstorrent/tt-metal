@@ -10,7 +10,7 @@
 #
 # torch is the CPU build (the reference/oracle runs on CPU; device math is ttnn on
 # Blackhole). Install torch from the CPU index, e.g.:
-#     pip install torch==2.11.0+cpu torchvision==0.26.0+cpu \
+#     pip install torch==2.13.0+cpu torchvision==0.28.0+cpu \
 #         --index-url https://download.pytorch.org/whl/cpu
 
 # --- HF transformers stack ---
@@ -25,8 +25,8 @@ accelerate==1.7.0
 sentencepiece==0.2.1
 
 # --- Torch (CPU build — reference oracle only; see note above for the index URL) ---
-torch==2.11.0+cpu
-torchvision==0.26.0+cpu
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
 
 # --- Numerics / utils used by reference + harness ---
 numpy==1.26.4
