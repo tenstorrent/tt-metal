@@ -79,7 +79,7 @@ Tensor scale_mask_softmax_in_place(
     const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 
 /**
  * @brief Specialized in-place operation for causal masked softmax with height-width dimension constraints.
@@ -101,6 +101,6 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     const std::optional<const Tensor>& mask = std::nullopt,
     const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 
 }  // namespace ttnn

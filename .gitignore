@@ -173,3 +173,4 @@ tray_to_pcie_device_mapping.yaml
 # model bringup manifests and tensor artifacts
 bringup/artifacts
 model_tracer/traced_operations
+.aider*
