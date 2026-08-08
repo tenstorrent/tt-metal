@@ -31,10 +31,7 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
                                                 // fist 16 for sfpu, next 16 for fpu
 
 // Pack config
-// Word-2 layout matches THCON_SEC[01]_REG1. The REG8 banks differ: bits 17-23 are not
-// implemented as below (no All_pack_disable_zero_compress/_ovrd; Add_tile_header_size is
-// at bit 17 per cfg_defines.h), so REG8 readback can't be interpreted with this struct.
-typedef struct
+struct pack_config_t
 {
     // word 0
     std::uint32_t row_ptr_section_size : 16;
@@ -65,8 +62,7 @@ typedef struct
     std::uint32_t pack_l1_acc_disable_pack_zero_flag : 2;
     std::uint32_t reserved_2                         : 1;
     std::uint32_t exp_threshold                      : 8;
-
-} pack_config_t;
+};
 
 static_assert(sizeof(pack_config_t) == (sizeof(std::uint32_t) * 4));
 
@@ -77,7 +73,7 @@ typedef union
 } pack_config_u;
 
 // Relu Config
-typedef struct
+struct relu_config_t
 {
     std::uint32_t ALU_ACC_CTRL_Zero_Flag_disabled_src      : 1;
     std::uint32_t ALU_ACC_CTRL_Zero_Flag_disabled_dst      : 1;
@@ -89,7 +85,7 @@ typedef struct
     std::uint32_t DISABLE_RISC_BP_Disable_bmp_clear_main   : 1;
     std::uint32_t DISABLE_RISC_BP_Disable_bmp_clear_trisc  : 3;
     std::uint32_t DISABLE_RISC_BP_Disable_bmp_clear_ncrisc : 1;
-} relu_config_t;
+};
 
 static_assert(sizeof(relu_config_t) == (sizeof(std::uint32_t)));
 
@@ -100,14 +96,14 @@ typedef union
 } relu_config_u;
 
 // Dest rd control
-typedef struct
+struct dest_rd_ctrl_t
 {
     std::uint32_t PCK_DEST_RD_CTRL_Read_32b_data  : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Read_unsigned  : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Read_int8      : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Round_10b_mant : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Reserved       : 28;
-} dest_rd_ctrl_t;
+};
 
 static_assert(sizeof(dest_rd_ctrl_t) == (sizeof(std::uint32_t)));
 
@@ -126,7 +122,8 @@ typedef union
 // TILE_ROW_SET_MAPPING[0:3] have 2 bits for each row inside a face that determine which PACK_EDGE_OFFSET_SEC[0:3] mask is used.
 // Only PACK_EDGE_OFFSET_SEC0 register has higher 16b configured to determine TILE_ROW_SET_MAPPING[0:3] registers used for each packer.
 // Other PACK_EDGE_OFFSET_SEC[1:3] registers are used only for the masks in the lower 16b.
-typedef struct
+
+struct pck_edge_offset_t
 {
     std::uint32_t mask                      : 16;
     std::uint32_t mode                      : 1;
@@ -135,7 +132,7 @@ typedef struct
     std::uint32_t tile_row_set_select_pack2 : 2;
     std::uint32_t tile_row_set_select_pack3 : 2;
     std::uint32_t reserved                  : 7;
-} pck_edge_offset_t;
+};
 
 static_assert(sizeof(pck_edge_offset_t) == (sizeof(std::uint32_t)));
 
@@ -146,14 +143,14 @@ typedef union
 } pck_edge_offset_u;
 
 // Pack counters
-typedef struct
+struct pack_counters_t
 {
     std::uint32_t pack_per_xy_plane        : 8;
     std::uint32_t pack_reads_per_xy_plane  : 8;
     std::uint32_t pack_xys_per_til         : 7;
     std::uint32_t pack_yz_transposed       : 1;
     std::uint32_t pack_per_xy_plane_offset : 8;
-} pack_counters_t;
+};
 
 static_assert(sizeof(pack_counters_t) == (sizeof(std::uint32_t)));
 
