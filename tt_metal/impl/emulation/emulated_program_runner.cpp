@@ -582,8 +582,7 @@ struct Metal2BindingsSnapshot {
         }
         for (const auto& [name, h] : sem_accessors) {
             // Fold the baked scope and access bit too: same id under a different scope or access
-            // compiles a different token and must not reuse the first kernel's .so. ":ro" is
-            // appended only when set, so mutable bindings' keys don't carry it.
+            // compiles a different token and must not reuse the first kernel's .so.
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
             if (h.read_only) {
                 s += ":ro";

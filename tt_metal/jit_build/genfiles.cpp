@@ -154,8 +154,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
-    // DM_LOCAL_CACHED sems need sem::init_dm_cached() run at entry; the caller auto-injects
-    // that call (see jit_build_genfiles_kernel_include), so the flag is returned.
+    // Returned so the caller can auto-inject the init call (see jit_build_genfiles_kernel_include).
     const bool has_cached_sem = std::any_of(
         sem_entries.begin(), sem_entries.end(), [](const SemEntry& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
@@ -282,10 +281,9 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             if (has_cached_sem) {
                 // Seed the cached-only pool, which the dispatcher never NoC-writes: thread 0 copies
                 // each cached sem's init value from its ring slot (uncached alias) into the pool,
-                // then a barrier so every thread sees the init before its first up(). The call is
-                // auto-injected at kernel entry by wrapping kernel_main. The body is empty off the
-                // DM+Quasar path (a DM_LOCAL_CACHED Semaphore is a compile error there), but the
-                // symbol always exists so a manual call still compiles.
+                // then a barrier so every thread sees the init before its first up(). The body is
+                // empty off the DM+Quasar path (a DM_LOCAL_CACHED Semaphore is a compile error
+                // there), but the symbol always exists so a manual call still compiles.
                 content << "inline void init_dm_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 content << "    if (::get_my_thread_id() == 0u) {\n";

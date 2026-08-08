@@ -107,7 +107,7 @@ struct CollectedSpecData {
         std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
         std::vector<BinderRecord> readers;  // OBSERVE bindings
         // Union of ALL binders' node sets (writers + readers), derived once kernel node sets exist.
-        // Used to validate a forced DM_LOCAL_CACHED semaphore: the cached-only pool is per-core, so a
+        // Used to validate DM_LOCAL_CACHED eligibility (forced and AUTO, via cached_geometry_ok()): the cached-only pool is per-core, so a
         // binder on another node would address THAT node's pool copy and the semaphore would silently
         // split. (Every binder being a DM kernel is validator-enforced, but re-checked at decision
         // time since validation can be skipped.)
@@ -268,7 +268,8 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 // Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope baked into
 // every kernel that binds it. This is the authoritative decision; contradictions FATAL here.
 //
-//   EXTERNAL        -> EXTERNAL (pass-through).
+//   EXTERNAL        -> EXTERNAL (one FATAL: no CONSUME binder off the semaphore's node --
+//                      down() spins on the consumer's LOCAL word).
 //   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit escape hatch; caller is asserting single-writer).
 //   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only after six FATALs: Gen2 arch, single-node semaphore,
 //                      at most one binder kernel, no other cached-binder kernel on the node, every
@@ -279,18 +280,18 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
 //                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
 //                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      One hazard FATALs here: a SET racing another writer (mechanism-independent;
-//                      no scope can make a destructive store atomic). Multi-consumer down() is
-//                      safe on both atomic tiers, so CONSUME shapes resolve freely.
+//                      Two hazards FATAL here: a SET racing another writer (no scope can make a
+//                      destructive store atomic), and a CONSUME binder off the semaphore's node.
+//                      Multi-consumer down() itself is safe on both atomic tiers.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: {
             // Forced scopes skip the AUTO honesty guards, but an off-node consumer is a mechanical
             // hang (down() spins on the LOCAL word), so it is rejected like forced-cached geometry.
+            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
             TT_FATAL(
                 binders.consuming_instance_count == 0 ||
-                    to_node_range_set(sem.target_nodes).merge(binders.consuming_node_set).num_cores() ==
-                        to_node_range_set(sem.target_nodes).num_cores(),
+                    sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
                 "SemaphoreSpec '{}' is forced EXTERNAL with a CONSUME (down()) binder kernel on a node "
                 "outside the semaphore's node set; down() spins on the consumer's LOCAL word. Run "
                 "consumers on the semaphore's node(s).",
@@ -325,14 +326,15 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "exactly one kernel (its threads may be many), or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id,
                 binders.binder_kernel_count);
-            // Same reason, one level up: the seeder's rendezvous slot is node-wide, so only ONE kernel
-            // per node may bind cached semaphores -- even across DIFFERENT semaphores.
+            // Same reason, one level up: the seeder's rendezvous slot is node-wide, so only ONE
+            // kernel per node may FORCE cached semaphores (AUTO candidates yield by demoting).
             TT_FATAL(
                 !binders.cached_blocked_by_node_conflict,
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but another kernel on the same node also "
-                "binds a cached semaphore; the pool seeders share one node-wide rendezvous slot, so two "
-                "co-resident cached-binder kernels can hang or re-seed a live counter. Bind all cached "
-                "semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL.",
+                "FORCES a cached semaphore; the pool seeders share one node-wide rendezvous slot, so two "
+                "forced-binder kernels can hang or re-seed a live counter. Bind all forced-cached "
+                "semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL. (AUTO "
+                "cached candidates yield automatically.)",
                 sem.unique_id);
             // Validator forbids compute-kernel semaphore bindings, but validation can be skipped.
             TT_FATAL(
@@ -377,6 +379,15 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
 
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
             const bool single_node = sem_nodes.num_cores() == 1;
+            // Checked before the single-writer pick: even ONE off-node consumer would build and
+            // then hang (down() spins on the consumer's LOCAL word).
+            TT_FATAL(
+                binders.consuming_instance_count == 0 ||
+                    sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
+                "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
+                "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
+                "there. Run consumers on the semaphore's node(s).",
+                sem.unique_id);
             if (binders.writer_instance_count <= 1 && single_node) {
                 return SemScope::LOCAL_NONATOMIC;
             }
@@ -406,19 +417,8 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
-            // Multi-consumer down() is safe on both atomic tiers: the cached tier's CAS loop
-            // (checked above) and EXTERNAL's NoC-CAS lock (keystone-proven). Each CONSUME instance
-            // also counts as a writer, so >=2 CONSUME can never reach LOCAL_NONATOMIC above.
-            // down() spins on the LOCAL word, so a consumer off the semaphore's node would build
-            // and then hang at run time -- reject it here instead.
-            TT_FATAL(
-                binders.consuming_instance_count == 0 ||
-                    to_node_range_set(sem.target_nodes).merge(binders.consuming_node_set).num_cores() ==
-                        to_node_range_set(sem.target_nodes).num_cores(),
-                "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
-                "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
-                "there. Run consumers on the semaphore's node(s).",
-                sem.unique_id);
+            // Multi-consumer down() is safe on both atomic tiers (cached CAS loop; EXTERNAL
+            // NoC-CAS lock); off-node consumers were already rejected above.
             return SemScope::EXTERNAL;
         }
     }
@@ -934,7 +934,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // decision is stable regardless of spec ordering.
     {
         std::unordered_map<uint64_t, std::unordered_set<const KernelSpec*>> kernels_by_node;
-        std::unordered_map<uint64_t, std::vector<SemaphoreSpecName>> candidates_by_node;
+        std::unordered_map<uint64_t, std::unordered_set<const KernelSpec*>> forced_kernels_by_node;
+        std::unordered_map<uint64_t, std::vector<std::pair<SemaphoreSpecName, bool>>> candidates_by_node;
         for (const auto& semaphore : spec.semaphores) {
             const auto it = collected.semaphore_endpoints.find(semaphore.unique_id);
             if (it == collected.semaphore_endpoints.end() || it->second.binder_kernel_count != 1) {
@@ -958,14 +959,23 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             const KernelSpec* binder = binders.writers.empty() ? binders.readers.front().kernel
                                                               : binders.writers.front().kernel;
             kernels_by_node[node_key].insert(binder);
-            candidates_by_node[node_key].push_back(semaphore.unique_id);
+            if (forced_cached) {
+                forced_kernels_by_node[node_key].insert(binder);
+            }
+            candidates_by_node[node_key].push_back({semaphore.unique_id, forced_cached});
         }
+        // AUTO candidates yield: with >1 candidate kernels on a node they demote to EXTERNAL (no
+        // seeder injected), so a lone FORCED sem stays safe. A forced sem is blocked only when a
+        // SECOND forced-binder kernel shares the node -- the true mixed-rendezvous hang.
         for (const auto& [node_key, kernels] : kernels_by_node) {
             if (kernels.size() <= 1) {
                 continue;
             }
-            for (const auto& sem_name : candidates_by_node[node_key]) {
-                collected.semaphore_endpoints[sem_name].cached_blocked_by_node_conflict = true;
+            const bool forced_conflict = forced_kernels_by_node[node_key].size() > 1;
+            for (const auto& [sem_name, forced] : candidates_by_node[node_key]) {
+                if (!forced || forced_conflict) {
+                    collected.semaphore_endpoints[sem_name].cached_blocked_by_node_conflict = true;
+                }
             }
         }
     }

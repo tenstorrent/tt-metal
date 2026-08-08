@@ -72,9 +72,9 @@ void kernel_main() {
     noc.async_read_barrier();
 
     // Semaphore setup
-    // NOTE: no explicit <> -- sem::x is a SemaphoreBindingToken carrying the host-chosen scope,
-    // and CTAD adopts it. Spelling Semaphore<> would pin the class default (LOCAL_NONATOMIC) and
-    // contradict the baked scope, which is a static_assert.
+    // No explicit <>: CTAD adopts the token's host-baked scope. Spelling Semaphore<> would pin the
+    // class default (LOCAL_NONATOMIC) and trip the ctor's scope-mismatch static_assert whenever the
+    // host bakes any other scope.
     Semaphore sem_exchange(sem::exchange);
     Semaphore sem_barrier(sem::barrier);
 

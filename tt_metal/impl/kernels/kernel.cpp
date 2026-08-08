@@ -576,12 +576,9 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.id));
-        // Fold the baked scope: two kernels binding the same semaphore id under different
-        // scopes emit different tokens (different device mechanism) and must not share an artifact.
+        // scope and read_only are baked into the emitted token, so kernels differing in
+        // either must not share a cached artifact.
         hasher.update(static_cast<uint64_t>(it->second.scope));
-        // Same for the access bit: same id + scope but different access must not share an
-        // artifact (read_only is baked into the token and changes which members compile);
-        // without it the collision would be silent.
         hasher.update(static_cast<uint64_t>(it->second.read_only));
     }
     // Tensor binding handles:

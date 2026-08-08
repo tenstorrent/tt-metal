@@ -59,9 +59,7 @@ void kernel_main() {
         }
     }
 #elif defined(MODE_MULTI_CONSUMER)
-    // Mirror of PRODUCER_CONSUMER: ONE producer, (num_threads-1) CONCURRENT consumers. A
-    // double-spent credit overdraws the counter and wraps unsigned -> huge nonzero report; a
-    // lost credit blocks a consumer -> 'done' never fills -> RunProgram timeout.
+    // Mirror of PRODUCER_CONSUMER: ONE producer, (num_threads-1) CONCURRENT consumers (failure modes: see header).
     Semaphore done(sem::done);  // CTAD deduces the host-baked scope
     if (is_lowest) {
         // Producer + reporter: single-credit ups for maximal interleave with the racing consumers.
