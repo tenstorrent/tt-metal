@@ -198,6 +198,33 @@ def test_softsign(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.softsign)
 
 
+# softsign(x) = x / (1 + |x|) saturates to +-1 as |x| grows. The kernel evaluates it as
+# v * (1 / (1 + |v|)), and that reciprocal is the intermediate that underflows: once it
+# falls below the smallest normal it is flushed to zero and the product collapses to 0 --
+# the opposite end of the range from the correct answer.
+#
+# run_activation_unary_test draws from a standard normal, so the existing coverage never
+# reaches the affected magnitudes; the first failing input is around 1.06e38.
+@pytest.mark.parametrize(
+    "magnitude",
+    [2.0**120, 2.0**125, 2.0**126, 2.0**127, 3.3895313892515355e38],  # last = largest finite bfloat16
+)
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_softsign_large_magnitude(device, magnitude, sign):
+    torch_input_tensor = torch.full((32, 32), sign * magnitude, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.softsign)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.softsign(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    # The expected value is exactly +-1, so no tolerance is needed to state the contract:
+    # the magnitude must not collapse towards zero.
+    assert torch.all(output_tensor == torch_output_tensor)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_swish(device, h, w):
