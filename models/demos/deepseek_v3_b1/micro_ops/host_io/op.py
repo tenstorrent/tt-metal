@@ -261,6 +261,36 @@ class HostInterface:
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
+        # DEVICE_PULL mode: the H2D FIFO lives in pinned host memory, so the receiver
+        # kernel needs a dedicated L1 scratch buffer as a landing zone for each PCIe DMA
+        # read before the page is forwarded downstream. Allocate one page of L1 on the
+        # socket core and keep the tensor alive for the lifetime of this object.
+        self._h2d_scratch_tensor = None
+        self._h2d_scratch_l1_addr = 0
+        if (
+            self.h2d_socket is not None
+            and self.h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL
+            and not self.has_embedding  # fused kernel handles its own buffering
+        ):
+            core_coord = self.h2d_mesh_core_coord.core_coord
+            shard_spec = ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord)]),
+                [1, self.h2d_page_size // 4],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            self._h2d_scratch_tensor = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, self.h2d_page_size // 4]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    shard_spec,
+                ),
+            )
+            self._h2d_scratch_l1_addr = self._h2d_scratch_tensor.buffer_address()
+
     def _get_downstream_sender_socket(self):
         if self.inter_mesh_downstream:
             return self.downstream_mesh_socket
@@ -311,6 +341,10 @@ class HostInterface:
                 ]
             )
             h2d_socket_kernel_ct_args.extend(get_tensor_accessor_args(self.embedding_tensor))
+        else:
+            # h2d_receiver.cpp (non-fused) CT arg 12: scratch L1 address for DEVICE_PULL.
+            # HOST_PUSH mode passes 0 (kernel ignores it when pull_from_host=false).
+            h2d_socket_kernel_ct_args.append(self._h2d_scratch_l1_addr)
 
         kernel_source = (
             "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp"
