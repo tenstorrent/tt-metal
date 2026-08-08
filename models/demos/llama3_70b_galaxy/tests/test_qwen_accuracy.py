@@ -425,7 +425,76 @@ def test_qwen_model_acc(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
             )[0, 0, 0, : model_args.vocab_size]
 
-        if _IS_BLACKHOLE:
+        if os.environ.get("QWEN_ACC_HOST_ARGMAX") == "1":
+            # Diagnostic: score from the host-composed lm_head logits instead of the on-device
+            # sampling argmax. Discriminates lm_head-output corruption from sampling-path
+            # (cross-column gather / argmax) corruption.
+            host_logits_full = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+            )[0, 0, 0, :]
+            host_logits = host_logits_full[: model_args.vocab_size]
+            tt_argmax_token = host_logits.argmax()
+            if i < 8:
+                # One-time diagnostic: check whether any vocab chunk of the lm_head output is a
+                # duplicate of another (device row computing the wrong weight slice).
+                chunk_w = host_logits_full.shape[0] // 8
+                chunks = host_logits_full.view(8, chunk_w)
+                for a in range(8):
+                    for b in range(a + 1, 8):
+                        max_diff = (chunks[a] - chunks[b]).abs().max().item()
+                        if max_diff < 1e-3:
+                            logger.warning(f"step {i}: vocab chunk {a} and {b} are IDENTICAL (max diff {max_diff})")
+            # Also read the on-device sampled token and log divergences from the host argmax,
+            # including the host logit values at both positions (isolates argmax-vs-logits issues).
+            dev_token = int(ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok[0])[0]).reshape(-1)[0])
+            host_token = int(tt_argmax_token)
+            if dev_token != host_token:
+                dev_logit = host_logits[dev_token].item() if dev_token < model_args.vocab_size else float("nan")
+                logger.warning(
+                    f"step {i}: device tok {dev_token} != host argmax {host_token} "
+                    f"(host logits: dev={dev_logit:.3f} host={host_logits[host_token].item():.3f}, "
+                    f"padded_region={dev_token >= model_args.vocab_size})"
+                )
+                untilized = getattr(tt_sampling, "debug_untilized", None)
+                if untilized is not None:
+                    # The gathered (tiled) logits were verified slot-perfect; now inspect the
+                    # TRACED untilize output (the argmax input) to localize the displacement:
+                    # if it is already displaced, untilize is at fault; if it is clean, argmax is.
+                    u = ttnn.to_torch(ttnn.get_device_tensors(untilized)[0]).float()[0, 0, 0, :]
+                    exp_val = host_logits_full[host_token].item()
+                    u_at_host = u[host_token].item()
+                    u_at_dev = u[dev_token].item() if dev_token < u.shape[0] else float("nan")
+                    max_diff = (u - host_logits_full).abs().max().item()
+                    logger.warning(
+                        f"step {i}: traced untilize out: u[host_tok]={u_at_host:.3f} "
+                        f"u[dev_tok]={u_at_dev:.3f} expected_max={exp_val:.3f} "
+                        f"max|untilized-host|={max_diff:.4f}"
+                    )
+                    # Map the permutation: for each 1/16th segment of the untilized row, find the
+                    # best-matching host segment (reveals which regions were written where).
+                    nseg = 16
+                    seg_w = u.shape[0] // nseg
+                    mapping = []
+                    for s in range(nseg):
+                        useg = u[s * seg_w : (s + 1) * seg_w]
+                        diffs = [
+                            (host_logits_full[c * seg_w : (c + 1) * seg_w] - useg).abs().max().item()
+                            for c in range(nseg)
+                        ]
+                        best = min(range(nseg), key=lambda c: diffs[c])
+                        mapping.append(f"{s}<-{best}({diffs[best]:.2f})")
+                    logger.warning(f"step {i}: untilize segment mapping: {' '.join(mapping)}")
+                    # Also rerun argmax eagerly on the traced untilize output.
+                    sub_grids = tt_sampling._force_argmax_sub_core_grids
+                    eager_tok = ttnn.argmax(untilized, dim=-1, keepdim=False, sub_core_grids=sub_grids)
+                    eager_token = int(ttnn.to_torch(ttnn.get_device_tensors(eager_tok)[0]).reshape(-1)[0])
+                    ttnn.deallocate(eager_tok)
+                    logger.warning(
+                        f"step {i}: eager argmax on traced untilize out -> {eager_token} "
+                        f"(host {host_token}, traced-device {dev_token})"
+                    )
+        elif _IS_BLACKHOLE:
             # The argmax token is replicated across the mesh, so read device 0's shard and flatten.
             # This is rank-agnostic: the regular sampling kernel returns [1,1,1,32] while the
             # force-argmax (Blackhole) path returns [1,1,32]; reshape(-1) handles both.
