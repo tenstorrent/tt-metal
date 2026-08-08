@@ -119,7 +119,7 @@ class TopKRouter:
     def __call__(self, hidden_states, use_throughput_experts):
         # Actual token count from volume (shape[0] after reshape is tile-padded).
         actual_tokens = hidden_states.volume() // self.hidden_dim
-        hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
+        hidden_states = ttnn.squeeze(ttnn.squeeze(hidden_states, 0), 0)
 
         # L1 for decode (small), DRAM for prefill (large sequences).
         is_decode = actual_tokens <= 128
