@@ -281,6 +281,17 @@ class TtQwenModelArgs(TtModelArgs):
                     ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(10, 9)),
                 ]
             )
+            # Force-argmax sampling: argmax is a scalar-RISC compare loop over the full gathered
+            # padded vocab (32 x 155648), so runtime scales ~1/num_cores. The default
+            # sub_core_grids is only 40 cores (2.1 ms/token); use the whole worker sub-device
+            # (cols 1-10, rows 0-9 = 100 cores, matching prefetcher_common's worker_cores_range_set)
+            # for the sampling untilize/argmax. Argmax/untilize CBs are tiny, so unlike top-k they
+            # coexist with the resident global CB on the receiver columns 1-3.
+            self.force_argmax_sub_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(10, 9)),
+                ]
+            )
         else:
             self.sub_core_grid_topk = ttnn.CoreRangeSet(
                 [

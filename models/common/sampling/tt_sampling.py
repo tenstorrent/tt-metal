@@ -153,7 +153,15 @@ class TTSampling(LightweightModule):
         # ("kernel group cores do not match sub device cores"). Pin the force-argmax untilize/argmax to
         # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
         # other arch's behaviour changes.
-        self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
+        # force_argmax_sub_core_grids (optional): a wider grid than sub_core_grids for the
+        # force-argmax untilize/argmax. Argmax is a scalar-RISC compare loop over the full gathered
+        # vocab, so its runtime scales ~1/num_cores; the BH galaxy passes the full 100-core worker
+        # sub-device here instead of the 40-core sub_core_grids (2.1 ms -> ~0.85 ms per token).
+        self._force_argmax_sub_core_grids = (
+            (getattr(args, "force_argmax_sub_core_grids", None) or self.sub_core_grids)
+            if getattr(args, "use_unfused_ccl", False)
+            else None
+        )
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)

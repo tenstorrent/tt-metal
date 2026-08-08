@@ -390,6 +390,62 @@ class TtLlamaAttention(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
 
+    def compute_decode_rot_slices(self, rot_mats, q_rot_end, k_rot_end, store_cache=False):
+        """Slice/reshard the expanded decode rot_mats into the rotary op's expected layout and
+        cache the result on the shared tt_ccl, keyed by the rot_mats identity. The slices are
+        loop-invariant across layers within one decode step (same rot_mats object, static head
+        shapes), so this runs once per step: either from llama_model's decode forward preamble
+        (preferred: the persistent tensors allocate before any per-layer transients and land high
+        in L1, clear of the ring-matmul CB region) or lazily from layer 0. The cache holds a
+        reference to rot_mats so the id()-based key cannot alias a freed tensor; the next decode
+        step allocates a new rot_mats and naturally invalidates the cache."""
+        # Prefetcher resident (unfused-CCL): pin the auto-gridding slice kernels to the worker
+        # sub-core grid. Otherwise ttnn.slice packs a 32-core block column-major from origin
+        # (0,0), spilling into the uncovered senders-column tail (cores (0,8)/(0,9)) and hitting
+        # the "kernel group cores do not match sub device cores" fatal under the split
+        # senders/worker sub-device manager. None on the WH / no-prefetcher path (no split mgr).
+        rot_slice_sub_core_grids = self._worker_sub_core_grids if self.use_unfused_ccl else None
+        q_rot_cos = ttnn.slice(
+            rot_mats[0],
+            [0, 0, 0, 0],
+            q_rot_end,
+            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            sub_core_grids=rot_slice_sub_core_grids,
+        )
+        q_rot_sin = ttnn.slice(
+            rot_mats[1],
+            [0, 0, 0, 0],
+            q_rot_end,
+            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            sub_core_grids=rot_slice_sub_core_grids,
+        )
+        k_rot_cos = ttnn.slice(
+            rot_mats[0],
+            [0, 0, 0, 0],
+            k_rot_end,
+            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            sub_core_grids=rot_slice_sub_core_grids,
+        )
+        k_rot_sin = ttnn.slice(
+            rot_mats[1],
+            [0, 0, 0, 0],
+            k_rot_end,
+            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            sub_core_grids=rot_slice_sub_core_grids,
+        )
+        q_rot_cos = ttnn.to_layout(q_rot_cos, ttnn.TILE_LAYOUT)
+        q_rot_sin = ttnn.to_layout(q_rot_sin, ttnn.TILE_LAYOUT)
+        k_rot_cos = ttnn.to_layout(k_rot_cos, ttnn.TILE_LAYOUT)
+        k_rot_sin = ttnn.to_layout(k_rot_sin, ttnn.TILE_LAYOUT)
+        if store_cache:
+            self.tt_ccl._decode_rot_slice_cache = (
+                (id(rot_mats[0]), id(rot_mats[1])),
+                (tuple(q_rot_end), tuple(k_rot_end)),
+                (q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin),
+                (rot_mats[0], rot_mats[1]),
+            )
+        return q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin
+
     def _apply_decode_qk_norm(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD):
         # unfused-CCL (BH prefetcher) path: the create-head output is an ND round-robin height-sharded
         # tensor (user-parallel), which neither the fused sharded reshard (expects the head-parallel
@@ -829,44 +885,32 @@ class TtLlamaAttention(LightweightModule):
                     k_heads_pre_rot_1BKD.shape[2],
                     self.head_dim,
                 ]
-                # Prefetcher resident (unfused-CCL): pin the auto-gridding slice kernels to the worker
-                # sub-core grid. Otherwise ttnn.slice packs a 32-core block column-major from origin
-                # (0,0), spilling into the uncovered senders-column tail (cores (0,8)/(0,9)) and hitting
-                # the "kernel group cores do not match sub device cores" fatal under the split
-                # senders/worker sub-device manager. None on the WH / no-prefetcher path (no split mgr).
-                rot_slice_sub_core_grids = self._worker_sub_core_grids if self.use_unfused_ccl else None
-                q_rot_cos = ttnn.slice(
-                    rot_mats[0],
-                    [0, 0, 0, 0],
-                    q_rot_end,
-                    memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-                    sub_core_grids=rot_slice_sub_core_grids,
-                )
-                q_rot_sin = ttnn.slice(
-                    rot_mats[1],
-                    [0, 0, 0, 0],
-                    q_rot_end,
-                    memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-                    sub_core_grids=rot_slice_sub_core_grids,
-                )
-                k_rot_cos = ttnn.slice(
-                    rot_mats[0],
-                    [0, 0, 0, 0],
-                    k_rot_end,
-                    memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-                    sub_core_grids=rot_slice_sub_core_grids,
-                )
-                k_rot_sin = ttnn.slice(
-                    rot_mats[1],
-                    [0, 0, 0, 0],
-                    k_rot_end,
-                    memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-                    sub_core_grids=rot_slice_sub_core_grids,
-                )
-                q_rot_cos = ttnn.to_layout(q_rot_cos, ttnn.TILE_LAYOUT)
-                q_rot_sin = ttnn.to_layout(q_rot_sin, ttnn.TILE_LAYOUT)
-                k_rot_cos = ttnn.to_layout(k_rot_cos, ttnn.TILE_LAYOUT)
-                k_rot_sin = ttnn.to_layout(k_rot_sin, ttnn.TILE_LAYOUT)
+                # EXPERIMENTAL (QWEN_BH_HOIST_ROT_SLICES=1, default off): these slices/layout-casts
+                # are loop-invariant within a decode step (same rot_mats object for all layers,
+                # static head shapes), so they can be computed once and reused via a cache on the
+                # shared tt_ccl, removing 4 slice + 4 to_layout ops from 63 of 64 layers (~0.5
+                # ms/token on BH galaxy). Disabled by default: the cached tensors persist for the
+                # whole layer loop and the BH ring FF matmul's static CB region (ends 444480 on
+                # cols 1-6) leaves no persistent L1 headroom on those cores, tripping "static
+                # circular buffers clash with L1 buffers" at trace capture even when the tensors
+                # allocate at the very top of the decode forward.
+                _rot_bounds = (tuple(q_rot_end), tuple(k_rot_end))
+                if os.environ.get("QWEN_BH_HOIST_ROT_SLICES", "0") == "1":
+                    _rot_key = (id(rot_mats[0]), id(rot_mats[1]))
+                    _rot_cache = getattr(self.tt_ccl, "_decode_rot_slice_cache", None)
+                    if _rot_cache is not None and _rot_cache[0] == _rot_key and _rot_cache[1] == _rot_bounds:
+                        q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin = _rot_cache[2]
+                    else:
+                        q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin = self.compute_decode_rot_slices(
+                            rot_mats, q_rot_end, k_rot_end, store_cache=True
+                        )
+                    # Publish the (static) bounds so llama_model can preslice at the top of
+                    # subsequent decode forwards without knowing the head shapes.
+                    self.tt_ccl._decode_rot_slice_bounds = _rot_bounds
+                else:
+                    q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin = self.compute_decode_rot_slices(
+                        rot_mats, q_rot_end, k_rot_end, store_cache=False
+                    )
             q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_pre_rot_1BQD,
                 q_rot_cos,

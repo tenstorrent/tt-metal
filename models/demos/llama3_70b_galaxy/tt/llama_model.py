@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 import torch
 from tqdm import tqdm
@@ -912,6 +914,27 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
+        if (
+            mode == "decode"
+            and self.use_prefetcher
+            and self.use_unfused_ccl
+            and os.environ.get("QWEN_BH_HOIST_ROT_SLICES", "0") == "1"
+            and rot_mats is not None
+            and rot_mats[0].shape[1] != 1
+        ):
+            # Pre-compute the per-step rotary cos/sin slices before any per-layer transients are
+            # allocated: the sliced tensors persist for the whole layer loop, and allocating them
+            # first places them high in L1, clear of the ring matmuls' static CB region (allocating
+            # them lazily inside layer 0 landed them at ~0x59400 on the worker cores and tripped
+            # "static circular buffers clash with L1 buffers" during trace capture). The slice
+            # bounds are recorded by the attention on the first (eager) decode run; until then the
+            # layers compute the slices themselves.
+            _rot_bounds = getattr(self.tt_ccl, "_decode_rot_slice_bounds", None)
+            if _rot_bounds is not None:
+                self.layers[0].attention.compute_decode_rot_slices(
+                    rot_mats, list(_rot_bounds[0]), list(_rot_bounds[1]), store_cache=True
+                )
+
         if mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(

@@ -411,3 +411,49 @@ ttnn C++ (device kernels — JIT, no host rebuild needed):
 
 NOTE: a full `ttnn` C++ rebuild is required for the host-side changes (the `.so`). The device
 kernel `.cpp`/`.hpp` recompile automatically by hash on first run.
+
+## Decode perf: 47.6 -> 50.7 t/s/u (2026-08-08)
+
+Traced-decode profiling (qwen_trace_pf_b32_v2 capture, device 16, one replay = one token,
+~20.4 ms span):
+
+- Worker stream: 15.6 ms busy + 4.9 ms dispatch gaps across 2673 ops/token (~42 ops/layer on the
+  unfused-CCL path vs ~25 on WH's fused-CCL path — that op-count delta is the structural gap).
+- Per layer (~330 us): FF1/FF3 ring matmul pair 73 us (the second one is gated by the prefetcher's
+  DRAM stream), 2x reduce_scatter_minimal_async 45 us, 3x all_reduce 26 us, 2x distributed-norm
+  chains (reshard+LN+AllGather+LN+reshard) ~28 us, QK-norm with 4 reshards ~10 us, 4 rotary
+  cos/sin slices ~9 us.
+- Sampling trace (separate trace, serialized after decode, every token): gather 206 us +
+  untilize 201 us + **argmax 2.1 ms**. Argmax is a scalar-RISC compare loop over the full gathered
+  padded vocab (32 x 155648) and was pinned to the 40-core `sub_core_grids`.
+
+### Fix landed: wide force-argmax grid (+3 t/s/u)
+
+`qwen_model_config.py` now sets `force_argmax_sub_core_grids` = the full 100-core worker
+sub-device (cols 1-10, rows 0-9) on the BH prefetcher path; `tt_sampling.py` prefers it over
+`sub_core_grids` for the force-argmax untilize/argmax. Argmax/untilize CBs are tiny, so unlike
+top-k they coexist with the resident global CB on receiver columns 1-3.
+
+Result (batch-32, 64 tokens, prefetcher + fused async RS matmul):
+**19.73 ms @ 50.68 tok/s/user (1622 tok/s)**, steady-state iterations ~20.07 ms — up from
+20.99 ms @ 47.64 t/s/u. Accuracy re-verified after the change (see accuracy section).
+
+### Tried and parked: rotary slice hoist (QWEN_BH_HOIST_ROT_SLICES=1, default off)
+
+The 4 rotary cos/sin slices + 4 to_layouts per layer are loop-invariant (same rot_mats object,
+static head shapes) — hoisting them to once-per-token would save ~0.5 ms. Implemented as a
+tt_ccl-cached memo (llama_attention.compute_decode_rot_slices) with a model-level preamble
+preslice, but the cached tensors persist through the layer loop and the BH ring FF matmul's
+static CB region (ends 444480 on cols 1-6) leaves ~zero persistent L1 headroom on those cores:
+trace capture trips "static circular buffers clash with L1 buffers" (lowest buffer 365568-392320
+< 444480) even when the tensors allocate at the very top of the decode forward. Env-gated off.
+To revive: shrink to a single cos/sin pair (q and k bounds are identical => 2 tensors, 16 KB) or
+carve headroom out of the ring matmul CB budget.
+
+### Remaining ideas towards ~55 t/s/u
+
+- Distributed local argmax: per-column argmax over the 19456-wide shard + tiny cross-column
+  combine would cut sampling from ~2.5 ms to ~0.35 ms total (saves another ~1.3 ms vs the wide
+  grid's 0.85 ms argmax + full-width gather/untilize).
+- The ~42 us stalls before reduce_scatter in ~9 layers/token; the QK-norm reshard sandwich
+  (4 reshards/layer); the 2-op distributed-norm gather chains (WH uses fused RMSAllGather).
