@@ -395,12 +395,37 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         /*buffering_factor=*/(read_batch_size * operation_attributes.num_experts_per_tok) + 1,
         /*cb_id=*/tt::CBIndex::c_13,
         "worker_metadata_scratch");
-    // c_15: route_info scratch (16B = l1_alignment). Worker writer builds the 4-u32
-    // route_info entry [route, distance, page_idx, dst_chip] here, then NOC-writes the whole
-    // block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw).
-    // dst_chip is the linearized dest device index used by the sender's 2D fabric route.
+    // Per-page sparse-multicast grouping (1D Ring, any top-k): widen the sender ring's route_info slot
+    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], expert[4], k[4],
+    // weight[4]] = 23 u32 — so a token's co-directional destinations become sparse-multicast payload
+    // writes, each covering up to 4 destinations (writer_worker spills wider groups into extra
+    // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
+    // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
+    // keeps the per-expert path.
+    // Sparse multicast is a 1D-line primitive (hop-bitmask along one forwarding direction), so it is
+    // enabled only for a 1D line: Ring, or Linear with one mesh dimension == 1. Excludes 2D meshes
+    // (both dims > 1) whose Topology::Linear would otherwise match — those route along an axis and were
+    // never validated for the grouped path.
+    const bool enable_sparse_mcast =
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
+        (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
+    log_info(
+        tt::LogOp,
+        "[dispatch][tile] enable_sparse_mcast={} (topology={}, num_links={})",
+        enable_sparse_mcast,
+        (int)topology,
+        operation_attributes.num_links);
+    constexpr uint32_t grouped_route_info_u32 = 23;
+    const uint32_t route_info_slot_stride_bytes =
+        enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
+                            : l1_alignment;
+
+    // c_15: route_info scratch. Worker writer builds the route_info entry here, then NOC-writes the
+    // whole block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw). Per-
+    // expert path: 4 u32 [route, distance, page_idx, dst_chip]. Sparse-mcast path: the widened grouped
+    // record. dst_chip is the linearized dest device index used by the sender's 2D fabric route.
     {
-        uint32_t route_info_scratch_size = l1_alignment;
+        uint32_t route_info_scratch_size = route_info_slot_stride_bytes;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = route_info_scratch_size,
             .core_ranges = worker_core_grid,
@@ -442,7 +467,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // and CB creation asserts — that is the intended "breaks if too many" behaviour.
     std::vector<std::array<uint32_t, 3>> writer_cb_ids(num_workers);  // {route, payload, metadata}
     {
-        uint32_t route_info_page_size = l1_alignment;
+        uint32_t route_info_page_size = route_info_slot_stride_bytes;
         uint32_t next_free_cb = static_cast<uint32_t>(tt::CBIndex::c_19);
         for (uint32_t s = 0; s < num_workers; s++) {
             std::array<uint32_t, 3> ids;
@@ -624,6 +649,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
+    // Toggles the grouped sparse-multicast path in both writer_worker (ring producer) and
+    // writer_sender (ring consumer / sender). Gated on the widened route_info slot above.
+    if (enable_sparse_mcast) {
+        fabric_defines["SPARSE_MCAST_DISPATCH"] = "1";
+    }
 
     // ==================== Sender writer kernel ====================
     // Drains the worker baton-ring CBs and writes tokens and metadata via fabric
@@ -781,7 +811,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             detail::get_aligned_page_size(metadata_tensor),              // 7: aligned_metadata_page_size
             static_cast<uint32_t>(tt::CBIndex::c_14),                    // 8: cb_plan_id
             linearized_mesh_coord,                                       // 9
-            l1_alignment,                                                // 10: route_info slot stride
+            route_info_slot_stride_bytes,                                // 10: route_info slot stride
             writer_cb_size,                                              // 11: sender writer CB size
             static_cast<uint32_t>(tt::CBIndex::c_15),                    // 12: cb_route_info_scratch_id
             read_batch_size * operation_attributes.num_experts_per_tok,  // 13: meta_scratch_slots
