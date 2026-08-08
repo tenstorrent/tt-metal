@@ -44,7 +44,7 @@ inline void calculate_fmod() {
         v_else { quotient = v * recip_val; }
         v_endif
 
-        v_if(quotient > v * recip_val) {
+        v_if(exp < 23 && quotient * s > v) {
             quotient = quotient - 1;
         }
         v_endif;
