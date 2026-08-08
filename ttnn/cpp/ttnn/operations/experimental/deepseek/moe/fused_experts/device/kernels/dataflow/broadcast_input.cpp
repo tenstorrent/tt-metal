@@ -49,7 +49,11 @@
 //   19: num_weights
 //   20: cb_rscalar
 //   21: down_prefetch (down slices to fetch before the gather/broadcast sync)
-//   22+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   22: batch        (token rows, B <= 32, sharing one activation tile row)
+//   23: experts_block (experts per block; the activation block held in L1 at once)
+//   24: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
+//   25: down_reserve_tiles    (pages a down slice reserves in cb_weights)
+//   26+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -58,6 +62,7 @@
 //   3: mcast_end_x     4: mcast_end_y
 //   5: num_dests       (number of receiver cores = total cores - 1)
 //   6: core_index      (this core's flat grid index, x*8 + y)
+//   7: leader_noc_x    8: leader_noc_y (core {0,0}, for the per-block slot-free ack)
 void kernel_main() {
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
@@ -81,8 +86,12 @@ void kernel_main() {
     constexpr uint32_t num_weights = get_compile_time_arg_val(19);
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(20);
     constexpr uint32_t down_prefetch = get_compile_time_arg_val(21);
+    constexpr uint32_t batch = get_compile_time_arg_val(22);
+    constexpr uint32_t experts_block = get_compile_time_arg_val(23);
+    constexpr uint32_t gate_up_reserve_tiles = get_compile_time_arg_val(24);
+    constexpr uint32_t down_reserve_tiles = get_compile_time_arg_val(25);
 
-    constexpr auto input_args = TensorAccessorArgs<22>();
+    constexpr auto input_args = TensorAccessorArgs<26>();
     constexpr auto gate_up_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -97,6 +106,8 @@ void kernel_main() {
     const uint32_t mcast_end_y = get_arg_val<uint32_t>(4);
     const uint32_t num_dests = get_arg_val<uint32_t>(5);
     const uint32_t core_index = get_arg_val<uint32_t>(6);
+    const uint32_t leader_noc_x = get_arg_val<uint32_t>(7);
+    const uint32_t leader_noc_y = get_arg_val<uint32_t>(8);
 
     // Use NoC 1 ("the other NoC") so this runs in parallel with the {0,0} sender on NoC 0.
     Noc noc(1);
@@ -166,5 +177,11 @@ void kernel_main() {
         kDownAddrBase,
         cb_rscalar_id,
         num_weights,
-        down_prefetch);
+        down_prefetch,
+        batch,
+        experts_block,
+        gate_up_reserve_tiles,
+        down_reserve_tiles,
+        leader_noc_x,
+        leader_noc_y);
 }

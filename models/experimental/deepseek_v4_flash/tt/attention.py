@@ -3,14 +3,14 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
-from .layers import (
-    BatchedLinearDecode,
-    DeepSeekV4RMSNorm,
-    LinearDecode,
-    _rms_norm_unweighted,
-    make_shared_decode_gcb,
+from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config, _signpost
+from .decode_prefetch import (
+    DECODE_LAYOUTS,
+    check_decode_layout,
+    decode_prefetch_page_bytes,
+    make_decode_prefetch_buffers,
 )
+from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
 from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -28,6 +28,40 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 #   Rd = qk_rope_head_dim (the trailing RoPE slice of each head).
 # V4 is shared-KV MQA (one KV head broadcast to all query heads) and lays each
 # head out as ``[nope | rope]`` with interleaved RoPE on the trailing ``Rd``.
+#
+# A step decodes ``B`` users at once (``S == 1``), all of them at the same absolute
+# position: the RoPE rows, the additive mask and the cache indices are shared, which
+# is what a batch stepped in lockstep from position 0 looks like. Users at *differing*
+# positions would need per-user RoPE rows and masks and are not supported here.
+#
+# Two activation layouts appear throughout, and which one a tensor is in matters
+# because tiles are 32 rows tall:
+#
+#   * *packed rows* ``[1, 1, B, F]`` -- the B users on consecutive rows of a single
+#     tile-row. Everything that is per-token arithmetic (projections, norms, RoPE)
+#     runs here, so one decode step costs one tile-row of work rather than B of them.
+#     This is what caps a step at ``TILE_SIZE`` users.
+#   * *per-user tile-rows* ``[1, B, 1, F]`` / ``[B, 1, ..., F]`` -- one tile-row per
+#     user. The KV-cache ops require it (``paged_update_cache`` dispatches one user per
+#     core, SDPA-decode indexes K/V by a leading batch), and the surrounding block hands
+#     ``hidden`` in as ``[B, S, 1, D]``.
+#
+# :func:`_pack_tokens` / :func:`_one_row_per_user` convert between them; both are view
+# reshapes at ``B == 1`` and relayouts above it.
+#
+# Two separate things bound ``B``, and the smaller one is not the one in the assert:
+#
+#   * the *layout* bound, ``TILE_SIZE`` (32), enforced by :func:`_pack_tokens` -- a step's
+#     tokens have to fit one tile-row.
+#   * an *L1* bound, well under that. Almost nothing here grows with ``B`` (the projections
+#     and norms all run on the one tile-row, which is the point of the packed layout), but
+#     the query does: SDPA-decode wants a head axis, so ``q`` is width-sharded over ``B*H``
+#     rows, i.e. ``B * H * Dh * 2`` bytes -- 64 KB per core at ``B == 16``, ``head_dim 512``.
+#     Past a handful of users that crowds out SDPA-decode's own statically-allocated
+#     circular buffers and the op fails to build. Measured on a Blackhole grid at
+#     ``head_dim 512``: 8 users fit, 16 do not. It surfaces as "statically allocated circular
+#     buffers ... clash with L1 buffers", not as a clean batch-size error, so treat 8 as the
+#     supported ceiling until the query's residency is reworked.
 # ---------------------------------------------------------------------------- #
 # KV / compressor cache (decode)
 #
@@ -65,23 +99,25 @@ class _StaticLayerCache:
     """Fixed-size, in-place per-layer decode caches (eager + traced decode).
 
     DRAM tensors of a fixed capacity written in place at the new token's position
-    by ``paged_update_cache`` (a device-tensor index):
+    by ``paged_update_cache`` (a device-tensor index). Every one of them carries the
+    batch on dim 0 and the (single, shared) KV head on dim 1, which is the
+    ``[B, heads, rows, feat]`` layout both ``paged_update_cache`` and SDPA-decode read:
 
-      * ``sliding`` ``[1, 1, window, Dh]`` -- a ring buffer (slot ``pos % window``);
+      * ``sliding`` ``[B, 1, window, Dh]`` -- a ring buffer (slot ``pos % window``);
         attention masks unwritten / out-of-window slots. Sliding-only layers only;
         for CSA/HCA the ring lives in ``combined`` (below).
-      * ``win_kv`` / ``win_gate`` ``[1, 1, compress_rate, feat]`` -- the compressor
+      * ``win_kv`` / ``win_gate`` ``[B, 1, compress_rate, feat]`` -- the compressor
         projections of the window *currently being filled*, at slot
         ``pos % compress_rate``. Only the ``compress_rate`` tokens of one window are
         held, because pooling is incremental: the step that closes a window pools
         just that window and appends its single entry (see :meth:`_pool_window`).
         ``None`` for sliding-only layers.
-      * ``prev_kv`` / ``prev_gate`` ``[1, 1, compress_rate, 2*Dh]`` -- the previous
+      * ``prev_kv`` / ``prev_gate`` ``[B, 1, compress_rate, 2*Dh]`` -- the previous
         window's projections, kept only by CSA because its entry ``w`` also needs
         window ``w-1``'s Ca slice. Refreshed from ``win_*`` after each pool.
         ``prev_gate`` starts at ``_MASK_NEG`` so window 0's absent Ca half carries
         softmax weight 0. ``None`` for HCA and sliding-only layers.
-      * ``combined`` ``[1, 1, window + cap // compress_rate, Dh]`` -- the single
+      * ``combined`` ``[B, 1, window + cap // compress_rate, Dh]`` -- the single
         K==V buffer a CSA/HCA layer hands to SDPA, holding *both* regions of the
         attention axis: the sliding ring in rows ``[0, window)`` and the pooled
         (normed, RoPE'd) compressed entries in rows ``[window, ...)``.
@@ -126,8 +162,9 @@ def build_static_layer_cache(
     max_seq: int,
     compress_rates: dict,
     paged: bool = False,
+    batch: int = 1,
 ) -> _StaticLayerCache:
-    """Allocate a layer's fixed-size in-place caches empty (all-zero).
+    """Allocate a layer's fixed-size in-place caches empty (all-zero), for ``batch`` users.
 
     ``paged`` leaves the KV buffers (``sliding`` / ``combined``) unallocated: those
     reads and writes go through the shared block pool instead (see
@@ -137,7 +174,7 @@ def build_static_layer_cache(
 
     def _filled(rows: int, width: int, value: float = 0.0) -> ttnn.Tensor:
         return ttnn.from_torch(
-            torch.full((1, 1, rows, width), value),
+            torch.full((batch, 1, rows, width), value),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -168,10 +205,14 @@ def build_static_layer_cache(
     return _StaticLayerCache(sliding, win_kv, win_gate, prev_kv, prev_gate, combined)
 
 
-def int32_pos_tensor(pos: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Single INT32 position scalar ``[1]`` on ``device`` (for ``paged_update_cache``)."""
+def int32_pos_tensor(pos: int, device: ttnn.MeshDevice, batch: int = 1) -> ttnn.Tensor:
+    """INT32 position vector ``[batch]`` on ``device`` (for ``paged_update_cache`` / SDPA).
+
+    Both ops index per user, so the vector carries one entry per user; the batch decodes
+    in lockstep, so every entry is the same ``pos``.
+    """
     return ttnn.from_torch(
-        torch.tensor([pos], dtype=torch.int32),
+        torch.full((batch,), pos, dtype=torch.int32),
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -186,11 +227,14 @@ def host_decode_mask(
     max_seq: int,
     device: ttnn.MeshDevice,
 ) -> ttnn.Tensor:
-    """Host-built additive decode mask for one absolute position ``pos``.
+    """Host-built additive decode mask ``[1, 1, 1, Skv]`` for one absolute position ``pos``.
 
     Mirrors the on-device mask in :meth:`DeepSeekV4Model._device_mask`: sliding
     columns mask slots with index ``> pos``; compressor columns mask windows with
     index ``>= (pos+1)//cr``.
+
+    Batch-independent: the users of a step share an absolute position, and SDPA-decode
+    broadcasts a mask whose leading dim is 1 over the batch, so one row serves them all.
     """
     if layer_type == "sliding_attention":
         invalid = torch.arange(sliding_window, dtype=torch.float32) > pos
@@ -265,19 +309,53 @@ def make_rope_table(cos_half: torch.Tensor, sin_half: torch.Tensor) -> tuple[tor
 # ``rot`` (the ``[Rd, Rd]`` interleaved rotate matrix) is block-diagonal in 32-wide
 # blocks, so the single top-left ``[32, 32]`` tile is the per-tile ``rotate_half`` the
 # fused device op applies to every rope tile. Derive + cache it once per ``rot`` object.
-_TRANS_MAT_CACHE: dict[int, ttnn.Tensor] = {}
+_TRANS_MAT_CACHE: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
 
 def _trans_mat_for(rot: ttnn.Tensor) -> ttnn.Tensor:
-    tm = _TRANS_MAT_CACHE.get(id(rot))
-    if tm is None:
-        tm = ttnn.reshape(
-            ttnn.slice(rot, [0, 0], [ttnn.TILE_SIZE, ttnn.TILE_SIZE]), [1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE]
-        )
-        # The fused op reads trans_mat from a DRAM-interleaved source.
-        tm = ttnn.to_memory_config(tm, ttnn.DRAM_MEMORY_CONFIG)
-        _TRANS_MAT_CACHE[id(rot)] = tm
+    """The cached per-tile ``rotate_half`` for ``rot``, derived on first use.
+
+    The entry keeps ``rot`` itself alive alongside the tile, because the key is its
+    ``id()``: let the last reference go and CPython is free to hand that address to the
+    next ``rot`` allocated, which would turn this into a silent hit returning a tile
+    belonging to a different (possibly already closed) device. Holding it makes the
+    address unique for as long as the entry lives, and costs one small tensor per distinct
+    rope matrix -- one per layer.
+    """
+    cached = _TRANS_MAT_CACHE.get(id(rot))
+    if cached is not None and cached[0] is rot:
+        return cached[1]
+    tm = ttnn.reshape(ttnn.slice(rot, [0, 0], [ttnn.TILE_SIZE, ttnn.TILE_SIZE]), [1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE])
+    # The fused op reads trans_mat from a DRAM-interleaved source.
+    tm = ttnn.to_memory_config(tm, ttnn.DRAM_MEMORY_CONFIG)
+    _TRANS_MAT_CACHE[id(rot)] = (rot, tm)
     return tm
+
+
+def _pack_tokens(hidden: ttnn.Tensor) -> ttnn.Tensor:
+    """``[B, S, 1, D]`` -> ``[1, 1, B*S, D]``: the block's tokens packed onto rows.
+
+    The surrounding block keeps one *tile-row* per token, of which a decode step fills a
+    single row. Packing them onto consecutive rows of one tile-row is what makes a
+    B-user step cost the same projections / norms / RoPE as a one-user step, and is
+    why the batch is capped at ``TILE_SIZE`` users.
+    """
+    b, s, _, d = hidden.shape
+    tokens = b * s
+    assert (
+        tokens <= ttnn.TILE_SIZE
+    ), f"a decode step packs its {tokens} tokens onto one tile-row, so B*S must be at most {ttnn.TILE_SIZE}"
+    return ttnn.reshape(hidden, [1, 1, tokens, d])
+
+
+def _one_row_per_user(x: ttnn.Tensor) -> ttnn.Tensor:
+    """``[1, 1, B, F]`` -> ``[1, B, 1, F]``, the layout the KV-cache writer indexes by user.
+
+    ``paged_update_cache`` dispatches one user per core and reads its input with the batch
+    on dim 1, so the packed rows the projections produce have to be spread back over one
+    tile-row each. A view at ``B == 1``, a relayout above it.
+    """
+    return ttnn.reshape(x, [1, x.shape[-2], 1, x.shape[-1]])
 
 
 def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.MemoryConfig:
@@ -298,10 +376,17 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     op: ``x`` is height-sharded one tile-row per core while ``cos`` / ``sin`` / ``trans_mat``
     are DRAM-interleaved (the reader streams each core's rope tile-row), then the sharded
     output is converted back to ``x``'s original memory config.
+
+    ``rows`` is every leading dim multiplied out, not just ``x.shape[-2]``: the batched
+    inputs here are ``[1, B, H, Dh]`` (SDPA-decode's head layout), whose ``B*H`` rows are
+    contiguous because ``H`` is tile-aligned.
     """
     device = x.device()
     d = x.shape[-1]
-    rows = x.shape[-2]
+    shape = list(x.shape)
+    rows = 1
+    for dim in shape[:-1]:
+        rows *= dim
 
     # The op reads one cos/sin tile-row per core, or a single tile-row broadcast across all
     # rows on device (e.g. a shared decode position over heads). So cos/sin must cover either
@@ -315,7 +400,16 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     if not x.is_sharded():
         x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device))
 
+    # The op takes its row count off dim -2 alone, so a batched ``[1, B, H, Dh]`` has to be
+    # folded onto that dim first. The shard already spans all ``rows``, so both reshapes are
+    # metadata-only and the caller gets its own shape back.
+    mem_config = x.memory_config()
+    folded = shape[-2] != rows
+    if folded:
+        x = ttnn.reshape(x, [1, 1, rows, d], memory_config=mem_config)
     out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim)
+    if folded:
+        out_sh = ttnn.reshape(out_sh, shape, memory_config=mem_config)
     return out_sh
 
 
@@ -330,14 +424,14 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
 # in-place KV writer (it mutates the persistent cache buffer during capture,
 # unlike ``ttnn.copy`` which is rejected mid-capture).
 # ---------------------------------------------------------------------------- #
-def _height_sharded_l1_config(width: int) -> ttnn.MemoryConfig:
-    """Single-core height-sharded L1 config for a ``[1, 1, 1, width]`` decode row.
+def _height_sharded_l1_config(num_users: int, width: int, device) -> ttnn.MemoryConfig:
+    """Height-sharded L1 config for a ``[1, B, 1, width]`` decode row: one core per user.
 
-    ``paged_update_cache`` requires its (single-token) input to be height-sharded
-    with one core per batch user (B == 1 here -> one core), shard width == the
-    last dim, ROW_MAJOR orientation.
+    ``paged_update_cache`` requires its (single-token) input to be height-sharded with the
+    core count equal to the number of batch users -- it dispatches one user per core --
+    shard width == the last dim, ROW_MAJOR orientation.
     """
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), row_wise=True)
     shard_spec = ttnn.ShardSpec(grid, [ttnn.TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -348,7 +442,7 @@ def _update_cache_at(
     pos_tensor: ttnn.Tensor,
     paged: PagedLayerView | None = None,
 ) -> None:
-    """In-place write ``row`` ``[1, 1, 1, F]`` into a KV cache at ``pos_tensor`` ``[1]``
+    """In-place write ``row`` ``[1, B, 1, F]`` into a KV cache at ``pos_tensor`` ``[B]``
     (INT32), either the layer's own dense buffer or -- when ``paged`` is given --
     ``paged.pool`` through the active session's page table.
 
@@ -357,8 +451,8 @@ def _update_cache_at(
     only ``window / block_size`` blocks; without it any position past that capacity
     resolves through the row's unmapped tail (see :mod:`.paged_cache`).
     """
-    width = row.shape[-1]
-    row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(width))
+    num_users, width = row.shape[1], row.shape[-1]
+    row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(num_users, width, row.device()))
     if paged is None:
         ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
     else:
@@ -383,6 +477,23 @@ def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) 
     return ttnn.sum(ttnn.multiply(kv, weights), dim=window_axis)
 
 
+def _retire_window(prev: ttnn.Tensor, current: ttnn.Tensor) -> None:
+    """Copy the just-closed window buffer ``current`` into ``prev``, in place.
+
+    ``fill_cache`` is an in-place whole-tensor cache writer, so (unlike ``ttnn.copy``) it is
+    accepted mid trace capture, and both buffers are distinct tensors. It writes a single
+    batch index per call, though, so a batched layer retires its users one slice at a time.
+    """
+    users, heads, rows, width = current.shape
+    if users == 1:
+        ttnn.fill_cache(prev, current, 0)
+        return
+    for user in range(users):
+        one = ttnn.slice(current, [user, 0, 0, 0], [user + 1, heads, rows, width])
+        ttnn.fill_cache(prev, one, user)
+        ttnn.deallocate(one)
+
+
 class DeepSeekV4HCACompressor:
     """Heavily-Compressed-Attention compressor (decode, running KV cache).
 
@@ -403,7 +514,7 @@ class DeepSeekV4HCACompressor:
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_slabs: int = 1,
+        num_prefetch_pages: int = 16,
         prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
@@ -421,7 +532,7 @@ class DeepSeekV4HCACompressor:
             cache,
             weight_dtype,
             use_prefetcher,
-            num_prefetch_slabs,
+            num_prefetch_pages,
             prefetch_buffers,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
@@ -443,38 +554,41 @@ class DeepSeekV4HCACompressor:
         self.kv_proj.fetch_weights()
         self.gate_proj.fetch_weights()
 
-    def _project(self, hidden: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, Dh]`` each.
+    def _project(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``tokens`` ``[1, 1, B, D]`` -> per-token ``(kv, gate)`` ``[1, 1, B, Dh]`` each.
 
         ``LinearDecode`` leaves its result width-sharded over the cores it reduced onto, while
         the callers reshape these and reshard them height-wise for the cache write, so hand
         back the DRAM-interleaved form they expect (as ``_o_proj`` does for o_b_proj).
         """
         return (
-            ttnn.to_memory_config(self.kv_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_memory_config(self.gate_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.kv_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.gate_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
         )
 
     def _pool_window(
         self, win_kv: ttnn.Tensor, win_gate: ttnn.Tensor, cos_row: ttnn.Tensor, sin_row: ttnn.Tensor
     ) -> ttnn.Tensor:
-        """Pool one closed window's ``[1, 1, compress_rate, Dh]`` projections into that
-        window's single compressed entry ``[1, 1, 1, Dh]``, RoPE'd at ``cos_row`` /
-        ``sin_row`` (the window's own position).
+        """Pool each user's closed window ``[B, 1, compress_rate, Dh]`` into that window's
+        single compressed entry, returned as ``[1, B, 1, Dh]`` (RoPE'd at ``cos_row`` /
+        ``sin_row``, the window's own position) ready for the cache write.
 
-        The buffer shape doubles as the ``[B, n_win, compress_rate, Dh]`` the pool
-        wants with ``B == n_win == 1``, so ``position_bias`` (indexed by a token's
-        offset *within* its window) broadcasts unchanged.
+        The buffer shape doubles as the ``[B, n_win, compress_rate, Dh]`` the pool wants with
+        ``n_win == 1``, so ``position_bias`` (indexed by a token's offset *within* its window)
+        broadcasts over both users and windows unchanged.
         """
+        users = win_kv.shape[0]
         gate = ttnn.add(win_gate, self.position_bias)
         compressed = _softmax_weighted_sum(win_kv, gate, window_axis=2)
-        compressed = ttnn.reshape(compressed, [1, 1, 1, self.head_dim])
+        # Back onto packed rows for the norm + RoPE, which are per-token arithmetic.
+        compressed = ttnn.reshape(compressed, [1, 1, users, self.head_dim])
         compressed = self.kv_norm(compressed)
-        return _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
+        compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
+        return _one_row_per_user(compressed)
 
     def decode_static(
         self,
-        hidden: ttnn.Tensor,
+        tokens: ttnn.Tensor,
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
         scache: "_StaticLayerCache",
@@ -484,26 +598,31 @@ class DeepSeekV4HCACompressor:
         pool: bool = True,
         paged: PagedLayerView | None = None,
     ) -> None:
-        """Trace-safe decode: write this token's projection in place at ``win_slot``
-        (``pos % compress_rate``) into the one-window ``[1, 1, compress_rate, Dh]``
+        """Trace-safe decode: write each user's token projection in place at ``win_slot``
+        (``pos % compress_rate``) into the one-window ``[B, 1, compress_rate, Dh]``
         buffers, and -- on the step that closes the window -- pool just that window
         and append its single entry at row ``win_row`` of the layer's KV axis
         (``combined_cache``, or ``paged``'s block pool).
+
+        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``.
 
         ``pool`` is set by the caller only on the steps that close a window, so the
         cost per step is ``O(compress_rate)`` rather than ``O(max_seq)``: in between,
         the KV axis already holds exactly the entries the block-bias exposes
         (see the module header).
         """
-        kv, gate = self._project(hidden)  # [1, 1, 1, Dh]
-        kv = ttnn.reshape(kv, [1, 1, 1, self.head_dim])
-        gate = ttnn.reshape(gate, [1, 1, 1, self.head_dim])
+        _signpost("HCA_START")
+        users = tokens.shape[-2]
+        kv, gate = self._project(tokens)  # [1, 1, B, Dh]
+        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, self.head_dim]))
+        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim]))
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
         if pool and (combined_cache is not None or paged is not None):
             pooled = self._pool_window(scache.win_kv, scache.win_gate, cos_row, sin_row)
             _update_cache_at(combined_cache, pooled, win_row, paged=paged)
             ttnn.deallocate(pooled)
+        _signpost("HCA_END")
 
 
 class DeepSeekV4CSACompressor:
@@ -532,7 +651,7 @@ class DeepSeekV4CSACompressor:
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_slabs: int = 1,
+        num_prefetch_pages: int = 16,
         prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
@@ -550,7 +669,7 @@ class DeepSeekV4CSACompressor:
             cache,
             weight_dtype,
             use_prefetcher,
-            num_prefetch_slabs,
+            num_prefetch_pages,
             prefetch_buffers,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
@@ -571,15 +690,15 @@ class DeepSeekV4CSACompressor:
         self.kv_proj.fetch_weights()
         self.gate_proj.fetch_weights()
 
-    def _project(self, hidden: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``hidden`` ``[B, S, D]`` -> per-token ``(kv, gate)`` ``[B, S, 2*Dh]`` each.
+    def _project(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``tokens`` ``[1, 1, B, D]`` -> per-token ``(kv, gate)`` ``[1, 1, B, 2*Dh]`` each.
 
         DRAM-interleaved for the same reason as
         :meth:`DeepSeekV4HCACompressor._project`.
         """
         return (
-            ttnn.to_memory_config(self.kv_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_memory_config(self.gate_proj(hidden), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.kv_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.gate_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
         )
 
     def _pool_window(
@@ -591,19 +710,21 @@ class DeepSeekV4CSACompressor:
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Pool the closing window ``w`` into its single compressed entry ``[1, 1, 1, Dh]``.
+        """Pool each user's closing window ``w`` into its single compressed entry,
+        returned as ``[1, B, 1, Dh]`` ready for the cache write.
 
-        ``win_*`` hold window ``w``'s ``[1, 1, compress_rate, 2*Dh]`` projections and
+        ``win_*`` hold window ``w``'s ``[B, 1, compress_rate, 2*Dh]`` projections and
         ``prev_*`` window ``w-1``'s; the entry is the softmax-gated combination of
         window ``w-1``'s Ca half with window ``w``'s Cb half over a width-``2*cr``
         window. On the very first window ``prev_gate`` is still ``_MASK_NEG``, which
         gives the absent Ca half softmax weight 0.
 
         Both buffers are shaped like the ``[B, n_win, compress_rate, 2*Dh]`` the pool
-        wants with ``B == n_win == 1``, so ``position_bias`` -- indexed by a token's
-        offset within its own window -- broadcasts over each half unchanged.
+        wants with ``n_win == 1``, so ``position_bias`` -- indexed by a token's offset
+        within its own window -- broadcasts over users and windows for each half.
         """
         dh = self.head_dim
+        users = win_kv.shape[0]
         prev_g = ttnn.add(prev_gate, self.position_bias)
         cur_g = ttnn.add(win_gate, self.position_bias)
         _profile(self.device)
@@ -613,16 +734,18 @@ class DeepSeekV4CSACompressor:
         _, cb_cur = ttnn.split(win_kv, dh, dim=3)
         _, cbg_cur = ttnn.split(cur_g, dh, dim=3)
 
-        new_kv = ttnn.concat([ca_prev, cb_cur], dim=2)  # [1, 1, 2*cr, Dh]
+        new_kv = ttnn.concat([ca_prev, cb_cur], dim=2)  # [B, 1, 2*cr, Dh]
         new_gate = ttnn.concat([cag_prev, cbg_cur], dim=2)
         compressed = _softmax_weighted_sum(new_kv, new_gate, window_axis=2)
-        compressed = ttnn.reshape(compressed, [1, 1, 1, dh])
+        # Back onto packed rows for the norm + RoPE, which are per-token arithmetic.
+        compressed = ttnn.reshape(compressed, [1, 1, users, dh])
         compressed = self.kv_norm(compressed)
-        return _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
+        compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
+        return _one_row_per_user(compressed)
 
     def decode_static(
         self,
-        hidden: ttnn.Tensor,
+        tokens: ttnn.Tensor,
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
         scache: "_StaticLayerCache",
@@ -632,19 +755,23 @@ class DeepSeekV4CSACompressor:
         pool: bool = True,
         paged: PagedLayerView | None = None,
     ) -> None:
-        """Trace-safe decode: write this token's ``2*Dh`` projection in place at
-        ``win_slot`` into the one-window ``[1, 1, compress_rate, 2*Dh]`` buffers, and
+        """Trace-safe decode: write each user's ``2*Dh`` token projection in place at
+        ``win_slot`` into the one-window ``[B, 1, compress_rate, 2*Dh]`` buffers, and
         -- on the step that closes the window -- pool just that window (Ca/Cb overlap
         against the retained previous window) and append its single entry at row
         ``win_row`` of the layer's KV axis (``combined_cache``, or ``paged``'s pool).
 
+        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``.
+
         After pooling, the closing window becomes the ``prev_*`` the *next* window
         will overlap with. See :meth:`DeepSeekV4HCACompressor.decode_static`.
         """
+        _signpost("CSA_START")
         feat = 2 * self.head_dim
-        kv, gate = self._project(hidden)  # [1, 1, 1, 2*Dh]
-        kv = ttnn.reshape(kv, [1, 1, 1, feat])
-        gate = ttnn.reshape(gate, [1, 1, 1, feat])
+        users = tokens.shape[-2]
+        kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
+        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat]))
+        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat]))
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
         if pool and (combined_cache is not None or paged is not None):
@@ -653,71 +780,15 @@ class DeepSeekV4CSACompressor:
             )
             _update_cache_at(combined_cache, pooled, win_row, paged=paged)
             ttnn.deallocate(pooled)
-            # Retire the closed window into ``prev_*`` for the next overlap. ``fill_cache``
-            # is an in-place whole-tensor cache writer, so (unlike ``ttnn.copy``) it is
-            # accepted mid trace capture, and both buffers are distinct tensors.
-            ttnn.fill_cache(scache.prev_kv, scache.win_kv, 0)
-            ttnn.fill_cache(scache.prev_gate, scache.win_gate, 0)
+            _retire_window(scache.prev_kv, scache.win_kv)
+            _retire_window(scache.prev_gate, scache.win_gate)
+        _signpost("CSA_END")
 
 
 _COMPRESSORS = {
     "compressed_sparse_attention": DeepSeekV4CSACompressor,
     "heavily_compressed_attention": DeepSeekV4HCACompressor,
 }
-
-
-# The four decode projections, keyed in the order :meth:`DeepSeekV4Attention.decode` calls
-# them. That order is load-bearing under the prefetcher: projections sharing a GCB share a
-# single FIFO, so their weights must be queued in the order the matmuls pop them (see
-# :meth:`DeepSeekV4Attention.prefetch_weights`). All four want 64 B cores, which is what makes
-# them candidates to share a receiver set at all. Identical for every layer, which is what lets
-# one set of buffers serve a whole model.
-_DECODE_PROJ_LAYOUTS = {
-    "q_a_proj": {"K": 4096, "N": 1024, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
-    "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
-    "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
-    "o_b_proj": {"K": 8192, "N": 4096},
-}
-
-# The compressor's two projections (``kv_proj`` then ``gate_proj``, both consuming the block's
-# ``hidden``) are the same shape as each other, so one GCB serves the pair. That shape depends
-# on the layer's compressor kind -- HCA projects each token to ``Dh``, CSA to ``2*Dh`` for its
-# Ca/Cb pair -- so the two kinds cannot share with each other. Keyed by layer type.
-_COMPRESSOR_PROJ_LAYOUTS = {
-    "heavily_compressed_attention": {
-        "K": 4096,
-        "N": 512,
-        "partial_width_sharded": True,
-        "k_blocks": 4,
-        "n_blocks": 16,
-    },
-    "compressed_sparse_attention": {
-        "K": 4096,
-        "N": 1024,
-        "partial_width_sharded": True,
-        "k_blocks": 2,
-        "n_blocks": 32,
-    },
-}
-
-_ALL_DECODE_LAYOUTS = {**_DECODE_PROJ_LAYOUTS, **_COMPRESSOR_PROJ_LAYOUTS}
-
-# Which weights share a GCB. Grouped by slab size, because a GCB whose page size changes between
-# transfers hangs (see ``make_shared_decode_gcb``) -- and grouped as tightly as that allows,
-# because the count is capped well below what L1 would bear: each GCB also takes a fixed ~176 B
-# of the DRISC senders' 1 KB state zone, so a device runs out of room at six.
-#
-# The compressor layouts come out byte-identical to a block projection (HCA to kv_proj, CSA to
-# q_a_proj), so they ride along instead of taking buffers of their own. That extends the FIFO
-# ordering contract across the block/compressor boundary, which holds because the compressor
-# runs unconditionally -- only its *pooling* is conditional -- and always after the projection
-# it shares with: ``_qkv`` runs q_a and kv before ``decode`` reaches the compressor, which is
-# also the order :meth:`DeepSeekV4Attention.prefetch_weights` queues them in.
-_DECODE_PROJ_GCB_GROUPS = (
-    ("q_b_proj", "o_b_proj"),
-    ("q_a_proj", "compressed_sparse_attention"),
-    ("kv_proj", "heavily_compressed_attention"),
-)
 
 
 def _compressor_projections(
@@ -728,33 +799,25 @@ def _compressor_projections(
     cache: WeightCache,
     weight_dtype: ttnn.DataType,
     use_prefetcher: bool,
-    num_prefetch_slabs: int,
+    num_prefetch_pages: int,
     prefetch_buffers: Optional[dict],
 ):
     """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
 
-    Shared by the two compressor kinds, which differ only in the projected width. Under the
-    prefetcher the pair streams through the GCB keyed to ``layer_type`` -- which the block
-    projection of the same slab size also uses -- so they must be queued in the order
-    :meth:`DeepSeekV4HCACompressor._project` runs them, kv before gate, and after that
-    projection's own weight.
-
-    The layout is a hardcoded constant (as for the block projections), so check it against the
-    config here -- a stale ``K``/``N`` would otherwise reach the device as a silently
-    mis-sharded weight rather than an error.
+    Shared by the two compressor kinds, which differ only in the projected width -- HCA
+    projects a token to ``Dh``, CSA to ``2*Dh`` for its Ca/Cb pair -- which is why the layout
+    is keyed by ``layer_type``. Under the prefetcher the pair streams through the device's one
+    GCB, so they must be queued in the order :meth:`DeepSeekV4HCACompressor._project` runs
+    them, kv before gate, in the block's turn (see ``decode_prefetch``).
     """
-    layout = _COMPRESSOR_PROJ_LAYOUTS[layer_type]
     feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
-    if (layout["K"], layout["N"]) != (config.hidden_size, feat):
-        raise ValueError(
-            f"the {layer_type} compressor layout is fixed at K={layout['K']}, N={layout['N']} but this config "
-            f"wants K={config.hidden_size}, N={feat}"
-        )
+    layout = check_decode_layout(layer_type, config.hidden_size, feat)
     if use_prefetcher and prefetch_buffers is None:
-        prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs)
+        prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
     prefetch = {"use_prefetcher": use_prefetcher}
     if use_prefetcher:
         prefetch["global_cb"] = prefetch_buffers[layer_type]
+        prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
 
     def projection(name):
         return LinearDecode(
@@ -767,38 +830,6 @@ def _compressor_projections(
         )
 
     return projection("kv_proj"), projection("gate_proj")
-
-
-def make_attention_prefetch_buffers(
-    device: ttnn.MeshDevice, weight_dtype: ttnn.DataType, num_prefetch_slabs: int = 1
-) -> dict:
-    """The GCBs attention blocks prefetch their projection weights through.
-
-    Returns a mapping to hand to :class:`DeepSeekV4Attention` as ``prefetch_buffers``, keyed by
-    projection name for the block's own four and by layer type for the compressors. Three
-    buffers back all of them (see ``_DECODE_PROJ_GCB_GROUPS`` for the grouping), which matters
-    beyond L1: each GCB also consumes a fixed slice of a small DRISC state zone that only fits
-    about six per device.
-
-    Build this **once per device and pass it to every layer on that device**. A GCB is a
-    permanent L1 allocation, so per-layer buffers do not scale: at bf4 one block's worth is
-    ~342 KB per receiver core, which a 43-layer model would multiply well past L1. Every
-    layer has the same projection shapes, so one set serves them all.
-
-    Sharing across layers extends the FIFO ordering contract across them too: on each buffer
-    the weights must be queued in the order the matmuls consume them, which for a model
-    stepping layer by layer means layer order. Queueing layer ``i+1``'s weights while layer
-    ``i`` computes is fine and is the point; queueing them out of order is not, and yields
-    wrong results rather than an error.
-    """
-    buffers = {}
-    for group in _DECODE_PROJ_GCB_GROUPS:
-        global_cb = make_shared_decode_gcb(
-            device, [_ALL_DECODE_LAYOUTS[name] for name in group], weight_dtype, num_slabs=num_prefetch_slabs
-        )
-        for name in group:
-            buffers[name] = global_cb
-    return buffers
 
 
 class DeepSeekV4Attention(DeepSeekV4Module):
@@ -823,10 +854,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
       session should span a whole model step rather than a single block. Check
       ``ttnn.experimental.is_tensor_prefetcher_supported(device)`` first.
     * A GCB is a permanent L1 allocation, not a transient staging copy. Pass
-      ``prefetch_buffers`` from :func:`make_attention_prefetch_buffers` so one set is shared
-      by every layer on the device: left to build its own, each block costs ~342 KB per
-      receiver core plus a slice of a DRISC state zone that only fits about six GCBs, neither
-      of which scales past a handful of layers.
+      ``prefetch_buffers`` from :func:`~.decode_prefetch.make_decode_prefetch_buffers` so one
+      buffer is shared by every layer on the device: left to build its own, each block costs
+      288 KB per receiver core plus a slice of a DRISC state zone that only fits about six
+      GCBs, neither of which scales past a handful of layers.
     """
 
     def __init__(
@@ -838,7 +869,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_slabs: int = 1,
+        num_prefetch_pages: int = 16,
         prefetch_buffers: Optional[dict] = None,
     ):
         self.use_prefetcher = use_prefetcher
@@ -857,18 +888,19 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         print(f"weight_dtype: {weight_dtype}")
 
         if use_prefetcher and prefetch_buffers is None:
-            prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs)
+            prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
 
         def projection(name):
             prefetch = {"use_prefetcher": use_prefetcher}
             if use_prefetcher:
                 prefetch["global_cb"] = prefetch_buffers[name]
+                prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
             return LinearDecode(
                 weights[f"{name}.weight"],
                 device,
                 cache.file(name),
                 dtype=weight_dtype,
-                **_DECODE_PROJ_LAYOUTS[name],
+                **DECODE_LAYOUTS[name],
                 **prefetch,
             )
 
@@ -876,7 +908,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.q_b_proj = projection("q_b_proj")
         self.kv_proj = projection("kv_proj")
         self.o_b_proj = projection("o_b_proj")
-        self._prefetch_order = list(_DECODE_PROJ_LAYOUTS)
         self.q_a_norm = DeepSeekV4RMSNorm(
             weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
         )
@@ -889,7 +920,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # folds the weight along BOTH batch (group) and N into the width-sharded layout the op
         # expects. The raw torch weight is [g*o_lora_rank, (H*Dh)//g]; ``preprocess`` normalizes it
         # to the per-group [g, K, N] the class folds from (applied only on a cache miss).
+        #
+        # Under the prefetcher it streams through the device's one shared GCB like every other
+        # decode weight, at the fixed b_blocks/n_blocks the registry sizes that buffer against
+        # -- passed explicitly rather than left to the class's own defaults, so a device with a
+        # different grid still gets the geometry the buffer was actually built for.
         in_per_group = (self.num_heads * self.head_dim) // self.o_groups  # K
+        o_a_layout = check_decode_layout("o_a_proj", in_per_group, self.o_lora_rank, batch=self.o_groups)
+        o_a_prefetch = {"use_prefetcher": use_prefetcher}
+        if use_prefetcher:
+            o_a_prefetch["global_cb"] = prefetch_buffers["o_a_proj"]
+            o_a_prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
         self.o_a_proj = BatchedLinearDecode(
             weights["o_a_proj.weight"],
             device,
@@ -898,7 +939,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             batch=self.o_groups,
             K=in_per_group,
             N=self.o_lora_rank,
+            b_blocks=o_a_layout["b_blocks"],
+            n_blocks=o_a_layout["n_blocks"],
             preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
+            **o_a_prefetch,
         )
 
         # sinks live on host (folded into the softmax denominator), so there is
@@ -948,7 +992,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 cache=cache,
                 weight_dtype=weight_dtype,
                 use_prefetcher=use_prefetcher,
-                num_prefetch_slabs=num_prefetch_slabs,
+                num_prefetch_pages=num_prefetch_pages,
                 prefetch_buffers=prefetch_buffers,
             )
             if compressor_cls is not None
@@ -958,31 +1002,30 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def prefetch_weights(self):
         """Stage this block's projection weights ahead of the :meth:`decode` that uses them.
 
-        On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_b_proj
-        is left out because its [8192, 4096] weight does not fit alongside the others.
+        On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_a_proj
+        and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues the DRISC transfers, which allocate nothing
         (the shared GCB was sized at construction) and run off the command queue, so every
-        projection is hoisted -- o_b_proj included. Requires an open prefetcher session (see
-        the class docstring), and every queued request must be consumed by a matching
-        ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
+        projection is hoisted -- o_a_proj and o_b_proj included. Requires an open prefetcher
+        session (see the class docstring), and every queued request must be consumed by a
+        matching ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
 
-        Projections that share a GCB share one FIFO, so they are queued in ``decode``'s call
-        order. Nothing checks this: a projection whose matmul runs out of turn pops its own page
-        size off the head of another weight's slab, which is wrong results rather than an error.
+        Every projection shares one GCB, hence one FIFO, so they are queued here in the order
+        ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
+        ``decode_static`` runs it after ``_qkv`` and before ``_attend`` reaches the output
+        projections (o_a_proj, then o_b_proj -- see ``_grouped_output``). Nothing checks this:
+        a projection whose matmul runs out of turn pops its own page size off the head of
+        another weight's slab, which is wrong results rather than an error.
         """
-        for name in self._prefetch_order:
-            proj = getattr(self, name)
-            if name == "o_b_proj" and not self.use_prefetcher:
-                # L1 path only: the staged copy of its [8192, 4096] weight does not fit
-                # alongside the others.
-                continue
-            proj.fetch_weights()
+        self.q_a_proj.fetch_weights()
+        self.q_b_proj.fetch_weights()
+        self.kv_proj.fetch_weights()
         if self.compressor is not None:
-            # Last, because the compressor shares a buffer with whichever projection matches its
-            # slab size (kv_proj for HCA, q_a_proj for CSA) and ``decode`` runs both of those, in
-            # ``_qkv``, before it reaches the compressor.
             self.compressor.prefetch_weights()
+        if self.use_prefetcher:
+            self.o_a_proj.fetch_weights()
+            self.o_b_proj.fetch_weights()
 
     def _sdpa_decode(
         self,
@@ -993,20 +1036,20 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         paged: PagedLayerView | None = None,
         sliding_window: int | None = None,
     ) -> ttnn.Tensor:
-        """Single-token (``S == 1``) attention via the fused SDPA-decode op.
+        """Single-token (``S == 1``) attention over the batch via the fused SDPA-decode op.
 
         Drop-in for :meth:`_attention` on the decode paths: fuses the scale, the
         masking, the per-head sink, and both matmuls into one device op.
 
-        ``q`` ``[1, 1, H, Dh]`` (already the op's ``[1, B, H, Dh]`` decode head
-        layout, produced by :meth:`_qkv`); ``kv`` is the shared K==V
-        ``[1, 1, Skv, Dh]`` (MQA, one KV head). The op emits ``[1, 1, H, Dh]`` too, so
-        no head/seq transposes are needed around the call.
+        ``q`` ``[1, B, H, Dh]`` (already the op's decode head layout, produced by
+        :meth:`_qkv`); ``kv`` is the shared K==V ``[B, 1, Skv, Dh]`` (MQA, one KV head).
+        The op emits ``[1, B, H, Dh]`` too, so no head/seq transposes are needed around
+        the call.
 
         Two mutually exclusive ways to bound the KV axis (the op rejects an
         ``attn_mask`` in causal mode, so this is a real branch):
 
-        * ``cur_pos`` ``[1]`` INT32 -- causal mode. The kernel derives its chunk
+        * ``cur_pos`` ``[B]`` INT32 -- causal mode. The kernel derives its chunk
           range from the position, so it never reads or computes the chunks past it:
           cost tracks the *actual* position instead of the ``max_seq``-sized axis.
           Requires the valid set to be a contiguous prefix
@@ -1017,6 +1060,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
           not control flow, so the kernel always walks the whole axis. The op wants
           the mask to carry Q's (padded) head count, so the head-independent row is
           broadcast across ``H`` first -- a materialisation the causal path avoids.
+          Its leading dim stays 1 and the op broadcasts it over the batch, which the
+          users of a step can share because they are all at the same position.
 
         ``paged`` swaps ``kv`` for the layer's block pool read through the active
         session's page table; the bounding modes above are unchanged by it, except
@@ -1057,18 +1102,22 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             compute_kernel_config=_HIFI4_SDPA,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             **bounds,
-        )  # [1, 1, H, Dh]
+        )  # [1, B, H, Dh]
 
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
 
-        ``attn`` is ``[B, S, H, Dh]``. Reshape to per-group feature blocks, run the
-        batched ``matmul_decode`` over the group axis (batch = o_groups, weights
+        ``attn`` is SDPA-decode's ``[1, B, H, Dh]``; returns the block's hidden output
+        back on packed rows, ``[1, 1, B, D]``. Reshape to per-group feature blocks, run
+        the batched ``matmul_decode`` over the group axis (batch = o_groups, weights
         folded along group + N), then mix groups back to hidden via ``o_b_proj``.
+
+        The groups partition the heads, so splitting ``[B, H, Dh]`` into
+        ``[B, g, (H/g)*Dh]`` is a plain reshape and only the group / token axes have to
+        be swapped to give the batched matmul its group-major activation.
         """
-        b, s, h, dh = attn.shape
+        _, m, h, dh = attn.shape
         in_per_group = (h * dh) // self.o_groups
-        m = b * s
         # Rank-4 activation [1, g, M, K] (batch = g = o_groups) for the batched matmul_decode; the
         # op folds the group axis to match the folded (b_blocks x n_blocks) weight layout.
         x = ttnn.reshape(attn, [m, self.o_groups, in_per_group])
@@ -1076,7 +1125,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         x = ttnn.reshape(x, [1, self.o_groups, m, in_per_group])  # [1, g, M, K]
         y = self.o_a_proj(x)  # DRAM-interleaved [1, g, M, N]
         y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
-        y = ttnn.reshape(y, [b, s, 1, self.o_groups * self.o_lora_rank])
+        y = ttnn.reshape(y, [1, 1, m, self.o_groups * self.o_lora_rank])
         return ttnn.to_memory_config(self.o_b_proj(y), ttnn.DRAM_MEMORY_CONFIG)
 
     def _attend(
@@ -1092,51 +1141,44 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Fused SDPA-decode + output RoPE + grouped output projection.
 
-        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[B,1,H,Dh]``,
+        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[1,B,H,Dh]``,
         the shared K==V ``kv`` ``[B,1,Skv,Dh]`` (or ``paged``'s block pool) and either
         ``sdpa_cur_pos`` or the additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden
-        output ``[B,1,1,D]``. ``kv`` is the layer's persistent buffer, updated in place;
-        the only per-path difference is where ``mask`` / ``sdpa_cur_pos`` come from
-        (host-built for eager, device-generated for the traced path).
+        output on packed rows, ``[1,1,B,D]``. ``kv`` is the layer's persistent buffer,
+        updated in place; the only per-path difference is where ``mask`` /
+        ``sdpa_cur_pos`` come from (host-built for eager, device-generated for the
+        traced path).
         """
         attn = self._sdpa_decode(
             q, kv, mask, cur_pos=sdpa_cur_pos, paged=paged, sliding_window=sliding_window
-        )  # [B, 1, H, Dh]
+        )  # [1, B, H, Dh]
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
-        return self._grouped_output(attn)  # already [B, 1, H, Dh] for the grouped proj
+        return self._grouped_output(attn)
 
-    def _qkv(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Project + RoPE the query and (shared) K=V for ``hidden`` ``[B, S, 1, D]``.
+    def _qkv(self, tokens: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Project + RoPE the query and (shared) K=V for the packed-row ``tokens`` ``[1, 1, B, D]``.
 
-        Returns ``q`` ``[B, 1, H, Dh]`` (the SDPA-decode head layout) and the
-        rotated ``kv`` ``[B, 1, S, Dh]`` (pre-compressor, pre-cache). Shared by the
-        decode paths.
+        Returns ``q`` ``[1, B, H, Dh]`` (the SDPA-decode head layout) and the rotated
+        ``kv`` ``[1, 1, B, Dh]``, still on packed rows (pre-compressor, pre-cache).
+        Shared by the decode paths.
 
-        The per-head split uses the fused ``nlp_create_qkv_heads_decode`` op (as in
-        the gpt-oss decode attention) instead of manual ``reshape``/``transpose``:
-        Q and the shared K=V are concatenated into one ``[1, 1, B, (H+2)*Dh]`` row
-        (K==V, so the single KV head is duplicated for the op's K and V slices) and
-        split into the ``[1, B, H, Dh]`` decode layout in one device op. Producing Q
-        directly in this layout also removes the head/seq transposes that previously
-        wrapped the SDPA-decode call.
+        Only ``q`` leaves the packed layout, because SDPA-decode is the one op here that
+        wants a head axis: the projections and norms all run over the single tile-row the
+        batch occupies, so a B-user step issues the same ops a one-user step does.
         """
-        b, s, _, hidden_width = hidden.shape  # B == 1, S == 1 (decode)
+        _, _, tokens_n, _ = tokens.shape
         h, dh = self.num_heads, self.head_dim
-        # width_sharded_l1_config = _width_sharded_l1_config(b * s, hidden_width, self.device)
-        # hidden = ttnn.to_memory_config(hidden, width_sharded_l1_config)
         _profile(self.device)
-        # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
-        # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
-        q_a = self.q_a_norm(self.q_a_proj(hidden))
-        q = self.q_b_proj(q_a)  # [B, S, H*Dh]
-        q = ttnn.reshape(q, [1, 1, h, dh], memory_config=width_sharded_l1_config(b * s * h, dh, self.device))
+        q_a = self.q_a_norm(self.q_a_proj(tokens))
+        q = self.q_b_proj(q_a)  # [1, 1, B, H*Dh]
+        q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
 
         q = _rms_norm_unweighted(q, self.eps)
-        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [B, 1, H, Dh]
+        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
 
-        kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
+        kv = self.kv_norm(self.kv_proj(tokens))  # [1, 1, B, Dh]
 
-        kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
+        kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv
 
     def decode(
@@ -1216,8 +1258,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         ``sdpa_cur_pos``, when set, replaces ``mask`` with causal-mode SDPA bounded
         by that position (see :meth:`_sdpa_decode` and :func:`sdpa_causal_ok`).
+
+        ``hidden`` is ``[B, 1, 1, D]`` and the block decodes all ``B`` users in one step,
+        every one of them at the same absolute position: ``mask``, the RoPE rows and the
+        position tensors are shared, and the latter carry one (identical) entry per user
+        because the cache and SDPA ops index per user.
         """
-        q, kv_new = self._qkv(hidden, cos, sin)  # q [1,1,H,Dh], kv_new [1,1,1,Dh]
+        b, s, _, d = hidden.shape
+        assert s == 1, f"decode attends one token per user, but S == {s}"
+        tokens = _pack_tokens(hidden)  # [1, 1, B, D]
+        q, kv_new = self._qkv(tokens, cos, sin)  # q [1,B,H,Dh], kv_new [1,1,B,Dh]
+        kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh], one core per user for the write
 
         if self.compressor is None:
             # The KV axis is the sliding ring alone. Paged: the *absolute* position,
@@ -1227,7 +1278,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             # slot, with the additive mask hiding the not-yet-written slots.
             if paged is not None:
                 _update_cache_at(None, kv_new, compress_pos, paged=paged)
-                return self._attend(
+                ttnn.deallocate(kv_new)
+                out = self._attend(
                     q,
                     None,
                     None,
@@ -1237,17 +1289,33 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                     paged=paged,
                     sliding_window=self.config.sliding_window,
                 )
-            _update_cache_at(scache.sliding, kv_new, sliding_pos)
-            return self._attend(q, scache.sliding, mask, cos, neg_sin)
+            else:
+                _update_cache_at(scache.sliding, kv_new, sliding_pos)
+                ttnn.deallocate(kv_new)
+                out = self._attend(q, scache.sliding, mask, cos, neg_sin)
+            return ttnn.reshape(out, [b, s, 1, d])
 
         # One KV axis holds both regions, so there is no per-step concat: the ring slot
         # ``pos % window`` lands in the prefix and each pooled entry is appended after
         # it at row ``window + w``. Both indices are pre-wrapped, so the paged reads
         # need no ``cache_position_modulo``.
-        kv = None if paged is not None else scache.combined  # [1, 1, window + n_win, Dh]
+        kv = None if paged is not None else scache.combined  # [B, 1, window + n_win, Dh]
         _update_cache_at(kv, kv_new, sliding_pos, paged=paged)
+        # Written, and one row per user is a whole tile of L1 each -- worth handing
+        # back before the compressor and SDPA below ask for their own.
+        ttnn.deallocate(kv_new)
+        # ``q`` is width-sharded over B*H rows of L1 and nothing reads it until the SDPA
+        # below, while the compressor in between is the step's L1 high-water mark. At a
+        # wide batch holding both at once is what leaves an op's circular buffers
+        # nowhere to go, so park q in DRAM across the compressor and bring it back in
+        # the layout SDPA expects. At batch 1 both fit and the round trip is dead cost.
+        q_config = q.memory_config() if b > 1 else None
+        if q_config is not None:
+            spilled = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(q)
+            q = spilled
         self.compressor.decode_static(
-            hidden,
+            tokens,
             cos_win,
             sin_win,
             scache,
@@ -1257,4 +1325,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             pool=pool_compressor,
             paged=paged,
         )
-        return self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
+        if q_config is not None:
+            q = ttnn.to_memory_config(q, q_config)
+        out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
+        return ttnn.reshape(out, [b, s, 1, d])

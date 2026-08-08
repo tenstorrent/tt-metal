@@ -21,8 +21,12 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //   fused_w is split inside the fused_hyperconnection_pre_post device op into
 //   pre_w [1,1,T,H] / post_w [1,1,T,H] / comb_w [1,1,T,H*H] (contiguous slices of
 //   the [(2+H)*H] last dim). pre_w / post_w are consumed inside the kernel; comb_w
-//   is returned already reshaped to the [1,1,H,H] comb matrix (single tile), so no
-//   host-side reshape is needed before the Sinkhorn stage.
+//   is returned already reshaped to the [1,T,H,H] comb matrix (one tile per token),
+//   so no host-side reshape is needed before the Sinkhorn stage.
+//
+// The T = B*S tokens are independent and are spread one-per-core across the grid, so
+// batched decode (B > 1) and multi-token prefill (S > 1) run in the same two device ops
+// as a single-token decode step.
 //
 //   pre        = sigmoid(pre_w  * pre_scale  + pre_bias)  + eps
 //   post       = 2 * sigmoid(post_w * post_scale + post_bias)
