@@ -7,7 +7,7 @@
 // hardware-timing-sensitive (PCIe read brackets, chip thermal state), so this file is deliberately NOT part of the
 // merge gate -- it runs from UNIT_TESTS_DISPATCH_SLOW_SOURCES alongside the stress tests. Merge-gate coverage of the
 // same pipeline (well-formedness, delivery, sources) lives in test_realtime_profiler_sanity.cpp; the didt suite
-// (tests/didt/test_rt_profiler_sync_error.py) asserts the same distribution under compute load.
+// (tests/ttnn/tracy/test_rt_profiler_sync_error.py) asserts the same distribution under compute load.
 
 #include <algorithm>
 #include <chrono>
@@ -363,9 +363,14 @@ TEST_F(RealtimeProfilerSyncTest, RecordMappingMatchesAnIndependentClockRead) {
     };
 
     // Each round brackets one device clock read, then runs one program, pairing the two so the comparison below is
-    // against the mapping that was live beside that read.
+    // against the mapping that was live beside that read. The idle gap before each round is what makes the rounds
+    // sample a moving clock: reads begin the instant the stamper starts, which is when DVFS is ramping AICLK back up
+    // from its idle state, and the paired record runs in the same window. The per-round frequency log below shows how
+    // much the clock actually moved between rounds.
+    constexpr auto kIdleGapBeforeRound = std::chrono::seconds(1);
     std::vector<ClockBracket> brackets;
     for (uint32_t round = 0; round < kClockCheckRounds; ++round) {
+        std::this_thread::sleep_for(kIdleGapBeforeRound);
         const std::vector<uint32_t> zeros(8, 0);
         cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), vcore), stamp_addr);
 
@@ -461,6 +466,12 @@ TEST_F(RealtimeProfilerSyncTest, RecordMappingMatchesAnIndependentClockRead) {
         }
         ++rounds_checked;
         const ProgramRealtimeRecord& record = it->second;
+        log_info(
+            tt::LogTest,
+            "[RT profiler sync] round {}: record frequency {:.6f} GHz, claim {}ns",
+            round,
+            record.frequency,
+            record.clock_sync.sync_error.count());
         for (const auto& bracket : brackets) {
             if (bracket.round != round) {
                 continue;

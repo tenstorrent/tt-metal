@@ -9,7 +9,7 @@
 # The workload is test_ff1_matmul.py::test_ff1_matmul, called directly rather than reimplemented: swapping in another
 # didt workload is a one-line change here, and its shapes stay owned by its own file.
 #
-#   pytest tests/didt/test_rt_profiler_sync_error.py -k "8chips" --didt-workload-iterations 1000
+#   pytest tests/ttnn/tracy/test_rt_profiler_sync_error.py -k "8chips" --didt-workload-iterations 1000
 
 import statistics
 import threading

@@ -106,6 +106,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/device_clock_sync.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_receiver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_tracy_consumer.cpp

@@ -16,7 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 
 #include "context/context_types.hpp"
-#include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_service.hpp"
 
 namespace tt::tt_metal {
@@ -31,13 +31,6 @@ class MeshDevice;
 }  // namespace distributed
 
 using experimental::ProgramRealtimeRecord;
-
-// L1 carve-out addresses (ring buffer + D2H socket config) for the reserved RT-profiler tensix, anchored past
-// UNRESERVED to bypass the user-space allocator.
-struct RealtimeProfilerCoreL1Addrs {
-    uint32_t ring_buffer = 0;
-    uint32_t socket_config = 0;
-};
 
 // The record producer for one MeshDevice: owns the per-device sockets, the record ring, and the receiver thread behind
 // them, and publishes what it drains to whatever consumers the service has attached.
@@ -76,37 +69,13 @@ public:
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
-    struct DeviceState {
-        IDevice* device = nullptr;
-        uint32_t chip_id = 0;
-        CoreCoord realtime_profiler_core;
-        std::unique_ptr<distributed::D2HSocket> socket;
-        // Keeps the BRISC+NCRISC kernels (and their tt-inspector metadata) alive for the receiver's lifetime.
-        std::unique_ptr<Program> realtime_profiler_program;
-        RealtimeProfilerCoreL1Addrs core_l1;
-        // Held by pointer so moving DeviceState does not copy the sync object's ~100KB probe ring.
-        std::unique_ptr<DeviceClockSync> clock_sync;
-        bool fifo_capacity_warned = false;
-
-        DeviceState();
-        ~DeviceState();
-        DeviceState(DeviceState&& o) noexcept;
-        DeviceState& operator=(DeviceState&&) = delete;
-        DeviceState(const DeviceState&) = delete;
-        DeviceState& operator=(const DeviceState&) = delete;
-    };
-
-    RealtimeProfilerReceiver(ContextId context_id, std::vector<DeviceState> devices);
-
-    // Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
-    static std::vector<DeviceState> initialize_devices(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
+    RealtimeProfilerReceiver(ContextId context_id, std::vector<RealtimeProfilerDevice> devices);
 
     void note_fifo_depth(uint32_t available);
     // Decodes `pages` and publishes them, placed against the probe history. True when anything was published, so the
     // caller knows to wake consumers. `batch` is the caller's scratch, reused so this never allocates.
     bool publish_pages(
-        DeviceState& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch);
+        RealtimeProfilerDevice& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch);
 
     struct DrainResult {
         uint32_t pages = 0;
@@ -120,7 +89,7 @@ private:
     // `now` is re-read as devices are drained, so a device late in a long pass isn't gated on a stale timestamp.
     uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
     // Reads, probes, then publishes -- in that order, which is what makes the batch's bracketing pair exist.
-    DrainResult drain_device_pages(DeviceState& dev_state, std::vector<uint32_t>& page_buf);
+    DrainResult drain_device_pages(RealtimeProfilerDevice& dev_state, std::vector<uint32_t>& page_buf);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
@@ -128,7 +97,7 @@ private:
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
 
-    std::vector<DeviceState> devices_;
+    std::vector<RealtimeProfilerDevice> devices_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
