@@ -94,4 +94,8 @@ void kernel_main() {
         cb_read_offset += tile_bytes;
     }
     dfb.pop_front(num_tiles);
+
+    // Drain the sem.up()/set_multicast handshake atomics before returning, so no non-posted atomic
+    // is in flight at kernel exit (per-write async_write_barrier already drained the dst writes).
+    noc.async_atomic_barrier();
 }
