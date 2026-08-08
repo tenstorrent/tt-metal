@@ -110,6 +110,7 @@ jobs:
       # ttsim installs under TT_METAL_HOME; setup-ttsim is invoked with root=$TT_METAL_HOME
       # so it copies the soc descriptor from the installed package's tt_metal/soc_descriptors/.
       TT_METAL_HOME: /usr/libexec/tt-metalium
+      TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
     steps:
       - name: Checkout actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
