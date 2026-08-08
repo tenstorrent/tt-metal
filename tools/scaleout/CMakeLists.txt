@@ -87,6 +87,38 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+# Do not export scaleout_tools' symbols from the shared libraries it is linked into (libtt_metal.so
+# via TT::Metalium and TT::Metalium::Fabric). This extends to the generated protobuf message classes
+# the same treatment libprotobuf already gets in third_party/CMakeLists.txt ("Setting visibility to
+# hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used").
+#
+# libprotobuf being hidden is not sufficient on its own. Every generated .pb.cc also defines a
+# `descriptor_table_<file>_2eproto` object plus an AddDescriptorsRunner static initializer, and those
+# were still exported with default visibility. Any consumer that compiles these same schemas against
+# its own protobuf -- which it must, because we forward-declare the message types in public headers
+# (e.g. CablingGenerator::generate_factory_system_descriptor returns one by value) and do not install
+# the generated headers -- ends up defining the same symbols. The executable wins the global symbol
+# lookup scope, so libtt_metal.so's references to its own descriptor tables get preempted by the
+# consumer's; shared library initializers run first, so our protobuf calls AddDescriptors on THEIR
+# table, consumes its call_once flag, and registers the file into OUR descriptor pool. Their pool is
+# left empty and their first reflection-based call (TextFormat::ParseFromString, say) aborts in
+# AssignDescriptorsImpl on "CHECK failed: file != nullptr"
+# (generated_message_reflection.cc:3012). Hiding these symbols makes each module resolve to its own
+# copy and register into its own pool.
+#
+# NOTE: run_fabric_manager and the tools/tests/scaleout targets already link TT::ScaleoutTools
+# directly, so they are unaffected -- they get their own copy of these objects. Targets that reach
+# scaleout_tools only transitively through tt_metal must link TT::ScaleoutTools explicitly; see
+# run_cluster_validation below and test_link_retraining in tools/tests/scaleout/CMakeLists.txt.
+set_target_properties(
+    scaleout_tools
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
 # We are adding yaml-cpp include like this to avoid including
 # scaleout_tools headers because that would cause protobuf issues.
 target_include_directories(
@@ -96,9 +128,13 @@ target_include_directories(
         $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
+# TT::ScaleoutTools is required explicitly: this target's sources call into scaleout_tools (and
+# include its generated protobuf headers), and those symbols are no longer exported from
+# libtt_metal.so. Matches how run_fabric_manager already links.
 target_link_libraries(
     run_cluster_validation
     PRIVATE
+        TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
