@@ -12,6 +12,13 @@ set(TTNN_OP_MATMUL_SRCS
     device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
     device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
     device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
+    for_python/matmul_multicore_program_factory.cpp
+    for_python/matmul_multicore_reuse_mcast_1d_program_factory.cpp
+    for_python/matmul_multicore_reuse_mcast_2d_program_factory.cpp
+    for_python/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
+    for_python/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
+    for_python/matmul_multicore_reuse_optimized_program_factory.cpp
+    for_python/matmul_program_factory_for_python.cpp
     device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
     device/sparse/sparse_matmul_device_operation.cpp
 )
@@ -23,6 +30,7 @@ set(TTNN_OP_MATMUL_API_HEADERS
     device/config/matmul_program_config.hpp
     device/config/matmul_program_config_types.hpp
     shared_with_host/activation_type.hpp
+    for_python/matmul_program_factory_for_python.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from

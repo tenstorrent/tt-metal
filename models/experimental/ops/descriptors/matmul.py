@@ -64,7 +64,7 @@ def matmul(
     device = input_a.device()
 
     # Detect gather_in0 early — the factory it selects (MeshWorkload) has no
-    # Python binding, so matmul_select_program_factory would raise a TypeError.
+    # Python binding, so matmul_select_program_factory_for_python would raise a TypeError.
     if getattr(program_config, "gather_in0", False):
         raise ValueError(
             "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory (gather_in0) "
@@ -94,7 +94,7 @@ def matmul(
     tensor_args.optional_input_tensors = [None]
 
     # Select the program factory based on program_config type
-    factory = ttnn.matmul_select_program_factory(operation_params, tensor_args)
+    factory = ttnn.matmul_select_program_factory_for_python(operation_params, tensor_args)
     if _UNSUPPORTED_FACTORY is not None and isinstance(factory, _UNSUPPORTED_FACTORY):
         raise ValueError(
             "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory (gather_in0) "
