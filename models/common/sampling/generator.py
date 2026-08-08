@@ -23,6 +23,19 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
+def _mark_trace_buffers_corruptible(bucket, value):
+    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    if bucket is None or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(bucket, item)
+        return
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
+
+
 def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     """Derive a stable per-token device seed from a request seed.
 
@@ -68,6 +81,7 @@ class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
     force_argmax: bool
+    bucket: int | None = None
 
 
 class SamplingGenerator:
@@ -105,6 +119,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self._active_trace_bucket = None
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -114,8 +129,19 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
+    def set_trace_bucket(self, bucket: int | None):
+        """Select the trace namespace for subsequent capture/replay. Callers that multiplex the
+        decode-output logits tensor per batch width (decode bucketing) set this to the width, so a
+        sampling trace captured at width B is only ever replayed against width-B logits."""
+        self._active_trace_bucket = bucket
+
     def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
+        key = _TraceKey(
+            penalties_on=penalties_on,
+            log_probs_on=log_probs_on,
+            force_argmax=force_argmax,
+            bucket=self._active_trace_bucket,
+        )
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -124,13 +150,13 @@ class SamplingGenerator:
 
     def reset_trace(self):
         """
-        Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
+        Drop any cached trace metadata for all sampling configurations and bucket widths.
         """
         for key, slot in self._trace_states.items():
             if slot["id"] is None:
                 continue
             logger.debug(
-                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
@@ -334,6 +360,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+        _mark_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
 
         return slot["output"]
 
