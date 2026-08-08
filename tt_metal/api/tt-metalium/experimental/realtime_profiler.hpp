@@ -18,8 +18,8 @@ struct ProgramRealtimeRecord {
     uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
     uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
     double frequency;                                  // Device clock frequency (cycles per ns)
-    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
-                                                       // MetalContext teardown or reinitialization.
+    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid for the
+                                                       // lifetime of the process.
 };
 
 struct ProgramRealtimeRecordBatch {
@@ -39,8 +39,8 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 // clang-format off
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
- * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
+ * Multiple callbacks can be registered; they are invoked concurrently, each on its own thread. If a
+ * callback shares a resource with other callbacks, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
  * is reported by ProgramRealtimeRecordBatch::dropped.
  *
@@ -53,7 +53,8 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(Pr
 /**
  * Unregister a previously registered callback by its handle.
  *
- * This call blocks until any in-flight invocation of that callback has completed.
+ * This call blocks until any in-flight invocation of that callback has completed. A callback may also unregister
+ * itself; such a call returns immediately, and the callback is not invoked again after its current invocation ends.
  */
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
@@ -71,9 +72,9 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  * asserting on collected record counts — the canonical use case is for tests that
  * want to gracefully skip when RT profiler is not supported.
  *
- * This is safe to call at any time after device construction. It becomes true after
- * the init-sync handshake for the first device completes, and returns to false when
- * every RT-profiler-enabled device has been closed.
+ * This is safe to call at any time after device construction. It becomes true once
+ * the first device's profiler is brought up (during mesh open), and returns to false
+ * when every RT-profiler-enabled device has been closed.
  */
 bool IsProgramRealtimeProfilerActive();
 

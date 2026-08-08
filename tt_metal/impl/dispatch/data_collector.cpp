@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/indestructible.hpp>
 #include "data_collector.hpp"
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
@@ -132,12 +133,18 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+DataCollector::KernelSourceStore& DataCollector::kernel_source_store() {
+    static ttsl::Indestructible<KernelSourceStore> store;
+    return store.get();
+}
+
 void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
     // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
     uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     uint64_t program_id = program.get_id();
-    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
-    auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
+    auto& store = kernel_source_store();
+    std::lock_guard<std::mutex> lock(store.mutex);
+    auto [it, inserted] = store.program_id_to_kernel_sources.try_emplace(program_id);
     if (inserted) {
         auto& kernel_sources = it->second;
         const auto& hal = env_.get_hal();
@@ -145,7 +152,7 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
                 // insert(const string&) allocates only on a miss; on a hit it just returns the
                 // existing node, so this allocation is only done once per unique source.
-                const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+                const std::string& stored_path = *store.paths.insert(kernel->kernel_source().source_).first;
                 kernel_sources.emplace_back(stored_path);
             }
         }
@@ -172,61 +179,6 @@ std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
         return std::nullopt;
     }
     return it->second;
-}
-
-tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
-    tt::ProgramRealtimeProfilerCallback callback) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    auto handle = next_callback_handle_++;
-    program_realtime_profiler_callbacks_.push_back({handle, std::move(callback)});
-    const auto& stored_callback = program_realtime_profiler_callbacks_.back().callback;
-    for (auto* listener : realtime_callback_listeners_) {
-        listener->on_callback_registered(handle, stored_callback);
-    }
-    return handle;
-}
-
-void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    auto it = std::find_if(
-        program_realtime_profiler_callbacks_.begin(),
-        program_realtime_profiler_callbacks_.end(),
-        [handle](const auto& entry) { return entry.handle == handle; });
-    if (it == program_realtime_profiler_callbacks_.end()) {
-        return;
-    }
-    program_realtime_profiler_callbacks_.erase(it);
-    for (auto* listener : realtime_callback_listeners_) {
-        listener->on_callback_unregistered(handle);
-    }
-}
-
-void DataCollector::AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    realtime_callback_listeners_.push_back(listener);
-    for (const auto& registration : program_realtime_profiler_callbacks_) {
-        listener->on_callback_registered(registration.handle, registration.callback);
-    }
-}
-
-void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    std::erase(realtime_callback_listeners_, listener);
-}
-
-void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
-    realtime_profiler_active_chips_.insert(chip_id);
-}
-
-void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
-    realtime_profiler_active_chips_.erase(chip_id);
-}
-
-bool DataCollector::IsRealtimeProfilerActive() const {
-    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
-    return !realtime_profiler_active_chips_.empty();
 }
 
 void DataCollector::DumpData() {

@@ -69,7 +69,7 @@ public:
 
     ~BroadcastRing() {
         TT_FATAL(
-            active_readers_.load(std::memory_order_relaxed) == 0,
+            active_readers_.load(std::memory_order_acquire) == 0,
             "BroadcastRing readers must be destroyed before the ring");
     }
 
@@ -105,10 +105,11 @@ public:
         /**
          * @brief Wakes readers blocked in Reader::wait().
          *
-         * publish()/publish_batch() do not wake on their own; this must be called explicitly.
+         * publish()/publish_batch() do not wake on their own; this must be called explicitly, from the thread
+         * driving the writer.
          */
         void wake_readers() noexcept {
-            shared_state_->wake_token.fetch_add(1, std::memory_order_release);
+            shared_state_->wake_token.store(++wake_token_cache_, std::memory_order_release);
             shared_state_->wake_token.notify_all();
         }
 
@@ -120,7 +121,10 @@ public:
     private:
         friend class BroadcastRing;
         Writer(SharedState* shared_state, SlotsView view) noexcept :
-            shared_state_(shared_state), view_(view), head_cache_(shared_state->head.load(std::memory_order_relaxed)) {}
+            shared_state_(shared_state),
+            view_(view),
+            head_cache_(shared_state->head.load(std::memory_order_relaxed)),
+            wake_token_cache_(shared_state->wake_token.load(std::memory_order_relaxed)) {}
 
         template <typename U>
         void publish_impl(std::span<U> items) {
@@ -148,6 +152,7 @@ public:
         SharedState* shared_state_;
         SlotsView view_;
         uint64_t head_cache_;
+        typename WakeTokenAtomic::value_type wake_token_cache_;
     };
 
     [[nodiscard]] Writer& writer() noexcept { return writer_; }
@@ -289,7 +294,9 @@ public:
 
         void release() noexcept {
             if (active_readers_ != nullptr) {
-                active_readers_->fetch_sub(1, std::memory_order_relaxed);
+                if (active_readers_->fetch_sub(1, std::memory_order_release) == 1) {
+                    active_readers_->notify_all();
+                }
                 active_readers_ = nullptr;
             }
         }
@@ -318,9 +325,22 @@ public:
         return Reader(&shared_state_, view(), shared_state_.head.load(std::memory_order_acquire), &active_readers_);
     }
 
+    /**
+     * @brief Blocks until every reader has been destroyed.
+     *
+     * The caller must prevent new readers from being created before calling this method.
+     */
+    void wait_until_no_readers() const noexcept {
+        uint32_t count = active_readers_.load(std::memory_order_acquire);
+        while (count != 0) {
+            active_readers_.wait(count, std::memory_order_acquire);
+            count = active_readers_.load(std::memory_order_acquire);
+        }
+    }
+
 private:
     // avoids futex sleeps during short publish gaps
-    static constexpr uint32_t kWaitSpinIterations = 2048;
+    static constexpr uint32_t kWaitSpinIterations = 256;
 
     static constexpr bool kStoreNoexcept =
         kTriviallyCopyable || (std::is_nothrow_copy_constructible_v<T> && std::is_nothrow_copy_assignable_v<T>);
