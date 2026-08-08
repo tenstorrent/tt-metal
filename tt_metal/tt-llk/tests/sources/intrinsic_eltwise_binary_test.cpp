@@ -188,6 +188,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+// Compiler-managed pack intrinsics.  BH-only this slice (the WH pack
+// intrinsics + config geometry are deferred, like WH unpack).
+#define INTR_PACK_HW_CONFIGURE __builtin_xttbh_pack_hw_configure
+#define INTR_PACR __builtin_xttbh_pacr
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -200,18 +205,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
 
-    const std::uint32_t tile_size = tensor_shape.total_tensor_size();
+    // tile_size / num_faces / partial_face feed only the LLK configure calls,
+    // which TT_COMPILER_EMITS_PACK_CONFIG gates off (the compiler derives the
+    // config from the intrinsic's args).
+    [[maybe_unused]] const std::uint32_t tile_size = tensor_shape.total_tensor_size();
 
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
+    [[maybe_unused]] const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    [[maybe_unused]] const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
 
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);
 
+#if defined(TT_COMPILER_EMITS_PACK_CONFIG)
+    // Compiler-managed pack config: __builtin_xttbh_pack_hw_configure is a
+    // config-declaration intrinsic -- pass_rvtt_config derives configure_pack's
+    // baseline (strides, Dstacc, formats word, PCK_DEST_RD_CTRL, counters,
+    // edge/mapping, the ADDR_MOD slots the inline pacrs' AddrMode selects, and
+    // the EXP0_SEC_SIZE_BFP GPR) and emits it.  The _llk_pack_hw_configure_
+    // / _llk_pack_init_ calls are gated off; _llk_pack_dest_init_wrapper_ stays
+    // (dest-offset GPRs + DEST_TARGET + counter init -- author-owned
+    // dest-section state).  num_faces is a compile-time constant (1 for this
+    // 16x16 one-face oracle).
+    INTR_PACK_HW_CONFIGURE(PACK_IN, PACK_OUT, /*num_faces=*/1);
+#else
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+#endif
 
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
@@ -227,7 +248,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
+#if defined(TT_COMPILER_EMITS_PACK_CONFIG)
+            // Author-owned data-op: the per-tile dest select + L1 dest address
+            // + sync, then the MOP's PACR stream inlined -- one 16-row face is
+            // 4 PACRs (4 dest rows each via ALL_INTF_ACTIVE) with addr-mod 2 on
+            // the last, then the outer end (addr-mod 1, Last=1).  The pacr
+            // words match the LLK MOP's (_llk_pack_mop_config_, Default mode).
+            set_dst_write_addr(tile);
+            program_packer_destination(L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+            INTR_PACR(0, 0, 0, 0, 0, 0); // rows 0-3   (addr-mod 0)
+            INTR_PACR(0, 0, 0, 0, 0, 0); // rows 4-7
+            INTR_PACR(0, 0, 0, 0, 0, 0); // rows 8-11
+            INTR_PACR(0, 2, 0, 0, 0, 0); // rows 12-15 (last inner: addr-mod 2)
+            INTR_PACR(0, 1, 0, 0, 0, 1); // outer end  (addr-mod 1, Last=1)
+            TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+#else
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+#endif
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
