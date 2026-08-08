@@ -266,7 +266,7 @@ public:
     // SHARDED API STARTS HERE
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
     bool has_shard_spec() const { return shard_spec_.has_value(); }
-    ShardSpecBuffer shard_spec() const;
+    const ShardSpecBuffer& shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
