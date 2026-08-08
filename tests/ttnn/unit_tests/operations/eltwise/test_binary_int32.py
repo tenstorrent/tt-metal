@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -1015,6 +1015,171 @@ def test_div_int32_large_magnitude_cases(device):
 
     # Device still matches the torch fp32 golden bit-exact but the result has lost integer precision above 2**24.
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+def test_floor_div_int32_full_range(input_shapes, device):
+    value_ranges_a = [
+        (-300, 300),
+        (-1000, 1000),
+        (-1e4, 1e4),
+        (-1e7, 1e7),
+        (2e9, 2077000000),  # large positive input
+        (-2147483647, -2e9),  # large negative input
+        (-2147483647, 2147483647),  # full range
+        (-10, 10),  # small numerator
+    ]
+
+    value_ranges_b = [
+        (-250, 250),
+        (-500, 1000),
+        (-5e3, 5e3),
+        (-1e6, 1e6),
+        (2e9, 2147483647),  # large positive input
+        (-2077000000, -2e9),  # large negative input
+        (-10, 10),  # small denominator
+        (-2147483647, 2147483647),  # large denominator
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
+    )
+    # torch raises ZeroDivisionError for integer division by zero, so there is no
+    # reference to compare against for those lanes.
+    torch_input_tensor_b[torch_input_tensor_b == 0] = 1
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor_a, input_tensor_b))
+
+    # int32 in must stay int32 out: the result used to come back as float32 with
+    # the integer bit pattern reinterpreted as float.
+    assert output_tensor.dtype == torch.int32
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_floor_div_int32_edge_cases(device):
+    pairs = [
+        (7, 2),  # inexact, floor rounds toward -inf
+        (-7, 2),
+        (7, -2),
+        (-7, -2),
+        (6, 3),  # exact, no rounding
+        (-6, 3),
+        (1, 2),  # |a| < |b|
+        (-1, 2),
+        (0, 1),
+        (0, -1),
+        (2147483647, 1),  # INT32_MAX
+        (2147483647, 2),
+        (2147483647, -1),
+        (-2147483648, 1),  # INT32_MIN
+        (-2147483648, 2),
+        (-2147483648, 2147483647),
+        (2147483647, -2147483648),
+        (-2147483648, -2147483648),
+        (16777217, 3),  # 2**24 + 1, not representable exactly in float32
+        (16777217, 1),
+        (1073741831, -7),  # 2**30 + 7
+    ]
+    # a == -2147483648 with b == -1 is left out: the true quotient 2**31 is not
+    # representable in int32, and ttnn.div does not support that pair either.
+    numerators, denominators = zip(*pairs)
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    torch_input_tensor_b = torch.tensor(denominators, dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor_a, input_tensor_b))
+
+    assert output_tensor.dtype == torch.int32
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("scalar", [2, 3, -2, -3, 7, 1000])
+def test_floor_div_int32_scalar(scalar, device):
+    # The tensor-scalar overload used to compute input * (1.0f / scalar). multiply
+    # truncates a float scalar against an integer tensor, so 1/2 became 0 and the
+    # whole result collapsed to zero.
+    torch_input_tensor = torch.tensor(
+        [7, 6, 28, 100, 1, 0, -7, -6, -28, -100, -1, 12345678, -1000000007],
+        dtype=torch.int32,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor, scalar))
+
+    assert output_tensor.dtype == torch.int32
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_floor_div_int32_scalar_large_magnitude(device):
+    # Values above 2**24 are not representable exactly in float32, so the old
+    # reciprocal-multiply path could not have produced these even with a correct
+    # scalar.
+    torch_input_tensor = torch.tensor(
+        [16777217, 16777219, 33554435, 1073741831, 2147483647, -2147483648],
+        dtype=torch.int32,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+
+    for scalar in (1, 3, 7):
+        torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+        output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor, scalar))
+        assert output_tensor.dtype == torch.int32
+        assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("b_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_floor_div_int32_float_divisor_keeps_inf_guard(device, b_dtype):
+    # An integer numerator with a float divisor can still divide by zero, so the
+    # non-finite guard has to stay in place for mixed dtypes rather than taking
+    # the integer fast path. 0 / 0.0 is excluded: the device returns inf where
+    # torch returns nan, independently of floor_div.
+    torch_input_tensor_a = torch.tensor([7, -7, 5], dtype=torch.int32)
+    torch_input_tensor_b = torch.tensor([0.0, 0.0, 2.0], dtype=torch.float32)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=b_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor_a, input_tensor_b)).to(torch.float32)
+
+    assert torch.isinf(output_tensor[0]) and output_tensor[0] > 0
+    assert torch.isinf(output_tensor[1]) and output_tensor[1] < 0
+    assert output_tensor[2] == 2
 
 
 @pytest.mark.parametrize(
