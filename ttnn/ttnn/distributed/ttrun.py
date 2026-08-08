@@ -384,8 +384,9 @@ def compute_phase1_cache_fingerprint_full(
     mgd_path: Path,
     hosts: Optional[List[str]],
     mock_rank_to_desc: Optional[Dict[int, Path]],
+    rank_pinning_file: Optional[Path] = None,
 ) -> str:
-    """Full SHA-256 hex (64 chars) of MGD + hosts or mock descriptor contents.
+    """Full SHA-256 hex (64 chars) of MGD + hosts or mock descriptor contents + optional rank pinning file.
 
     Stored in :data:`PHASE1_CACHE_KEY_FILENAME` to validate cache hits; directory name uses only a prefix.
 
@@ -408,6 +409,9 @@ def compute_phase1_cache_fingerprint_full(
             h.update(b"\0")
             desc_path = mock_rank_to_desc[rank]
             h.update(hashlib.sha256(desc_path.read_bytes()).digest())
+    if rank_pinning_file is not None:
+        h.update(b"\0")
+        h.update(hashlib.sha256(Path(rank_pinning_file).read_bytes()).digest())
     return h.hexdigest()
 
 
@@ -415,6 +419,7 @@ def compute_phase1_cache_id(
     mgd_path: Path,
     hosts: Optional[List[str]],
     mock_rank_to_desc: Optional[Dict[int, Path]],
+    rank_pinning_file: Optional[Path] = None,
 ) -> str:
     """Short hex id for Phase 1 cache directory (prefix of SHA-256).
 
@@ -432,7 +437,9 @@ def compute_phase1_cache_id(
     Raises:
         ValueError: Invalid host/mock combination.
     """
-    return compute_phase1_cache_fingerprint_full(mgd_path, hosts, mock_rank_to_desc)[:PHASE1_CACHE_ID_HEX_LEN]
+    return compute_phase1_cache_fingerprint_full(mgd_path, hosts, mock_rank_to_desc, rank_pinning_file)[
+        :PHASE1_CACHE_ID_HEX_LEN
+    ]
 
 
 def read_stored_phase1_cache_key(run_dir: Path) -> Optional[str]:
@@ -752,6 +759,7 @@ def build_generate_rank_bindings_mpi_cmd(
     output_dir: Path,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
+    rank_pinning_file: Optional[Path] = None,
 ) -> List[str]:
     """Build MPI command for running generate_rank_bindings.
 
@@ -764,6 +772,7 @@ def build_generate_rank_bindings_mpi_cmd(
         output_dir: Output directory for generated files
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+        rank_pinning_file: Optional path to the rank pinning YAML forwarded to Phase 1
 
     Returns:
         List of command-line arguments for mpirun
@@ -819,6 +828,8 @@ def build_generate_rank_bindings_mpi_cmd(
             cmd.append(str(executable.resolve()))
             cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
             cmd.extend(["--output-dir", str(output_dir.resolve())])
+            if rank_pinning_file is not None:
+                cmd.extend(["--rank-pinning-file", str(Path(rank_pinning_file).resolve())])
 
         # Return early for mock mode (already added executable and args per rank)
         return cmd
@@ -834,6 +845,8 @@ def build_generate_rank_bindings_mpi_cmd(
         cmd.append(str(executable.resolve()))
         cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
         cmd.extend(["--output-dir", str(output_dir.resolve())])
+        if rank_pinning_file is not None:
+            cmd.extend(["--rank-pinning-file", str(Path(rank_pinning_file).resolve())])
     else:
         raise ValueError("Either hosts or mock_rank_to_desc must be provided")
 
@@ -862,6 +875,7 @@ def run_phase1_generate_rank_bindings(
     subprocess_run=subprocess.run,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
+    rank_pinning_file: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings to produce rank_bindings.yaml and rankfile.
 
@@ -877,6 +891,7 @@ def run_phase1_generate_rank_bindings(
         subprocess_run: Subprocess run function (injectable for testing)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+        rank_pinning_file: Optional path to the rank pinning YAML forwarded to Phase 1
 
     Returns:
         Tuple of (rank_bindings.yaml path, rankfile path)
@@ -886,7 +901,9 @@ def run_phase1_generate_rank_bindings(
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
-    cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args)
+    cmd = build_generate_rank_bindings_mpi_cmd(
+        executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args, rank_pinning_file
+    )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
@@ -2466,6 +2483,7 @@ def new_mode_flow(
     rankfile_syntax: Optional[RankfileSyntax] = None,
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
+    rank_pinning_file: Optional[Path] = None,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor.
 
@@ -2487,6 +2505,7 @@ def new_mode_flow(
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
         force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
+        rank_pinning_file: Optional rank pinning YAML pinning a subset of ranks to specific hosts
     """
     program = ctx.args
 
@@ -2504,6 +2523,12 @@ def new_mode_flow(
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
 
+    resolved_rank_pinning_file: Optional[Path] = None
+    if rank_pinning_file is not None:
+        resolved_rank_pinning_file = resolve_path(rank_pinning_file, description="Rank pinning file", must_be_file=True)
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} New mode: Rank pinning file = {resolved_rank_pinning_file}")
+
     # Parse mock cluster mapping if provided
     mock_rank_to_desc: Optional[Dict[int, Path]] = None
     if mock_cluster_rank_binding:
@@ -2516,7 +2541,9 @@ def new_mode_flow(
 
     hosts_for_phase1: Optional[List[str]] = sorted(hosts) if hosts else None
     try:
-        fingerprint_full = compute_phase1_cache_fingerprint_full(resolved_mgd, hosts_for_phase1, mock_rank_to_desc)
+        fingerprint_full = compute_phase1_cache_fingerprint_full(
+            resolved_mgd, hosts_for_phase1, mock_rank_to_desc, resolved_rank_pinning_file
+        )
     except FileNotFoundError as e:
         raise click.ClickException(
             f"Cannot compute Phase 1 cache fingerprint: {e}. "
@@ -2596,6 +2623,7 @@ def new_mode_flow(
                     run_dir,
                     mock_rank_to_desc,
                     phase1_mpi_args,
+                    resolved_rank_pinning_file,
                 )
                 print_command(
                     phase1_cmd,
@@ -2614,6 +2642,8 @@ def new_mode_flow(
 
         run_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(resolved_mgd, run_dir / f"mgd{resolved_mgd.suffix}")
+        if resolved_rank_pinning_file is not None:
+            shutil.copy2(resolved_rank_pinning_file, run_dir / "rank_pinnings.yaml")
         if hosts_for_phase1:
             write_phase1_openmpi_hostfile(run_dir / "hostfile", hosts_for_phase1)
         try:
@@ -2624,6 +2654,7 @@ def new_mode_flow(
                 subprocess_run=subprocess.run,
                 mock_rank_to_desc=mock_rank_to_desc,
                 mpi_args=phase1_mpi_args,
+                rank_pinning_file=resolved_rank_pinning_file,
             )
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
@@ -2702,6 +2733,13 @@ def new_mode_flow(
     required=False,
     help="Mesh graph descriptor file. When provided, enables new mode (mutually exclusive with --rank-binding). "
     "Requires --hosts unless --mock-cluster-rank-binding is provided.",
+)
+@click.option(
+    "--rank-pinning-file",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="New mode only: optional YAML pinning specific ranks to specific hosts. Ranks not listed are placed "
+    "automatically by the auto-mapper. Requires --mesh-graph-descriptor.",
 )
 @click.option(
     "--hosts",
@@ -2788,6 +2826,7 @@ def main(
     rank_binding: Optional[Path],
     rank_bindings_mapping: Optional[Path],
     mesh_graph_descriptor: Optional[Path],
+    rank_pinning_file: Optional[Path],
     hosts: Optional[List[str]],
     dry_run: bool,
     verbose: bool,
@@ -2840,6 +2879,11 @@ def main(
                 f"{TT_RUN_PREFIX} --force-rediscovery applies only to new mode (--mesh-graph-descriptor); ignoring."
             )
         # Warn if new mode options are used with legacy mode
+        if rank_pinning_file is not None:
+            raise click.ClickException(
+                "--rank-pinning-file requires new mode (--mesh-graph-descriptor); it has no effect with "
+                "--rank-binding / --rank-bindings-mapping."
+            )
         if hosts is not None:
             logger.warning(
                 f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). "
@@ -2889,6 +2933,7 @@ def main(
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
+            rank_pinning_file=rank_pinning_file,
         )
         return
 
