@@ -519,6 +519,12 @@ def cmd_optimize(args) -> int:
 
     if _os.environ.get("PERF_MCP_SUPERVISED") != "1" and _os.environ.get("PERF_MCP_SUPERVISE", "1") == "1":
         _max = int(_os.environ.get("PERF_MCP_MAX_RESTARTS", "3") or "3")
+        # Imported from the ONE definition rather than restated: a second literal here that drifted
+        # from run.py's would turn every refusal back into three device resets, silently.
+        try:
+            from models.experimental.perf_automation.cc_optimize.run import EXIT_REFUSED as _EXIT_REFUSED
+        except Exception:  # noqa: BLE001 -- a supervisor that cannot import must still supervise
+            _EXIT_REFUSED = 3
         _ttsmi = _sh.which("tt-smi")
         for _n in range(_max + 1):
             _rc = _sp.run(
@@ -530,6 +536,19 @@ def cmd_optimize(args) -> int:
                 if not _dok:
                     print(_out_of_disk_msg(_dlow), flush=True)
                     return _rc
+            # A REFUSAL IS NOT A CRASH. The child refused to start on evidence it already gathered
+            # (a red preflight suite, a dirty tree under PERF_MCP_REQUIRE_CLEAN). Relaunching
+            # re-derives the same decision from the same evidence, so a restart can only spend three
+            # device resets and ten minutes to reach the verdict that was available at once -- and
+            # bury the reason under three "likely native crash" lines that misdescribe it. See
+            # cc_optimize/run.py:EXIT_REFUSED.
+            if _rc == _EXIT_REFUSED:
+                print(
+                    f"  [optimize/supervisor] child REFUSED to start (rc={_rc}) — a decision, not a crash. "
+                    "Not restarting; the reason is above.",
+                    flush=True,
+                )
+                return _rc
             if _rc == 0 or _n >= _max:
                 if _rc != 0:
                     print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)

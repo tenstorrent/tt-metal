@@ -37,6 +37,23 @@ state_dir = _tmpstate.state_dir
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
+
+# A REFUSAL IS NOT A CRASH, and the supervisor could not tell them apart because both exited 1.
+#
+# The auto-restart supervisor exists for a native tt-metal SIGSEGV: a crash kills the whole Python
+# process, no in-process handler can catch it, and relaunching is the right answer. It reads any
+# non-zero exit as that case -- "likely native crash / device wedge" -- resets the board and runs
+# again, up to PERF_MCP_MAX_RESTARTS times.
+#
+# But a refusal is a DECISION the tool already made on evidence: the preflight suite is red, the
+# model tree is dirty under PERF_MCP_REQUIRE_CLEAN. Relaunching re-derives the same decision from
+# the same evidence and gets the same answer, so the only effect is to spend three device resets and
+# ten minutes before reporting a verdict that was available immediately -- and to bury the reason
+# under three "likely native crash" lines that misdescribe it.
+#
+# So a deliberate refusal exits with its own code and the supervisor returns it untouched. Anything
+# that is genuinely unexpected keeps exit 1 and keeps being retried.
+EXIT_REFUSED = 3
 _LAST_SCORECARD: dict = {}
 
 
@@ -3179,7 +3196,8 @@ def _warn_dirty_model_tree(demo_dir, repo_root) -> list:
         "against different work. Commit or revert before trusting a gain."
     )
     if os.environ.get("PERF_MCP_REQUIRE_CLEAN") == "1":
-        raise SystemExit("  [optimize/cc] PERF_MCP_REQUIRE_CLEAN=1 and the model tree is dirty — refusing to start.")
+        print("  [optimize/cc] PERF_MCP_REQUIRE_CLEAN=1 and the model tree is dirty — refusing to start.", flush=True)
+        raise SystemExit(EXIT_REFUSED)
     return dirty
 
 
@@ -4122,7 +4140,8 @@ def run_cc_optimize(
     # BEFORE the device is touched and before discovery spends an agent call: verify the tool this
     # run will execute is the tool that was verified. See _preflight_tool.
     if not _preflight_tool(repo_root):
-        raise SystemExit("  [optimize/cc] refusing to start against a tool whose own tests fail.")
+        print("  [optimize/cc] refusing to start against a tool whose own tests fail.", flush=True)
+        raise SystemExit(EXIT_REFUSED)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         # No exported key is FINE: `claude` may be authenticated via `claude /login` (README §5.2
         # Option A). Every claude subprocess uses those stored creds; claude surfaces its own error

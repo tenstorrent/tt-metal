@@ -128,6 +128,39 @@ def test_r4_it_tests_the_repo_the_run_will_use(monkeypatch, tmp_path):
     assert str(repo / "models/experimental/perf_automation/tests") in seen["cmd"]
 
 
+# --------------------------------------------------------------------------- r5 A REFUSAL IS NOT A CRASH
+def test_r5_a_refusal_exits_with_its_own_code():
+    """The auto-restart supervisor exists for a native tt-metal SIGSEGV, and read ANY non-zero exit
+    as that case. The first real preflight refusal was therefore reported as "likely native crash /
+    device wedge", the board was reset, and the same decision was re-derived from the same evidence
+    -- three times, ten minutes, for a verdict available at once."""
+    m = _run()
+    assert m.EXIT_REFUSED != 0 and m.EXIT_REFUSED != 1, m.EXIT_REFUSED
+
+
+def test_r5_the_supervisor_does_not_restart_a_refusal():
+    sup = (_PA.parent.parent.parent / "scripts/tt_hw_planner/commands/optimize.py").read_text()
+    i = sup.index("_EXIT_REFUSED")
+    body = sup[i : i + 2000]
+    assert "return _rc" in body
+    assert "not a crash" in body.lower() or "Not restarting" in body
+
+
+def test_r5_the_exit_code_has_one_definition():
+    """A second literal in the supervisor that drifted from run.py's would turn every refusal back
+    into three device resets, silently."""
+    m = _run()
+    sup = (_PA.parent.parent.parent / "scripts/tt_hw_planner/commands/optimize.py").read_text()
+    assert "from models.experimental.perf_automation.cc_optimize.run import EXIT_REFUSED" in sup
+    assert "_EXIT_REFUSED = %d" % m.EXIT_REFUSED in sup, "the supervisor fallback disagrees with run.py"
+
+
+def test_r5_both_deliberate_refusals_use_it():
+    """The dirty-tree refusal is the same kind of decision and was the same rc=1."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    assert src.count("raise SystemExit(EXIT_REFUSED)") >= 2, "a deliberate refusal still exits 1"
+
+
 def test_r4_the_run_calls_it_before_touching_the_device():
     """Ordered ahead of discovery, which spends an agent call, and ahead of any device work."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
