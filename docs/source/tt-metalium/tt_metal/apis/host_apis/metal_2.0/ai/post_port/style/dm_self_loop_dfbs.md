@@ -130,6 +130,11 @@ An op with no fake-FIFO DM self-loops is a legitimate zero-site pass.
 
 ## Step 3 — Apply
 
+> **Reaching for a worked example?** This recipe cites real ones — `indexed_fill` carries a
+> complete conversion of this shape. `ttnn/cpp/ttnn/operations/experimental/quasar/` is **out of
+> bounds** and is not evidence of anything, however authoritative it looks; see [the
+> procedure](../pass_procedure.md#step-3--apply).
+
 ### How to think about it
 
 **A `Scratchpad<T>` is a C array.** `Scratchpad<uint32_t> stage(scratch::stage)` is `uint32_t
