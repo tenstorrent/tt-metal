@@ -19,7 +19,12 @@
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 >
-> **§N+37 (newest): the REAL knee is 1 drainer ~250, 2 drainers ~150 (~1.7x, not 5x).** "Knee 20" is
+> **§N+38 (newest): the knee is set by the WORST sweep's CREDIT-WAIT (71-93% of it), not by read or proc
+> (17.8 us of 125 us) — optimize the worst sweep, not the mean.** The per-read page cap must clear at least
+> one whole FRAME (`kPagesPerSlot` = 165): cap 176 gives knee 150 → 100, cap 165 and below stalls badly,
+> cap 0 is broken. Derive the default from `kPagesPerSlot`, not the magic 1024.
+>
+> **§N+37: the REAL knee is 1 drainer ~250, 2 drainers ~150 (~1.7x, not 5x).** "Knee 20" is
 > RETRACTED — it was measured on an MMIO-degraded card, where 2.3 us host WRITES stretch the serial
 > slow-dispatch launch ~13x and DESYNCHRONIZE the producers, collapsing peak concurrent rate. Forcing a
 > Gen1 link (slow reads, fast writes) does the opposite and pushes the knee past 150, which is how the
@@ -3269,3 +3274,80 @@ path. It was never a property of the drainer.
 **A knee is only meaningful with the card's health stated alongside the dispatch mode.** The existing rule
 was "never quote a knee without the dispatch mode"; add "and without the ACK-WRITE probe value", because
 a slow WRITE path silently desynchronizes producers and flatters every number downstream.
+
+## §N+38 — The knee is set by the WORST sweep's CREDIT-WAIT, and the per-read page cap must clear a whole FRAME (bh-26, 2026-08-08)
+
+### Averages pointed at the wrong phase for hours
+
+Mean-sweep phases said read ~46% and proc ~23%, so three micro-optimizations went there. All three were
+end-to-end null:
+
+| change | phase effect | stalls |
+|---|---|---|
+| scan unrolled into registers | scan 42% -> 23% | none |
+| read split across cores (both NoCs) | read 47% -> 42% | none |
+| read split within one core's span | -- | none |
+
+Capturing the phases OF THE WORST SWEEP (not the mean) explained why instantly:
+
+```
+delay 100:  WORST 125.1 us = read 3.8 + proc 13.9 + credit-wait 89.4 + write 7.1 + wr-barrier 7.0  (97% accounted)
+delay 150:  WORST 128.3 us = read 3.8 + proc 14.0 + credit-wait 93.0 + write 6.7 + wr-barrier 7.0  (97%)
+```
+
+**Credit-wait is 2.8% of the MEAN sweep and 71-93% of the WORST one.** The knee is decided by the worst
+sweep beating ring-fill time, so read+proc -- 17.8 us of a 125 us worst sweep -- could never move it.
+Note the worst sweep does LESS read work than a mean sweep (3.8 us vs ~22 us): it is not busy, it is
+BLOCKED.
+
+**Rule: optimize the worst sweep, not the mean. They have different bottlenecks.**
+
+### THE FIX: the per-read page cap must clear at least one whole frame
+
+`TT_METAL_PERF_DEBUG_MAX_PAGES` at delay 100, 120 cores, 2 drainers, `NO_DECODE`, healthy card:
+
+| cap (pages) | stalls |
+|---|---|
+| 4096 | 14,652 / 14,943 |
+| 1024 (compiled default) | 8,432 / 8,269 |
+| 512 | 3,903 / 3,622 |
+| 256 | 764 / 1,015 |
+| 208 | **0 / 0** |
+| 192 | 0 / 333 |
+| **176** | **0 / 0** |
+| **165 (= kPagesPerSlot, one frame)** | 1,550 / 2,114 |
+| 160 | 1,904 / 3,683 |
+| 144 | 7,266 / 8,230 |
+| 128 | 15,441 / 15,214 |
+| 0 (uncapped) | **run produces no output at all -- broken** |
+
+**The cliff is exactly at one frame.** `kPagesPerSlot = 165` pages is one core's span. At or below it a read
+cannot be guaranteed to retire a WHOLE frame, so the host keeps pulling partial frames, credit is returned
+in dribs, and the drainer waits; just above it every read clears at least one complete frame. That is a
+STRUCTURAL boundary, not a fitted constant -- which is why 165 still stalls and 176 is clean.
+
+So the right default is `kPagesPerSlot + headroom`, DERIVED, not the magic 1024.
+
+### Knee 150 -> 100 (1.5x)
+
+With cap 176, 2 drainers, `NO_DECODE`:
+
+| delay | cap 176 | default 1024 |
+|---|---|---|
+| 60 | 12,496 / 12,330 | 9,997 / 9,992 |
+| 80 | 11,206 / 13,398 | -- |
+| **100** | **0 / 0** (occ 476-484) | 8,378 / 7,888 |
+| 150 | -- | 0 / 15 |
+
+First genuine end-to-end win of the session -- everything else made a phase faster while the total stood
+still. Occupancy at the knee drops off the 510 ceiling to 476-484, so there is real margin.
+
+**Caveats:** below the knee the small cap is slightly WORSE (12,000 vs 10,000 stalls at delay 60) -- once
+saturated, smaller reads cost throughput. And this is `NO_DECODE`; decode+publish adds host work that will
+move the optimum, so 176 must not be adopted as a default until re-measured with decode on.
+
+### Also fixed here
+
+A phase-accounting underflow: `c_proc += elapsed - nested` wrapped when the nested ship_run time exceeded
+the elapsed span, printing `proc 18727729111430.1%` and silently corrupting the whole breakdown. Now
+saturating.
