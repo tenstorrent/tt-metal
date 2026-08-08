@@ -103,7 +103,7 @@ class Semaphore {
         return get_semaphore<core_type>(id);
     }
 
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
     // This EXTERNAL semaphore's lock word on THIS node (firmware-zeroed at boot; only ever 0/1).
     // Recovered from l1_offset_ so the instance stays one word for every scope.
     uint32_t external_lock_l1_offset() const {
@@ -137,6 +137,13 @@ public:
             static_assert(
                 Id * L1_ALIGNMENT < MEM_DM_CACHED_SEM_SIZE,
                 "semaphore id does not fit the DM cached semaphore pool (grow MEM_DM_CACHED_SEM_SIZE)");
+        }
+        // The lock region sits right below the cached pool, so an out-of-range id would CAS-write
+        // a live cached counter. The raw-id ctor has only the watcher ASSERT -- ids must be < 16.
+        if constexpr (Scope == SemScope::EXTERNAL) {
+            static_assert(
+                Id * 4 < MEM_NOC_SEM_LOCK_SIZE,
+                "semaphore id does not fit the EXTERNAL lock region (grow MEM_NOC_SEM_LOCK_SIZE)");
         }
 #endif
         static_assert(
@@ -247,7 +254,9 @@ public:
             } while (!__atomic_compare_exchange_n(
                 word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
         } else if constexpr (Scope == SemScope::EXTERNAL) {
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+            // (Emule gate: its shadow header normally replaces this file; the gate keeps a stray
+            // real-header compile on the Gen1 arm, whose primitives emule shims.)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
             // Multi-consumer-safe: a 4-bit NoC-CAS spinlock on this semaphore's lock word guards
             // check-then-INCR_GET(-v). Producers stay plain INCR_GET (increments commute with the
             // critical section; CAS and INCR_GET serialize mutually at the NIU -- keystone
@@ -256,6 +265,12 @@ public:
             // TestAtomicCasReturnsPreOpValue proved the barrier also orders the return, so the
             // polls exit on their first check). INVARIANT: the semaphore never legitimately holds
             // 0xFFFFFFFF (the sentinel).
+            // Drain any prior in-flight atomic on this hart FIRST: a remote up(noc,x,y,v) does not
+            // barrier, and its pre-op return targets this hart's sticky ret slot once any earlier
+            // down() programmed it. Landing after our acquire CAS's return would corrupt the lock
+            // verdict (false acquire, or a lock stranded at 1). One NoC on Quasar, so one barrier
+            // covers everything issued before this call.
+            noc_async_atomic_barrier();
             const uint64_t sem_noc = ::get_noc_addr(l1_offset_);
             const uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset());
             const uint32_t ret_slot = cas_ret_slot();
