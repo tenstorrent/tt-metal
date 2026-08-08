@@ -13,7 +13,7 @@ on:
       image:
         required: true
         type: string
-        description: "Image type: release or release-models"
+        description: "Image type: release, release-models or prefill-worker"
       tag-latest:
         required: false
         type: boolean
@@ -23,8 +23,40 @@ on:
         type: number
         default: 10
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
+        default: ""
+        description: >-
+          Wheel artifact installed by the image. Required for images built from
+          the wheel (release); empty for derived images (see derive-from), which
+          inherit an already-installed tt-metal from their base.
+      derive-from:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Build this image on top of ANOTHER image type from the same release
+          instead of from the base OS + wheel, i.e.
+          tt-metalium-<platform>-<derive-from>-amd64:<version>. The job that
+          publishes that image type must therefore have completed first. When
+          set, no tool layers, wheel or version args are passed to bake - the
+          derived Dockerfile is expected to consume only its base contexts.
+      tt-llm-engine-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Prebuilt tt-llm-engine migration image the prefill-worker COPYs
+          _migration_client out of (no clone, no token). Pin by full SHA and match
+          the release base's Python minor (3.10 on 22.04). Empty falls back to the
+          pinned default in dockerfile/docker-bake.hcl.
+      skip-smoke-test:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Skip the on-device smoke tests for this image. The retag-as-latest job
+          still runs (it treats a skipped smoke test as non-blocking).
       dry-run:
         required: false
         type: boolean
@@ -80,13 +112,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Download wheels
+        if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
         run: |
-          echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
+          if [ -n "${{ inputs.wheel-artifact-name }}" ]; then
+            echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
+          fi
           UBUNTU_VERSION="${{ steps.extract-version.outputs.version }}"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
@@ -120,25 +155,55 @@ jobs:
           UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
           PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
           HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+          PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ inputs.version }}
+          DERIVE_FROM: ${{ inputs.derive-from }}
+          TT_LLM_ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
         run: |
           set -euo pipefail
           TARGET="${{ inputs.image }}"
-          # Tool list comes from docker-bake.hcl via get-target-tools.sh
-          TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
           SET=""
-          for tool in "${TOOLS[@]}"; do
-            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
-            [ "$tag" = "null" ] && { echo "ERROR: missing tag for tool '$tool' in compute-tool-tags output"; exit 1; }
-            SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
-          done
+          if [ -n "$DERIVE_FROM" ]; then
+            # Derived image: it layers on an image type published earlier in this
+            # same release, so it needs neither tool layers nor the wheel.
+            BASE_IMAGE="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-${DERIVE_FROM}-amd64:${VERSION}"
+            echo "Deriving ${TARGET} from ${BASE_IMAGE}"
+            # Deliberately NOT Harbor-prefixed: the base is a ghcr.io image from this
+            # very run (pushed minutes ago), and a pull-through cache can serve a
+            # stale miss for a tag that new.
+            SET+="${TARGET}.contexts.release-base=docker-image://${BASE_IMAGE}"$'\n'
+            # prefill-worker COPYs _migration_client out of a prebuilt tt-llm-engine
+            # image; override the bake default only when the caller pinned one.
+            if [ -n "$TT_LLM_ENGINE_IMAGE" ]; then
+              SET+="${TARGET}.args.TT_LLM_ENGINE_IMAGE=${TT_LLM_ENGINE_IMAGE}"$'\n'
+            fi
+          else
+            # Tool list comes from docker-bake.hcl via get-target-tools.sh
+            TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
+            for tool in "${TOOLS[@]}"; do
+              tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+              [ "$tag" = "null" ] && { echo "ERROR: missing tag for tool '$tool' in compute-tool-tags output"; exit 1; }
+              SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
+            done
+            SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
+            SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
+            SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
+            SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
+          fi
           SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
-          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
-          SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
-          SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
-          SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
-          SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
+          # force-compression is safe only for base images whose layers are all
+          # built locally. A derived image (DERIVE_FROM set) layers on a REMOTE
+          # base whose layers are referenced lazily; forcing them to recompress
+          # to zstd at export fails with 'failed to get compression blob "zstd":
+          # not found'. Omit it there so the base layers are reused by digest
+          # (kept shared with the base image) and only new layers are zstd.
+          if [ -n "$DERIVE_FROM" ]; then
+            SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,oci-mediatypes=true"$'\n'
+          else
+            SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          fi
           # RUN steps (apt-get, curl, uv pip) need the proxy too. BuildKit
           # sets these build args in every RUN automatically, no ARG
           # declaration needed.
@@ -178,7 +243,7 @@ jobs:
           echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 
   smoke-test-docker-image:
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && !inputs.skip-smoke-test }}
     needs: create-docker-release-image
     strategy:
       matrix:
@@ -233,7 +298,14 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   tag-docker-image-as-latest:
-    if: ${{ !inputs.dry-run }}
+    # A SKIPPED smoke test (skip-smoke-test) must not block the retag, but a
+    # FAILED one still must - hence the explicit result checks instead of relying
+    # on needs, which would skip this job in both cases.
+    if: >-
+      ${{ !inputs.dry-run && !cancelled()
+      && needs.create-docker-release-image.result == 'success'
+      && (needs.smoke-test-docker-image.result == 'success'
+      || needs.smoke-test-docker-image.result == 'skipped') }}
     needs: [smoke-test-docker-image, create-docker-release-image]
     runs-on: ubuntu-latest
     steps:

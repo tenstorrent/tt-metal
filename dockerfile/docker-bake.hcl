@@ -17,6 +17,7 @@
 #   docker buildx bake ci-build         # Build CI build image
 #   docker buildx bake basic-dev        # Build basic dev image
 #   docker buildx bake manylinux        # Build manylinux image
+#   docker buildx bake prefill-worker   # COPYs _migration_client from a prebuilt tt-llm-engine image (docker login ghcr.io)
 #   docker buildx bake tools            # Build just the tool images
 #   docker buildx bake venvs            # Build just the venv images
 #   docker buildx bake all              # Build everything
@@ -68,6 +69,14 @@ variable "TT_SMI_VERSION" {
   # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
   # `docker build` without Bake). Keep the two in sync.
   default = "5.2.0"
+}
+
+variable "TT_LLM_ENGINE_IMAGE" {
+  # Prebuilt tt-llm-engine migration image the prefill-worker target COPYs the
+  # _migration_client module out of (no clone, no compile, no token). Pin by full
+  # SHA per release, never :latest, and keep it in sync with the tag tt-blaze's
+  # decode worker uses so the P and D sides speak the same migration protocol.
+  default = "ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74"
 }
 
 variable "UV_IMAGE" {
@@ -410,6 +419,32 @@ target "evaluation" {
   contexts = {
     ccache-layer = "target:ccache"
     sfpi-layer   = "target:sfpi"
+  }
+}
+
+# =============================================================================
+# Prefill worker target (from Dockerfile.prefill-worker)
+#
+# A thin layer on top of release-models: adds tt-llm-engine's _migration_client
+# and nothing else, so tt-metal is never rebuilt here. The release-base arrives
+# as a named context, resolved to a local target here and overridden to a
+# docker-image:// ref in CI (.github/workflows/publish-release-image.yaml) so the
+# worker layers on the exact release image that was just published.
+#
+# The _migration_client module is COPYed out of a prebuilt tt-llm-engine image
+# (TT_LLM_ENGINE_IMAGE) - no clone, no compile, so no GitHub token; pulling that
+# image needs only `docker login ghcr.io`. Mirrors tt-blaze's decode worker.
+# =============================================================================
+
+target "prefill-worker" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.prefill-worker"
+  tags       = ["tt-metalium-prefill-worker:local"]
+  args = {
+    TT_LLM_ENGINE_IMAGE = TT_LLM_ENGINE_IMAGE
+  }
+  contexts = {
+    release-base = "target:release-models"
   }
 }
 

@@ -1,0 +1,13 @@
+# Per-Dockerfile ignore for Dockerfile.prefill-worker (BuildKit picks this up in
+# preference to a root .dockerignore when building with
+# `-f dockerfile/Dockerfile.prefill-worker`). Scoped so it does NOT affect other
+# tt-metal image builds.
+#
+# The worker layers on a prebuilt release base and compiles only the migration
+# client from a cloned tt-llm-engine, so NOTHING is read from the build context
+# today (no COPY from context, no bind mount). Everything is excluded to keep the
+# context transfer at zero — notably tt-metal's ~2 GB .git, which the earlier
+# from-source variant of this image had to keep. If a future change does need a
+# file from the working tree, un-ignore that path explicitly rather than dropping
+# the catch-all.
+**
