@@ -1,0 +1,410 @@
+name: "[internal] codegen port — device run"
+
+# The card-holding half of the codegen porting pipeline. `port-agent` reasons and writes; this
+# measures. It builds tt-metal, checks out the private tt-dm-codegen generator beside it, restores
+# whatever run state a previous leg left, runs one pipeline command against a real card, and hands
+# the state and artifacts back.
+#
+# Why this is a classic workflow rather than part of the agent: the agent has no card, and the work
+# here is entirely mechanical — a fixed command, a fixed artifact contract. Nothing it does needs a
+# model, so nothing it does should cost one.
+#
+# Serialization: the pipeline normally requires the tt-device-mcp daemon to queue card jobs. There is
+# no daemon here and none is needed — the Actions scheduler already gives this job the card to
+# itself, which is exactly what CODEGEN_PORT_EXCLUSIVE_DEVICE=1 asserts (see the tt-dm-codegen
+# `_probe_daemon` docstring). It is set here and must not be set on a shared box.
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      op:
+        description: "op name, e.g. pad"
+        required: true
+        type: string
+      mode:
+        description: "which pipeline command to run"
+        required: true
+        type: choice
+        options:
+          - sync
+          - verify
+          - update
+          - port
+      run_id:
+        description: "pipeline run id — the key both the state file and its artifact are named for"
+        required: true
+        type: string
+      codegen_ref:
+        description: "tt-dm-codegen ref to run from"
+        required: false
+        type: string
+        default: "main"
+      commit:
+        description: "tt-metal commit to test (default: this ref's HEAD)"
+        required: false
+        type: string
+        default: ""
+      arch:
+        required: false
+        type: choice
+        default: wormhole_b0
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        description: 'JSON runner labels, e.g. ["N300", "in-service", "pipeline-perf", "bare-metal"]'
+        required: false
+        type: string
+        default: '["N300", "in-service", "pipeline-perf", "bare-metal"]'
+      avoid_syncing:
+        description: "declared divergence: '<paths>: <why>' per line — reported, never overwritten"
+        required: false
+        type: string
+        default: ""
+      extra_flags:
+        description: "extra run.py flags (allowlisted; anything else fails the job)"
+        required: false
+        type: string
+        default: ""
+      state_from_run_id:
+        description: "Actions run id to restore prior pipeline state from (blank: start clean)"
+        required: false
+        type: string
+        default: ""
+      tracy:
+        description: "build with the profiler — required for the performance phase"
+        required: false
+        type: boolean
+        default: true
+      staged:
+        description: "measure and report only; never push a branch or open/edit a PR"
+        required: false
+        type: boolean
+        default: true
+
+  # Same surface, callable. `port-agent` reaches this workflow through the workflow_dispatch API,
+  # but that only resolves against the default branch — so a caller on a topic branch (a test
+  # harness, or a future gate that wants a port re-measured) has no way in without this.
+  # `choice` is not a reusable-workflow input type, so those arrive as plain strings and are
+  # validated in `validate` below rather than by the dispatch form.
+  workflow_call:
+    inputs:
+      op:
+        required: true
+        type: string
+      mode:
+        description: "sync | verify | update | port"
+        required: true
+        type: string
+      run_id:
+        required: true
+        type: string
+      codegen_ref:
+        required: false
+        type: string
+        default: "main"
+      commit:
+        required: false
+        type: string
+        default: ""
+      arch:
+        description: "wormhole_b0 | blackhole"
+        required: false
+        type: string
+        default: wormhole_b0
+      runner-label:
+        required: false
+        type: string
+        default: '["N300", "in-service", "pipeline-perf", "bare-metal"]'
+      avoid_syncing:
+        required: false
+        type: string
+        default: ""
+      extra_flags:
+        required: false
+        type: string
+        default: ""
+      state_from_run_id:
+        required: false
+        type: string
+        default: ""
+      tracy:
+        required: false
+        type: boolean
+        default: true
+      staged:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      CODEGEN_REPO_TOKEN:
+        description: "read access to the private tenstorrent/tt-dm-codegen"
+        required: true
+
+run-name: "codegen port: ${{ inputs.mode }} ${{ inputs.op }} @ ${{ inputs.codegen_ref }}"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  # Validated before anything expensive: a build is ~an hour, and a rejected flag should cost
+  # seconds. This is a second line of defence — `port-agent` validates the same input — because this
+  # workflow is independently dispatchable by anyone with write access.
+  validate:
+    # ubuntu-slim, this repo's label for light gate jobs, rather than ubuntu-latest — the latter
+    # backlogs here, and this job gates the build, so a queued validator stalls the whole run.
+    runs-on: ubuntu-slim
+    steps:
+      # workflow_dispatch constrains mode/arch with a `choice` picker, but workflow_call cannot —
+      # reusable workflows have no choice type, so a caller can pass anything. Checked here so both
+      # entry points end up equally constrained. `op` is checked because it becomes a path.
+      - name: Check the enumerated inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          ARCH: ${{ inputs.arch }}
+          OP: ${{ inputs.op }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          mode, arch, op = os.environ["MODE"], os.environ["ARCH"], os.environ["OP"]
+          if mode not in ("sync", "verify", "update", "port"):
+              sys.exit(f"mode must be sync|verify|update|port, got {mode!r}")
+          if arch not in ("wormhole_b0", "blackhole"):
+              sys.exit(f"arch must be wormhole_b0|blackhole, got {arch!r}")
+          if not re.fullmatch(r"[a-z][a-z0-9_]*", op):
+              sys.exit(f"op must be a bare lowercase identifier, got {op!r}")
+          print(f"ok: mode={mode} arch={arch} op={op}")
+          PY
+
+      - name: Check extra_flags against the allowlist
+        env:
+          EXTRA_FLAGS: ${{ inputs.extra_flags }}
+        run: |
+          python3 - <<'PY'
+          import os, shlex, sys
+
+          # Value-taking flags are listed separately so their argument is not itself checked as a
+          # flag. Everything here is a documented run.py option; nothing that writes to a remote.
+          BOOL = {
+              "--allow-narrow", "--skip-intake", "--refresh-manifest", "--update", "--rescope",
+              "--no-cross-arch-sweep", "--collect-cross-arch", "--render-png-charts",
+          }
+          VALUED = {
+              "--stack-on", "--from-main", "--manifest", "--baseline-ref", "--max-tokens",
+              "--max-wall-clock-s", "--phase-timeout-s", "--max-phases", "--build-timeout-s",
+              "--review-verdict", "--ttmetal-base-ref", "--claude-model",
+          }
+
+          raw = os.environ.get("EXTRA_FLAGS", "").strip()
+          if not raw:
+              sys.exit(0)
+          try:
+              tokens = shlex.split(raw)
+          except ValueError as e:
+              sys.exit(f"extra_flags is not parseable as shell words: {e}")
+
+          expect_value = False
+          for token in tokens:
+              if expect_value:
+                  expect_value = False
+                  continue
+              if token in BOOL:
+                  continue
+              if token in VALUED:
+                  expect_value = True
+                  continue
+              if token.split("=", 1)[0] in VALUED:
+                  continue
+              sys.exit(
+                  f"refusing {token!r}: not in the extra_flags allowlist.\n"
+                  f"allowed: {', '.join(sorted(BOOL | VALUED))}"
+              )
+          if expect_value:
+              sys.exit(f"trailing flag {tokens[-1]!r} expects a value")
+          print(f"extra_flags ok: {tokens}")
+          PY
+
+  build-artifact:
+    needs: [check-harbor, validate]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      # The performance phase reads Tracy device timings; without this it has nothing to measure.
+      tracy: ${{ inputs.tracy }}
+      build-wheel: true
+      ref: ${{ inputs.commit || github.sha }}
+      platform: "Ubuntu 22.04"
+      build-type: "Release"
+
+  port-device:
+    needs: [check-harbor, build-artifact]
+    timeout-minutes: 720
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    container:
+      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout tt-metal
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 10
+        with:
+          fetch-depth: 0 # the pipeline diffs against origin/main, so it needs real history
+          submodules: recursive
+          path: docker-job
+          ref: ${{ inputs.commit || github.sha }}
+
+      # `persist-credentials: false` is load-bearing, not hygiene: this job uploads artifacts from
+      # inside the checkout, and the default would write the token into
+      # tt-dm-codegen/.git/config for those uploads to carry off a private-repo credential.
+      - name: 🧬 Checkout tt-dm-codegen (private)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 10
+        with:
+          repository: tenstorrent/tt-dm-codegen
+          token: ${{ secrets.CODEGEN_REPO_TOKEN }}
+          ref: ${{ inputs.codegen_ref }}
+          path: docker-job/tt-dm-codegen
+          fetch-depth: 0 # sync_op resolves refs and merge-bases; a shallow clone cannot
+          persist-credentials: false
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 20
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: 🐍 Install pipeline dependencies
+        run: uv pip install pyyaml matplotlib github-copilot-sdk
+
+      # A port is a chain of jobs, not one job: the state file is what makes the next leg a
+      # continuation rather than a restart. Absent state is normal (a first leg), so this never
+      # fails the run — it just starts clean.
+      - name: 📥 Restore pipeline state
+        if: inputs.state_from_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codegen-port-state-${{ inputs.op }}-${{ inputs.run_id }}
+          path: docker-job/tt-dm-codegen/agentic_port/state
+          run-id: ${{ inputs.state_from_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🔬 Run the pipeline
+        env:
+          OP: ${{ inputs.op }}
+          MODE: ${{ inputs.mode }}
+          RUN_ID: ${{ inputs.run_id }}
+          CODEGEN_REF: ${{ inputs.codegen_ref }}
+          AVOID_SYNCING: ${{ inputs.avoid_syncing }}
+          EXTRA_FLAGS: ${{ inputs.extra_flags }}
+          STAGED: ${{ inputs.staged }}
+          # The card is this job's alone, so the daemon queue is redundant rather than missing.
+          CODEGEN_PORT_EXCLUSIVE_DEVICE: "1"
+          # tt-metal CI authenticates Copilot, not Claude; `agent_invoke` reads this to pick a backend.
+          CODEGEN_PORT_LLM_BACKEND: copilot
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODEGEN_PORT_STATE_DIR: /work/tt-dm-codegen/agentic_port/state
+          PYTHONPATH: /work/tt-dm-codegen:/work
+        working-directory: /work/tt-dm-codegen
+        run: |
+          set -euo pipefail
+          mkdir -p "$CODEGEN_PORT_STATE_DIR"
+
+          # Inputs reach argv through "$@", never through shell interpolation of a workflow
+          # expression: the free-text ones (avoid_syncing especially) would otherwise be a command
+          # injection into this very block.
+          declare -a args=(--op "$OP" --ttmetal-home /work)
+          if [[ -n "$AVOID_SYNCING" ]]; then
+            printf '%s\n' "$AVOID_SYNCING" > /tmp/avoid-syncing.txt
+          fi
+          # shellcheck disable=SC2206 -- allowlisted and shell-word-validated in the `validate` job
+          declare -a extra=($EXTRA_FLAGS)
+
+          case "$MODE" in
+            sync)
+              args+=(--codegen-ref "$CODEGEN_REF" --ttmetal-branch "${GITHUB_HEAD_REF:-main}")
+              if [[ -n "$AVOID_SYNCING" ]]; then args+=(--avoid-syncing @/tmp/avoid-syncing.txt); fi
+              # Staged stops at the report: no write, no branch, no PR.
+              if [[ "$STAGED" != "true" ]]; then args+=(--apply); fi
+              python3 -m agentic_port.orchestrator.sync_op "${args[@]}" "${extra[@]+"${extra[@]}"}"
+              ;;
+            verify|update|port)
+              args+=(--run-id "$RUN_ID" --tt-dm-codegen-root /work/tt-dm-codegen --render-png-charts)
+              if [[ "$MODE" == "update" ]]; then args+=(--update); fi
+              # --auto-ship is the only thing that pushes and opens/edits a PR, so withholding it is
+              # what makes `staged` true rather than merely advisory.
+              if [[ "$STAGED" != "true" ]]; then args+=(--auto-ship); fi
+              python3 -m agentic_port.orchestrator.run "${args[@]}" "${extra[@]+"${extra[@]}"}"
+              ;;
+            *)
+              echo "unknown mode: $MODE" >&2
+              exit 2
+              ;;
+          esac
+
+      # Runs on failure too: a failed run's state and logs are the whole diagnostic, and a crash is
+      # exactly when the next leg most needs to resume rather than restart.
+      - name: 🧹 Scrub credentials from anything about to be uploaded
+        if: always()
+        run: |
+          set -euo pipefail
+          # Belt and braces over `persist-credentials: false`: any stray git remote carrying a token
+          # is rewritten before these directories become downloadable artifacts.
+          find /work/tt-dm-codegen -name config -path '*/.git/*' -print0 2>/dev/null \
+            | xargs -0 --no-run-if-empty sed -i -E 's#https://[^@/]+@github#https://github#g'
+
+      - name: 📤 Upload pipeline state
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codegen-port-state-${{ inputs.op }}-${{ inputs.run_id }}
+          path: /work/tt-dm-codegen/agentic_port/state/*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 📤 Upload charts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codegen-port-charts-${{ inputs.op }}-${{ inputs.run_id }}
+          path: /work/tt-dm-codegen/agentic_port/state/charts/*.png
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 📤 Upload run logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codegen-port-logs-${{ inputs.op }}-${{ inputs.run_id }}
+          path: |
+            /work/tt-dm-codegen/agentic_port/logs/**
+            /work/generated/profiler/reports/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
