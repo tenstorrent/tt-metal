@@ -314,7 +314,11 @@ Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<Memory
         Layout::TILE,
         input_a.device(),
         output_mem_config.value_or(input_a.memory_config()));
-    return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
+    // where, not multiply. A masked-out element is defined as zero, but
+    // -inf * 0 and inf * 0 are NaN, so any non-finite input turns the masked
+    // triangle into NaN instead of zero. Multiplication is only equivalent to
+    // masking for finite operands; selection is what tril/triu actually mean.
+    return ttnn::where(index_l, input_a, 0.0f, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
@@ -327,7 +331,11 @@ Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<Memory
         Layout::TILE,
         input_a.device(),
         output_mem_config.value_or(input_a.memory_config()));
-    return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
+    // where, not multiply. A masked-out element is defined as zero, but
+    // -inf * 0 and inf * 0 are NaN, so any non-finite input turns the masked
+    // triangle into NaN instead of zero. Multiplication is only equivalent to
+    // masking for finite operands; selection is what tril/triu actually mean.
+    return ttnn::where(index_u, input_a, 0.0f, output_mem_config);
 }
 
 // polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
