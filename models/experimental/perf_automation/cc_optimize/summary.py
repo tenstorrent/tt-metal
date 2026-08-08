@@ -277,23 +277,56 @@ def _read_json(path) -> object:
         return None
 
 
+_PERF_MCP = None
+
+
+def _perf_mcp():
+    """perf_mcp, loaded so that it works under EVERY load style.
+
+    This module is loaded by run.py via `spec_from_file_location` -- no package, and no sys.path
+    entry for its own directory. Under that style both `from .perf_mcp import x` and
+    `from perf_mcp import x` raise, and each reader here ended its fallback chain in a bare `except`
+    that returned empty. So the report printed "not measured" over prefill timings, model params,
+    trace paths and the observed ISL that were all sitting on disk, and nothing errored.
+
+    Tries the package import first, then falls back to loading by file path -- which is what run.py
+    already does for tmpstate and for this module. Cached: the readers are called repeatedly.
+    """
+    global _PERF_MCP
+    if _PERF_MCP is not None:
+        return _PERF_MCP or None
+    for _name in ("cc_optimize.perf_mcp", "perf_mcp"):
+        try:
+            _PERF_MCP = __import__(_name, fromlist=["*"])
+            return _PERF_MCP
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        import importlib.util as _ilu
+
+        _p = Path(__file__).resolve().parent / "perf_mcp.py"
+        _spec = _ilu.spec_from_file_location("cc_perf_mcp_by_path", str(_p))
+        _m = _ilu.module_from_spec(_spec)
+        sys.modules.setdefault("cc_perf_mcp_by_path", _m)
+        _spec.loader.exec_module(_m)
+        _PERF_MCP = _m
+        return _m
+    except Exception:  # noqa: BLE001
+        _PERF_MCP = False
+        return None
+
+
 def _measured_stage_paths(model: str = "", task: str = "") -> dict:
     """How each stage was measured: "trace+1cq", "eager", or absent/unknown.
 
     A stage that fell back to eager is not comparable to a traced one -- eager pays per-op host
     dispatch that trace removes, which on gemma-3's prefill is half the wall clock. Held against a
     band that assumes trace it scores an automatic miss, so the report needs to know."""
+    m = _perf_mcp()
     try:
-        from .perf_mcp import read_stage_paths
-
-        return read_stage_paths(model=model, task=task) or {}
+        return (m.read_stage_paths(model=model, task=task) or {}) if m else {}
     except Exception:  # noqa: BLE001
-        try:
-            from perf_mcp import read_stage_paths  # type: ignore
-
-            return read_stage_paths(model=model, task=task) or {}
-        except Exception:  # noqa: BLE001
-            return {}
+        return {}
 
 
 def _measured_stage_ms(model: str = "", task: str = "") -> dict:
@@ -302,17 +335,11 @@ def _measured_stage_ms(model: str = "", task: str = "") -> dict:
     These come from the PIPELINE_STAGES the MODEL declares -- prefill/decode measured by the
     harness -- so they are the only phase numbers in this report that are not prose.
     """
+    m = _perf_mcp()
     try:
-        from .perf_mcp import read_stage_ms
-
-        return read_stage_ms(model=model, task=task) or {}
+        return (m.read_stage_ms(model=model, task=task) or {}) if m else {}
     except Exception:  # noqa: BLE001
-        try:
-            from perf_mcp import read_stage_ms  # type: ignore
-
-            return read_stage_ms(model=model, task=task) or {}
-        except Exception:  # noqa: BLE001
-            return {}
+        return {}
 
 
 def _stage_rows(rows: list, indent: str = "    ", mark_hottest: bool = True) -> list:
@@ -710,15 +737,11 @@ def _capacity_bytes():
 
 def _model_facts():
     """perf_target_inputs.json — total_params / layers / weight bytes. None if unobtainable."""
+    m = _perf_mcp()
+    if m is None:
+        return None
     try:
-        from .perf_mcp import _load_perf_target_inputs as _lp
-    except Exception:  # noqa: BLE001
-        try:
-            from perf_mcp import _load_perf_target_inputs as _lp  # type: ignore
-        except Exception:  # noqa: BLE001
-            return None
-    try:
-        f = _lp()
+        f = m._load_perf_target_inputs()
         return f if isinstance(f, dict) else None
     except Exception:  # noqa: BLE001
         return None
@@ -747,17 +770,10 @@ def _prefill_tokens() -> int:
     # by the tool and as a top-level `summary` by spec_from_file_location, and a bare relative import
     # fails silently in the second case -- which would skip the observed value and quietly fall back
     # to a default, the exact bug this is fixing.
-    _rd = None
-    try:
-        from .perf_mcp import read_stage_isl as _rd
-    except Exception:  # noqa: BLE001
+    m = _perf_mcp()
+    if m is not None:
         try:
-            from perf_mcp import read_stage_isl as _rd  # type: ignore
-        except Exception:  # noqa: BLE001
-            _rd = None
-    if _rd is not None:
-        try:
-            _obs = int(_rd() or 0)
+            _obs = int(m.read_stage_isl() or 0)
             if _obs > 0:
                 return _obs
         except Exception:  # noqa: BLE001

@@ -2981,10 +2981,19 @@ def _emit_summary(
         perf_test=perf_test,
         report_csv=report_csv,
         residual=residual,
+        # THE PROFILE IS READ FROM WHERE IT IS WRITTEN. This looked beside `report_csv`; the profile
+        # is written to runs/<ts>/profiles/, so it resolved to None on every real run -- and with no
+        # profile the report silently loses its Op breakdown, its Dispatch row, its Fidelity ladder
+        # and every Utilization bar, because each of those renders nothing rather than complaining.
+        # _read_baseline_profile_for_report already resolves it correctly and was in use a few lines
+        # above for the residual; the CSV-adjacent path stays as a fallback.
         baseline_profile=(
-            json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
-            if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
-            else None
+            _read_baseline_profile_for_report(repo_root)
+            or (
+                json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
+                if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
+                else None
+            )
         ),
         finalized=True,
         final_override_ms=_cur_ms,

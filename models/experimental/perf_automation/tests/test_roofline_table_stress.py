@@ -557,19 +557,17 @@ def test_the_prompt_length_is_stated_once(monkeypatch, fid):
     monkeypatch.setattr(S, "_model_facts", lambda: {"total_params": 11_180_446_320, "layers": 48})
     monkeypatch.setenv("PERF_MCP_ARCH", "blackhole")
 
-    import perf_mcp as _pm
-
     from agent.perf_test_gen import DEFAULT_ISL_TOKENS, _skeleton_default
 
     # the default is READ from the emitted test's own literal, not written twice
     assert DEFAULT_ISL_TOKENS == _skeleton_default("TT_PERF_ISL_TOKENS") > 0
 
-    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 0, raising=False)
+    monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 0)}))
     assert S._prefill_tokens() == DEFAULT_ISL_TOKENS
     assert "PREFILL" in _render(stage_ms={"prefill": 35.80, "decode": 138.49})
 
     # ...and an OBSERVED length wins over it, so an overridden ISL is never priced as the default
-    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 512, raising=False)
+    monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 512)}))
     assert S._prefill_tokens() == 512
 
 
@@ -584,9 +582,9 @@ def test_the_observed_isl_beats_the_default(monkeypatch, fid):
     monkeypatch.setattr(S, "_model_facts", lambda: {"total_params": 11_180_446_320, "layers": 48})
     monkeypatch.setenv("PERF_MCP_ARCH", "blackhole")
 
-    import perf_mcp as _pm  # summary resolves it under this name when loaded top-level
-
-    monkeypatch.setattr(_pm, "read_stage_isl", lambda *a, **k: 512, raising=False)
+    # patch through summary's OWN accessor: it resolves perf_mcp itself and caches the module, so
+    # patching a separately-imported copy is not the object it calls
+    monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 512)}))
     assert S._prefill_tokens() == 512
 
     # and the env still overrides nothing above it: observed wins
