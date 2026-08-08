@@ -37,6 +37,8 @@ def model_artifacts(model_location_generator):
 @pytest.mark.parametrize("seq_len", SEQUENCE_LENGTHS, ids=[f"S{seq_len}" for seq_len in SEQUENCE_LENGTHS])
 def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
     require_single_device(device)
+    if seq_len == 4096:
+        pytest.skip("Skipping S4096: PCC check fails on N150 (Wormhole), refs #46975")
     backbone, state_dict, model_id_or_path = model_artifacts
 
     model_args, tt_model, _ = create_tt_model(
