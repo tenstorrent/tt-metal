@@ -14,6 +14,10 @@ import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
+
+# Mesh trace region (bytes) by architecture (for fabric mesh tests in this suite).
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from ttnn import ConcatMeshToTensor
 
@@ -31,9 +35,13 @@ def reference_conv2d_patch(model_args):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -106,7 +114,6 @@ def test_conv2d_inference(
     H_out = H // kernel_size
     W_out = W // kernel_size
     tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, out_channels, H_out, W_out)
-
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

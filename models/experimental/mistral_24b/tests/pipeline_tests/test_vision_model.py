@@ -16,6 +16,23 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+# Mesh trace region (bytes) by architecture.
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
+
+def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
+    from models.common.utility_functions import is_wormhole_b0
+
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if is_wormhole_b0() else TRACE_REGION_SIZE_BLACKHOLE
+    return [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": num_command_queues,
+        }
+    ]
+
 
 def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     """
@@ -26,20 +43,24 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     return image_features
 
 
-@pytest.mark.skip(reason="Disabled: see #45992")
+# @pytest.mark.skip(reason="Disabled: see #45992")
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):
@@ -70,7 +91,8 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
-    reference_output = get_image_features(reference_model, reference_mmp, input_tensor.float(), image_sizes=[(H, W)])
+    # Pass bfloat16 directly; redundant upcast to float32 dropped to match TT model input dtype.
+    reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
     tt_ccl = TT_CCL(mesh_device=mesh_device)
@@ -82,7 +104,6 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         dtype=dtype,
         model_args=model_args,
     )
-
     tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
@@ -91,7 +112,6 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     non_zero_indices = tt_output.ne(0).nonzero(as_tuple=True)
     tt_output = tt_output[non_zero_indices]
     reference_output = reference_output[non_zero_indices]
-
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output))

@@ -14,15 +14,23 @@ from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as 
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+# Mesh trace region (bytes) by architecture (for fabric mesh tests in this suite).
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
 
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -61,7 +69,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
     torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
 
-    reference_output = reference_model(torch_input.float())
+    reference_output = reference_model(torch_input)  # bfloat16 input; redundant upcast to float32 dropped.
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
