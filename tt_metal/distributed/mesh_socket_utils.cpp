@@ -271,18 +271,10 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     CoreRangeSet shard_grid;
     bool per_core = socket_mem_config.per_core_allocation;
     if (per_core) {
-        // Per-core (HYBRID) allocation: the FIFO only lives on the receiver connection core(s), instead of
-        // reserving fifo_size on every worker core (lockstep/bank-uniform allocation). Guard the v1 restrictions.
-        // Order matters: run the config-only checks first (they need no device state and give clear errors) and
-        // only then verify the device was opened in HYBRID mode.
         TT_FATAL(
             socket_mem_config.socket_storage_type == BufferType::L1,
             "Per-core socket allocation is only supported for L1 storage (got {}).",
             socket_mem_config.socket_storage_type);
-
-        // Build the shard grid from the receiver connection cores (mirror create_socket_config_buffer).
-        // v1 only supports a single distinct receiver core per socket, so the buffer resolves to exactly one
-        // per-core address (matching the single data_buffer_address field carried in the handshake).
         std::set<CoreCoord> receiver_cores;
         for (const auto& connection : config.socket_connection_config) {
             receiver_cores.insert(connection.receiver_core.core_coord);
@@ -491,10 +483,6 @@ void write_socket_configs(
     }
 }
 
-// Returns the L1/DRAM address of the receiver's socket data (FIFO) buffer.
-// For a lockstep (bank-uniform) buffer this is simply MeshBuffer::address(). For a per-core allocated buffer
-// MeshBuffer::address() is 0 (there is no single lockstep address), so read the per-core address of the single
-// receiver connection core instead. v1 guarantees exactly one distinct receiver core, so this is unambiguous.
 DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
     const auto& config = receiver_socket.get_config();
     const auto& data_buffer = *receiver_socket.get_data_buffer();

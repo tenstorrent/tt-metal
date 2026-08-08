@@ -60,11 +60,8 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
-    // When true (and socket_storage_type == L1), the receiver data (FIFO) buffer is allocated with the
-    // per-core (HYBRID) allocator, so it only occupies L1 on the receiver connection core(s) instead of
-    // reserving the same L1 address on every worker core (lockstep/bank-uniform allocation).
-    // Requires the device to be opened with AllocatorMode::HYBRID (TT_METAL_ALLOCATOR_MODE_HYBRID=1).
-    // v1 restriction: exactly one distinct receiver core per socket. Defaults to false (no behavior change).
+    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer.
+    // so data buffers are allocated only on the receiver connection cores instead of every worker core.
     bool per_core_allocation = false;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
