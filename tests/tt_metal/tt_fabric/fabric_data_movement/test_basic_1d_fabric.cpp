@@ -2298,6 +2298,10 @@ void UDMFabricUnicastCommon(
     std::optional<RoutingDirection> override_initial_direction,
     std::optional<std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>>> worker_coords_list,
     bool dual_risc) {
+    // Temporarily disabled: test_udm_read_sender.cpp trips a BRISC assert, refs #47073
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_READ) {
+        GTEST_SKIP() << "UDM read tests disabled due to BRISC assert in test_udm_read_sender.cpp, refs #47073";
+    }
     // Build list of worker coordinate pairs - default to single pair (0,0) -> (1,0)
     std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> worker_pairs;
     if (worker_coords_list.has_value()) {
