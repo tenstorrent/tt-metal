@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -22,7 +23,11 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_handle.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tlb.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 #include "context/metal_context.hpp"
@@ -223,8 +228,6 @@ std::unique_ptr<Program> launch_profiler_kernels(
     return program;
 }
 
-// Evaluates against the device's owning context_id (not bare instance()) so a mock device isn't falsely enabled via
-// the silicon DEFAULT_CONTEXT_ID fallback (#38445/#39849).
 std::optional<CoreCoord> evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
     const auto device_id = device->id();
     auto& metal = MetalContext::instance(context_id);
@@ -311,6 +314,55 @@ RealtimeProfilerDevice::RealtimeProfilerDevice() = default;
 RealtimeProfilerDevice::~RealtimeProfilerDevice() = default;
 RealtimeProfilerDevice::RealtimeProfilerDevice(RealtimeProfilerDevice&&) noexcept = default;
 
+void RealtimeProfilerDevice::configure_program_start_peek(
+    ContextId context_id, CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr) {
+    try {
+        const tt_xy_pair tlb_core(dispatch_s_virtual.x, dispatch_s_virtual.y);
+        auto* tlb_manager =
+            MetalContext::instance(context_id).get_cluster().get_driver()->get_chip(chip_id)->get_tlb_manager();
+        const uint32_t span = start_b_addr + 2 * sizeof(uint32_t) - start_a_addr;
+        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, start_a_addr, span)) {
+            return;
+        }
+        auto* window = tlb_manager->get_tlb_window(tlb_core);
+        if (window == nullptr) {
+            return;
+        }
+        const uint64_t window_offset = window->get_base_address() - window->handle_ref().get_config().local_offset;
+        auto* base = window->handle_ref().get_base();
+        peek_start_a = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_a_addr);
+        peek_start_b = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_b_addr);
+    } catch (const std::exception& e) {
+        log_debug(
+            tt::LogMetal,
+            "[Real-time profiler] Device {}: program-start peek disarmed ({}); long-program starts fall back to the "
+            "ring-wide rate",
+            chip_id,
+            e.what());
+    }
+}
+
+void RealtimeProfilerDevice::peek_running_program_start() {
+    if (peek_start_a == nullptr || clock_sync == nullptr) {
+        return;
+    }
+    const auto newest_bank_start = [this] {
+        const uint64_t a = (static_cast<uint64_t>(peek_start_a[0]) << 32) | peek_start_a[1];
+        const uint64_t b = (static_cast<uint64_t>(peek_start_b[0]) << 32) | peek_start_b[1];
+        return std::max(a, b);
+    };
+    const uint64_t candidate = newest_bank_start();
+    if (candidate == last_peek_device_timestamp) {
+        return;
+    }
+    // Reject a torn two-word read: dispatch_s writes once and holds; a second identical peek cannot be torn.
+    if (newest_bank_start() != candidate) {
+        return;
+    }
+    last_peek_device_timestamp = candidate;
+    clock_sync->pin_start(candidate);
+}
+
 std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id) {
     std::vector<RealtimeProfilerDevice> devices;
@@ -368,6 +420,24 @@ std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
         dev_state.realtime_profiler_core = realtime_profiler_core;
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
+        dev_state.clock_sync = std::make_unique<DeviceClockSync>(context_id, device, dev_state.realtime_profiler_core);
+        if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
+            const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
+            dev_state.configure_program_start_peek(
+                context_id,
+                device->virtual_core_from_logical_core(CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y), CoreType::WORKER),
+                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_a),
+                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_b));
+        }
+        if (!dev_state.clock_sync->has_direct_clock_read()) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: the profiler core's clock register could not be mapped into "
+                "a UC TLB window.",
+                device_id);
+            return std::nullopt;
+        }
+
         log_debug(
             tt::LogMetal,
             "[Real-time profiler] Initializing real-time profiler D2H socket for device {} on distributed::MeshDevice "
@@ -384,8 +454,6 @@ std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
             return std::nullopt;
         }
 
-        // Before the kernels launch, so nothing this discards can be a real record: undefined bytes on a fresh
-        // MeshDevice, or pages an SHM-recovered FIFO carried over, would otherwise be decoded as bogus records.
         const uint32_t stale_pages = dev_state.socket->discard_pending_pages();
         if (stale_pages > 0) {
             log_debug(tt::LogMetal, "[Real-time profiler] Device {} discarded {} stale pages", device_id, stale_pages);

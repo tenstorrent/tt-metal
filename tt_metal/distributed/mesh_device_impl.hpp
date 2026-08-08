@@ -154,9 +154,6 @@ private:
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
-    // Owns this MeshDevice's real-time profiler producers (per-device sockets, receiver thread, and record ring).
-    // Constructed by init_realtime_profiler() and torn down in close_impl() before the rest of the mesh shutdown
-    // so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerReceiver> realtime_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.

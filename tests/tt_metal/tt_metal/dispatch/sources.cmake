@@ -31,5 +31,6 @@ set(UNIT_TESTS_DISPATCH_SLOW_SOURCES
     dispatch_buffer/test_large_mesh_buffer.cpp
     dispatch_program/test_EnqueueProgram.cpp
     dispatch_program/test_realtime_profiler_stress.cpp
+    dispatch_program/test_realtime_profiler_sync.cpp
     dispatch_trace/test_EnqueueTrace.cpp
 )

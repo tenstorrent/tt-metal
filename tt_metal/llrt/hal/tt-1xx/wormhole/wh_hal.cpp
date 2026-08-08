@@ -360,6 +360,8 @@ void Hal::initialize_wh(
 
     this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
+    this->tensix_wall_clock_reg_addr_lo_ = RISCV_DEBUG_REG_WALL_CLOCK_L;
+    this->tensix_wall_clock_reg_addr_hi_ = RISCV_DEBUG_REG_WALL_CLOCK_H;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;

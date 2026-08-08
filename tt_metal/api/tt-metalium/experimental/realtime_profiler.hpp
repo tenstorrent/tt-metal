@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <string_view>
 
 namespace tt::tt_metal::experimental {
+
+struct ProgramRealtimeClockSync {
+    int64_t device_cycle_offset;          // A device timestamp maps to std::chrono::steady_clock host time as
+                                          // host_ns = (timestamp - device_cycle_offset) / frequency
+    std::chrono::nanoseconds error;       // Estimated error in a host time derived from this mapping
+};
 
 struct ProgramRealtimeRecord {
     uint32_t runtime_id;                               // Runtime ID. Currently truncated to 16 bits;
@@ -18,8 +25,39 @@ struct ProgramRealtimeRecord {
     uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
     uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
     double frequency;                                  // Device clock frequency (cycles per ns)
+    ProgramRealtimeClockSync clock_sync;               // Device-to-host clock mapping for this record
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid for the
                                                        // lifetime of the process.
+
+    /**
+     * @brief Program execution duration.
+     */
+    [[nodiscard]] constexpr std::chrono::duration<double, std::nano> duration() const {
+        return std::chrono::duration<double, std::nano>{
+            static_cast<double>(end_timestamp - start_timestamp) / frequency};
+    }
+
+    /**
+     * @brief When the program began executing, on the std::chrono::steady_clock timeline.
+     *
+     * Error estimated by clock_sync.error.
+     */
+    [[nodiscard]] constexpr std::chrono::steady_clock::time_point host_start() const {
+        const std::chrono::duration<double, std::nano> host_ns{
+            (static_cast<double>(start_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency};
+        return std::chrono::steady_clock::time_point{std::chrono::round<std::chrono::steady_clock::duration>(host_ns)};
+    }
+
+    /**
+     * @brief When the program finished executing, on the std::chrono::steady_clock timeline.
+     *
+     * Error estimated by clock_sync.error.
+     */
+    [[nodiscard]] constexpr std::chrono::steady_clock::time_point host_end() const {
+        const std::chrono::duration<double, std::nano> host_ns{
+            (static_cast<double>(end_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency};
+        return std::chrono::steady_clock::time_point{std::chrono::round<std::chrono::steady_clock::duration>(host_ns)};
+    }
 };
 
 struct ProgramRealtimeRecordBatch {
@@ -40,7 +78,7 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
  * Multiple callbacks can be registered; they are invoked concurrently, each on its own thread. If a
- * callback shares a resource with other callbacks, access it in a thread-safe way (e.g. with a lock).
+ * resource is shared across callbacks, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
  * is reported by ProgramRealtimeRecordBatch::dropped.
  *
@@ -71,10 +109,6 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  * from "profiler is disabled by the current dispatch config" should query this before
  * asserting on collected record counts — the canonical use case is for tests that
  * want to gracefully skip when RT profiler is not supported.
- *
- * This is safe to call at any time after device construction. It becomes true once
- * the first device's profiler is brought up (during mesh open), and returns to false
- * when every RT-profiler-enabled device has been closed.
  */
 bool IsProgramRealtimeProfilerActive();
 

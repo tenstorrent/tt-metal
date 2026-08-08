@@ -22,20 +22,31 @@
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
+#if defined(TRACY_ENABLE)
+#include "realtime_profiler_tracy_consumer.hpp"
+#endif
+
 namespace tt::tt_metal {
 
-namespace {
-
 constexpr uint32_t kWaitSpinIterations = 256;
-
-}  // namespace
 
 RealtimeProfilerService& realtime_profiler_service() {
     static RealtimeProfilerService service;
     return service;
 }
 
-void register_builtin_realtime_profiler_consumers() {}
+static void register_builtin_realtime_profiler_consumers() {
+    [[maybe_unused]] static const bool registered = [] {
+#if defined(TRACY_ENABLE)
+        auto tracy_consumer = std::make_shared<RealtimeProfilerTracyConsumer>(DEFAULT_CONTEXT_ID);
+        tracy_consumer->set_handle(experimental::RegisterProgramRealtimeProfilerCallback(
+            [tracy_consumer](const experimental::ProgramRealtimeRecordBatch& batch) {
+                tracy_consumer->on_records(batch);
+            }));
+#endif
+        return true;
+    }();
+}
 
 RealtimeProfilerService::~RealtimeProfilerService() {
     {
@@ -105,6 +116,7 @@ void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeP
 }
 
 void RealtimeProfilerService::attach_producer(ProgramRecordProducer& producer) {
+    register_builtin_realtime_profiler_consumers();
     {
         std::lock_guard topology_lock(topology_mutex_);
         attached_producers_.insert(&producer);

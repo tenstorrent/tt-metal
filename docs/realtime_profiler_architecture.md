@@ -11,19 +11,19 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 | HOST                                                                        |
 |                                                                             |
 |   +-------------------+  +------------------+  +-------------------------+  |
-|   | Init/Calibration  |  | D2H Socket       |  | Receiver thread         |  |
-|   | - Pick profiler   |  | - Config buffer  |  | - wait_for_pages()      |  |
-|   |   core            |  | - Page flow      |  | - Parse timestamps      |  |
-|   | - Create D2H      |  |   (PCIe)         |  | - InvokeProgramRealtime |  |
-|   |   socket          |  |                  |  |   Callbacks()           |  |
-|   | - Run sync        |  |                  |  |                         |  |
+|   | Init               |  | D2H Socket       |  | Receiver thread         |  |
+|   | - Pick profiler   |  | - Config buffer  |  | - Drain pages           |  |
+|   |   core            |  | - Page flow      |  | - Probe device clock    |  |
+|   | - Create D2H      |  |   (PCIe)         |  | - Map + publish records |  |
+|   |   socket          |  |                  |  |   to the record ring    |  |
+|   | - Warm up clock   |  |                  |  |                         |  |
 |   | - Start recv      |  |                  |  |                         |  |
 |   +--------+----------+  +--------+---------+  +------------+------------+  |
 |            |                     |                          |               |
-|            | L1 writes           | PCIe read                | PCIe read     |
-|            | (sync_request,      | (timestamp pages)        | (timestamp    |
-|            |  sync_host_ts,      |                          |  pages)       |
-|            |  config_buffer_addr)|                          |               |
+|            | L1 write            | PCIe read                | PCIe read     |
+|            | (config_buffer_addr)| (timestamp pages)        | (timestamp    |
+|            |                     |                          |  pages +      |
+|            |                     |                          |  clock reg)   |
 +------------+---------------------+--------------------------+---------------+
              |                     |                          |               |
              v                     |                          |               |
@@ -36,11 +36,9 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   |                                                                     |   |
 |   |   +---------------+  +-------------------------------------------+  |   |
 |   |   | Mailbox (L1)  |  | Loop:                                     |  |   |
-|   |   | - config_buf  |  |   IDLE + sync_request -> sync(); push     |  |   |
-|   |   |   _addr       |  |   PUSH_A -> NOC read buf A -> D2H push    |  |   |
-|   |   | - state (R/W) |  |   PUSH_B -> NOC read buf B -> D2H push    |  |   |
-|   |   | - sync_req    |  |   TERMINATE -> exit                       |  |   |
-|   |   | - sync_host_ts|  |                                           |  |   |
+|   |   | - config_buf  |  |   PUSH_A -> NOC read buf A -> L1 ring     |  |   |
+|   |   |   _addr       |  |   PUSH_B -> NOC read buf B -> L1 ring     |  |   |
+|   |   | - state (R/W) |  |   TERMINATE -> exit                       |  |   |
 |   |   +-------+-------+  +-------------------------------------------+  |   |
 |   |           |                        ^ NOC read (timestamp data)      |   |
 |   +-----------+------------------------+--------------------------------+   |
@@ -100,28 +98,30 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 
 ## 3. Sync (Timestamp Calibration)
 
-Host and device timestamps are aligned so that Tracy (or other consumers) can relate device cycles to host time.
+Host and device timestamps are aligned so consumers can relate device cycles to host time. The host retains a per-chip ring of clock **probes** — paired (host time, device ticks) reads — and places each record between the two probes around it: every record is published with its own affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`, whose rate is the secant of the probe pair (or, for a record spanning several pairs, of its own two placements). There is no fitted model and no re-anchor policy: the mapping is pure interpolation over what was measured (`DeviceClockSync::Mapping`).
+
+The tensix free-running cycle counter is a hardware register the NOC serves directly, so the host reads it through its own uncached TLB window with a single load, bracketed between two `steady_clock` reads. The device timestamp is known to have been sampled somewhere inside that bracket, so the probe goes at its midpoint and contributes half its width to `clock_sync.error`.
 
 ```
-  HOST                              REAL-TIME PROFILER CORE
+  HOST                                   REAL-TIME PROFILER CORE
 
-    |  Write sync_request = 1 (L1)        |
-    | ---------------------------------> |  Poll sync_request
-    |  Write sync_host_timestamp = T     |
-    | ---------------------------------> |  See host_ts > 0
-    |                                    |  Capture device wall clock (D)
-    |                                    |  Push page: (D_hi, D_lo, T,
-    |                                    |    REALTIME_PROFILER_SYNC_MARKER_ID)
-    |                                    |  Clear sync_host_timestamp
-    |  wait_for_pages(1)                 |
-    | <--------------------------------- |  (D2H page arrives)
-    |  Parse device_time D, host_time T  |
-    |  Repeat for N samples              |
-    |  Write sync_request = 0 (L1)       |
-    | ---------------------------------> |  Exit sync loop
-    |  Linear regression -> frequency,   |
-    |  first_timestamp for this device   |
+    |  t1 = steady_clock::now()            |
+    |  load WALL_CLOCK_L  ---------------> |  (served by the NOC; no RISC involved)
+    | <--------------------- D ----------- |
+    |  t2 = steady_clock::now()            |
+    |  load WALL_CLOCK_H (latched by the L read, so outside the bracket)
+    |  anchor D at (t1+t2)/2               |
 ```
+
+Reading the low word latches the high word, so the pair is coherent and only the low read has to sit inside the bracket. The window is allocated once at configure time and the mapped address resolved once: the generic UMD register read holds a chip-wide mutex and rewrites the TLB configuration registers over PCIe on every call, all of which would land inside the bracket. The bracket *is* the error bound, so that width is the whole quantity being minimised.
+
+Because no device software is in the path, a sample cannot be delayed by whatever the profiler core's push loop is doing, and sync costs the device nothing at all.
+
+**Probe cadence.** The receiver probes a device immediately after every non-empty page read — the previous probe and that one bracket every record the read returned, so nothing waits on publication — and on a 500 us sync-interval floor while the device is idle. Each probe is the tightest of up to a few reads, taken only while the bracket is still wider than reads have recently been coming back at; a warm-up before the receiver thread starts gives the first record a pair to land between.
+
+**`clock_sync.error`** is what the placement itself could be off by: the anchoring probes' half-brackets, plus the clock's measured departure from their secant, read at the neighbouring probe the secant was not fitted to.
+
+What the probe spacing has to resolve is set by how the clock actually misbehaves: DVFS steps AICLK on the ARC firmware's 1 ms timer (~5200 ppm per PLL multiplier step on Blackhole), so probe pairs well under a millisecond wide straddle at most one step, and a step inside a pair misplaces a record by at most step * width / 4.
 
 ---
 
@@ -130,7 +130,7 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
 | **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
-| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
+| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**. |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
 
@@ -141,7 +141,9 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 | Component | File(s) |
 |-----------|--------|
 | Dispatch_s (timestamp record + signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
-| Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
-| Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
+| Real-time profiler kernels | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp`, `cq_realtime_profiler_push.cpp` |
+| Host init and receiver thread | `tt_metal/impl/realtime_profiler/realtime_profiler_receiver.cpp` |
+| Clock read path + probe-interpolation mapping | `tt_metal/impl/realtime_profiler/device_clock_sync.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
-| Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |
+| Public API (register / unregister / is-active) | `tt_metal/impl/realtime_profiler/realtime_profiler.cpp` |
+| Callback registration and record delivery | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp` |

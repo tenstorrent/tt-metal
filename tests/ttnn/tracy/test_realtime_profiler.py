@@ -25,6 +25,8 @@ and can be selected individually with pytest ``-k``:
                                        and verify 1:1 correspondence between
                                        host ``EnqueueProgram`` TracyMessages
                                        and device real-time records.
+* ``test_sync_error_under_didt_load`` — Sample sync error while
+                                       ff1_matmul runs (AICLK under load).
 """
 
 from __future__ import annotations
@@ -35,12 +37,14 @@ import os
 import re
 import shutil
 import socket
+import statistics
 import subprocess
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
 
@@ -62,13 +66,6 @@ WORKLOAD_DIR = Path(__file__).parent
 CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
-
-# Every test in this module runs its device-touching work in a subprocess.
-# The UMD ``CHIP_IN_USE_*_PCIe`` lock is held for the lifetime of the first
-# process that touches the device, so if the pytest parent ever opened a
-# device then every subsequent subprocess workload would block waiting for
-# the lock.  Keeping the parent device-free lets all 6 tests run in a
-# single pytest invocation.
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +324,10 @@ def _run_cross_reference_workload(
     env["MESH_SHAPE"] = f"{mesh_shape[0]},{mesh_shape[1]}"
     env["RT_RECORDS_PATH"] = str(rt_path)
     env["DEV_PERF_PATH"] = str(dev_path)
+    # sync_device_info.csv carries the device profiler's own host<->device fit, which
+    # test_sync_mapping_cross_check reads back; writing it needs the file dumps left on.
+    env.pop("TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES", None)
+    env["TT_METAL_PROFILER_DIR"] = str(tmp_path / "profiler")
     if require_galaxy:
         env["REQUIRE_GALAXY"] = "1"
 
@@ -511,6 +512,90 @@ def test_cross_reference(tmp_path):
     )
 
 
+def _parse_device_profiler_sync(profiler_dir: Path) -> dict[int, list[tuple[float, float]]]:
+    """
+    Read the device profiler's own host<->device sync samples out of
+    ``sync_device_info.csv`` as {chip_id: [(device_cycles, host_ns), ...]}.
+
+    Its host axis is Tracy's CPU-tick domain scaled by ``tracy_ratio``, a
+    different epoch from the ``time.monotonic_ns()`` domain the RT profiler
+    publishes.  Only differences between the two mappings are meaningful, not
+    their absolute values.
+    """
+    csv_path = profiler_dir / ".logs" / "sync_device_info.csv"
+    if not csv_path.exists():
+        pytest.skip(f"Device profiler wrote no sync data: {csv_path}")
+    by_chip = defaultdict(list)
+    with open(csv_path) as f:
+        for row in csv.DictReader(f, skipinitialspace=True):
+            chip = int(row["device id"])
+            host_ticks = float(row["host_tracy"]) + float(row["host_start"])
+            by_chip[chip].append((float(row["device"]), host_ticks * float(row["tracy_ratio"])))
+    return by_chip
+
+
+def _fit_line(points: list[tuple[float, float]]) -> tuple[float, float]:
+    """Least-squares (slope, intercept) of y on x."""
+    n = float(len(points))
+    mean_x = sum(x for x, _ in points) / n
+    mean_y = sum(y for _, y in points) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in points)
+    den = sum((x - mean_x) ** 2 for x, _ in points)
+    return (num / den, mean_y - (num / den) * mean_x)
+
+
+SYNC_CROSS_CHECK_SPREAD_NS = 25_000
+
+
+@pytest.mark.timeout(1200)
+def test_sync_mapping_cross_check(tmp_path):
+    """
+    Cross-check the RT profiler's host<->device mapping against the device profiler's.
+
+    The two live in different host epochs (monotonic ns vs Tracy CPU ticks), so the
+    absolute difference between them carries a fixed unknown offset and is not asserted
+    on.  What is asserted is that the difference stays *consistent* across every record
+    of a session: both mappings track the same physical device clock, so once the epoch
+    offset is subtracted out they must move together.  A mis-anchored or mis-placed
+    RT mapping shows up here as spread.
+    """
+    if not CROSS_REFERENCE_WORKLOAD.exists():
+        pytest.fail(f"Workload script not found: {CROSS_REFERENCE_WORKLOAD}")
+
+    rt_records, _, _ = _run_cross_reference_workload(tmp_path, mesh_shape=(1, 1), timeout_s=900)
+    sync_by_chip = _parse_device_profiler_sync(tmp_path / "profiler")
+
+    deltas_by_chip = defaultdict(list)
+    for rec in rt_records:
+        chip = rec["chip_id"]
+        freq = rec["frequency_ghz"]
+        points = sync_by_chip.get(chip, [])
+        if freq <= 0 or len(points) < 2:
+            continue
+        slope, intercept = _fit_line(points)
+        device_profiler_host_ns = slope * rec["start_timestamp"] + intercept
+        rt_host_ns = (rec["start_timestamp"] - rec["device_cycle_offset"]) / freq
+        deltas_by_chip[chip].append(rt_host_ns - device_profiler_host_ns)
+
+    assert deltas_by_chip, "No RT record shared a chip with the device profiler's sync data"
+
+    print("\n=== test_sync_mapping_cross_check ===")
+    worst_spread = 0.0
+    for chip, deltas in sorted(deltas_by_chip.items()):
+        centered = [d - (sum(deltas) / len(deltas)) for d in deltas]
+        spread = max(centered) - min(centered)
+        worst_spread = max(worst_spread, spread)
+        print(
+            f"  chip {chip}: n={len(deltas)} mean_offset={sum(deltas)/len(deltas)/1e3:.1f}us " f"spread={spread:.0f}ns"
+        )
+    print(f"  worst spread: {worst_spread:.0f}ns (limit {SYNC_CROSS_CHECK_SPREAD_NS}ns)")
+
+    assert worst_spread <= SYNC_CROSS_CHECK_SPREAD_NS, (
+        f"The two host<->device mappings disagree by a varying amount (spread {worst_spread:.0f}ns > "
+        f"{SYNC_CROSS_CHECK_SPREAD_NS}ns); one of them is not tracking the device clock"
+    )
+
+
 TG_MESH_SHAPE = (8, 4)
 
 
@@ -657,3 +742,64 @@ def test_host_device_correlation(tmp_path):
             "workload_output.log": workload_log,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Sync error under didt load
+# ---------------------------------------------------------------------------
+
+
+def _didt_mesh_device_params():
+    return [
+        pytest.param(1, id="1chips"),
+        pytest.param(2, id="2chips"),
+        pytest.param(8, id="8chips"),
+        pytest.param((8, 4), id="galaxy"),
+    ]
+
+
+@pytest.mark.parametrize("mesh_device", _didt_mesh_device_params(), indirect=["mesh_device"])
+def test_sync_error_under_didt_load(mesh_device, request, determinism_check_interval):
+    import ttnn
+    from tests.didt.test_ff1_matmul import test_ff1_matmul as run_didt_power_workload
+
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.skip("Real-time profiler not active on this configuration")
+
+    cli_iters = request.config.getoption("--didt-workload-iterations")
+    didt_workload_iterations = int(cli_iters) if cli_iters is not None else 10_000
+
+    errors = []
+
+    def on_batch(batch):
+        errors.extend(record.clock_sync.error_ns for record in batch.records)
+
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(on_batch)
+    logger.disable("tests.didt.op_test_base")
+    try:
+        run_didt_power_workload(
+            mesh_device,
+            gelu=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            didt_workload_iterations=didt_workload_iterations,
+            determinism_check_interval=determinism_check_interval,
+        )
+    finally:
+        logger.enable("tests.didt.op_test_base")
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+
+    ordered = sorted(errors)
+    assert ordered, "No real-time profiler records were delivered during the workload"
+
+    def pct(p):
+        return ordered[min(int(p * len(ordered)), len(ordered) - 1)]
+
+    logger.info(
+        f"sync error over {len(ordered)} records: "
+        f"min={ordered[0]}ns p50={pct(0.50)}ns p90={pct(0.90)}ns p99={pct(0.99)}ns "
+        f"max={ordered[-1]}ns mean={statistics.mean(ordered):.0f}ns"
+    )
+    assert ordered[0] > 0, "sync error should be populated"
+    assert pct(0.50) < 6_000, "median sync error too high under compute load"
+    assert pct(0.90) < 10_000, "p90 sync error too high under compute load"
+    assert pct(0.99) < 15_000, "tail sync error too high under compute load"
