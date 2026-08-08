@@ -853,6 +853,49 @@ def _print_config() -> None:
     logger.info("\n" + "\n".join(lines))
 
 
+def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
+    """Fail fast when the ranks of a pipeline did not resolve the SAME model/shape config.
+
+    Every PREFILL_* knob is read from this process's environment, and tt-run only guarantees
+    per-rank delivery for what a rank binding puts in `global_env` (it auto-propagates just the
+    TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_ prefixes, and an `-x FOO` in --mpi-args lands in mpirun's
+    FIRST application context -> rank 0 only). So exporting PREFILL_MANIFEST in the launching shell
+    sets rank 0 and silently leaves every other rank on adapter.py's DEFAULT_MODEL -- a DIFFERENT,
+    perfectly valid model, whose weight cache is equally "complete". Nothing errors: the pipeline
+    just runs one model's layers into another's, and only the downstream ranks' KV fails PCC.
+
+    A one-int allgather of a config fingerprint turns that into an immediate, named failure.
+    """
+    if num_ranks <= 1:
+        return
+    import zlib
+
+    fields = {
+        "PREFILL_MODEL": os.environ.get("PREFILL_MODEL") or f"<unset -> default:{DEFAULT_MODEL}>",
+        "adapter": ADAPTER.name,
+        "num_layers": NUM_LAYERS,
+        "chunk_size": CHUNK_SIZE,
+        "max_seq_len": MAX_SEQ_LEN,
+        "num_users": NUM_USERS,
+        "mesh_shape": GLOBAL_MESH_SHAPE,
+    }
+    fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
+    digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
+    all_digests = ttnn.distributed_context_allgather_int(digest)
+    if len(set(all_digests)) == 1:
+        logger.info(f"[pp rank {rank}/{num_ranks}] config fingerprint {digest} agrees across all ranks ({fingerprint})")
+        return
+    disagreeing = [i for i, d in enumerate(all_digests) if d != all_digests[0]]
+    raise RuntimeError(
+        f"Pipeline ranks resolved DIFFERENT prefill configs: fingerprints {all_digests} "
+        f"(ranks {disagreeing} differ from rank 0). This rank ({rank}) has {fingerprint}. "
+        f"Each rank prints its own values above — compare PREFILL_MODEL first. "
+        f"Fix: pin PREFILL_MODEL (and any other PREFILL_* the run depends on) in the rank binding's "
+        f"global_env, which tt-run applies to EVERY rank. Exporting PREFILL_MANIFEST in the shell only "
+        f"reaches rank 0."
+    )
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
@@ -865,6 +908,7 @@ def main() -> None:
         ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
+    _assert_ranks_agree_on_config(rank, num_ranks)
 
     layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
