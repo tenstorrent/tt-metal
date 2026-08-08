@@ -209,6 +209,56 @@ def test_the_ladder_has_a_single_definition(mcp):
             assert rung in rendered, "%s missing from the rendered levels: %s" % (rung, rendered)
 
 
+def test_the_rendered_ladder_follows_the_profile_the_report_is_about(mcp):
+    """The report printed ONE fixed order for every model. It now reads the binding off the same
+    per-op `bound_by` annotation the ladder gate reads, weighted by gap_ms -- a hundred tiny eltwise
+    ops must not outvote the matmul that owns the residual."""
+    import importlib
+
+    summary = importlib.import_module("models.experimental.perf_automation.cc_optimize.summary")
+    prof = {
+        "buckets": [
+            {"top_ops": [{"bound_by": "memory", "gap_ms": 40.0}]},
+            {"top_ops": [{"bound_by": "compute", "gap_ms": 1.0}] * 20},
+        ]
+    }
+    assert summary._dominant_bound_by(prof) == "memory"
+    assert summary._dominant_bound_by(None) == ""
+    assert summary._dominant_bound_by({"buckets": [{"top_ops": [{"gap_ms": 5.0}]}]}) == ""
+    rendered = summary._levels_display(summary._dominant_bound_by(prof))
+    assert rendered.index("dtype") < rendered.index("fidelity"), rendered
+
+
+def test_the_lever_that_can_move_the_number_leads(mcp):
+    """THE CLIMB ORDER FOLLOWS THE BINDING, because a lever that cannot move the measurement is not
+    a cheap first try -- it is a wasted round.
+
+    fidelity speeds the MATH ENGINE. A fixed order put it second for every model, so on gemma-3-12b
+    -- memory-bound in both stages, decode compute running at 0.1% of peak -- the ladder led with
+    the one knob that cannot help, ahead of the two that cut bytes directly. And on a dispatch-bound
+    op no knob applies at all: the op is waiting on the host loop that launches it."""
+    assert mcp.ladder_order("memory").index("dtype") < mcp.ladder_order("memory").index("fidelity")
+    assert mcp.ladder_order("compute").index("fidelity") < mcp.ladder_order("compute").index("dtype")
+    assert mcp.ladder_order("dispatch")[0] == "host"
+
+
+def test_the_binding_sets_priority_never_membership(mcp):
+    """bound_by is a roofline ESTIMATE, ops are rarely purely one-bound, and `compute` is only ever
+    computed for matmuls -- so no reduction/eltwise op can ever read compute-bound however it
+    behaves. Used as a FILTER that silently deletes levers for a whole run: llama3_1_8b_p150
+    recorded 0 fidelity attempts across 133, its two costliest ops structurally ineligible."""
+    full = set(mcp.ladder_order())
+    for bound in ("memory", "compute", "dispatch", "", "nonsense-bound"):
+        assert set(mcp.ladder_order(bound)) == full, bound
+
+
+def test_the_knob_order_is_not_a_second_ordering(mcp):
+    """_KNOB_ORDER and the climb order were two literals over the same rungs and only one of them
+    knew what the op was waiting on. Derived from one table now, so they cannot disagree."""
+    for bound, knobs in mcp._KNOB_ORDER.items():
+        assert list(knobs) == [r for r in mcp.ladder_order(bound) if r in mcp._KNOBS], bound
+
+
 def test_the_climb_order_is_cheapest_first(mcp):
     """knobs before structural before hand-written kernels -- a long ladder must not spend its
     budget on tt-lang/C++ before reaching a cheaper restructure."""

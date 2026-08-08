@@ -1,6 +1,27 @@
 """Proactive execution-scope: restrict the optimizer's edit targets to the model
 files the profiled workload ACTUALLY runs.
 
+PART OF THE RETIRED FSM ENGINE (agent/engine.py + agent/states.py + agent/loop_context.py +
+agent/handlers/). Nothing constructs a LoopContext outside the tests, so `ensure_scope` has no
+caller: this is dormant BY DESIGN, not a missing wire. Said here because its absence from any call
+graph reads identically to a bug, and has been re-diagnosed as one more than once.
+
+The live path is cc_optimize/run.py driving `claude -p` against the perf_mcp tools, where the file
+list comes from discovery (before_loop -> read_model_files -> manifest `model_files`) and the
+reactive `edit_inert` steering catches an edit to a file the workload never executes.
+
+Wiring it into the live path is a real improvement and a real cost, so it is a decision rather than
+an oversight. What it would take:
+  * `ensure_scope(ctx)` split into a pure function over (model_root, tt_root, perf node, case,
+    model_files) so both callers share ONE implementation;
+  * a call after discovery in before_loop, at a SHALLOW TT_PERF_LAYERS -- which files execute does
+    not depend on depth, and a full-depth settrace run costs minutes;
+  * a decision about the failure mode that matters: a file the shallow run happens not to reach
+    would be REMOVED from the agent's edit set, which is worse than the noise it removes. Advisory
+    (rank the files) is the safe form; restrictive is not.
+  * a consumer for `hot_sources` -- most usefully next_target, so the agent is handed the source
+    line that emits the hot matmul instead of hunting for it.
+
 Run once at the start of the loop. Re-runs the perf test under
 exec_trace_plugin (sys.settrace), collects the model-source files that execute,
 and intersects them with the discovered model_files. The result lands in

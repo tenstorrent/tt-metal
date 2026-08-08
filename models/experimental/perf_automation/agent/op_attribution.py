@@ -1,5 +1,8 @@
 """Aggregate the op-attribution sidecar into ranked hot SOURCE LINES.
 
+Reached only from exec_scope, which belongs to the RETIRED FSM ENGINE -- dormant by design, not a
+missing wire. See exec_scope's header for what wiring it into the live path would take.
+
 Turns the raw per-op records (op, src file:line, shape) that op_attribution_plugin
 emits into "which source lines emit the most matmul work" — the automated answer to
 "where does the hot op live". A matmul's cost scales with its tensor size, so we rank

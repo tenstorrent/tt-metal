@@ -241,16 +241,43 @@ def _disp_level(label: str) -> str:
 _MODEL_LEVER_PREFIX = "model:"
 
 
-def _levels_display() -> str:
-    """Render the ladder from its single definition in perf_mcp, not from a second hardcoded copy."""
+def _dominant_bound_by(profile: dict | None) -> str:
+    """What the model's LARGEST reachable gap is waiting on, from the profile's own annotation.
+
+    The same `bound_by` tag the per-op ladder gate reads, so the order this report prints is the
+    order the optimizer actually walks -- not a second opinion about the same model. Weighted by
+    gap_ms rather than by op count: the ladder is spent on the ops with headroom, and a hundred tiny
+    eltwise ops should not outvote the matmul that owns the residual."""
+    if not isinstance(profile, dict):
+        return ""
+    weight: dict = {}
+    for b in profile.get("buckets") or []:
+        for o in (b.get("top_ops") or []) if isinstance(b, dict) else []:
+            if not isinstance(o, dict):
+                continue
+            bound = (o.get("bound_by") or "").strip().lower()
+            gap = o.get("gap_ms")
+            if not bound or not isinstance(gap, (int, float)) or gap <= 0:
+                continue
+            weight[bound] = weight.get(bound, 0.0) + float(gap)
+    return max(weight, key=weight.get) if weight else ""
+
+
+def _levels_display(bound_by: str = "") -> str:
+    """Render the ladder from its single definition in perf_mcp, not from a second hardcoded copy.
+
+    The order depends on what the model is waiting on -- fidelity speeds the math engine, so it
+    leads on a compute-bound model and trails on a memory-bound one -- so the binding travels with
+    the request. Without one, perf_mcp's own default row is used; there is no display-side default,
+    because a display-side default is how the two copies drifted the first time."""
     try:
         from .perf_mcp import ladder_order
     except Exception:  # noqa: BLE001
         try:
             from perf_mcp import ladder_order  # type: ignore
         except Exception:  # noqa: BLE001
-            return "grid -> fidelity -> dtype -> shard -> host -> tt-lang -> cpp"
-    return " -> ".join(_disp_level(r) if r == "tt-lang" else r for r in ladder_order())
+            return "grid -> dtype -> shard -> fidelity -> host -> structural -> tt-lang -> cpp"
+    return " -> ".join(_disp_level(r) if r == "tt-lang" else r for r in ladder_order(bound_by))
 
 
 def _op_label(sig: str, width: int = 34) -> str:
@@ -329,6 +356,15 @@ def _measured_stage_paths(model: str = "", task: str = "") -> dict:
         return {}
 
 
+def _measured_stage_ops(model: str = "", task: str = "") -> dict:
+    """Op dispatches observed per stage -- what the "eager"/"trace+1cq" label was derived from."""
+    m = _perf_mcp()
+    try:
+        return (m.read_stage_ops(model=model, task=task) or {}) if m else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _measured_stage_ms(model: str = "", task: str = "") -> dict:
     """trace_replay's per-stage timings, or {}.
 
@@ -368,16 +404,17 @@ def _stage_rows(rows: list, indent: str = "    ", share: bool = True) -> list:
     return out
 
 
-def _stage_table_lines(stages: list, model: str = "", task: str = "") -> list:
+def _stage_table_lines(stages: list, model: str = "", task: str = "", stages_measured: bool = False) -> list:
     """The block-level timing view, in two parts that do NOT have the same standing.
 
     MEASURED (top): trace_replay's per-stage timings, derived from the PIPELINE_STAGES the model
     declares. Real numbers, phase-correct, and absent when the pipeline declares no stages.
 
-    ANNOTATION (bottom): the agent's own breakdown, passed as stages_json to record_kernel_attempt.
-    Free text -- nothing validates the names, and on this model four of fourteen carry no phase at
-    all. It is the more USEFUL view for finding hot spots, so it stays; it just stops being
-    presentable as measurement.
+    BREAKDOWN (bottom): where the ms inside a stage went. Its provenance is stated in its own
+    header, because two different things can supply it. The profile's op-class buckets are device
+    measurements and are used whenever they exist. The agent's stages_json is free text -- nothing
+    validates the names, and on this model four of fourteen carry no phase at all -- so it appears
+    only when the profile has no buckets to answer with, and says so.
 
     The two are kept apart rather than merged because decode ms and prefill ms are not the same
     currency: decode recurs on every token and sets tok/s/u, prefill happens once and sets TTFT. A
@@ -401,8 +438,14 @@ def _stage_table_lines(stages: list, model: str = "", task: str = "") -> list:
         rows = [(x.get("name", "?"), float(x.get("ms") or 0)) for x in st]
         if out:
             out.append("")
-        # The agent's rows ARE one currency (its own block timings), so a share is meaningful here.
-        out.append("  %-44s %8.2f ms" % ("agent breakdown (annotation, not measurement)", sum(m for _n, m in rows)))
+        # These rows ARE one currency (one profile, one window), so a share is meaningful here --
+        # unlike the measured block above, whose two stages are counted per request and per token.
+        _hdr = (
+            "op-class breakdown (measured, same profile as above)"
+            if stages_measured
+            else "agent breakdown (annotation, not measurement)"
+        )
+        out.append("  %-44s %8.2f ms" % (_hdr, sum(m for _n, m in rows)))
         out.extend(_stage_rows(rows))
     return out
 
@@ -989,6 +1032,7 @@ def _roofline_tables(
     note="",
     stage_ms=None,
     stage_paths=None,
+    stage_ops=None,
     tp_degree=1,
 ):
     """The Roofline / Overheads / Utilization blocks.
@@ -1176,6 +1220,12 @@ def _roofline_tables(
         _u = _STAGE_UNIT.get(_st) or unit
         _path = str((stage_paths or {}).get(_st) or "").strip().lower()
         _traced = _path.startswith("trace") or not _path
+        # STATE THE EVIDENCE BESIDE THE LABEL. "eager" is a CONCLUSION trace_replay drew from the op
+        # dispatches it counted during the last warmup -- one for a traced stage, hundreds for an
+        # eager one. Printing the count makes the label checkable; without it, gemma-3's prefill was
+        # diagnosed as eager twice from the label alone, once wrongly.
+        _ndisp = (stage_ops or {}).get(_st)
+        _lab = "%s, %d op dispatches" % (_path, _ndisp) if isinstance(_ndisp, int) else _path
         _ms = _pf_measured if _st == "prefill" else (float(per_unit_ms) if per_unit_ms else None)
         # EVERY ROW CARRIES ALL THREE COLUMNS. The stage wall-clock was hoisted to this heading to
         # avoid repeating it, which left each roof row holding a bare tick -- MEASURED no longer
@@ -1185,7 +1235,7 @@ def _roofline_tables(
         out.append(
             _row(
                 "%s%s"
-                % (_STAGE_TITLE[_st], "" if _traced else "   [%s \u2014 not comparable to a traced band]" % _path),
+                % (_STAGE_TITLE[_st], "" if _traced else "   [%s \u2014 not comparable to a traced band]" % _lab),
                 "",
                 "",
                 "",
@@ -1602,6 +1652,9 @@ def _roofline_lines(
                     # HOW each stage was measured. A stage that fell back to eager cannot be graded
                     # against a band that assumes trace.
                     stage_paths=_measured_stage_paths(model, task),
+                    # The dispatch count each path label was derived from, so the label is evidence
+                    # rather than an assertion.
+                    stage_ops=_measured_stage_ops(model, task),
                     # The stage roofs shard the bytes and the FLOPs the same way the ceiling does.
                     tp_degree=tp,
                     # WHY the measurement is absent, not merely that it is. A depth mismatch means the
@@ -1941,8 +1994,15 @@ def render_summary(
     )
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
-    _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
-    _stages = _st["stages"] if _st else _stages_from_profile(baseline_profile)
+    # MEASURED FIRST, PROSE ONLY WHERE THERE IS NO MEASUREMENT. This preferred the agent's
+    # stages_json -- free text, unvalidated, frozen at capture time -- and fell back to the
+    # profile's own op-class buckets only when no attempt happened to carry any. So the one source
+    # with a device measurement behind it was the LAST resort: the table has carried "QKV, still
+    # HiFi2 -- same lever untried" long after that lever was tried and won, and summed to 529.43 ms
+    # while the op breakdown directly above it summed to 556.80.
+    _pstages = _stages_from_profile(baseline_profile)
+    _st = None if _pstages else next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
+    _stages = _pstages or (_st["stages"] if _st else [])
     if _stages:
         _lbl = (
             f"latest lever on {_op_label(_st.get('op_signature', '?'))}"
@@ -1963,7 +2023,7 @@ def render_summary(
         # trace_replay actually measured. Repeating it here restated the total a line above where the
         # table prints it, and put a 90-character disclaimer between the reader and the numbers.
         lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
-        lines.extend(_stage_table_lines(_stages, model, task))
+        lines.extend(_stage_table_lines(_stages, model, task, stages_measured=bool(_pstages)))
         lines.append("")
 
     if _model_levers:
@@ -2163,6 +2223,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        f"levels: {_levels_display()}   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: {_levels_display(_dominant_bound_by(baseline_profile))}   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)

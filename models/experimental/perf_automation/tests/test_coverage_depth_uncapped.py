@@ -9,7 +9,9 @@ The signpost path computed:
 
 and 16 was the last rung of the 2/4/8/16 ladder that a568d9dcba deleted when it introduced this very
 path. Nothing computes a marker capacity anywhere in the tool; the docstring calls 16 "the marker
-limit" after the fact, and drain_sizing.py already prevents overflow by sizing TT_PERF_FLUSH_EVERY.
+limit" after the fact. What DOES handle an overflow is profiler_heal + _detect_partial_capture: the
+run degrades to a partial report and the capture is FLAGGED as partial, rather than dying on a
+TT_FATAL or -- worse -- being read as complete. A depth cap prevents neither.
 
 The cost was silence. On gemma-3-12b-it the window was reported as
 

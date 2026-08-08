@@ -343,7 +343,11 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         "r=t()\n"
         "print('CANSTOP=' + str(bool(r.get('can_stop'))))\n"
         "print('HALT=' + str(bool(r.get('halt'))))\n"
-        "print('HALTREASON=' + str(r.get('halt_reason') or ''))"
+        # WHICH halt, not just that one happened. `halt` is a truthy STRING naming the kind
+        # (needs_host_reboot / device_unrecoverable / True for the tt-lang rung), and the supervisor
+        # used to print one hardcoded remedy for all of them.
+        "print('HALTKIND=' + ('' if r.get('halt') is True else str(r.get('halt') or '')))\n"
+        "print('HALTREASON=' + str(r.get('halt_reason') or r.get('error') or ''))"
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
@@ -357,13 +361,30 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
     )
     if rc is None:
-        return {"can_stop": False, "halt": False, "reason": ""}
+        return {"can_stop": False, "halt": False, "reason": "", "kind": ""}
     out = out or ""
-    reason = ""
+    reason = kind = ""
     for line in out.splitlines():
         if line.startswith("HALTREASON="):
             reason = line[len("HALTREASON=") :]
-    return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason}
+        elif line.startswith("HALTKIND="):
+            kind = line[len("HALTKIND=") :]
+    return {
+        "can_stop": "CANSTOP=True" in out,
+        "halt": "HALT=True" in out,
+        "reason": reason,
+        "kind": kind,
+    }
+
+
+# What the operator must DO, per halt kind. Keyed off the gate's own name for the condition, so a
+# new halt cannot silently inherit another one's remedy -- which is what "install tt-lang first"
+# did for a board that needed a host reboot.
+_HALT_REMEDY = {
+    "needs_host_reboot": "reboot the host, then re-run",
+    "device_unrecoverable": "the device could not be recovered — check the board, then re-run",
+    "": "install tt-lang first, then re-run",
+}
 
 
 def _reset_fullpipe_baselines() -> None:
@@ -1577,10 +1598,12 @@ def _cap_cov_depth(depth: int, model_id: str = "") -> int:
     """The profiling window, bounded only by things that are real.
 
     UNCAPPED BY DEFAULT. The old ceiling of 16 was the last rung of the 2/4/8/16 ladder this path
-    replaced; no code derives it from any profiler capacity, and marker overflow is already handled
-    elsewhere by drain_sizing (TT_PERF_FLUSH_EVERY). Capping below what the ops need does not make
-    the profile safe, it makes it BLIND -- gemma-3-12b-it was handed a 16-layer window with 54 op
-    types "present in full model, un-timed", any of which could hold the next bottleneck.
+    replaced; no code derives it from any profiler capacity. A marker overflow is handled where it
+    happens: profiler_heal patches the TT_FATAL into a warning so the run yields a PARTIAL report,
+    and _detect_partial_capture flags that capture as partial so it is never read as complete.
+    Capping below what the ops need does not make the profile safe, it makes it BLIND --
+    gemma-3-12b-it was handed a 16-layer window with 54 op types "present in full model, un-timed",
+    any of which could hold the next bottleneck.
 
     Two bounds remain, both meaningful:
       * the model's DECLARED depth -- profiling deeper than the model is nonsense, not caution;
@@ -3160,6 +3183,63 @@ def _warn_dirty_model_tree(demo_dir, repo_root) -> list:
     return dirty
 
 
+def _preflight_tool(repo_root: Path) -> bool:
+    """Run the TOOL'S OWN test suite against the copy this run will execute. Returns True to proceed.
+
+    THE COPY THAT RUNS IS NOT THE COPY THAT WAS EDITED. The tool is developed in one checkout and
+    synced into the repo the run uses, and nothing checked that the sync landed or that what landed
+    imports. Three distinct failures came from that gap, each costing a run:
+
+      * an edit that applied to the WRONG PLACE -- DEFAULT_ISL_TOKENS landed inside a template
+        STRING rather than at module scope, so the module imported cleanly and the symbol did not
+        exist. Found hours later, from an unrelated traceback;
+      * a module reachable by package name but not by path -- the report loader uses
+        spec_from_file_location, which supplies no package context and no sys.path entry for the
+        module's own directory, so both relative and absolute imports raise. The report rendered
+        with three blank sections and every failure was silent;
+      * a `git stash` during a debugging detour that never popped, so two committed fixes were
+        absent from the tree that then ran.
+
+    Every one of them is caught by importing the tree and running its tests, which takes ~90 seconds
+    against a run measured in hours. The suite is the tool's own; a failing one means the thing about
+    to spend the night on a board is not the thing that was verified.
+
+    PERF_MCP_SKIP_PREFLIGHT=1 skips it, for a deliberate run on a knowingly-red tree.
+    """
+    if os.environ.get("PERF_MCP_SKIP_PREFLIGHT") == "1":
+        print("  [optimize/cc] preflight SKIPPED (PERF_MCP_SKIP_PREFLIGHT=1)")
+        return True
+    tests = Path(repo_root) / PERF_DIR / "tests"
+    if not tests.is_dir():
+        print(f"  [optimize/cc] preflight: no test suite at {tests} — cannot verify the tool that is about to run")
+        return os.environ.get("PERF_MCP_REQUIRE_PREFLIGHT") != "1"
+    print(f"  [optimize/cc] preflight: running the tool's own suite against {tests}")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(tests), "-q", "--no-header", "-p", "no:cacheprovider"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=int(os.environ.get("PERF_MCP_PREFLIGHT_TIMEOUT_S", "900")),
+        )
+    except Exception as exc:  # noqa: BLE001 -- a preflight that cannot RUN has cleared nothing
+        print(f"  [optimize/cc] preflight could not run ({str(exc)[:160]}) — treating as UNKNOWN, not as passed")
+        return os.environ.get("PERF_MCP_REQUIRE_PREFLIGHT") != "1"
+    tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()][-1:] or ["(no output)"]
+    if proc.returncode == 0:
+        print(f"  [optimize/cc] preflight OK — {tail[0]}")
+        return True
+    print(f"  [optimize/cc] preflight FAILED — {tail[0]}")
+    for ln in (proc.stdout or "").splitlines():
+        if ln.startswith("FAILED") or ln.startswith("ERROR"):
+            print("      %s" % ln)
+    print(
+        "      This is the tool that is about to run, in the repo it will run from. Fix it, re-sync, "
+        "or set PERF_MCP_SKIP_PREFLIGHT=1 to start anyway."
+    )
+    return False
+
+
 def _seed_ladder_from_cumulative(kernel_log: str, current_baseline_ms=None) -> int:
     """Start the ladder from what this (model, task) has ALREADY conclusively tried. Returns the count.
 
@@ -3359,7 +3439,8 @@ def optimize_pipeline(
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
         if st.get("halt"):
-            print(f"  [optimize/cc] HALT — install tt-lang first, then re-run: {st.get('reason')}")
+            _remedy = _HALT_REMEDY.get(st.get("kind") or "") or _HALT_REMEDY[""]
+            print(f"  [optimize/cc] HALT — {_remedy}: {st.get('reason') or '(no reason reported)'}")
             halted = True
             break
         if st.get("can_stop"):
@@ -4038,6 +4119,10 @@ def run_cc_optimize(
     at the end. Off by default — learning stays local unless opted in. Both steps are best-effort and
     never fail the run; the remote/branch is fully configurable (nothing hard-coded)."""
     _stamp_run_id()
+    # BEFORE the device is touched and before discovery spends an agent call: verify the tool this
+    # run will execute is the tool that was verified. See _preflight_tool.
+    if not _preflight_tool(repo_root):
+        raise SystemExit("  [optimize/cc] refusing to start against a tool whose own tests fail.")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         # No exported key is FINE: `claude` may be authenticated via `claude /login` (README §5.2
         # Option A). Every claude subprocess uses those stored creds; claude surfaces its own error

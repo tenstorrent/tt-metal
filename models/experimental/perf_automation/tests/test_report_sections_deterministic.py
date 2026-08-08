@@ -96,19 +96,38 @@ def test_roofline_renders_when_throughput_none(tmp_path, monkeypatch):
     assert "Roofline" in text
 
 
-def test_prefers_agent_stages_when_present(tmp_path):
+_AGENT_STAGES = [
+    {
+        "op_signature": "MatmulDeviceOperation",
+        "kernel_kind": "dtype",
+        "measured_ms": 10.0,
+        "beat_baseline": True,
+        "stages": [{"name": "matmul", "ms": 9.0, "dominant": True}],
+    }
+]
+
+
+def test_the_profile_outranks_the_agents_prose(tmp_path):
+    """MEASURED FIRST. This preferred the agent's stages_json -- free text, unvalidated, frozen at
+    the moment it was captured -- and consulted the profile's own op-class buckets only when no
+    attempt happened to carry any. So the one source with a device measurement behind it was the
+    LAST resort: the table carried "QKV, still HiFi2 -- same lever untried" long after that lever
+    was tried and won, and summed to 529.43 ms while the op breakdown directly above it summed to
+    556.80 -- two totals for one profile, in adjacent sections."""
     sm = _summary()
-    attempts = [
-        {
-            "op_signature": "MatmulDeviceOperation",
-            "kernel_kind": "dtype",
-            "measured_ms": 10.0,
-            "beat_baseline": True,
-            "stages": [{"name": "matmul", "ms": 9.0, "dominant": True}],
-        }
-    ]
-    text = _render(sm, tmp_path, baseline_profile=_PROF, attempts=attempts)
+    text = _render(sm, tmp_path, baseline_profile=_PROF, attempts=_AGENT_STAGES)
+    assert "op-class breakdown (same profile as the table above)" in text
+    assert "latest lever on Matmul" not in text
+    assert "annotation, not measurement" not in text, "measured rows must not be labelled annotation"
+
+
+def test_the_agents_prose_is_still_shown_when_nothing_measured_it(tmp_path):
+    """It remains the more useful view for finding hot spots -- it just stops OUTRANKING a
+    measurement, and it says whose words it is."""
+    sm = _summary()
+    text = _render(sm, tmp_path, baseline_profile={"buckets": []}, attempts=_AGENT_STAGES)
     assert "Block-level timing (per-stage trace) — latest lever on Matmul" in text
+    assert "annotation, not measurement" in text
 
 
 def test_a_floor_target_publishes_no_achievable_band(tmp_path):
