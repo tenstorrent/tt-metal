@@ -278,7 +278,6 @@ class resnetBlock2D:
             epsilon=eps,
             memory_config=ttnn.get_memory_config(hidden_states),
             core_grid=self.first_group_norm_core_grid,
-            dtype=ttnn.bfloat8_b,
         )
         hidden_states = ttnn.reshape(
             hidden_states,
@@ -394,7 +393,6 @@ class resnetBlock2D:
             epsilon=eps,
             memory_config=self.second_gn_expected_input_sharded_memory_config,
             core_grid=self.second_group_norm_core_grid,
-            dtype=ttnn.bfloat8_b,
         )
         hidden_states = ttnn.reshape(
             hidden_states,
