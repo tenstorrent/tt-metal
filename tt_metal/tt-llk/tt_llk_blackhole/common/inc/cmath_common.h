@@ -43,71 +43,139 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 //                    bf16 -0.0 and 16-bit-integer datums.
 //   MOV_OPS        : flag = 1. Selected by transpose_dest 32b hi16-lo16 MOV sequences.
 //
-// Each configurator early-returns when already in its state (DEFAULT additionally re-applies when
-// the cached operand formats changed), so steady-state ops pay no extra cfg writes.
-// See ckernel::requires_disabled_src_zero_flag for the UInt16 rationale.
-// (Blackhole reduce's enforce_fp32 path uses ALU_ACC_CTRL_Fp32_enabled for the same MOVD2B/B2D
-// workaround - Issue tt-llk#449 - so it does not interact with this flag.)
+// CFG write is only issued when necessary, so the user doesn't pay for CFG writes unless necessary.
 // ---------------------------------------------------------------------------------------------
-enum class SrcZeroFlagState : std::uint8_t
+class ZeroFlags
 {
-    UNCONFIGURED   = 0,
-    DEFAULT        = 1,
-    UNARY_PRESERVE = 2,
-    MOV_OPS        = 3,
+public:
+    enum class State : bool
+    {
+        Enable  = true,
+        Disable = false,
+    };
+
+private:
+    enum class TrackerState : std::uint8_t
+    {
+        UNCONFIGURED   = 0,
+        DEFAULT        = 1,
+        UNARY_PRESERVE = 2,
+        MOV_OPS        = 3,
+    };
+
+    static inline TrackerState tracker_state = TrackerState::UNCONFIGURED;
+    static inline std::uint32_t fpu_format  = 0xff;
+    static inline std::uint32_t sfpu_format  = 0xff;
+
+    static inline void zero_flags_toggle(const State state)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+
+        // Disabling subnormal flush is done by disabling Zero Flags, which will force ZeroFlag == 0 for each datum, leading to the raw value being used.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(state == State::Disable ? 1 : 0);
+    }
+
+public:
+    /**
+     * @brief Whether the zero flags (ALU_ACC_CTRL_Zero_Flag_disabled_src) must be
+     *        disabled (State::Disable, written 1) for the given SrcA/SrcB destination formats.
+     *
+     * While the flag is clear (its reset state), MOVA2D / MOVB2D flush any SrcA/SrcB datum whose low
+     * 8 bits are zero to 0 (FlushDenormals; see MOVA2D.md `if (FlushDenormals && !(SrcAVal & 0xff))`).
+     * For the floating-point Src layout the low 8 bits are the exponent, and a zero exponent denotes a
+     * subnormal, which the HW does not support and therefore rounds to zero.
+     *
+     * UInt16 is the HW "Integer 16" format and the only 16-bit integer unpacker destination format. It
+     * shares the Src bit layout, so its low byte is the integer's low magnitude bits, NOT an exponent.
+     * A legitimate value such as 256 (0x0100) has a zero low byte and would be silently flushed to 0,
+     * destroying the high magnitude bits. Disabling the flag suppresses the flush so 16-bit integer
+     * data survives the move into Dst.
+     *
+     * @param fpu_format format used by the FPU
+     * @param sfpu_format format used by the SFPU
+     * @return State::Disable when either operand is UInt16 (flag must be disabled), else State::Enable.
+     *
+     * @note ISA (paths are in the tt-isa-documentation repo): Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
+     *       SrcASrcB.md (the "Integer 16" note).
+     */
+    static constexpr State compute_reconfig(const std::uint32_t fpu_format, const std::uint32_t sfpu_format)
+    {
+        const bool requires_disable =
+            (fpu_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (sfpu_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+        return requires_disable ? State::Disable : State::Enable;
+    }
+
+    /**
+     * @brief DEFAULT state: the flag follows the operand formats. Re-applies when the state or cached formats change.
+     *
+     * @param fpu_format_next format used by the FPU
+     * @param sfpu_format_next format used by the SFPU
+     */
+    static void execute_reconfig(const std::uint32_t fpu_format_next, const std::uint32_t sfpu_format_next)
+    {
+        const bool formats_match = (fpu_format == fpu_format_next) && (sfpu_format == sfpu_format_next);
+        if (tracker_state != TrackerState::DEFAULT || !formats_match)
+        {
+            tracker_state = TrackerState::DEFAULT;
+            fpu_format   = fpu_format_next;
+            sfpu_format   = sfpu_format_next;
+            zero_flags_toggle(compute_reconfig(fpu_format, sfpu_format));
+        }
+    }
+
+    /** @brief Cached FPU destination format, so a single-operand reconfig can reuse the other operand. */
+    static std::uint32_t get_fpu_format()
+    {
+        return fpu_format;
+    }
+
+    /** @brief Cached SFPU destination format, so a single-operand reconfig can reuse the other operand. */
+    static std::uint32_t get_sfpu_format()
+    {
+        return sfpu_format;
+    }
+
+    /**
+     * @brief Setup zero flags for UNARY / SFPU / DATACOPY ops.
+     *
+     * Used for preservation of -0.0 and INT16/UINT16 (redundant).
+     */
+    static void execute_reconfig_unary_preserve()
+    {
+        if (tracker_state != TrackerState::UNARY_PRESERVE)
+        {
+            tracker_state = TrackerState::UNARY_PRESERVE;
+            zero_flags_toggle(State::Disable);
+        }
+    }
+
+    /**
+     * @brief Setup zero flags for MOV operations.
+     *
+     * Used for 32bit TRANSPOSE_DEST to ensure HI16/LO16 MOV operations don't accidentally flush raw bits to zero.
+     */
+    static void execute_reconfig_mov_ops()
+    {
+        if (tracker_state != TrackerState::MOV_OPS)
+        {
+            tracker_state = TrackerState::MOV_OPS;
+            zero_flags_toggle(State::Disable);
+        }
+    }
+
+    /**
+     * @brief Invalidates the tracked state leading to forced reconfiguration on next execute_reconfig_**
+     *
+     * @note This is useful after Zero Flags is altered outside of this wrapper, bypassing the tracker
+     */
+    static void invalidate_tracker()
+    {
+        tracker_state = TrackerState::UNCONFIGURED;
+    }
 };
 
-static SrcZeroFlagState src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
-static std::uint32_t src_zero_flag_srca_fmt = 0xff;
-static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-inline void _configure_src_zero_flag_(const bool disable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
-}
 
-// DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
-inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
-{
-    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_srca_fmt == srca_dst_format && src_zero_flag_srcb_fmt == srcb_dst_format)
-    {
-        return;
-    }
-    src_zero_flag_srca_fmt = srca_dst_format;
-    src_zero_flag_srcb_fmt = srcb_dst_format;
-    src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
-    _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
-}
-
-// UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
-inline void _configure_unary_preserve_zero_flag_state_()
-{
-    if (src_zero_flag_state == SrcZeroFlagState::UNARY_PRESERVE)
-    {
-        return;
-    }
-    src_zero_flag_state = SrcZeroFlagState::UNARY_PRESERVE;
-    _configure_src_zero_flag_(true);
-}
-
-// MOV_OPS: transpose_dest 32b hi16-lo16 MOV sequences keep the flag disabled.
-inline void _configure_mov_ops_zero_flag_state_()
-{
-    if (src_zero_flag_state == SrcZeroFlagState::MOV_OPS)
-    {
-        return;
-    }
-    src_zero_flag_state = SrcZeroFlagState::MOV_OPS;
-    _configure_src_zero_flag_(true);
-}
-
-// Invalidate the tracked state after a code path that writes the flag directly (bypassing the
-// tracker), so the next configurator re-applies regardless of the skip-if-set fast path.
-inline void _invalidate_src_zero_flag_state_()
-{
-    src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
-}
 
 inline void reset_counters(const std::uint32_t setrwc)
 {
