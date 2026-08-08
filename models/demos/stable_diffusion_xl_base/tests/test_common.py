@@ -825,6 +825,7 @@ def run_tt_image_gen(
     guidance_rescale=0.0,
     one_minus_guidance_rescale=1.0,
     return_latents=False,  # If True, skip VAE decoding and return latents
+    on_step=None,  # Optional callback(step, total) invoked once per denoise iteration
 ):
     """Run TT (Tenstorrent) image generation pipeline for Stable Diffusion XL.
 
@@ -995,6 +996,9 @@ def run_tt_image_gen(
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
+
+        if on_step is not None:
+            on_step(i + 1, num_steps)
 
     ttnn.synchronize_device(ttnn_device)
 

@@ -10,6 +10,27 @@ from loguru import logger
 import ttnn
 
 
+def _clip_text_model_is_flattened(text_encoder):
+    """Whether this CLIP text encoder's attention module paths lack the
+    ``text_model.`` prefix.
+
+    transformers>=5 flattened ``CLIPTextModel`` (SDXL's first text encoder) so
+    ``named_modules()`` now yields e.g. ``encoder.layers.0.self_attn.q_proj``
+    instead of ``text_model.encoder.layers.0.self_attn.q_proj``. The projection
+    text encoder (``CLIPTextModelWithProjection``, te2) still keeps the prefix.
+    """
+    for name, _ in text_encoder.named_modules():
+        if name.endswith((".q_proj", ".k_proj", ".v_proj", ".out_proj", ".fc1", ".fc2")):
+            return not name.startswith("text_model.")
+    return False
+
+
+def _strip_text_model_segment(mapping, prefix):
+    """Drop the ``text_model.`` segment right after ``{prefix}.`` in each key."""
+    seg = f"{prefix}.text_model."
+    return {(f"{prefix}." + k[len(seg) :] if k.startswith(seg) else k): v for k, v in mapping.items()}
+
+
 class TtLoRAWeightsManager:
     def __init__(self, device, torch_pipeline):
         self._device = device
@@ -26,6 +47,52 @@ class TtLoRAWeightsManager:
         )
 
         self._is_fused = False
+
+        # Status tracking for the most recent load_lora_weights() call. These let
+        # the pipeline/runner report back what was actually applied vs skipped.
+        self._skipped_reason = None
+        self._text_encoder_components = []
+
+        # Text-encoder LoRA state. `_te_base_state` is a lazily-captured clean snapshot
+        # of the torch text-encoder weights (taken before any adapter is applied) used to
+        # revert; `_te_fused` tracks whether the on-device encoders currently hold merged
+        # LoRA weights. `_reload_text_encoders` is the caller-supplied hook that pushes
+        # torch weights onto the device encoders — see register_text_encoder_reload().
+        self._te_base_state = None
+        self._te_fused = False
+        self._reload_text_encoders = None
+        self._device_text_encoders = ()
+
+    def register_text_encoder_reload(self, reload_fn, components):
+        """Register the hook that pushes torch text-encoder weights onto the device.
+
+        ``reload_fn()`` takes no arguments and reloads the device encoders from the
+        current torch state dicts. ``components`` is the subset of
+        ``("text_encoder", "text_encoder_2")`` that ``reload_fn`` actually reloads.
+
+        Not registering — or registering no components — disables the text-encoder LoRA
+        path entirely, which is how the caller signals that the encoders run on host.
+        """
+        self._reload_text_encoders = reload_fn
+        self._device_text_encoders = tuple(components)
+
+    def _text_encoders_reloadable(self):
+        return self._reload_text_encoders is not None and bool(self._device_text_encoders)
+
+    def adapter_state(self):
+        """Current state of the loaded LoRA adapter.
+
+        ``fused`` is whether the UNet deltas are merged on device,
+        ``text_encoder_fused`` whether the device text encoders hold merged weights,
+        ``skipped_reason`` is why a load was rejected (``None`` when it was applied), and
+        ``text_encoder_components`` lists the text encoders the adapter trains.
+        """
+        return {
+            "fused": self._is_fused,
+            "text_encoder_fused": self._te_fused,
+            "skipped_reason": self._skipped_reason,
+            "text_encoder_components": list(self._text_encoder_components),
+        }
 
     def prepare_lora_linear_params(self, device, weights, bias, dtype, name, permute_weights=True):
         if permute_weights:
@@ -64,9 +131,9 @@ class TtLoRAWeightsManager:
 
         return False
 
-    def _affects_non_unet(self):
+    def _text_encoder_components_present(self):
         adapters = self.get_lora_adapters()
-        return any(component != "unet" and adapter_list for component, adapter_list in adapters.items())
+        return [c for c in ("text_encoder", "text_encoder_2") if adapters.get(c)]
 
     def _affects_unsupported_ops(self):
         for key in self._get_lora_params():
@@ -74,33 +141,133 @@ class TtLoRAWeightsManager:
                 return True
         return False
 
+    @staticmethod
+    def _load_lora_weights_te_compat(pipeline, lora_path, adapter_name=None):
+        """``pipeline.load_lora_weights`` that also works under transformers>=5.
+
+        diffusers' text-encoder LoRA loader builds its rank dict by matching
+        ``{module}.lora_B.weight`` against the live ``text_encoder`` module names, but
+        the converted LoRA keys always carry a ``text_model.`` prefix. Since
+        transformers>=5 flattened ``CLIPTextModel`` (dropping that prefix from its
+        module paths), nothing matches for the first text encoder, the rank dict comes
+        out empty, and ``get_peft_kwargs`` raises ``IndexError: list index out of
+        range``. When an encoder is flattened we strip ``text_model.`` from its LoRA
+        keys (weights and network-alpha keys) and mirror diffusers' own
+        unet -> te1 -> te2 load sequence with the remapped state dict.
+
+        When no encoder is flattened (transformers<5, or after diffusers fixes this
+        upstream) we defer to the stock loader untouched.
+
+        TODO: remove once the upstream diffusers loader handles transformers>=5.
+        """
+        encoders = [
+            (getattr(pipeline, "text_encoder", None), "text_encoder"),
+            (getattr(pipeline, "text_encoder_2", None), "text_encoder_2"),
+        ]
+        if not any(te is not None and _clip_text_model_is_flattened(te) for te, _ in encoders):
+            pipeline.load_lora_weights(lora_path)
+            return
+
+        # unet_config is required so diffusers remaps SGM block numbers to diffusers
+        # block names (e.g. down_blocks.1.attentions.0); without it the UNet LoRA keys
+        # stay half-converted and peft can't find the target modules.
+        result = pipeline.lora_state_dict(lora_path, unet_config=pipeline.unet.config)
+        state_dict = result[0]
+        network_alphas = result[1] if len(result) > 1 else None
+
+        for te, prefix in encoders:
+            if te is not None and _clip_text_model_is_flattened(te):
+                state_dict = _strip_text_model_segment(state_dict, prefix)
+                if network_alphas:
+                    network_alphas = _strip_text_model_segment(network_alphas, prefix)
+
+        pipeline.load_lora_into_unet(
+            state_dict, network_alphas, pipeline.unet, adapter_name=adapter_name, _pipeline=pipeline
+        )
+        pipeline.load_lora_into_text_encoder(
+            state_dict,
+            network_alphas,
+            pipeline.text_encoder,
+            prefix="text_encoder",
+            adapter_name=adapter_name,
+            _pipeline=pipeline,
+        )
+        pipeline.load_lora_into_text_encoder(
+            state_dict,
+            network_alphas,
+            pipeline.text_encoder_2,
+            prefix="text_encoder_2",
+            adapter_name=adapter_name,
+            _pipeline=pipeline,
+        )
+
     def load_lora_weights(self, lora_path):
+        # Must run before anything can attach an adapter to the torch text encoders,
+        # so the snapshot is of clean weights. Deliberately ahead of the
+        # already-loaded early return below, which would otherwise skip it.
+        self._ensure_te_base_snapshot()
+
+        self._skipped_reason = None
+        self._text_encoder_components = []
+
         if self.has_lora_adapter():
             logger.info("LoRA weights already loaded, skipping.")
             return
 
-        self._torch_pipeline.load_lora_weights(lora_path)
-
-        if self._affects_non_unet():
-            logger.warning("Only LoRA affecting the UNet is supported, skipping loading LoRA weights.")
-            self._torch_pipeline.unload_lora_weights()
-            return
+        self._load_lora_weights_te_compat(self._torch_pipeline, lora_path)
 
         if self._uses_dora():
             logger.warning("DoRA is not supported, skipping loading LoRA weights.")
             self._torch_pipeline.unload_lora_weights()
+            self._skipped_reason = "dora"
             return
 
         if self._affects_unsupported_ops():
-            logger.warning("LoRA weights affect unsupported operations, skipping loading LoRA weights.")
+            logger.warning("LoRA weights affect unsupported UNet operations, skipping loading LoRA weights.")
             self._torch_pipeline.unload_lora_weights()
+            self._skipped_reason = "unsupported_ops"
             return
 
-    def fuse_lora(self, lora_scale=1.0):
-        if not self.has_lora_adapter():
+        # Text-encoder adapters are supported via host-side fuse + on-device encoder
+        # reload (see _fuse_text_encoder_lora). Record which TE components are present
+        # so the fuse can target them and adapter_state() can report them.
+        self._text_encoder_components = self._text_encoder_components_present()
+
+    def _ensure_te_base_snapshot(self):
+        """Capture a clean copy of the torch text-encoder weights, once."""
+        if self._te_base_state is not None or not self._text_encoders_reloadable():
+            return
+        state = {}
+        for name in self._device_text_encoders:
+            text_encoder = getattr(self._torch_pipeline, name, None)
+            if text_encoder is not None:
+                state[name] = {k: v.detach().cpu().clone() for k, v in text_encoder.state_dict().items()}
+        self._te_base_state = state
+
+    def fuse_lora(self, lora_scale=1.0, clip_scale=None):
+        """Fuse the loaded LoRA into the UNet (on device) and the text encoders (on host).
+
+        ``lora_scale`` applies to the UNet; ``clip_scale`` to the text encoders, and
+        defaults to ``lora_scale`` when omitted. A ``clip_scale`` of 0.0 skips the
+        text-encoder fuse entirely.
+
+        The caller is responsible for establishing the mesh-mapper context for the UNet
+        device work — see TtSDXLPipeline.fuse_lora.
+        """
+        if clip_scale is None:
+            clip_scale = lora_scale
+
+        if self.has_lora_adapter():
+            self._fuse_unet_lora(lora_scale)
+        elif not (self._is_fused or self._te_fused):
+            # Genuinely nothing loaded. Stay quiet when something is already fused: a
+            # text-encoder fuse strips the torch adapters, so has_lora_adapter() is
+            # False afterwards even though the LoRA is applied.
             logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
-            return
 
+        self._fuse_text_encoder_lora(clip_scale)
+
+    def _fuse_unet_lora(self, lora_scale=1.0):
         if self._is_fused:
             logger.info("LoRA weights already fused. Skipping fusion.")
             return
@@ -217,6 +384,48 @@ class TtLoRAWeightsManager:
 
             ttnn.add_(self._base_weights_device[qkv_key], qkv_delta_tt)
 
+    def _fuse_text_encoder_lora(self, lora_scale):
+        # Idempotency guard, mirroring the UNet path (_fuse_unet_lora early-returns on
+        # self._is_fused). Without this, a second fuse before an unload would merge the
+        # TE delta on top of already-merged torch weights, double-applying the adapter.
+        if self._te_fused:
+            logger.info("Text-encoder LoRA already fused; skipping re-fuse (idempotent).")
+            return
+        components = self._text_encoder_components
+        if not components:
+            return
+        # scale=0.0 means "do not apply to CLIP" — skip the host fuse + device reload
+        # entirely rather than fusing a zero delta (saves a full TE reload). _te_fused
+        # stays False, so adapter_state reports text_encoder_fused: false.
+        if lora_scale == 0.0:
+            logger.info("CLIP LoRA scale is 0.0 — skipping text-encoder fusion.")
+            return
+        if not self._text_encoders_reloadable():
+            logger.warning("Text-encoder LoRA present but encoders run on host; TE LoRA not applied.")
+            return
+        logger.info(f"Fusing text-encoder LoRA into {components} and reloading on device...")
+        # Merge the TE LoRA into the torch encoders, then strip all adapters. The merged
+        # weights stay in place with clean state-dict keys, which the reload hook pushes
+        # onto the device encoders. UNet deltas are already applied on device, so
+        # dropping the torch UNet adapter here is harmless.
+        self._torch_pipeline.fuse_lora(components=components, lora_scale=lora_scale)
+        self._torch_pipeline.unload_lora_weights()
+        self._reload_text_encoders()
+        self._te_fused = True
+
+    def _unload_text_encoder_lora(self):
+        if not self._te_fused:
+            return
+        logger.info("Restoring base text-encoder weights on device...")
+        # _ensure_te_base_snapshot only stores components the reload hook covers, so the
+        # presence of a key is itself the "this encoder exists on device" check.
+        base = self._te_base_state or {}
+        for name in ("text_encoder", "text_encoder_2"):
+            if base.get(name) is not None:
+                getattr(self._torch_pipeline, name).load_state_dict(base[name])
+        self._reload_text_encoders()
+        self._te_fused = False
+
     def unload_lora_weights(self):
         # Restore original base weights to the device
         for key in self._base_weights_device.keys():
@@ -224,5 +433,14 @@ class TtLoRAWeightsManager:
             device_tensor = self._base_weights_device[key]
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
-        self._torch_pipeline.unload_lora_weights()
+        # Torch adapters may already have been stripped by the text-encoder fuse
+        # path (which unloads them after merging); only unload when still attached.
+        if self.has_lora_adapter():
+            self._torch_pipeline.unload_lora_weights()
         self._is_fused = False
+        self._skipped_reason = None
+        self._text_encoder_components = []
+
+        # Base snapshot is deliberately retained: it is a one-shot capture of clean
+        # weights, valid for every later load/fuse/unload cycle.
+        self._unload_text_encoder_lora()
