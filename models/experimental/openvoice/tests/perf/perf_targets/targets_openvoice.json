@@ -1,0 +1,18 @@
+{
+    "openvoice-v2": {
+        "N300": {
+            "voice_conversion_rtf_1s": 0.15,
+            "voice_conversion_rtf_3s": 0.05,
+            "voice_conversion_rtf_5s": 0.03,
+            "embedding_extraction_ms": 10.0,
+            "total_clone_latency_ms": 1000.0
+        },
+        "N150": {
+            "voice_conversion_rtf_1s": 0.20,
+            "voice_conversion_rtf_3s": 0.08,
+            "voice_conversion_rtf_5s": 0.05,
+            "embedding_extraction_ms": 15.0,
+            "total_clone_latency_ms": 1500.0
+        }
+    }
+}
