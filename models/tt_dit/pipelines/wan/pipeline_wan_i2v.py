@@ -41,7 +41,7 @@ _ENCODER_T_CHUNK_BY_MESH = {
 
 # Truncated VAE encode: encode only the first I2V_ENCODE_FRAMES pixel frames and
 # replicate the last latent to fill the remaining slots.
-_I2V_ENCODE_FRAMES = os.environ.get("I2V_ENCODE_FRAMES", 81)
+_I2V_ENCODE_FRAMES = int(os.environ.get("I2V_ENCODE_FRAMES", 81))
 
 
 def _resolve_checkpoint(repo_id: str) -> str:
