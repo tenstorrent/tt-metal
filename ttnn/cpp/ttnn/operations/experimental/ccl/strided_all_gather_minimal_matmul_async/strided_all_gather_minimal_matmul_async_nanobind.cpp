@@ -51,6 +51,12 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
             * :attr:`fused_ternary_input_b` (Optional[ttnn.Tensor]): addcmul multiplier/gate tensor; a single tile-row broadcasts across M.
             * :attr:`fused_ternary_scalar` (Optional[float]): addcmul scale; output = a + scalar * matmul_out * b. Requires both a and b.
             * :attr:`chunks` (int): split the matmul output into this many tensors along N (default 1). Returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}]. N must be divisible by chunks.
+            * :attr:`fuse_swiglu` (bool): If True, applies SwiGLU fused into the matmul: the weight's N columns
+              are interpreted as a tile-pair-interleaved [gate|up] layout — column tile 2p is the gate and 2p+1
+              the up projection for each pair p (``models.tt_dit.utils.tensor.prepare_for_fused_swiglu`` produces
+              this layout). The op computes silu(gate) * up, so the matmul output width is N/2. The bias (if
+              provided) must use the same column layout. N must be divisible by 2*32, and by 2*32*chunks when
+              chunking. Mutually exclusive with fused_activation and the fused ternary (addcmul) inputs.
 
         Example:
 
@@ -82,7 +88,8 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
         nb::arg("fused_ternary_input_a") = nb::none(),
         nb::arg("fused_ternary_input_b") = nb::none(),
         nb::arg("fused_ternary_scalar") = nb::none(),
-        nb::arg("chunks") = 1);
+        nb::arg("chunks") = 1,
+        nb::arg("fuse_swiglu") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
