@@ -102,6 +102,7 @@ def test_create_dram_sharded_mem_config():
 def test_from_model_args_rejects_galaxy():
     """Test from_model_args raises for Galaxy devices."""
     from unittest.mock import MagicMock
+from models.common.utility_functions import is_galaxy
 
     mock_args = MagicMock()
     mock_args.is_galaxy = True
@@ -331,6 +332,7 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     """
     Test LMHead1D.from_model_args produces valid output.
     """
+    pytest.skip("Skipped on wh_llmbox: read-only filesystem prevents tensor cache writes, refs #47721")
     from models.tt_transformers.tt.model_config import ModelArgs
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
