@@ -41,11 +41,13 @@ _PROFILER_ENV_FLAGS = (
 # minutes to a CI run.  We sample evenly from the sorted candidate list to
 # keep the sweep bounded while still covering diverse block-size regimes.
 _MAX_MINIMAL_CANDIDATES = 4
-# Maximum number of classic MatmulProgramConfig candidates (2D mcast, 1D mcast
-# in0/in1) benchmarked per signature.  Each candidate is a distinct matmul
-# execution mode; invalid ones for a given shape self-eliminate during the
-# on-device benchmark loop, so we generate broadly and let measured latency pick.
-_MAX_PROGRAM_CONFIG_CANDIDATES = 6
+# Maximum number of classic MatmulProgramConfig candidates benchmarked per
+# signature.  We sweep {2D mcast, 1D mcast in0/in1} x {in0_block_w divisors of
+# k_tiles}; the L1 prune drops oversized working sets and this cap bounds the
+# rest (round-robin across schemes keeps the spread diverse).  Invalid configs
+# self-eliminate during the on-device benchmark loop, so we generate broadly and
+# let measured latency pick.
+_MAX_PROGRAM_CONFIG_CANDIDATES = 16
 # Maximum relative L2 error a tuned candidate's output may have versus the
 # trusted reference (default-config) output to be eligible for selection.
 # Different but valid configs differ only by bf16 rounding (well under this);
@@ -1212,6 +1214,55 @@ def _run_program_config_matmul(
     return base_operation(prepared.input_tensor_a, prepared.input_tensor_b, **call_kwargs)
 
 
+def _in0_block_w_candidates(k_tiles: int, heuristic: int) -> list[int]:
+    """in0_block_w values to sweep for one scheme, heuristic first.
+
+    in0_block_w is the K-dimension inner block (in tiles) and must divide the K
+    tile count.  The pre-widening heuristic often collapsed to 1, which measured
+    materially slower than a larger K block on device-kernel time (an expert-down
+    matmul ran 22.5% faster at in0_block_w=6 vs 1).  We benchmark the heuristic
+    value first so the cap can never regress the pre-widening choice, then every
+    divisor of k_tiles (ascending); the L1 prune and on-device benchmark keep the
+    fastest.
+    """
+    values = sorted(set([1, heuristic] + _get_k_block_candidates(k_tiles)))
+    return [heuristic] + [value for value in values if value != heuristic]
+
+
+def _grid_candidates(grid_x: int, grid_y: int) -> list[tuple[int, int]]:
+    """Sub-grid partitions to sweep, full device grid first.
+
+    The optimum is sometimes a sub-grid rather than the full device grid -- an
+    optimality sweep measured a wide 256x8192x2048 matmul ~29% faster on an 8x4
+    grid than on 8x8.  We sweep the full grid plus row/column halvings and
+    quarterings; full grid is first so rank-0 stays the pre-widening choice.
+    """
+    candidates: list[tuple[int, int]] = []
+    for gx in (grid_x, max(1, grid_x // 2), max(1, grid_x // 4)):
+        for gy in (grid_y, max(1, grid_y // 2), max(1, grid_y // 4)):
+            if (gx, gy) not in candidates:
+                candidates.append((gx, gy))
+    return candidates
+
+
+def _subblock_candidates(per_core_m: int, per_core_n: int) -> list[tuple[int, int]]:
+    """All valid (out_subblock_h, out_subblock_w): area <= 8, h | per_core_M, w | per_core_N.
+
+    The out-subblock is a first-order lever the single-pick heuristic missed -- an
+    optimality sweep found every off-by-more-than-5% shape's best config used a
+    non-default subblock (e.g. 4x2, 2x4, 2x3), worth up to ~22% on device-kernel
+    time on top of the in0_block_w sweep.  Larger-first so a stronger subblock is
+    preferred when the online candidate cap samples this list.
+    """
+    out = [
+        (h, w)
+        for h in range(4, 0, -1)
+        for w in range(4, 0, -1)
+        if per_core_m % h == 0 and per_core_n % w == 0 and h * w <= 8
+    ]
+    return out or [(1, 1)]
+
+
 def _build_program_config_candidates(
     signature: AutoMatmulSignature,
     prepared: PreparedMatmulInputs,
@@ -1219,14 +1270,20 @@ def _build_program_config_candidates(
     *,
     base_operation: Any,
 ) -> list[Candidate]:
-    """Generate candidates spanning the distinct ttnn.matmul execution modes.
+    """Sweep {scheme} x {grid} x {in0_block_w} x {out-subblock} program configs.
 
     ttnn.matmul dispatches to several MatmulProgramConfig variants (2D systolic
-    multicast, 1D multicast gathering in0 or in1, ...).  Rather than trusting a
-    single heuristic, this builds a representative config for each mode from the
-    M/K/N tile counts and the device grid, then lets the on-device benchmark loop
-    measure them and keep the fastest.  Configs that are invalid for the shape
-    throw during benchmarking and are discarded there.
+    multicast, 1D multicast gathering in0 or in1).  Rather than one heuristic
+    config per scheme, we enumerate the valid space -- parallelism scheme x grid
+    partition x K-inner block (in0_block_w, divisors of k_tiles) x out-subblock --
+    because an optimality sweep showed the single-config-per-scheme heuristic
+    landing 9-48% off the best valid config, with the gap explained by the grid
+    and out-subblock dimensions it never varied.  The pre-widening heuristic
+    descriptors are emitted first (rank 0) so the online candidate cap never
+    regresses them.  With TTNN_AUTO_MATMUL_EXHAUSTIVE set (the offline tune path)
+    the full valid space is returned; otherwise it is L1-pruned and bounded to
+    _MAX_PROGRAM_CONFIG_CANDIDATES by even-sampling.  Invalid configs throw during
+    benchmarking and are discarded.
     """
     if _is_distributed(signature):
         return []
@@ -1238,91 +1295,102 @@ def _build_program_config_candidates(
 
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = int(grid.x), int(grid.y)
-    num_cores = max(1, grid_x * grid_y)
     m_tiles, k_tiles, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    exhaustive = _env_flag_enabled("TTNN_AUTO_MATMUL_EXHAUSTIVE")
 
-    descriptors: list[dict[str, Any]] = []
+    modes = ("2d_mcast", "1d_mcast_in0", "1d_mcast_in1")
 
-    # 2D systolic multicast: M distributed over grid rows, N over grid columns.
-    per_core_m_2d = max(1, math.ceil(m_tiles / grid_y))
-    per_core_n_2d = max(1, math.ceil(n_tiles / grid_x))
-    subblock_w_2d = _pick_out_subblock_w(per_core_n_2d, 1)
-    descriptors.append(
-        {
+    def _scheme_per_core(mode: str, gx: int, gy: int) -> tuple[int, int]:
+        num_cores = max(1, gx * gy)
+        if mode == "2d_mcast":  # M over grid rows, N over grid columns
+            return max(1, math.ceil(m_tiles / gy)), max(1, math.ceil(n_tiles / gx))
+        if mode == "1d_mcast_in0":  # all cores split N (best when M is small)
+            return m_tiles, max(1, math.ceil(n_tiles / num_cores))
+        return max(1, math.ceil(m_tiles / num_cores)), n_tiles  # 1d_mcast_in1: split M
+
+    def _heuristic_in0_block_w(mode: str, gx: int, gy: int) -> int:
+        divisor = gy if mode == "2d_mcast" else max(1, gx * gy)
+        return _find_largest_divisor(max(1, k_tiles // divisor))
+
+    def _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w):
+        return {
             "kind": "program_config",
-            "mode": "2d_mcast",
-            "grid": [grid_x, grid_y],
-            "in0_block_w": _find_largest_divisor(max(1, k_tiles // grid_y)),
-            "per_core_M": per_core_m_2d,
-            "per_core_N": per_core_n_2d,
-            "out_subblock_h": 1,
-            "out_subblock_w": subblock_w_2d,
+            "mode": mode,
+            "grid": [gx, gy],
+            "in0_block_w": in0_block_w,
+            "per_core_M": per_core_m,
+            "per_core_N": per_core_n,
+            "out_subblock_h": sub_h,
+            "out_subblock_w": sub_w,
         }
-    )
 
-    in0_block_w_1d = _find_largest_divisor(max(1, k_tiles // num_cores))
+    # Rank-0 heuristic descriptors (full grid, heuristic in0_block_w, single-pick
+    # subblock): identical to the pre-widening configs, so the online candidate cap
+    # can never regress them.
+    heuristic_descriptors: list[dict[str, Any]] = []
+    for mode in modes:
+        per_core_m, per_core_n = _scheme_per_core(mode, grid_x, grid_y)
+        sub_w = _pick_out_subblock_w(per_core_n, 1)
+        sub_h = 1 if mode == "2d_mcast" else _pick_out_subblock_h(per_core_m, sub_w)
+        heuristic_descriptors.append(
+            _descriptor(
+                mode, grid_x, grid_y, per_core_m, per_core_n, _heuristic_in0_block_w(mode, grid_x, grid_y), sub_h, sub_w
+            )
+        )
 
-    # 1D multicast gathering in0: all cores split N (best when M is small).
-    per_core_m_in0 = m_tiles
-    per_core_n_in0 = max(1, math.ceil(n_tiles / num_cores))
-    subblock_w_in0 = _pick_out_subblock_w(per_core_n_in0, 1)
-    descriptors.append(
-        {
-            "kind": "program_config",
-            "mode": "1d_mcast_in0",
-            "grid": [grid_x, grid_y],
-            "in0_block_w": in0_block_w_1d,
-            "per_core_M": per_core_m_in0,
-            "per_core_N": per_core_n_in0,
-            "out_subblock_h": _pick_out_subblock_h(per_core_m_in0, subblock_w_in0),
-            "out_subblock_w": subblock_w_in0,
-        }
-    )
+    # Full valid sweep: grid partition x scheme x in0_block_w x out-subblock.
+    sweep_descriptors: list[dict[str, Any]] = []
+    for gx, gy in _grid_candidates(grid_x, grid_y):
+        for mode in modes:
+            per_core_m, per_core_n = _scheme_per_core(mode, gx, gy)
+            for in0_block_w in _in0_block_w_candidates(k_tiles, _heuristic_in0_block_w(mode, gx, gy)):
+                for sub_h, sub_w in _subblock_candidates(per_core_m, per_core_n):
+                    sweep_descriptors.append(
+                        _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
+                    )
 
-    # 1D multicast gathering in1: all cores split M (best when N is small).
-    per_core_m_in1 = max(1, math.ceil(m_tiles / num_cores))
-    per_core_n_in1 = n_tiles
-    subblock_w_in1 = _pick_out_subblock_w(per_core_n_in1, 1)
-    descriptors.append(
-        {
-            "kind": "program_config",
-            "mode": "1d_mcast_in1",
-            "grid": [grid_x, grid_y],
-            "in0_block_w": in0_block_w_1d,
-            "per_core_M": per_core_m_in1,
-            "per_core_N": per_core_n_in1,
-            "out_subblock_h": _pick_out_subblock_h(per_core_m_in1, subblock_w_in1),
-            "out_subblock_w": subblock_w_in1,
-        }
-    )
-
-    # Drop configs whose per-core working set clearly exceeds L1, de-duplicate,
-    # and cap the sweep so CI stays bounded.
-    seen: set[str] = set()
-    candidates: list[Candidate] = []
-    for descriptor in descriptors:
+    # L1-prune + de-duplicate.  Heuristics are a subset of the sweep at the full
+    # grid, so keeping them first and de-duping leaves them only in `heuristics`.
+    def _keep(descriptor: dict[str, Any], seen: set[str]) -> bool:
         if (
             _estimate_l1_kb(
                 descriptor["per_core_M"], descriptor["in0_block_w"], descriptor["per_core_N"], prepared.bias
             )
             > _L1_BUDGET_KB
         ):
-            continue
+            return False
         key = json.dumps(descriptor, sort_keys=True)
         if key in seen:
-            continue
+            return False
         seen.add(key)
-        candidates.append(
-            Candidate(
-                descriptor=descriptor,
-                run=lambda descriptor=descriptor: _run_program_config_matmul(
-                    base_operation, signature, prepared, kwargs, descriptor=descriptor
-                ),
-            )
+        return True
+
+    seen: set[str] = set()
+    heuristics = [d for d in heuristic_descriptors if _keep(d, seen)]
+    sweep = [d for d in sweep_descriptors if _keep(d, seen)]
+
+    # Offline (exhaustive) tuning benchmarks the whole valid space so the cached
+    # winner is the true optimum; the online path is bounded by even-sampling the
+    # sweep on top of the always-kept heuristics.
+    if exhaustive:
+        selected = heuristics + sweep
+    else:
+        remaining = max(0, _MAX_PROGRAM_CONFIG_CANDIDATES - len(heuristics))
+        if remaining and sweep:
+            step = max(1, len(sweep) // remaining)
+            selected = heuristics + sweep[::step][:remaining]
+        else:
+            selected = heuristics[:_MAX_PROGRAM_CONFIG_CANDIDATES]
+
+    return [
+        Candidate(
+            descriptor=descriptor,
+            run=lambda descriptor=descriptor: _run_program_config_matmul(
+                base_operation, signature, prepared, kwargs, descriptor=descriptor
+            ),
         )
-        if len(candidates) >= _MAX_PROGRAM_CONFIG_CANDIDATES:
-            break
-    return candidates
+        for descriptor in selected
+    ]
 
 
 def _is_single_output_tile(signature: AutoMatmulSignature) -> bool:
@@ -2108,16 +2176,18 @@ def _tuning_bypassed_by_environment() -> bool:
 
 
 def _device_profiler_enabled() -> bool:
-    """True when this process was launched under the Tracy device profiler.
+    """True when this process is running under the Tracy device profiler.
 
-        open, so it cannot spawn a separate profiler subprocess to measure a
-        candidate.  Instead, when the whole workload is launched under the profiler
-        (``TT_METAL_DEVICE_PROFILER=1`` + mid-run-dump + cpp-post-process on a
-        Tracy-enabled build), we read the on-device ``DEVICE KERNEL DURATION``
-        column directly -- that measurement is the pure kernel execution time and
-        excludes host dis    The auto-config selection loop runs in-process while the device is held
-    patch overhead.  When the profiler is not active the perf
-        APIs return an empty dict, so we fall back to wall-clock timing.
+    Device kernel duration (``DEVICE KERNEL DURATION``) is the preferred metric
+    for selecting a matmul config: it measures pure on-device kernel time and
+    excludes host dispatch overhead, which can otherwise overstate a config's
+    win by ~20% for small ops.  The auto-config selection loop runs in-process
+    while the device is held open, so it cannot spawn a separate profiler
+    subprocess; instead, when the whole workload is launched under the profiler
+    (``TT_METAL_DEVICE_PROFILER=1`` + ``TT_METAL_PROFILER_MID_RUN_DUMP=1`` +
+    ``TT_METAL_PROFILER_CPP_POST_PROCESS=1`` on a Tracy-enabled build) we read
+    the on-device duration directly.  When the profiler is not active the perf
+    APIs return an empty dict and selection falls back to wall-clock timing.
     """
     ttnn = _ttnn()
     profiler_mod = getattr(ttnn, "_ttnn", None)
@@ -2220,25 +2290,44 @@ def _notify_benchmark_mode(mode: str) -> None:
         )
 
 
-def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0) -> tuple[float, list[float], str]:
+def _trace_apis_available() -> bool:
     ttnn = _ttnn()
-    # Preferred: measure the on-device kernel duration via the device profiler.
-    # This is the pure kernel execution time and excludes host dispatch
-    # overhead, which is the metric that should drive candidate selection.  It
-    # is only available when the workload is launched under the profiler.
-    if _device_profiler_enabled():
-        try:
-            result = _benchmark_candidate_profiler(candidate, device)
-            _notify_benchmark_mode(result[2])
-            return result
-        except Exception:
-            pass
-    # Fallbacks (wall-clock, so they include some dispatch overhead) for runs
-    # not launched under the profiler.  Trace amortises per-iteration dispatch
-    # far better than eager enqueue, so prefer it when trace APIs are available.
-    if all(
+    return all(
         hasattr(ttnn, attr) for attr in ("begin_trace_capture", "end_trace_capture", "execute_trace", "release_trace")
-    ):
+    )
+
+
+def _expected_benchmark_mode() -> str:
+    """The single timing metric every candidate in a sweep must share.
+
+    Selection compares candidates by measured time, so they must all be timed
+    the same way -- comparing a device-kernel-duration reading against a
+    dispatch-inclusive wall-clock reading is the ~20%-overstatement bug.  This
+    is decided once per sweep from the environment/capabilities (not per
+    candidate): profiler if active, else trace, else eager.
+    """
+    if _device_profiler_enabled():
+        return "profiler"
+    if _trace_apis_available():
+        return "trace"
+    return "eager"
+
+
+def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0) -> tuple[float, list[float], str]:
+    # Preferred: on-device kernel duration via the device profiler -- pure kernel
+    # time, excluding host dispatch overhead.  When the profiler is active EVERY
+    # candidate is timed this way; a per-candidate profiler failure is propagated
+    # (the caller records the candidate as errored and skips it) rather than
+    # silently degraded to wall-clock, so a sweep never mixes device-kernel and
+    # dispatch-inclusive timings when picking the winner.
+    if _device_profiler_enabled():
+        result = _benchmark_candidate_profiler(candidate, device)
+        _notify_benchmark_mode(result[2])
+        return result
+    # Profiler not active: wall-clock fallbacks (include some dispatch overhead),
+    # applied uniformly to every candidate.  Trace amortises per-iteration
+    # dispatch far better than eager enqueue, so prefer it when available.
+    if _trace_apis_available():
         try:
             result = _benchmark_candidate_trace(candidate, device, queue_id=queue_id)
             _notify_benchmark_mode(result[2])
@@ -2309,6 +2398,7 @@ def _make_passthrough_selection(
         "cache_hit": False,
         "cache_path": str(cache.path_for(signature)),
         "winner": {"kind": winner_kind},
+        "selection_metric": None,
         "candidate_timings_us": [],
         "recommendations": _append_recommendation(_make_recommendations(signature, prepared), message),
         "candidate": None,
@@ -2318,6 +2408,7 @@ def _make_passthrough_selection(
 def _selection_summary(selection: dict[str, Any]) -> dict[str, Any]:
     return {
         "winner": selection.get("winner"),
+        "selection_metric": selection.get("selection_metric"),
         "candidate_timings_us": list(selection.get("candidate_timings_us", [])),
         "recommendations": list(selection.get("recommendations", [])),
     }
@@ -2331,16 +2422,20 @@ def _persist_and_build_selection(
     candidate: "Candidate | None",
     candidate_timings: list[dict[str, Any]],
     recommendations: list[str],
+    selection_metric: str | None = None,
 ) -> dict[str, Any]:
     """Persist a freshly tuned record and return the matching selection dict.
 
     ``candidate`` is None for a base-op fallback (no runnable winner); dispatch then
-    runs the plain base op."""
+    runs the plain base op.  ``selection_metric`` records how candidates were timed
+    ("profiler" = device kernel duration, "trace"/"eager" = wall-clock) so a reader
+    can tell whether the winner was chosen on dispatch-overhead-free measurements."""
     record = {
         "version": cache.version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "signature": signature.to_dict(),
         "winner": winner_descriptor,
+        "selection_metric": selection_metric,
         "candidate_timings_us": candidate_timings,
         "recommendations": recommendations,
     }
@@ -2349,6 +2444,7 @@ def _persist_and_build_selection(
         "cache_hit": False,
         "cache_path": str(cache.path_for(signature)),
         "winner": winner_descriptor,
+        "selection_metric": selection_metric,
         "candidate_timings_us": candidate_timings,
         "recommendations": recommendations,
         "candidate": candidate,
@@ -2375,6 +2471,7 @@ def _select_candidate(
                 "cache_hit": True,
                 "cache_path": str(cache.path_for(signature)),
                 "winner": cached_record["winner"],
+                "selection_metric": cached_record.get("selection_metric"),
                 "candidate_timings_us": cached_record.get("candidate_timings_us", []),
                 "recommendations": cached_record.get("recommendations", []),
                 "candidate": None,
@@ -2391,6 +2488,7 @@ def _select_candidate(
                 "cache_hit": True,
                 "cache_path": str(cache.path_for(signature)),
                 "winner": cached_record["winner"],
+                "selection_metric": cached_record.get("selection_metric"),
                 "candidate_timings_us": cached_record.get("candidate_timings_us", []),
                 "recommendations": cached_record.get("recommendations", []),
                 "candidate": candidate,
@@ -2404,6 +2502,7 @@ def _select_candidate(
                 "cache_hit": False,
                 "cache_path": str(cache.path_for(signature)),
                 "winner": runtime_record.get("winner"),
+                "selection_metric": runtime_record.get("selection_metric"),
                 "candidate_timings_us": runtime_record.get("candidate_timings_us", []),
                 "recommendations": runtime_record.get("recommendations", []),
                 "candidate": None,
@@ -2412,6 +2511,7 @@ def _select_candidate(
             "cache_hit": False,
             "cache_path": str(cache.path_for(signature)),
             "winner": None,
+            "selection_metric": None,
             "candidate_timings_us": [],
             "recommendations": ["No cache entry available and tuning was disabled."],
             "candidate": None,
@@ -2427,6 +2527,9 @@ def _select_candidate(
         )
 
     device = prepared.input_tensor_a.device()
+    # Every candidate in this sweep must be timed by the same metric, or the
+    # winner comparison is apples-to-oranges (see _expected_benchmark_mode).
+    expected_mode = _expected_benchmark_mode()
     candidate_timings: list[dict[str, Any]] = []
     winner: Candidate | None = None
     winner_avg_us: float | None = None
@@ -2461,6 +2564,21 @@ def _select_candidate(
                     "descriptor": candidate.descriptor,
                     "status": "error",
                     "error": str(exc),
+                }
+            )
+            continue
+
+        if benchmark_mode != expected_mode:
+            # Timed by a different metric than the rest of the sweep (e.g. trace
+            # degraded to eager for this candidate); record it for transparency
+            # but exclude it from winner selection so the compare stays like-for-like.
+            candidate_timings.append(
+                {
+                    "descriptor": candidate.descriptor,
+                    "status": "metric_mismatch",
+                    "average_us": avg_us,
+                    "samples_us": samples_us,
+                    "benchmark_mode": benchmark_mode,
                 }
             )
             continue
@@ -2501,6 +2619,7 @@ def _select_candidate(
             candidate=None,
             candidate_timings=candidate_timings,
             recommendations=recommendations,
+            selection_metric=expected_mode,
         )
 
     return _persist_and_build_selection(
@@ -2510,6 +2629,7 @@ def _select_candidate(
         candidate=winner,
         candidate_timings=candidate_timings,
         recommendations=recommendations,
+        selection_metric=expected_mode,
     )
 
 
@@ -3253,6 +3373,7 @@ def explain_matmul(
             "cache_hit": False,
             "cache_path": str(cache.path_for(signature)),
             "winner": {"kind": "explicit_override"},
+            "selection_metric": None,
             "candidate_timings_us": [],
             "recommendations": [
                 "Auto-config is bypassed because explicit low-level configuration arguments were supplied."
@@ -3271,6 +3392,7 @@ def explain_matmul(
             "cache_hit": selection["cache_hit"],
             "cache_path": selection["cache_path"],
             "winner": selection["winner"],
+            "selection_metric": selection.get("selection_metric"),
             "candidate_timings_us": selection["candidate_timings_us"],
             "recommendations": selection["recommendations"],
             "distributed_plan": dataclasses.asdict(distributed_plan),
@@ -3287,6 +3409,7 @@ def explain_matmul(
         "cache_hit": selection["cache_hit"],
         "cache_path": selection["cache_path"],
         "winner": selection["winner"],
+        "selection_metric": selection.get("selection_metric"),
         "candidate_timings_us": selection["candidate_timings_us"],
         "recommendations": selection["recommendations"],
         "distributed_plan": dataclasses.asdict(distributed_plan),
