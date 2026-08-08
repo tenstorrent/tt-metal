@@ -291,6 +291,13 @@ struct StridedReduceScatterFusedOpSignaler {
     uint32_t fused_op_receiver_signal_semaphore = 0;
     // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core progress counter
     uint32_t mm_progress_counters_addr = 0;
+    // Rolling-window return path (MM output held in L1 as only mm_window_blocks M blocks per core).
+    // Set by the RS program factory, consumed by the matmul factory: L1 base address (identical on
+    // every MM core) of that core's per-RS-reader credit counters, and how many readers there are.
+    // mm_window_blocks == 0 means no window, and the other two are unused.
+    uint32_t rs_credit_counters_addr = 0;
+    uint32_t num_rs_readers = 0;
+    uint32_t mm_window_blocks = 0;
 
     bool initialized = false;
 

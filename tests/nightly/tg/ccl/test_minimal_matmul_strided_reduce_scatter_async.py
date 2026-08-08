@@ -217,6 +217,50 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="ltx_ff2_4864_4096_4096_x12_y8_b457",
         ),
+        # Same shape/blocking, but the MM output is handed over through a rolling 3-block L1 window
+        # instead of staying fully resident. Mt_per_core=19 with mm_block_ht=4 gives 5 M blocks per
+        # core, so a 3-deep window really does recycle slots (blocks 3,4 reuse slots 0,1) and
+        # exercises the RS->MM credit path. Only the RS output is PCC-checked; see the impl.
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4864,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=128,
+                mm_block_k=160,
+                mm_block_n=224,
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=4,
+                subblock_w=1,
+                num_workers_per_link=3,
+                mm_window_blocks=3,
+            ),
+            id="ltx_ff2_4864_4096_4096_x12_y8_b457_window3",
+        ),
+        # Control for the window: W == M_blocks_per_core (5), so no slot is ever recycled and the
+        # matmul's credit wait never fires. Isolates the windowed ADDRESSING (row remap on both
+        # sides, shortened output tensor) from the recycling handshake — if this passes and window3
+        # fails, the addressing is right and the bug is in the credit path.
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4864,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=128,
+                mm_block_k=160,
+                mm_block_n=224,
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=4,
+                subblock_w=1,
+                num_workers_per_link=3,
+                mm_window_blocks=5,
+            ),
+            id="ltx_ff2_4864_4096_4096_x12_y8_b457_window5_norecycle",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -316,6 +360,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         rs_mode=rs_mode,
         cluster_axis=cluster_axis,
+        mm_window_blocks=cfg.mm_window_blocks,
     )
 
 

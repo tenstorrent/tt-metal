@@ -57,6 +57,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
+    std::optional<uint32_t> mm_window_blocks = std::nullopt,
+    std::optional<uint32_t> mm_logical_Ht = std::nullopt,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
@@ -185,6 +187,7 @@ minimal_matmul_strided_reduce_scatter_async_program(
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord reduce_scatter_core_grid_offset,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
+    std::optional<uint32_t> mm_window_blocks,
 
     /* Matmul Params */
     const std::optional<const Tensor>& bias,
@@ -215,6 +218,13 @@ minimal_matmul_strided_reduce_scatter_async_program(
     uint32_t num_cores_x = config.compute_with_storage_grid_size.x;
     uint32_t padded_N_tiles = tt::round_up(N_tiles, num_cores_x);
     uint32_t mm_N_full_block_wt_val = padded_N_tiles / num_cores_x;
+
+    // With a rolling window the matmul output tensor is only mm_window_blocks M blocks tall, so the
+    // RS needs the true height told to it separately. Take it from the activations, which are always
+    // full height.
+    const std::optional<uint32_t> mm_logical_Ht_val =
+        mm_window_blocks.has_value() ? std::optional<uint32_t>(input_tensor.padded_shape()[-2] / TILE_HEIGHT)
+                                     : std::nullopt;
 
     // =========================================================================
     // STEP 1: Create the Reduce Scatter program FIRST
@@ -254,6 +264,8 @@ minimal_matmul_strided_reduce_scatter_async_program(
         mm_block_wt_val,
         mm_N_full_block_wt_val,
         chunk_width_in_mm_blocks,
+        mm_window_blocks,
+        mm_logical_Ht_val,
         // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
         fused_ternary_scalar,
         addcmul_input_tensor1,
@@ -331,6 +343,7 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         attributes.num_buffers_per_channel,
         attributes.reduce_scatter_core_grid_offset,
         attributes.chunk_width_in_mm_blocks,
+        attributes.mm_window_blocks,
 
         /* Matmul Params */
         tensor_args.bias,

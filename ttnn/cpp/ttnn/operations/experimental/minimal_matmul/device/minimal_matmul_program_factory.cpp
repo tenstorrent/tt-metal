@@ -440,6 +440,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";
         srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+        if (srs_fused_op_signaler->mm_window_blocks > 0) {
+            // The RS keeps only this many M blocks of our output resident, so we write into slot
+            // m % W and must wait for the RS readers to release a slot before recycling it.
+            defines["MM_WINDOW_BLOCKS"] = std::to_string(srs_fused_op_signaler->mm_window_blocks);
+            defines["MM_WINDOW_TOTAL_M_TILES"] =
+                std::to_string(grid_size.y * srs_fused_op_signaler->mm_window_blocks * M_block_tiles);
+        }
     }
 
     std::vector<CoreCoord> all_worker_cores_noc;
@@ -732,6 +739,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
          * all blocks that sender cores are expected to send.
          */
         uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+        // Where this core's rows begin in the windowed output tensor. Blocks, not rows, are the
+        // unit: every core gets mm_window_blocks whole blocks, so the strides stay uniform even
+        // when M_block_tiles does not divide M_tiles_per_core.
+        const uint32_t M_window_start_tile =
+            fuse_srs ? in0_idx * srs_fused_op_signaler->mm_window_blocks * M_block_tiles : 0;
         uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
@@ -790,6 +802,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
+            // Rolling window: where this core's window starts in the (shortened) output tensor, and
+            // the RS readers' credit counters that say when a window slot is free to recycle.
+            if (srs_fused_op_signaler->mm_window_blocks > 0) {
+                in0_args.push_back(M_window_start_tile);
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->rs_credit_counters_addr));
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_rs_readers));
+            }
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -845,6 +864,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
+            // Rolling window: where this core's window starts in the (shortened) output tensor, and
+            // the RS readers' credit counters that say when a window slot is free to recycle.
+            if (srs_fused_op_signaler->mm_window_blocks > 0) {
+                in1_args.push_back(M_window_start_tile);
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->rs_credit_counters_addr));
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_rs_readers));
+            }
         }
         if (in0_idx == 0) {
             // in1 sender

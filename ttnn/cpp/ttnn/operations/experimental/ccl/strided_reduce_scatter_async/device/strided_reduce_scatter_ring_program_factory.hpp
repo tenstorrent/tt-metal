@@ -67,6 +67,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
+    // Rolling L1 window over the fused matmul's output, in M blocks. When set, the input tensor
+    // holds only mm_window_blocks M blocks per core (slot m % mm_window_blocks) instead of the whole
+    // matmul result, so its height no longer describes the reduce-scatter's geometry — pass the true
+    // height in tiles as mm_logical_Ht. Both unset = the input tensor is the full matmul output.
+    std::optional<uint32_t> mm_window_blocks = std::nullopt,
+    std::optional<uint32_t> mm_logical_Ht = std::nullopt,
     // Optional fused addcmul at the final RS write step.
     // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
     std::optional<float> fused_ternary_scalar = std::nullopt,

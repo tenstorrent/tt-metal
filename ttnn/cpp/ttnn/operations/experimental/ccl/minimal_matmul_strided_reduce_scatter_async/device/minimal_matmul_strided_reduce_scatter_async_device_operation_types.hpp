@@ -39,6 +39,15 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const std::optional<uint32_t> num_buffers_per_channel;
     const std::optional<uint32_t> chunk_width_in_mm_blocks;
 
+    // Rolling L1 window over the MM output, in M blocks. Unset (the default) keeps the whole MM
+    // output resident in L1, which costs Mt_per_core * Nt_per_core tiles on every matmul core and
+    // caps how large M can get before the shard crowds out the programs' circular buffers. When set
+    // to W, only W M blocks per core are resident and slot m % W is recycled; the RS reader signals
+    // back per M block so the matmul stalls rather than overwriting a block still to be read.
+    // Windowing makes the MM output tensor smaller than [M, N] — it no longer holds the full matmul
+    // result, so callers that read it must leave this unset.
+    const std::optional<uint32_t> mm_window_blocks;
+
     const CoreCoord reduce_scatter_core_grid_offset;
 
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
@@ -58,6 +67,7 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "chunk_width_in_mm_blocks",
+        "mm_window_blocks",
         "reduce_scatter_core_grid_offset");
     auto attribute_values() const {
         return std::make_tuple(
@@ -75,6 +85,7 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
             std::cref(num_workers_per_link),
             std::cref(num_buffers_per_channel),
             std::cref(chunk_width_in_mm_blocks),
+            std::cref(mm_window_blocks),
             std::cref(reduce_scatter_core_grid_offset));
     }
 };

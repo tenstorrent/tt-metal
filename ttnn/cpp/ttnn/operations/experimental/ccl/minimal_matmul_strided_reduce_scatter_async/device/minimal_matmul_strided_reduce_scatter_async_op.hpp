@@ -78,6 +78,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
     std::optional<tt::tt_metal::DataType> dtype = std::nullopt,
     // Shared per-MM-core progress counter scratch; see MinimalMatmulStridedReduceScatterAsyncInputs.
-    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
+    std::optional<uint32_t> mm_window_blocks = std::nullopt);
 
 }  // namespace ttnn::prim
