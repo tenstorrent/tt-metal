@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as bcast_hw_metal2.cpp. Ops ported to Metal 2.0
+// bind the fork; this file serves the consumers still on the legacy API. Until the last of them migrates
+// and this file is retired, changes here likely belong in the fork too.
+
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -20,7 +24,8 @@ void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
+    compute_kernel_hw_startup(cb_a_id, cb_b_id, cb_out_id);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id);
 
 #ifdef BCAST_SCALAR
     dfb_b.wait_front(onetile);

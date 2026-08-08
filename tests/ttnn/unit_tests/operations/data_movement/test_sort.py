@@ -304,6 +304,65 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_value_dtype))
 
 
+def test_sort_uint16_fp32_dest_cross_core(device):
+    """Regression test for UInt16-in-32b-DEST on the cross-core (hybrid) factory path.
+
+    The single-core path (Wt <= 64) is covered by test_sort_datatypes.  This test uses
+    Wt = 66 which lies in (64, hybrid_threshold] so SortProgramFactoryCrossCoreDataExchange
+    is selected, exercising the TOPK_UINT16_FP32_DEST clear/prepare logic on that path.
+
+    Note: ROW_MAJOR + UInt16 + UInt32 indices is not yet supported.  The pack_untilize LLK
+    path loads UInt16 tiles into fp32 DEST and the packer reads the high 16 bits (zero)
+    rather than the low 16 bits where the data sits.  Fixing that path requires a dedicated
+    pack_untilize-aware UInt16 fixup and is tracked separately.
+    """
+    torch.manual_seed(0)
+    # 66 tiles * 32 columns = 2112; must be a multiple of 64 (tile-layout constraint).
+    shape = [1, 1, TILE_HEIGHT, 66 * TILE_WIDTH]
+    input_t = torch.randint(100, shape, dtype=torch.uint8)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_values, torch_indices = torch.sort(input_t, dim=-1, descending=False)
+
+    out_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    out_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint32)
+    ttnn.sort(ttnn_input, dim=-1, descending=False, out=(out_values, out_indices))
+
+    assert_equal(torch_values, ttnn.to_torch(out_values, dtype=torch.uint8))
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(out_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+def test_sort_uint16_fp32_dest_multi_core(device):
+    """Regression test for UInt16-in-32b-DEST on the DRAM multi-core factory path.
+
+    Uses the same device-adaptive sizing as test_sort_multi_row_multi_core_no_deadlock so
+    that SortProgramFactorySingleRowMultiCore is always selected, then sorts UInt16 values
+    with preallocated UInt32 indices and verifies correctness.
+
+    Note: ROW_MAJOR + UInt16 + UInt32 indices is not yet supported (see note in
+    test_sort_uint16_fp32_dest_cross_core for the explanation).
+    """
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    wt = _next_pow2(total_cores * 128 + 1)
+    shape = [1, 1, TILE_HEIGHT, wt * TILE_WIDTH]
+
+    input_t = torch.randint(100, shape, dtype=torch.uint8)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_values, torch_indices = torch.sort(input_t, dim=-1, descending=False)
+
+    out_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    out_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint32)
+    ttnn.sort(ttnn_input, dim=-1, descending=False, out=(out_values, out_indices))
+
+    assert_equal(torch_values, ttnn.to_torch(out_values, dtype=torch.uint8))
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(out_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
 def create_descending_tensor(shape, dim, dtype=torch.bfloat16):
     size_along_dim = shape[dim]
 
