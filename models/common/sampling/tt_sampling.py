@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import math
 import os
 import sys
 
@@ -162,6 +163,9 @@ class TTSampling(LightweightModule):
             if getattr(args, "use_unfused_ccl", False)
             else None
         )
+        # Distributed force-argmax (see _distributed_force_argmax): lazily created constants.
+        self._dist_argmax_iota = None
+        self._dist_argmax_fp32_ckc = None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -520,6 +524,277 @@ class TTSampling(LightweightModule):
 
         return max(1, num_links), topology
 
+    def _use_distributed_argmax(self, x, tt_out_tok, cluster_axis):
+        """Whether the distributed (local-argmax + tiny gather) greedy path applies.
+
+        Only used on the BH galaxy prefetcher path (where _force_argmax_sub_core_grids is set):
+        the full-logits gather + full-width argmax there costs ~1.15 ms/token, dominated by the
+        scalar-RISC argmax over the 32 x 155648 gathered tensor. The distributed variant argmaxes
+        each device's 32 x (vocab/ncols) shard locally and combines per-column (value, index)
+        candidates, ~5x cheaper. Kept off elsewhere so no other model's behaviour changes.
+        """
+        if os.environ.get("QWEN_BH_DIST_ARGMAX", "1") != "1":
+            return False
+        if self._force_argmax_sub_core_grids is None or self._sampling_dp != 1:
+            return False
+        if cluster_axis is None:
+            return False
+        # A caller-provided output buffer (the decode trace's token input in the galaxy demo flow,
+        # RM uint32 [1,1,1,B]) is written back via a worker-grid copy; only a single-page RM
+        # uint32 buffer with B in the last dim is supported.
+        if tt_out_tok is not None:
+            shp = list(tt_out_tok.shape)
+            if (
+                tt_out_tok.dtype != ttnn.uint32
+                or tt_out_tok.layout != ttnn.ROW_MAJOR_LAYOUT
+                or shp[-1] != self.max_batch_size
+                or math.prod(shp) != self.max_batch_size
+            ):
+                return False
+        w = x.shape[-1]
+        return x.shape[-2] == self.max_batch_size and self.max_batch_size == 32 and w % ttnn.TILE_SIZE == 0
+
+    def _distributed_force_argmax(self, x, cluster_axis, topology, tt_out_tok=None):
+        """Greedy sampling via per-device argmax + tiny cross-column combine.
+
+        Instead of all-gathering the full padded-vocab logits (32 x 155648) and running one huge
+        argmax, each column device computes the argmax/max over its local 32 x W shard, then only
+        the per-column candidate (max value, argmax index) pairs are gathered (one tile per
+        device). The winner column per user is picked by a small argmax over the gathered values,
+        and the final token id is reconstructed as local_idx[winner] + W * winner_col via a
+        one-hot select (byte-split fp32 select + exact int32 recombination; see the TF32 note
+        below).
+
+        Tie-break matches the single-op argmax: within a column argmax returns the first max, and
+        the cross-column argmax picks the lowest winning column, i.e. the global first occurrence.
+
+        Everything is pinned to the worker sub-core grid / sub-device (same reasons as the
+        non-distributed path: split senders/worker sub-device manager on the BH galaxy).
+        """
+        grids = self._force_argmax_sub_core_grids
+        w = x.shape[-1]
+        batch = self.max_batch_size
+        ncols = self.cluster_shape[cluster_axis]
+        if self._dist_argmax_iota is None:
+            # Row-index iota over the gathered-candidates height (ncols tiles of 32 rows): the
+            # gathered index tensor holds column c's candidates at row block 32*c, and the winner
+            # position from argmax over the gathered (tile-padded) values is exactly 32*c.
+            rows = ncols * ttnn.TILE_SIZE
+            iota = torch.arange(rows, dtype=torch.float32).reshape(1, 1, rows, 1).expand(1, 1, rows, batch)
+            self._dist_argmax_iota = ttnn.from_torch(
+                iota.contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            # fp32 accumulation: bf16 logits and index sums up to padded_vocab must stay exact
+            # (fp16 dest would round integers > 2048 and saturate logits > 65504).
+            self._dist_argmax_fp32_ckc = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+            )
+
+        barrier_accessor = getattr(
+            self.tt_ccl,
+            "get_sampling_barrier_semaphore_handle",
+            self.tt_ccl.get_and_cycle_barrier_semaphore_handle,
+        )
+        ag_sub_device_id = getattr(self.tt_ccl, "worker_sub_device_id", None)
+
+        _debug_sync = os.environ.get("QWEN_DIST_ARGMAX_SYNC") == "1"
+
+        def ck(step):
+            # Debug: block after each step so a device hang is attributable to one op.
+            if _debug_sync:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"dist-argmax step ok: {step}")
+
+        def argmax_grid(width):
+            # The multicore argmax factory gives every core ceil(blocks/num_cores) reduction units
+            # and only lets the LAST core be partial. If (num_cores-1)*units_per_core >= width the
+            # last core's unit count underflows (huge uint32) and trailing cores read out of bounds
+            # -> device hang. Cap the core count so every core lands inside the row. Granularity 64
+            # is a safe multiple of the factory's alignment-derived minimum (16/32/64 elements).
+            gran = 64
+            blocks = -(-width // gran)
+            max_cores = grids.num_cores()
+            units_per_core = -(-blocks // max_cores) * gran
+            n = -(-width // units_per_core)
+            if n >= max_cores:
+                return grids
+            return ttnn.num_cores_to_corerangeset_in_subcoregrids(self.start_core, n, grids, row_wise=True)
+
+        def tiny_gather(t, dim):
+            # 1 link: each device contributes a single tile page, nothing to split across links.
+            return ttnn.experimental.all_gather_async(
+                t,
+                persistent_output_buffer=None,
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                barrier_semaphore=barrier_accessor(cluster_axis),
+                chunks_per_sync=self.argmax_chunks_per_sync,
+                num_workers_per_link=1,
+                num_buffers_per_channel=2,
+                subdevice_id=ag_sub_device_id,
+            )
+
+        # Local shard argmax + max. Typecast to bf16 first so the reduce max value is exactly the
+        # value the argmax saw (a bfp8_b-quantized reduce output could disagree with the bf16
+        # untilize output near cross-column ties).
+        x_bf16 = ttnn.typecast(x, ttnn.bfloat16, sub_core_grids=grids) if x.dtype != ttnn.bfloat16 else x
+        ck("typecast x bf16")
+        x_unt = ttnn.untilize(x_bf16, use_multicore=True, sub_core_grids=grids)
+        ck("untilize local")
+        local_idx = ttnn.argmax(x_unt, dim=-1, keepdim=False, sub_core_grids=argmax_grid(w))  # [1,1,B] RM u32
+        ck("argmax local")
+        # Rank-4 view (same single RM page) so the pad/tilize/gather below address H and W plainly.
+        local_idx = ttnn.reshape(local_idx, [1, 1, 1, batch], sub_core_grids=grids)
+        ck("reshape local_idx")
+        x_unt.deallocate(True)
+        local_max = ttnn.max(
+            x_bf16, dim=3, keepdim=True, sub_core_grids=grids, compute_kernel_config=self._dist_argmax_fp32_ckc
+        )  # [1,1,B,1] tile bf16
+        ck("max local")
+        if x_bf16 is not x:
+            x_bf16.deallocate(True)
+
+        # Values: pad the [B,1] column to a full logical tile width with -inf so the gathered
+        # [B, 32*ncols] tensor has column c's max at width 32*c and -inf in the pad lanes (the
+        # physical tile pad lanes of the reduce output are undefined, so they must be overwritten).
+        # Sub-tile-width pad on TILE layout is unproven here, so round-trip through row-major.
+        local_max_rm = ttnn.untilize(local_max, use_multicore=True, sub_core_grids=grids)
+        ck("untilize local_max")
+        local_max.deallocate(True)
+        vals_rm = ttnn.pad(
+            local_max_rm, [(0, 0), (0, 0), (0, 0), (0, ttnn.TILE_SIZE - 1)], value=-3.38e38, sub_core_grids=grids
+        )
+        ck("pad vals")
+        local_max_rm.deallocate(True)
+        vals_p = ttnn.tilize(vals_rm, sub_core_grids=grids)  # [1,1,B,32] tile bf16
+        ck("tilize vals")
+        vals_rm.deallocate(True)
+        vals_g = tiny_gather(vals_p, dim=3)  # [1,1,B,32*ncols] tile bf16
+        ck("gather vals")
+        vals_p.deallocate(True)
+
+        # Indices: pad the [1,B] row to a full logical tile height (zeros), tilize, and typecast
+        # to int32 (exact) for the gather. Gather on dim 2 stacks column c's candidates at row
+        # block 32*c.
+        idx_p = ttnn.pad(local_idx, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0)], value=0, sub_core_grids=grids)
+        ck("pad idx")
+        local_idx.deallocate(True)
+        idx_t = ttnn.tilize(idx_p, sub_core_grids=grids)
+        ck("tilize idx")
+        idx_p.deallocate(True)
+        idx_i = ttnn.typecast(idx_t, ttnn.int32, sub_core_grids=grids)
+        ck("typecast idx i32")
+        idx_t.deallocate(True)
+        idx_g = tiny_gather(idx_i, dim=2)  # [1,1,32*ncols,B] tile int32
+        ck("gather idx")
+        idx_i.deallocate(True)
+
+        # Winner position per user: 32 * winner_col (pad lanes are -inf; ties pick lowest column).
+        vals_gu = ttnn.untilize(vals_g, use_multicore=True, sub_core_grids=grids)
+        ck("untilize vals_g")
+        vals_g.deallocate(True)
+        g_pos = ttnn.argmax(
+            vals_gu, dim=-1, keepdim=False, sub_core_grids=argmax_grid(vals_gu.shape[-1])
+        )  # [1,1,B] RM u32
+        ck("argmax g_pos")
+        vals_gu.deallocate(True)
+        g_pos = ttnn.reshape(g_pos, [1, 1, 1, batch], sub_core_grids=grids)
+        g_pos_t = ttnn.tilize_with_val_padding(
+            g_pos, [1, 1, ttnn.TILE_SIZE, batch], 0, sub_core_grids=grids
+        )  # logical [1,1,1,B] tile
+        ck("tilize g_pos")
+        g_pos.deallocate(True)
+        g_pos_f = ttnn.typecast(g_pos_t, ttnn.float32, sub_core_grids=grids)
+        ck("typecast g_pos f32")
+        g_pos_t.deallocate(True)
+
+        # One-hot select of the winning column's local index, then add the column offset:
+        # final = idx_g[32*c, u] + W * c, with W * c == (W / 32) * g_pos.
+        #
+        # TF32 hazard: the FPU eltwise mul/add unpack fp32 operands as TF32 (11-bit mantissa), so
+        # any fp32 value > 2048 that isn't on the TF32 grid gets truncated (observed: index 3031
+        # -> 3028). All values that flow through FPU mul/sum are therefore kept <= 2048: the index
+        # is split into hi/lo bytes for the one-hot select, and the recombination (<< 8 | lo, plus
+        # the column offset) is done with exact SFPU int32 shifts/adds. The colterm product
+        # (W/32) * g_pos = W * c is exactly representable in TF32 for tile-aligned W (multiple of
+        # 128 with a small mantissa), so that one multiply is safe.
+        onehot = ttnn.eq(self._dist_argmax_iota, g_pos_f, sub_core_grids=grids)  # bcast H: [rows,B] vs [1,B]
+        ck("eq onehot")
+        hi_i = ttnn.bitwise_right_shift(idx_g, 8, sub_core_grids=grids)
+        lo_i = ttnn.bitwise_and(idx_g, 255, sub_core_grids=grids)
+        ck("split idx hi/lo")
+        idx_g.deallocate(True)
+        hi_f = ttnn.typecast(hi_i, ttnn.float32, sub_core_grids=grids)
+        lo_f = ttnn.typecast(lo_i, ttnn.float32, sub_core_grids=grids)
+        hi_i.deallocate(True)
+        lo_i.deallocate(True)
+        picked_hi = ttnn.multiply(onehot, hi_f, sub_core_grids=grids)
+        picked_lo = ttnn.multiply(onehot, lo_f, sub_core_grids=grids)
+        ck("mul picked")
+        onehot.deallocate(True)
+        hi_f.deallocate(True)
+        lo_f.deallocate(True)
+        sel_hi = ttnn.sum(
+            picked_hi, dim=2, keepdim=True, compute_kernel_config=self._dist_argmax_fp32_ckc, sub_core_grids=grids
+        )  # [1,1,1,B] fp32, < 2048
+        sel_lo = ttnn.sum(
+            picked_lo, dim=2, keepdim=True, compute_kernel_config=self._dist_argmax_fp32_ckc, sub_core_grids=grids
+        )  # [1,1,1,B] fp32, < 256
+        ck("sum sel")
+        picked_hi.deallocate(True)
+        picked_lo.deallocate(True)
+        colterm = ttnn.multiply(g_pos_f, float(w // ttnn.TILE_SIZE), sub_core_grids=grids)
+        ck("mul colterm")
+        g_pos_f.deallocate(True)
+        sel_hi_i = ttnn.typecast(sel_hi, ttnn.int32, sub_core_grids=grids)
+        sel_lo_i = ttnn.typecast(sel_lo, ttnn.int32, sub_core_grids=grids)
+        col_i = ttnn.typecast(colterm, ttnn.int32, sub_core_grids=grids)
+        ck("typecast pieces i32")
+        sel_hi.deallocate(True)
+        sel_lo.deallocate(True)
+        colterm.deallocate(True)
+        hi_shifted = ttnn.bitwise_left_shift(sel_hi_i, 8, sub_core_grids=grids)
+        sel_hi_i.deallocate(True)
+        local_part = ttnn.add(hi_shifted, sel_lo_i, sub_core_grids=grids)  # int32 add: exact
+        hi_shifted.deallocate(True)
+        sel_lo_i.deallocate(True)
+        final_i = ttnn.add(local_part, col_i, sub_core_grids=grids)
+        ck("add final")
+        local_part.deallocate(True)
+        col_i.deallocate(True)
+        final_u = ttnn.typecast(final_i, ttnn.uint32, sub_core_grids=grids)
+        ck("typecast final u32")
+        final_i.deallocate(True)
+        tok = ttnn.untilize(final_u, use_multicore=True, sub_core_grids=grids)  # [1,1,1,B] RM u32
+        ck("untilize final")
+        final_u.deallocate(True)
+        if tt_out_tok is None:
+            # Match the single-op argmax output shape ([1,1,B], keepdim=False) expected downstream.
+            return ttnn.reshape(tok, [1, 1, batch], sub_core_grids=grids)
+        # Reshape to the caller buffer's logical shape (a view: same single RM page).
+        tok = ttnn.reshape(tok, list(tt_out_tok.shape), sub_core_grids=grids)
+        # Write the token into the caller's persistent buffer (the decode trace's frozen token
+        # input in the galaxy demo flow). ttnn.copy can't be used here: its factory grids from
+        # core (0,0), which under the split senders/worker sub-device manager lands the copy on
+        # the senders sub-device, where dispatch runs it concurrently with the worker-sub-device
+        # producers under trace replay (stale-token race, same failure mode as the unpinned
+        # all_gather). A no-op bitwise_or pinned to the worker grid keeps ordering correct.
+        out = ttnn.bitwise_or(tok, 0, output_tensor=tt_out_tok, sub_core_grids=grids)
+        ck("copy to tt_out_tok")
+        tok.deallocate(True)
+        return out
+
     def reset_params(
         self,
         k,
@@ -629,6 +904,10 @@ class TTSampling(LightweightModule):
             if num_devices > 1:
                 cluster_axis = self._get_sampling_cluster_axis()
                 num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
+                if self._use_distributed_argmax(x, tt_out_tok, cluster_axis):
+                    tok = self._distributed_force_argmax(x, cluster_axis, topology, tt_out_tok=tt_out_tok)
+                    self.tt_log_probs = None
+                    return tok, self.tt_log_probs
                 logger.debug(
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"

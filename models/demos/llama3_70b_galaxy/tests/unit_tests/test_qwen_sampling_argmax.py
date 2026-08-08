@@ -84,6 +84,20 @@ def test_qwen_sampling_argmax(mesh_device, reset_seeds):
     use_trace = os.environ.get("QWEN_SAMPLING_TEST_TRACE", "0") == "1"
     all_pass = True
 
+    # Mirror the demo flow: the generator passes the decode trace's frozen token-input buffer
+    # (RM uint32 [1,1,1,B], replicated) as tt_out_tok, and sampling must write the token into it.
+    out_tok = None
+    if os.environ.get("QWEN_SAMPLING_TEST_OUT_TOK", "1") == "1":
+        out_tok = ttnn.from_torch(
+            torch.zeros(1, 1, 1, batch, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        logger.info("scoring from caller-provided tt_out_tok buffer")
+
     def make_input(it):
         x = torch.rand(1, 1, batch, padded_vocab) * 4.0 - 2.0
         expected = []
@@ -120,18 +134,18 @@ def test_qwen_sampling_argmax(mesh_device, reset_seeds):
     if not use_trace:
         for it in range(n_iters):
             x, expected = make_input(it)
-            tok, _ = tt_sampling(to_dev(x))
+            tok, _ = tt_sampling(to_dev(x), tt_out_tok=out_tok)
             score(it, tok, expected)
     else:
         # Mirror the model's trace lifecycle: eager compile call on a persistent input buffer, then
         # capture sampling into a trace and replay it with fresh data copied into the same buffer.
         x0, expected0 = make_input(0)
         x_dev = to_dev(x0)
-        tok, _ = tt_sampling(x_dev)
+        tok, _ = tt_sampling(x_dev, tt_out_tok=out_tok)
         score(0, tok, expected0, tag=" [compile]")
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tok, _ = tt_sampling(x_dev)
+        tok, _ = tt_sampling(x_dev, tt_out_tok=out_tok)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
         for it in range(1, n_iters):

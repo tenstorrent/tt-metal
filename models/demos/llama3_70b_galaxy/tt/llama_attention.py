@@ -419,24 +419,39 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             sub_core_grids=rot_slice_sub_core_grids,
         )
-        k_rot_cos = ttnn.slice(
-            rot_mats[0],
-            [0, 0, 0, 0],
-            k_rot_end,
-            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            sub_core_grids=rot_slice_sub_core_grids,
-        )
-        k_rot_sin = ttnn.slice(
-            rot_mats[1],
-            [0, 0, 0, 0],
-            k_rot_end,
-            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            sub_core_grids=rot_slice_sub_core_grids,
-        )
         q_rot_cos = ttnn.to_layout(q_rot_cos, ttnn.TILE_LAYOUT)
         q_rot_sin = ttnn.to_layout(q_rot_sin, ttnn.TILE_LAYOUT)
-        k_rot_cos = ttnn.to_layout(k_rot_cos, ttnn.TILE_LAYOUT)
-        k_rot_sin = ttnn.to_layout(k_rot_sin, ttnn.TILE_LAYOUT)
+        # The expanded rot_mats repeat identical cos/sin rows across the heads dim (rotation
+        # depends only on position and head-dim index), and the decode rotary op validates only
+        # the batch dim and the (padded, 32-row) shard shape of cos/sin. So when the K bounds
+        # differ from Q only in the heads dim, the Q slices serve the K rotary as-is: K heads
+        # read the same per-core [32, head_dim] shard rows. Saves 2 slice + 2 to_layout ops per
+        # layer, and halves the L1 held when the slices are cached across the layer loop.
+        k_shares_q = (
+            k_rot_end[0] == q_rot_end[0]
+            and k_rot_end[1] == q_rot_end[1]
+            and k_rot_end[2] <= q_rot_end[2]
+            and k_rot_end[3] == q_rot_end[3]
+        )
+        if k_shares_q:
+            k_rot_cos, k_rot_sin = q_rot_cos, q_rot_sin
+        else:
+            k_rot_cos = ttnn.slice(
+                rot_mats[0],
+                [0, 0, 0, 0],
+                k_rot_end,
+                memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                sub_core_grids=rot_slice_sub_core_grids,
+            )
+            k_rot_sin = ttnn.slice(
+                rot_mats[1],
+                [0, 0, 0, 0],
+                k_rot_end,
+                memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                sub_core_grids=rot_slice_sub_core_grids,
+            )
+            k_rot_cos = ttnn.to_layout(k_rot_cos, ttnn.TILE_LAYOUT)
+            k_rot_sin = ttnn.to_layout(k_rot_sin, ttnn.TILE_LAYOUT)
         if store_cache:
             self.tt_ccl._decode_rot_slice_cache = (
                 (id(rot_mats[0]), id(rot_mats[1])),

@@ -450,10 +450,48 @@ trace capture trips "static circular buffers clash with L1 buffers" (lowest buff
 To revive: shrink to a single cos/sin pair (q and k bounds are identical => 2 tensors, 16 KB) or
 carve headroom out of the ring matmul CB budget.
 
-### Remaining ideas towards ~55 t/s/u
+### Fix landed: distributed force-argmax (+2.1 t/s/u, 2026-08-08)
 
-- Distributed local argmax: per-column argmax over the 19456-wide shard + tiny cross-column
-  combine would cut sampling from ~2.5 ms to ~0.35 ms total (saves another ~1.3 ms vs the wide
-  grid's 0.85 ms argmax + full-width gather/untilize).
+`tt_sampling._distributed_force_argmax` (default on via `QWEN_BH_DIST_ARGMAX`, BH prefetcher path
+only): each column device argmaxes/maxes its local 32 x 19456 shard, only the per-column
+(value, index) candidate tiles are gathered (1-link `all_gather_async`, worker sub-device), the
+winner column comes from a small argmax over the gathered values, and the token id is
+reconstructed exactly with int32 SFPU arithmetic (hi/lo byte split for the TF32-safe one-hot
+select, then `<< 8 | lo` + column offset — see the TF32 note in the code).
+
+Demo-flow engagement gotcha: the galaxy generator passes the decode trace's frozen token-input
+buffer (RM uint32 [1,1,1,32]) as `tt_out_tok`, and the first cut of the guard bailed on any
+caller-provided buffer — so the first "with dist argmax" perf run (19.48 ms @ 51.33) actually ran
+the old path. The write-back is now a no-op `ttnn.bitwise_or(tok, 0, output_tensor=tt_out_tok,
+sub_core_grids=worker_grid)`: `ttnn.copy` can't be used because its factory grids from core
+(0,0), which under the split senders/worker sub-device manager lands the copy on the senders
+sub-device and races the worker-sub-device producers under trace replay (same failure mode as
+the unpinned all_gather). binary_ng honors `sub_core_grids` directly and supports RM uint32.
+Verified by `test_qwen_sampling_argmax.py` (now passes a demo-style `tt_out_tok`; 8 trace
+replays, 0 mismatches).
+
+Result (batch-32, 64 tokens): **18.93 ms @ 52.82 tok/s/user (1690 tok/s)** — up from
+19.73 ms @ 50.68.
+
+Also landed: rotary K-share (`compute_decode_rot_slices` reuses the Q cos/sin slices for K when
+the bounds differ only in the heads dim) — removes 2 slice + 2 to_layout ops per layer on the
+per-layer (non-hoisted) path.
+
+### Rotary hoist retry with K-share: still 19 KB short (2026-08-08)
+
+With the K-share halving the cached slices to one cos/sin pair, `QWEN_BH_HOIST_ROT_SLICES=1`
+now fails trace capture with lowest buffer 425088 < 444480 (was 365568-392320 with 4 tensors) —
+the deficit is now exactly the persistent footprint (2 x 8 KB shards + alignment). L1 buffer
+allocation is lock-step across banks, so any persistent addition lowers the global floor by its
+size regardless of allocation order or shard placement; the only remaining lever is carving
+>=19392 B out of the ring FF matmul CB budget (region ends 444480 on cols 1-6), which is
+perf-critical matmul surgery. Parked again.
+
+### Remaining ideas towards ~55 t/s/u (need ~0.75 ms)
+
 - The ~42 us stalls before reduce_scatter in ~9 layers/token; the QK-norm reshard sandwich
   (4 reshards/layer); the 2-op distributed-norm gather chains (WH uses fused RMSAllGather).
+- ~5 TypecastDeviceOperations/layer (bf16<->bfp8, DRAM interleaved 128x128) of unclear origin
+  (not in the model python; likely inside composite CCL/reshard paths) — ~1-1.5 ms/token
+  including gaps in the 2026-08-07 capture; needs a fresh profile to attribute.
+- Fresh tracy profile of the 18.93 ms build queued (qwen_trace_pf_b32_v3) to re-rank the above.
