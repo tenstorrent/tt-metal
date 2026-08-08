@@ -337,6 +337,17 @@ uint32_t fill_target_pct() {
 // still stalled; at 50,000 it pinned at 50,000; at 100,000 it pinned at 100,000; only at 200,000 did it
 // SETTLE, at 108,881 -- i.e. the true operating point is ~109k and every smaller ceiling was clipping it.
 // A gap pinned exactly at this value in the results is the signature of a ceiling that is too low.
+// TT_METAL_PERF_DEBUG_READ_SPLIT=1: issue the batch's span reads alternately on BOTH NoCs instead of
+// only kReadNoc. The busy sweep is read-latency bound and the batch cannot grow (DRISC L1 holds 7 spans),
+// so splitting is the only way to raise outstanding read transactions.
+uint32_t read_split() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_READ_SPLIT");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+    }();
+    return v;
+}
+
 uint32_t gap_max_cycles() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_GAP_MAX");
@@ -1261,7 +1272,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 (my_cores + nstage - 1) / nstage,
                 pcie_enc_override,
                 fill_target_pct(),
-                gap_max_cycles()};
+                gap_max_cycles(),
+                read_split()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -2206,6 +2218,23 @@ void PerfDebugProfiler::stop() {
                 c_proc ? (100.0 * static_cast<double>(c_ph_head) / static_cast<double>(c_proc)) : 0.0,
                 pct(c_proc > c_ph_head ? c_proc - c_ph_head : 0),
                 ctx.core_virt.size());
+            // WORST-SWEEP breakdown. The knee is decided by the worst sweep, not the mean, and the worst
+            // has been running ~2.5x the mean with no explanation. These are that one sweep's phases.
+            {
+                const double ws_tot = static_cast<double>(res[43] + res[44] + res[45] + res[46] + res[47]);
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] WORST sweep {:.1f} us = read {:.1f} + proc {:.1f} + credit-wait "
+                    "{:.1f} + write {:.1f} + wr-barrier {:.1f} us (accounted {:.1f} us, {:.0f}%)",
+                    res[25] / kCycPerUs,
+                    res[43] / kCycPerUs,
+                    res[44] / kCycPerUs,
+                    res[45] / kCycPerUs,
+                    res[46] / kCycPerUs,
+                    res[47] / kCycPerUs,
+                    ws_tot / kCycPerUs,
+                    res[25] ? 100.0 * ws_tot / static_cast<double>(res[25]) : 0.0);
+            }
             const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
             log_info(
                 tt::LogMetal,
