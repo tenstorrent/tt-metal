@@ -192,6 +192,11 @@ pipeline will be exactly that.
 
 ## Step 3 — Apply
 
+> **Reaching for a worked example?** This recipe cites real ones — `moreh_fold` for the criterion,
+> `layernorm_pre_all_gather_welford` for the borrowed case. `ttnn/cpp/ttnn/operations/experimental/quasar/`
+> is **out of bounds** and is not evidence of anything, however authoritative it looks; see [the
+> procedure](../pass_procedure.md#step-3--apply).
+
 **Don't pattern-match on how the old code wrapped the address.** The examples below show the address
 being grabbed into a `CoreLocalMem<T>`, which is the tidy Device 2.0 form, but ported kernels carry
 at least four shapes and all of them collapse to the same replacement:
