@@ -94,7 +94,12 @@ _HF_TO_CKPT_RULES: tuple[tuple[str, str], ...] = (
         r"layers.\1.attn.indexer.compressor.norm.weight",
     ),
     (r"^layers\.(\d+)\.self_attn\.compressor\.indexer\.q_b_proj\.", r"layers.\1.attn.indexer.wq_b."),
-    (r"^layers\.(\d+)\.self_attn\.compressor\.indexer\.weights_proj\.", r"layers.\1.attn.indexer.weights_proj."),
+    # ``weights_proj`` sits directly under the indexer in some transformers releases and
+    # under an intervening ``scorer`` submodule in others; the checkpoint name is the same.
+    (
+        r"^layers\.(\d+)\.self_attn\.compressor\.indexer\.(?:scorer\.)?weights_proj\.",
+        r"layers.\1.attn.indexer.weights_proj.",
+    ),
     # MoE: router / experts / shared experts (HF `MixtralExperts` style)
     (r"^layers\.(\d+)\.mlp\.gate\.weight$", r"layers.\1.ffn.gate.weight"),
     (r"^layers\.(\d+)\.mlp\.gate\.e_score_correction_bias$", r"layers.\1.ffn.gate.bias"),

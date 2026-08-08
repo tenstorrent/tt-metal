@@ -464,13 +464,24 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t global_cb_k_blocks) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
     // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
-    // weight's ND shard shape on the GCB path, so this precondition has to sit ahead of both --
+    // weight's ND shard shape on the GCB path, so these preconditions have to sit ahead of both --
     // otherwise a legacy-sharded weight dies there with a bare bad_optional_access.
+    //
+    // The per-mode "does this cut the slab evenly" checks need tile geometry and live in the
+    // factories; these two only need the arguments.
+    TT_FATAL(
+        global_cb_k_blocks >= 1, "matmul_decode global_cb_k_blocks must be at least 1, but got {}", global_cb_k_blocks);
+    TT_FATAL(
+        global_cb.has_value() || global_cb_k_blocks == 1,
+        "matmul_decode global_cb_k_blocks ({}) applies only to the global_cb path: without a GCB the weight is "
+        "already L1-resident and there is nothing to stream",
+        global_cb_k_blocks);
     if (global_cb.has_value()) {
         TT_FATAL(
             input_tensor_b.nd_shard_spec().has_value(),
@@ -544,6 +555,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 b_blocks,
                 n_blocks,
                 global_cb,
+                global_cb_k_blocks,
             };
             auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
             return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -581,6 +593,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         /*b_blocks=*/1,
         /*n_blocks=*/1,
         global_cb,
+        global_cb_k_blocks,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
