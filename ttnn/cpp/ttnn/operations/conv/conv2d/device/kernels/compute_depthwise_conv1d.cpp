@@ -141,8 +141,22 @@ inline void mul_and_accumulate_block(
 //     DST_B <- inv_beta           DST_A = inv_beta * sin^2
 //     DST_ACC += DST_A
 //
-// Reads one alpha tile and one inv_beta tile per output tile and pops both; the reader must push them
-// in that order at the same rate, or the op desyncs.
+// The parameters ride in the **weights** CB rather than a CB of their own, which is why this takes
+// `in1_dfb`. AUDIO_FUSION_PLAN.md picked the optional-input-tensor route instead, but that is the more
+// expensive of the two once counted properly: adding an optional tensor to the op touches the
+// operation struct, validate, compute_output_specs, create_program, the conv2d/conv1d invoke chains
+// and pybind, and an op-signature change is all-or-nothing -- no subset of those files compiles, so it
+// cannot be landed incrementally. Riding in the weight tensor needs the per-block fetch widened in the
+// program factory (one file) and the host to append the parameter tiles to the weights (Python), with
+// no signature change anywhere. Two C++ files against six.
+//
+// The reader already streams in1; the program factory must widen `weight_block_num_tiles` by 2 for the
+// last tap so these two tiles are actually fetched, which is the part the plan correctly identified as
+// unavoidable -- the per-block count comes from the conv dims, not from the weight tensor's shape, so
+// appending to the tensor alone would leave the extra tiles never read.
+//
+// Consumes exactly the two tiles it waits on. The non-coalesced path takes in1 one tile per tap, so
+// this must run *after* the tap loop has popped its own, or the op desyncs.
 template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
 inline void apply_snake_beta(DataflowBuffer params_dfb) {
     const uint32_t params_cb_id = params_dfb.get_id();

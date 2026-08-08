@@ -79,6 +79,43 @@ CB carrying both tap sets, and a compute kernel that runs the three stages in DS
 per-channel snake parameters are the one genuinely new host-side piece, and they are the same
 optional-input-tensor problem Step 2a already scoped.
 
+## Carrying the per-channel parameters: weights CB, not an optional input tensor
+
+`AUDIO_FUSION_PLAN.md` Step 2a chose the optional-input-tensor route and called the weights-CB route
+"no longer obviously cheaper". Counted properly it is the cheaper one, by a lot, and the deciding
+factor is not line count.
+
+    optional input tensor   operation struct, validate, compute_output_specs, create_program,
+                            the conv2d and conv1d invoke chains, pybind        -- 6+ files
+    weights CB              per-block fetch width in the program factory (1 file),
+                            kernel reads two extra tiles (done), host appends
+                            the parameter tiles to the weight tensor (Python)  -- 2 files
+
+An **op-signature change is all-or-nothing**: no subset of those six files compiles, so it cannot be
+landed or handed over incrementally, and a half-applied signature change leaves the tree unbuildable.
+The weights-CB route touches no signature, so each piece lands independently and the tree builds at
+every point.
+
+The plan's objection to the weights CB stands and is already handled: the per-block fetch comes from
+the conv dimensions, not the weight tensor's shape
+
+    weight_block_h_ntiles  = act_block_h_ntiles * (coalesce ? filter_w : 1)
+    weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles
+
+so appending to the tensor alone leaves the extra tiles unread. Widening that count by 2 on the last
+tap is the one host change required, and it is the same work the optional-tensor route would have
+needed for its own CB anyway.
+
+Remaining, in order:
+
+1. Program factory: widen the last tap's `weight_block_num_tiles` by 2 when snake is requested, and
+   emit `SNAKE_PARAMS_CB_ID` pointing at the in1 CB. Rebuild.
+2. Host/Python: append the alpha and inv_beta tiles -- per-channel value replicated down all 32 rows,
+   `inv_beta = 1/(beta+eps)` precomputed -- to the prepared weight tensor, in that order.
+3. Verify against `band_stencil_cpu.py`'s float64 golden at rel_rmse ~1e-07, matching what GELU
+   achieved through the scalar seam.
+4. Then the chunk-wise band mode on top, which is where the op-count win actually is.
+
 ## Cost, honestly
 
 Step 2a was priced at ~20-30 ms (`fuse_saving.py`) and is *not* where the 5x is. This op is, because
