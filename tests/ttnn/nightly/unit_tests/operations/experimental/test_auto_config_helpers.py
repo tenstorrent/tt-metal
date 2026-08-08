@@ -1223,3 +1223,264 @@ def test_select_candidate_excludes_metric_mismatched_candidate(monkeypatch, tmp_
     # The metric that drove selection is persisted for auditability.
     cached_record = auto_matmul.AutoMatmulCache().load(signature)
     assert cached_record["selection_metric"] == "profiler"
+
+
+def _perturb_to_rel_error(golden, rel):
+    # Return a tensor whose rel-L2 error vs `golden` is exactly `rel`.
+    noise = torch.randn_like(golden)
+    noise = noise / torch.linalg.vector_norm(noise)
+    return golden + noise * (rel * torch.linalg.vector_norm(golden))
+
+
+def test_fp32_reference_builds_golden_from_host_operands():
+    torch.manual_seed(0)
+    a = torch.randn(64, 96, dtype=torch.bfloat16)
+    b = torch.randn(96, 128, dtype=torch.bfloat16)
+    prepared = auto_matmul.PreparedMatmulInputs(input_tensor_a=a, input_tensor_b=b)
+
+    golden = auto_matmul._fp32_reference(prepared, _make_signature())
+
+    expected = (a.to(torch.float32) @ b.to(torch.float32)).flatten()
+    assert golden is not None
+    # The golden is computed in float32, not bf16 -- so it is NOT bit-identical to
+    # a bf16 matmul; it is the true reference every bf16 candidate is measured against.
+    assert torch.allclose(golden, expected)
+
+
+def test_fp32_reference_honors_transpose_and_bias():
+    torch.manual_seed(1)
+    a = torch.randn(256, 1024, dtype=torch.bfloat16)  # (M, K)
+    b = torch.randn(512, 1024, dtype=torch.bfloat16)  # (N, K) -> needs transpose_b
+    bias = torch.randn(512, dtype=torch.bfloat16)
+    signature = dataclasses.replace(_make_linear_signature(), transpose_b=True)
+    prepared = auto_matmul.PreparedMatmulInputs(input_tensor_a=a, input_tensor_b=b, bias=bias)
+
+    golden = auto_matmul._fp32_reference(prepared, signature)
+
+    expected = (a.to(torch.float32) @ b.to(torch.float32).transpose(-1, -2) + bias.to(torch.float32)).flatten()
+    assert golden is not None
+    assert torch.allclose(golden, expected)
+
+
+def test_fp32_reference_is_none_for_distributed_signature():
+    # The single-device golden reads operands off one device; a mesh signature needs
+    # plan-aware reconstruction (the distributed gate), so this must decline rather
+    # than build a golden from one shard.
+    signature = _make_distributed_signature(lhs_shard_dim=3, rhs_shard_dim=2)
+    a = torch.randn(32, 64, dtype=torch.bfloat16)
+    b = torch.randn(64, 128, dtype=torch.bfloat16)
+    prepared = auto_matmul.PreparedMatmulInputs(input_tensor_a=a, input_tensor_b=b)
+    assert auto_matmul._fp32_reference(prepared, signature) is None
+
+
+def test_rel_l2_error_is_size_independent_and_rejects_nan_and_shape_mismatch():
+    torch.manual_seed(2)
+    golden = torch.randn(4096)
+    assert auto_matmul._rel_l2_error(golden, golden.clone()) == pytest.approx(0.0, abs=1e-6)
+    assert auto_matmul._rel_l2_error(golden, _perturb_to_rel_error(golden, 0.08)) == pytest.approx(0.08, rel=1e-3)
+    # NaN/Inf and shape mismatch are failed comparisons (None), never a silent pass.
+    nan_cand = golden.clone()
+    nan_cand[0] = float("nan")
+    assert auto_matmul._rel_l2_error(golden, nan_cand) is None
+    assert auto_matmul._rel_l2_error(golden, golden[:-1]) is None
+
+
+def test_relative_gate_accepts_no_worse_than_default_and_rejects_worse():
+    # The fix-A backfire guard, at the decision-rule level.  Reproduce a large-K /
+    # low-fidelity regime where the bf16 default is ITSELF 7% off the fp32 golden.
+    # A tuned config 6% off is numerically NO WORSE than the default, but the old
+    # flat 0.05 threshold would false-reject it.  The relative gate must accept it,
+    # and still reject a genuinely-worse (20% off) config.
+    torch.manual_seed(3)
+    golden = torch.randn(8192)
+    default_out = _perturb_to_rel_error(golden, 0.07)
+    good_cand = _perturb_to_rel_error(golden, 0.06)
+    bad_cand = _perturb_to_rel_error(golden, 0.20)
+
+    default_err = auto_matmul._rel_l2_error(golden, default_out)
+    err_budget = max(
+        default_err * (1.0 + auto_matmul._CORRECTNESS_REL_MARGIN),
+        auto_matmul._CORRECTNESS_REL_ERR_THRESHOLD,
+    )
+
+    good_err = auto_matmul._rel_l2_error(golden, good_cand)
+    bad_err = auto_matmul._rel_l2_error(golden, bad_cand)
+
+    # The old flat gate would have wrongly rejected the good candidate (0.06 > 0.05)...
+    assert good_err > auto_matmul._CORRECTNESS_REL_ERR_THRESHOLD
+    # ...but relative to the default's own 7% error it is accepted.
+    assert good_err <= err_budget
+    # A genuinely worse config is still rejected.
+    assert bad_err > err_budget
+
+
+def test_relative_gate_floor_protects_a_near_exact_default():
+    # When the default is essentially exact (tiny error), the budget must not collapse
+    # to ~0 and reject candidates on numerical noise; the flat floor still applies.
+    torch.manual_seed(4)
+    golden = torch.randn(4096)
+    default_err = 1e-4  # near-exact default
+    err_budget = max(
+        default_err * (1.0 + auto_matmul._CORRECTNESS_REL_MARGIN),
+        auto_matmul._CORRECTNESS_REL_ERR_THRESHOLD,
+    )
+    assert err_budget == auto_matmul._CORRECTNESS_REL_ERR_THRESHOLD  # floor wins
+    within = auto_matmul._rel_l2_error(golden, _perturb_to_rel_error(golden, 0.03))
+    assert within <= err_budget
+
+
+# ---------------------------------------------------------------------------
+# Distributed correctness gate (item #2) -- host-only with a fake mesh ttnn
+# ---------------------------------------------------------------------------
+
+
+class _FakeMeshTensor:
+    """A device tensor sharded across a fake mesh: a list of torch shards."""
+
+    def __init__(self, shards):
+        self.shards = list(shards)
+
+    def device(self):
+        return "mesh"
+
+    def deallocate(self, force=True):  # matches ttnn.Tensor API used by _deallocate_result
+        pass
+
+
+def _fake_ttnn_for_distributed():
+    def to_torch(tensor, mesh_composer=None):
+        if mesh_composer is not None and hasattr(tensor, "shards"):
+            return torch.cat(tensor.shards, dim=mesh_composer.dim)
+        if hasattr(tensor, "shards"):
+            return tensor.shards[0]  # replicated read of shard 0
+        return tensor  # already a torch tensor
+
+    return SimpleNamespace(
+        to_torch=to_torch,
+        get_device_tensors=lambda t: list(t.shards) if hasattr(t, "shards") else [t],
+        ConcatMeshToTensor=lambda device, dim: SimpleNamespace(dim=dim),
+        synchronize_device=lambda device: None,
+    )
+
+
+def test_fp32_reference_distributed_reconstructs_full_operands(monkeypatch):
+    # LHS is K-sharded across 2 devices, RHS is replicated.  The golden must
+    # reconstruct the FULL activation (concat the K shards) and multiply the whole
+    # matrices -- independent of how the collective splits the work.
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    torch.manual_seed(5)
+    full_a = torch.randn(32, 64)  # (M, K)
+    b = torch.randn(64, 128)  # (K, N), replicated
+    a_tensor = _FakeMeshTensor([full_a[:, :32], full_a[:, 32:]])  # sharded on K (dim 1)
+    b_tensor = _FakeMeshTensor([b, b])
+    prepared = auto_matmul.PreparedMatmulInputs(input_tensor_a=a_tensor, input_tensor_b=b_tensor)
+    plan = auto_matmul.DistributedCollectivePlan(
+        kind="gather_before_matmul", collective_dim=1, lhs_shard_dim=1, rhs_shard_dim=None
+    )
+
+    golden = auto_matmul._fp32_reference_distributed(prepared, _make_signature(), plan)
+
+    assert golden is not None
+    assert torch.allclose(golden, (full_a @ b).flatten(), atol=1e-4)
+
+
+def test_replicated_shards_agree_catches_per_device_divergence(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    torch.manual_seed(6)
+    out = torch.randn(16, 16)
+    assert auto_matmul._replicated_shards_agree(_FakeMeshTensor([out, out.clone()]), "mesh") is True
+    diverged = _FakeMeshTensor([out, out + 1.0])  # device 1 disagrees on a replicated output
+    assert auto_matmul._replicated_shards_agree(diverged, "mesh") is False
+
+
+def test_distributed_candidate_matches_accepts_correct_replicated_output(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    torch.manual_seed(7)
+    golden_2d = torch.randn(32, 128)
+    golden = golden_2d.flatten()
+    plan = auto_matmul.DistributedCollectivePlan(kind="gather_before_matmul", collective_dim=1, lhs_shard_dim=1)
+
+    good = SimpleNamespace(
+        descriptor={"kind": "all_gather_then_matmul"},
+        run=lambda: _FakeMeshTensor([golden_2d, golden_2d.clone()]),
+    )
+    assert auto_matmul._distributed_candidate_matches(good, "mesh", golden, plan) is True
+
+
+def test_distributed_candidate_matches_rejects_wrong_and_divergent_outputs(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    torch.manual_seed(8)
+    golden_2d = torch.randn(32, 128)
+    golden = golden_2d.flatten()
+    plan = auto_matmul.DistributedCollectivePlan(kind="gather_before_matmul", collective_dim=1, lhs_shard_dim=1)
+
+    wrong = SimpleNamespace(
+        descriptor={"kind": "all_gather_then_matmul"},
+        run=lambda: _FakeMeshTensor([golden_2d + 5.0, golden_2d + 5.0]),
+    )
+    assert auto_matmul._distributed_candidate_matches(wrong, "mesh", golden, plan) is False
+
+    # shard 0 matches the golden but device 1 diverges -> still rejected (the
+    # all-shards-agree check the reviewer asked for).
+    divergent = SimpleNamespace(
+        descriptor={"kind": "all_gather_then_matmul"},
+        run=lambda: _FakeMeshTensor([golden_2d, golden_2d + 3.0]),
+    )
+    assert auto_matmul._distributed_candidate_matches(divergent, "mesh", golden, plan) is False
+
+    # a recipe that throws is a failed gate, never a silent pass.
+    def _raise():
+        raise RuntimeError("device assert")
+
+    crashing = SimpleNamespace(descriptor={"kind": "all_gather_then_matmul"}, run=_raise)
+    assert auto_matmul._distributed_candidate_matches(crashing, "mesh", golden, plan) is False
+
+
+def test_distributed_candidate_matches_reduce_scatter_reconstructs_sharded_output(monkeypatch):
+    # Reduce-scatter output is sharded on the collective dim; the gate must concat the
+    # shards back before comparing to the full golden.
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    torch.manual_seed(9)
+    full_out = torch.randn(32, 128)  # full [M, N]
+    golden = full_out.flatten()
+    plan = auto_matmul.DistributedCollectivePlan(kind="matmul_before_reduce_scatter", collective_dim=1, rhs_shard_dim=0)
+    good = SimpleNamespace(
+        descriptor={"kind": "matmul_then_reduce_scatter"},
+        run=lambda: _FakeMeshTensor([full_out[:, :64], full_out[:, 64:]]),  # scattered on N
+    )
+    assert auto_matmul._distributed_candidate_matches(good, "mesh", golden, plan) is True
+
+    wrong = SimpleNamespace(
+        descriptor={"kind": "matmul_then_reduce_scatter"},
+        run=lambda: _FakeMeshTensor([full_out[:, :64] + 9.0, full_out[:, 64:]]),
+    )
+    assert auto_matmul._distributed_candidate_matches(wrong, "mesh", golden, plan) is False
+
+
+def test_distributed_gate_excludes_wrong_recipe_and_fails_closed(monkeypatch, tmp_path):
+    # End-to-end through _select_candidate: a fast-but-wrong distributed recipe must be
+    # marked incorrect and excluded, and if it is the ONLY candidate, selection fails
+    # closed to the base op rather than caching a wrong winner on timing alone.
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_ttnn", _fake_ttnn_for_distributed)
+    signature = _make_distributed_signature(lhs_shard_dim=3)
+
+    plan = auto_matmul.DistributedCollectivePlan(kind="gather_before_matmul", collective_dim=3, lhs_shard_dim=3)
+    monkeypatch.setattr(auto_matmul, "_infer_distributed_plan", lambda sig: plan)
+    golden = torch.randn(4096).flatten()
+    monkeypatch.setattr(auto_matmul, "_fp32_reference_distributed", lambda *a, **k: golden)
+
+    wrong_candidate = auto_matmul.Candidate(
+        descriptor={"kind": "all_gather_then_matmul"},
+        run=lambda: _FakeMeshTensor([torch.randn(64, 64), torch.randn(64, 64)]),  # != golden
+    )
+    monkeypatch.setattr(auto_matmul, "_build_candidates", lambda *a, **k: [wrong_candidate])
+
+    selection = auto_matmul._select_candidate(
+        signature, _prepared_for_selection(), {}, base_operation=None, allow_tuning=True
+    )
+
+    statuses = [e["status"] for e in selection["candidate_timings_us"]]
+    assert "incorrect" in statuses  # the wrong recipe was gated out...
+    assert selection["candidate"] is None
+    assert selection["winner"]["kind"] == auto_matmul.WINNER_KIND_BASE_OP_FALLBACK  # ...fail-closed

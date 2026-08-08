@@ -56,6 +56,16 @@ _MAX_PROGRAM_CONFIG_CANDIDATES = 16
 # config.  Size-independent, unlike correlation which is degenerate for the tiny
 # logical outputs many matmuls produce.
 _CORRECTNESS_REL_ERR_THRESHOLD = 0.05
+# When the reference is a float32 torch golden (not the bf16 default), every
+# candidate carries bf16 quantization error, so the flat 0.05 threshold would
+# false-reject valid configs on large-K / low-fidelity / bf8 shapes where the
+# *default itself* is already >0.05 off the golden.  Instead we gate relative to
+# the default's own error vs the golden: a candidate is accepted iff its rel-L2
+# is no worse than the default's by more than this margin (max'd with the flat
+# floor so a near-exact default doesn't reject on numerical noise).  This makes
+# the default the numerical baseline rather than a gate-exempt free pass, and a
+# config is rejected only when it is genuinely worse than the stock op.
+_CORRECTNESS_REL_MARGIN = 0.10
 _CACHE_FILE_SUFFIX = ".json"
 # Winner kind persisted when tuning found no candidate that could be benchmarked
 # successfully.  It carries no runnable candidate: dispatch_matmul falls back to the
@@ -837,18 +847,50 @@ def _get_k_block_candidates(k_tiles: int) -> list[int]:
     return sorted(candidate for candidate in range(_K_BLOCK_MIN, k_tiles + 1) if k_tiles % candidate == 0)
 
 
-def _estimate_l1_kb(m_block: int, k_block: int, n_block: int, bias: Any | None) -> int:
-    bf16_kb = 2
-    f32_kb = 4
+def _dtype_bytes(dtype: str | None) -> float:
+    """Approximate bytes-per-element for L1 sizing.
+
+    Block-float types include their shared-exponent overhead, so the estimate is
+    dtype-aware rather than assuming bf16: a bf8 config packs into ~half the L1 of
+    the same bf16 config (so more configs are valid), and an fp32 config needs
+    double (so fewer are).  ``None`` (unspecified) defaults to bf16.
+    """
+    if not dtype:
+        return 2.0
+    d = dtype.upper()
+    if "FLOAT32" in d:
+        return 4.0
+    if "BFLOAT8" in d:
+        return 1.0625
+    if "BFLOAT4" in d:
+        return 0.5625
+    if "INT8" in d or "UINT8" in d:
+        return 1.0
+    return 2.0  # bfloat16 / float16
+
+
+def _estimate_l1_kb(
+    m_block: int,
+    k_block: int,
+    n_block: int,
+    bias: Any | None,
+    *,
+    in0_bytes: float = 2.0,
+    in1_bytes: float = 2.0,
+    out_bytes: float = 2.0,
+) -> int:
+    # The intermediate accumulator is always fp32 on the compute engine regardless
+    # of the operand dtypes; the in0/in1/out block widths follow the real dtypes.
+    interm_bytes = 4
     total = (
-        2 * m_block * k_block * bf16_kb
-        + 2 * k_block * n_block * bf16_kb
-        + 2 * m_block * n_block * bf16_kb
-        + m_block * n_block * f32_kb
+        2 * m_block * k_block * in0_bytes
+        + 2 * k_block * n_block * in1_bytes
+        + 2 * m_block * n_block * out_bytes
+        + m_block * n_block * interm_bytes
     )
     if bias is not None:
-        total += n_block * bf16_kb
-    return total
+        total += n_block * out_bytes
+    return int(total)
 
 
 def _pick_subblock(m_block: int, n_block: int) -> tuple[int, int]:
@@ -898,11 +940,26 @@ def _build_minimal_descriptors(
     per_core_m = max(1, math.ceil(m_tiles / max(1, grid.x)))
     per_core_n = max(1, math.ceil(n_tiles / max(1, grid.y)))
 
+    in0_bytes = _dtype_bytes(signature.input_tensor_a.get("dtype"))
+    in1_bytes = _dtype_bytes(signature.input_tensor_b.get("dtype"))
+    out_bytes = _dtype_bytes(signature.output_dtype or signature.input_tensor_a.get("dtype"))
+
     descriptors: list[dict[str, Any]] = []
     for m_block in _get_mn_block_candidates(per_core_m):
         for k_block in _get_k_block_candidates(k_tiles):
             for n_block in _get_mn_block_candidates(per_core_n):
-                if _estimate_l1_kb(m_block, k_block, n_block, bias) > _L1_BUDGET_KB:
+                if (
+                    _estimate_l1_kb(
+                        m_block,
+                        k_block,
+                        n_block,
+                        bias,
+                        in0_bytes=in0_bytes,
+                        in1_bytes=in1_bytes,
+                        out_bytes=out_bytes,
+                    )
+                    > _L1_BUDGET_KB
+                ):
                     continue
                 subblock_h, subblock_w = _pick_subblock(m_block, n_block)
                 descriptors.append(
@@ -1395,12 +1452,23 @@ def _build_program_config_candidates(
                             _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
                         )
 
-    # L1-prune + de-duplicate.  Heuristics are a subset of the sweep at the full
-    # grid, so keeping them first and de-duping leaves them only in `heuristics`.
+    # L1-prune (dtype-aware) + de-duplicate.  Heuristics are a subset of the sweep
+    # at the full grid, so keeping them first and de-duping leaves them only in
+    # `heuristics`.
+    in0_bytes = _dtype_bytes(signature.input_tensor_a.get("dtype"))
+    in1_bytes = _dtype_bytes(signature.input_tensor_b.get("dtype"))
+    out_bytes = _dtype_bytes(signature.output_dtype or signature.input_tensor_a.get("dtype"))
+
     def _keep(descriptor: dict[str, Any], seen: set[str]) -> bool:
         if (
             _estimate_l1_kb(
-                descriptor["per_core_M"], descriptor["in0_block_w"], descriptor["per_core_N"], prepared.bias
+                descriptor["per_core_M"],
+                descriptor["in0_block_w"],
+                descriptor["per_core_N"],
+                prepared.bias,
+                in0_bytes=in0_bytes,
+                in1_bytes=in1_bytes,
+                out_bytes=out_bytes,
             )
             > _L1_BUDGET_KB
         ):
@@ -2138,6 +2206,229 @@ def _compute_reference_output(candidates: list[Candidate], device: Any) -> Any:
         _deallocate_result(output)
 
 
+def _operand_to_host_f32(tensor: Any) -> Any:
+    """Read a matmul operand to a host float32 torch tensor (matrix, not flattened).
+
+    Accepts either a host torch tensor (already staged, e.g. a host RHS/bias) or a
+    single-device ttnn tensor.  Returns None on any failure so the caller can skip
+    the golden rather than gate against a partial read."""
+    try:
+        import torch
+    except Exception:
+        return None
+    if torch.is_tensor(tensor):
+        return tensor.detach().to(torch.float32)
+    ttnn = _ttnn()
+    try:
+        return ttnn.to_torch(tensor).detach().to(torch.float32)
+    except Exception:
+        return None
+
+
+def _fp32_reference(prepared: PreparedMatmulInputs, signature: AutoMatmulSignature) -> Any:
+    """Independent float32 torch golden ``a @ b`` (+ bias) built from the host operands.
+
+    This is the ground truth the correctness gate compares against.  Unlike the
+    bf16 default candidate, it is computed in float32 from the operands read off
+    the device (never from the device matmul *result*), so it cannot validate the
+    device against itself, and it exposes the bf16 quantization error that the flat
+    threshold vs the default hides (accuracy note #1).
+
+    Single-device only: for a distributed signature the operands are sharded across
+    the mesh and need plan-aware reconstruction, which the distributed gate handles
+    separately.  Returns a flattened float32 tensor, or None if unavailable (the gate
+    then falls back to the bf16-default reference)."""
+    try:
+        import torch  # noqa: F401
+    except Exception:
+        return None
+    if _is_distributed(signature):
+        return None
+    lhs = _operand_to_host_f32(prepared.input_tensor_a)
+    rhs = _operand_to_host_f32(prepared.input_tensor_b)
+    if lhs is None or rhs is None:
+        return None
+    try:
+        lhs_m = lhs.transpose(-1, -2) if signature.transpose_a else lhs
+        rhs_m = rhs.transpose(-1, -2) if signature.transpose_b else rhs
+        out = lhs_m @ rhs_m
+        if signature.is_linear and prepared.bias is not None:
+            bias = _operand_to_host_f32(prepared.bias)
+            if bias is not None:
+                out = out + bias
+        return out.flatten()
+    except Exception:
+        return None
+
+
+def _rel_l2_error(reference: Any, candidate: Any) -> float | None:
+    """Relative L2 error ``||candidate - reference|| / ||reference||`` in float32.
+
+    Returns None if the tensors are unusable (shape mismatch, NaN/Inf candidate,
+    empty reference) so the caller treats it as a failed comparison rather than a
+    pass.  For a ~zero reference, returns the absolute diff norm."""
+    if reference is None or candidate is None:
+        return None
+    try:
+        import torch
+    except Exception:
+        return None
+    if reference.numel() == 0 or reference.numel() != candidate.numel():
+        return None
+    ref = reference.to(torch.float32)
+    cand = candidate.to(torch.float32)
+    if torch.isnan(cand).any() or torch.isinf(cand).any():
+        return None
+    diff_norm = torch.linalg.vector_norm(cand - ref).item()
+    ref_norm = torch.linalg.vector_norm(ref).item()
+    if ref_norm <= 1e-8:
+        return diff_norm
+    return diff_norm / ref_norm
+
+
+def _candidate_error_vs_golden(candidate: Candidate, device: Any, golden: Any) -> float | None:
+    """Run a candidate once and return its rel-L2 error vs the fp32 golden (or None)."""
+    try:
+        _sync_device(device)
+        output = candidate.run()
+        _sync_device(device)
+    except Exception:
+        return None
+    try:
+        candidate_torch = _result_to_torch(output)
+    finally:
+        _deallocate_result(output)
+    return _rel_l2_error(golden, candidate_torch)
+
+
+def _default_error_vs_golden(candidates: list[Candidate], device: Any, golden: Any) -> float | None:
+    """The stock default config's own rel-L2 error vs the fp32 golden.
+
+    This is the numerical baseline: bf16 accumulation means the default is itself
+    non-zero off the float32 golden (growing with K and shrinking fidelity), so the
+    gate accepts a tuned candidate iff it is no worse than this (plus a small margin),
+    rather than demanding it beat an unattainable exact match."""
+    default_candidate = next((c for c in candidates if str(c.descriptor.get("kind", "")).startswith("default")), None)
+    if default_candidate is None:
+        return None
+    return _candidate_error_vs_golden(default_candidate, device, golden)
+
+
+def _reconstruct_operand_f32(tensor: Any, shard_dim: int | None) -> Any:
+    """Full host float32 operand across the mesh.
+
+    If the operand is sharded (``shard_dim`` given) it is concatenated across the
+    mesh on that dim; otherwise it is replicated and shard 0 is read.  This yields
+    the *full* unsharded operand so the golden below multiplies the whole matrices,
+    independent of how the distributed recipe splits the work.  None on failure."""
+    try:
+        import torch
+    except Exception:
+        return None
+    ttnn = _ttnn()
+    try:
+        if shard_dim is not None:
+            host = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(tensor.device(), dim=shard_dim))
+        else:
+            shards = ttnn.get_device_tensors(tensor)
+            host = ttnn.to_torch(shards[0] if shards else tensor)
+        return host.detach().to(torch.float32)
+    except Exception:
+        return None
+
+
+def _fp32_reference_distributed(
+    prepared: PreparedMatmulInputs, signature: AutoMatmulSignature, plan: "DistributedCollectivePlan"
+) -> Any:
+    """Independent float32 golden for a distributed signature.
+
+    Reconstructs the *full* operands across the mesh (the shard dims come from the
+    plan) and computes ``a @ b`` (+ bias) in float32 -- the same host-side ground
+    truth ``place_weight(measure=True)`` uses, generalized to either collective
+    family.  This is what every distributed recipe is verified against before it can
+    win, closing the "distributed recipes picked on timing alone" hole (item #2).
+    Returns a flattened float32 tensor, or None if it cannot be built."""
+    try:
+        import torch  # noqa: F401
+    except Exception:
+        return None
+    lhs = _reconstruct_operand_f32(prepared.input_tensor_a, plan.lhs_shard_dim)
+    rhs = _reconstruct_operand_f32(prepared.input_tensor_b, plan.rhs_shard_dim)
+    if lhs is None or rhs is None:
+        return None
+    try:
+        lhs_m = lhs.transpose(-1, -2) if signature.transpose_a else lhs
+        rhs_m = rhs.transpose(-1, -2) if signature.transpose_b else rhs
+        out = lhs_m @ rhs_m
+        if signature.is_linear and prepared.bias is not None:
+            bias = _operand_to_host_f32(prepared.bias)
+            if bias is not None:
+                out = out + bias
+        return out.flatten()
+    except Exception:
+        return None
+
+
+def _replicated_shards_agree(result: Any, device: Any) -> bool:
+    """For a replicated (all-gather) output, every device must hold the same tensor.
+
+    A recipe that diverges per device on a nominally-replicated output is wrong even
+    if shard 0 happens to match the golden, so we compare all shards to shard 0
+    (the reviewer's explicit all-shards-agree check).  A single-device result or a
+    read failure is treated as agreeing (nothing to disprove / handled elsewhere)."""
+    try:
+        import torch  # noqa: F401
+    except Exception:
+        return True
+    ttnn = _ttnn()
+    if isinstance(result, (list, tuple)):
+        result = result[0] if result else None
+    if result is None:
+        return True
+    try:
+        shards = ttnn.get_device_tensors(result)
+    except Exception:
+        return True
+    if not shards or len(shards) == 1:
+        return True
+    try:
+        ref = _result_to_torch(shards[0])
+        for shard in shards[1:]:
+            if not _outputs_match(ref, _result_to_torch(shard)):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _distributed_candidate_matches(
+    candidate: Candidate, device: Any, golden: Any, plan: "DistributedCollectivePlan"
+) -> bool:
+    """Run a distributed candidate and verify its reconstructed output vs the golden.
+
+    Reduce-scatter outputs are sharded on the collective dim (concatenated back);
+    gather-before-matmul outputs are replicated (shard 0, plus an all-shards-agree
+    check).  A candidate that throws, diverges across a replicated output, or is
+    numerically off the golden fails and is excluded from selection (never cached)."""
+    if golden is None:
+        return False
+    output_is_sharded = plan.kind == "matmul_before_reduce_scatter"
+    output_shard_dim = plan.collective_dim if output_is_sharded else None
+    try:
+        _sync_device(device)
+        output = candidate.run()
+        _sync_device(device)
+    except Exception:
+        return False
+    try:
+        host = _placed_output_to_host_flat(output, device, output_shard_dim)
+        if not output_is_sharded and not _replicated_shards_agree(output, device):
+            return False
+    finally:
+        _deallocate_result(output)
+    return _outputs_match(golden, host)
+
+
 def _benchmark_candidate_eager(candidate: Candidate, device: Any) -> tuple[float, list[float], str]:
     _sync_device(device)
     warmup_output = candidate.run()
@@ -2582,15 +2873,37 @@ def _select_candidate(
     queue_id = int(kwargs["queue_id"] if "queue_id" in kwargs else (kwargs.get("cq_id") or 0))
     benchmark_accepts_queue_id = _callable_accepts_keyword(_benchmark_candidate, "queue_id")
 
-    # Trusted reference output (default config).  Any tuned candidate whose result
-    # doesn't correlate with it is rejected before selection, so we never pick a
-    # faster-but-numerically-wrong config for a shape it happens to run on.
-    reference_torch = _compute_reference_output(candidates, device)
+    # Correctness gate.  Two paths, both against an independent float32 torch golden:
+    #  * distributed (item #2): every collective recipe (all-gather / reduce-scatter)
+    #    is verified against a golden reconstructed across the mesh BEFORE it can win,
+    #    the way place_weight(measure=True) already validates -- closing the "picked on
+    #    timing alone" hole.  If the golden can't be built we fail closed (exclude all
+    #    distributed recipes -> base-op fallback) rather than trust timing blindly.
+    #  * single-device (accuracy note #1): a tuned candidate is rejected iff its rel-L2
+    #    error vs the golden is worse than the stock default's *own* error by more than
+    #    a small margin -- the default carries bf16 quantization error too, so gating
+    #    against an exact float32 match would false-reject valid configs on large-K /
+    #    low-fidelity / bf8 shapes.  Fallback (golden unavailable): the bf16 default
+    #    output with the flat threshold, the historical behaviour.
+    # Either way we never pick a faster-but-numerically-wrong config.
+    plan = _infer_distributed_plan(signature)
+    distributed_gate = plan.kind in ("gather_before_matmul", "matmul_before_reduce_scatter")
+    distributed_golden = _fp32_reference_distributed(prepared, signature, plan) if distributed_gate else None
+
+    golden = None if distributed_gate else _fp32_reference(prepared, signature)
+    err_budget: float | None = None
+    reference_torch = None
+    if golden is not None:
+        default_err = _default_error_vs_golden(candidates, device, golden)
+        if default_err is not None:
+            err_budget = max(default_err * (1.0 + _CORRECTNESS_REL_MARGIN), _CORRECTNESS_REL_ERR_THRESHOLD)
+    if err_budget is None and not distributed_gate:
+        reference_torch = _compute_reference_output(candidates, device)
 
     for candidate in candidates:
         is_default = str(candidate.descriptor.get("kind", "")).startswith("default")
-        if reference_torch is not None and not is_default:
-            if not _candidate_matches_reference(candidate, device, reference_torch):
+        if distributed_gate:
+            if not _distributed_candidate_matches(candidate, device, distributed_golden, plan):
                 candidate_timings.append(
                     {
                         "descriptor": candidate.descriptor,
@@ -2598,6 +2911,26 @@ def _select_candidate(
                     }
                 )
                 continue
+        elif not is_default:
+            if err_budget is not None:
+                candidate_err = _candidate_error_vs_golden(candidate, device, golden)
+                if candidate_err is None or candidate_err > err_budget:
+                    candidate_timings.append(
+                        {
+                            "descriptor": candidate.descriptor,
+                            "status": "incorrect",
+                        }
+                    )
+                    continue
+            elif reference_torch is not None:
+                if not _candidate_matches_reference(candidate, device, reference_torch):
+                    candidate_timings.append(
+                        {
+                            "descriptor": candidate.descriptor,
+                            "status": "incorrect",
+                        }
+                    )
+                    continue
 
         try:
             if benchmark_accepts_queue_id:
@@ -2801,9 +3134,11 @@ def _placement_reference_output(
 ) -> Any:
     """Trusted torch ground-truth ``activation @ weight`` (flattened float32).
 
-    The host weight makes an independent reference possible even though the
-    distributed recipes are not internally correctness-gated.  Returns None if a
-    reference cannot be built, in which case sharded placements are not trusted."""
+    The host weight makes an independent reference possible for the place_weight
+    measurement path.  (Selection now also gates distributed recipes internally via
+    _distributed_candidate_matches; this remains the reference for place_weight.)
+    Returns None if a reference cannot be built, in which case sharded placements are
+    not trusted."""
     try:
         import torch
     except Exception:
