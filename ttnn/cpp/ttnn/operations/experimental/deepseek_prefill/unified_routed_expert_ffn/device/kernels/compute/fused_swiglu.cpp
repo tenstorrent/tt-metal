@@ -862,6 +862,13 @@ void kernel_main() {
     const uint32_t effective_chunks =
         effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
+    // Hardware startup must precede every other Compute API call, init included: it does
+    // MMIO configuration of MATH/PACK/UNPACK that requires those units idle, so running an
+    // SFPU init first risks the startup writes racing the constants that init just loaded.
+    // This matters concretely for SiTU-GLU, whose tanh_init loads the vConstFloatPrgm
+    // registers the activation then reads.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+
     // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
     // between copy_tile and pack_tile — not packer-fused via
     // apply_activation_from_pack. Empirically the packer-fused variant
@@ -876,8 +883,6 @@ void kernel_main() {
 #else
     silu_tile_init();
 #endif
-
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
