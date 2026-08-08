@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
@@ -58,106 +56,62 @@ UNPACK_TILIZE_TILE_SIZES = [
 ]
 
 
-def generate_unpack_tilize_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
+def unpack_tilize_formats(formats_list, *, is_perf=False):
+    return formats_list
+
+
+def unpack_tilize_dest_acc_modes(formats):
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    if formats.input_format in (DataFormat.Float16, DataFormat.Int16):
+        return [DestAccumulation.No]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def unpack_tilize_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+def unpack_tilize_unpacker_engines(formats, dest_acc):
+    candidates = (
+        [UnpackerEngine.UnpDest]
+        if formats.input_format.is_32_bit()
+        else [UnpackerEngine.UnpA, UnpackerEngine.UnpB]
+    )
+    return [
+        unpacker_sel
+        for unpacker_sel in candidates
+        if not (
+            dest_acc == DestAccumulation.Yes and unpacker_sel == UnpackerEngine.UnpB
+        )
+    ]
+
+
+def unpack_tilize_tile_dimensions(formats, dest_acc, *, is_perf=False):
+    return [
+        tile_dims
+        for tile_dims in UNPACK_TILIZE_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
+        )
+        and not (
+            formats.input_format.is_32_bit()
+            and dest_acc == DestAccumulation.Yes
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        )
+    ]
+
+
+def unpack_tilize_input_dimensions(
+    dest_acc, dest_sync_mode, tile_dimensions, *, is_perf=False
 ):
-    """
-    Generate unpack_tilize combinations.
-
-    Rules:
-    1. 32-bit formats require DestAccumulation.Yes
-
-    Args: List of input-output format pairs
-
-    Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
-             tile_dimensions) tuples
-    """
-    combinations = []
-
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-        out_fmt = fmt.output_format
-
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (
-                (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
-                else (DestAccumulation.No, DestAccumulation.Yes)
-            )
-        )
-        # 32-bit tilize uses unpack_to_dest (UNP_DEST)
-        unpacker_engines = (
-            (UnpackerEngine.UnpDest,)
-            if in_fmt.is_32_bit()
-            else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
-        )
-
-        if is_perf:
-            if in_fmt.is_32_bit():
-                continue
-            for dest_acc in dest_acc_modes:
-                for dest_sync in dest_sync_modes:
-                    for unpacker_sel in unpacker_engines:
-                        if (
-                            dest_acc == DestAccumulation.Yes
-                            and unpacker_sel == UnpackerEngine.UnpB
-                        ):
-                            continue
-                        for dimensions in generate_perf_input_dimensions(dest_acc):
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    unpacker_sel,
-                                    runtime(dimensions),
-                                    runtime((32, 32)),
-                                )
-                            )
-            continue
-
-        for dest_acc in dest_acc_modes:
-            for dest_sync in dest_sync_modes:
-                for unpacker_sel in unpacker_engines:
-                    # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
-                    if (
-                        dest_acc == DestAccumulation.Yes
-                        and unpacker_sel == UnpackerEngine.UnpB
-                    ):
-                        continue
-                    for tile_dims in UNPACK_TILIZE_TILE_SIZES:
-                        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
-                            continue
-                        tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    unpacker_sel,
-                                    runtime(dimensions),
-                                    runtime(tile_dims),
-                                )
-                            )
-
-    return combinations
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc)
+    return generate_unary_input_dimensions(
+        dest_acc,
+        dest_sync=dest_sync_mode,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
 
 
 UNPACK_TILIZE_FORMATS = input_output_formats(
@@ -173,23 +127,34 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     ],
     same=True,  # Input format and output format are the same
 )
-ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
-    UNPACK_TILIZE_FORMATS
-)
-PERF_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
-    UNPACK_TILIZE_FORMATS,
-    is_perf=True,
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims=ALL_UNPACK_TILIZE_COMBINATIONS,
+    formats=lambda: unpack_tilize_formats(UNPACK_TILIZE_FORMATS, is_perf=False),
+    dest_acc=unpack_tilize_dest_acc_modes,
+    dest_sync_mode=lambda: unpack_tilize_dest_sync_modes(is_perf=False),
+    unpacker_sel=unpack_tilize_unpacker_engines,
+    tile_dimensions=runtime(
+        lambda formats, dest_acc: unpack_tilize_tile_dimensions(
+            formats, dest_acc, is_perf=False
+        )
+    ),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode, tile_dimensions: unpack_tilize_input_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -197,18 +162,6 @@ def test_unpack_tilize_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()

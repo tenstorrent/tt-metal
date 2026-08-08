@@ -715,92 +715,86 @@ def _typecast_pack_src_format(
     return output_format
 
 
-def generate_sfpu_unary_combinations(*, is_perf=False):
-    """
-    Build the unary-SFPU sweep across all operations and their format matrices.
+def sfpu_unary_mathops():
+    return [cfg.mathop for cfg in OP_CONFIGS]
 
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
-    dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
 
-    Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    approx_mode, input_dimensions) tuples.
-    """
-    combinations = []
-    for cfg in OP_CONFIGS:
-        # Ops that expose both a non-approximate and an approximate kernel are swept over both
-        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
-        approx_modes = (
-            (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop
-            in (
-                MathOperation.Exp,
-                MathOperation.Gelu,
-                MathOperation.Reciprocal,
-                MathOperation.Rsqrt,
-            )
-            else (ApproximationMode.No,)
+def sfpu_unary_formats(mathop):
+    return formats_for_op(OP_CONFIG_BY_MATHOP[mathop])
+
+
+def sfpu_unary_dest_acc_modes(mathop, formats):
+    is_typecast = mathop == MathOperation.Typecast
+    if formats.input_format.is_32_bit() or (
+        is_typecast and formats.output_format.is_32_bit()
+    ):
+        candidates = [DestAccumulation.Yes]
+    elif is_typecast:
+        candidates = [DestAccumulation.No]
+    else:
+        candidates = [DestAccumulation.No, DestAccumulation.Yes]
+    return [
+        dest_acc
+        for dest_acc in candidates
+        if not is_invalid_quasar_sfpu_format_combination(
+            formats,
+            dest_acc,
+            quasar_unpack_to_dest(formats, dest_acc, is_typecast),
         )
-        for fmt in formats_for_op(cfg):
-            in_fmt = fmt.input_format
+    ]
 
-            # Typecast's dest width is determined by the format pair, not swept: a 32-bit
-            # endpoint (either side) forces a 32-bit dest, every other pair runs in 16-bit
-            # dest. Every other op sweeps both dest_acc modes for non-32-bit inputs.
-            is_typecast = cfg.mathop == MathOperation.Typecast
-            dest_acc_modes = (
-                (DestAccumulation.Yes,)
-                if in_fmt.is_32_bit() or (is_typecast and fmt.output_format.is_32_bit())
-                else (
-                    (DestAccumulation.No,)
-                    if is_typecast
-                    else (DestAccumulation.No, DestAccumulation.Yes)
-                )
-            )
-            for dest_acc in dest_acc_modes:
-                # Skip invalid format combinations for Quasar
-                if is_invalid_quasar_sfpu_format_combination(
-                    fmt, dest_acc, quasar_unpack_to_dest(fmt, dest_acc, is_typecast)
-                ):
-                    continue
 
-                dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-                implied_math_formats = (
-                    (ImpliedMathFormat.Yes,)
-                    if is_perf
-                    else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-                )
-                input_dims = (
-                    generate_perf_input_dimensions(dest_acc)
-                    if is_perf
-                    else cfg.input_dims
-                )
-                for dest_sync in dest_sync_modes:
-                    for implied_math_format in implied_math_formats:
-                        for approx_mode in approx_modes:
-                            for input_dimensions in input_dims:
-                                combinations.append(
-                                    (
-                                        cfg.mathop,
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        implied_math_format,
-                                        approx_mode,
-                                        runtime(input_dimensions),
-                                    )
-                                )
+def sfpu_unary_dest_sync_modes(mathop, *, is_perf=False):
+    if is_perf:
+        return [DestSync.Half]
+    return list(OP_CONFIG_BY_MATHOP[mathop].dest_sync_modes)
 
-    return combinations
+
+def sfpu_unary_implied_math_formats(*, is_perf=False):
+    if is_perf:
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+
+def sfpu_unary_approx_modes(mathop):
+    if mathop in (
+        MathOperation.Exp,
+        MathOperation.Gelu,
+        MathOperation.Reciprocal,
+        MathOperation.Rsqrt,
+    ):
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+def sfpu_unary_input_dimensions(mathop, dest_acc, *, is_perf=False):
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc)
+    return list(OP_CONFIG_BY_MATHOP[mathop].input_dims)
 
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop=sfpu_unary_mathops(),
+    formats=sfpu_unary_formats,
+    dest_acc=sfpu_unary_dest_acc_modes,
+    dest_sync_mode=lambda mathop: sfpu_unary_dest_sync_modes(mathop, is_perf=False),
+    implied_math_format=lambda: sfpu_unary_implied_math_formats(is_perf=False),
+    approx_mode=sfpu_unary_approx_modes,
+    input_dimensions=runtime(
+        lambda mathop, dest_acc: sfpu_unary_input_dimensions(
+            mathop, dest_acc, is_perf=False
+        )
+    ),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    implied_math_format,
+    approx_mode,
+    input_dimensions,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -814,16 +808,6 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    (
-        mathop,
-        formats,
-        dest_acc,
-        dest_sync,
-        implied_math_format,
-        approx_mode,
-        input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-
     is_typecast = mathop == MathOperation.Typecast
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]
@@ -891,7 +875,7 @@ def test_eltwise_unary_sfpu_quasar(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
             # Typecast bakes the (input, output) pair so the compile-time functor can pick
             # the right conversion; every other op defaults it. The typecast dispatcher branch
             # in the shared C++ source references TYPECAST_IN_FORMAT/TYPECAST_OUT_FORMAT, so

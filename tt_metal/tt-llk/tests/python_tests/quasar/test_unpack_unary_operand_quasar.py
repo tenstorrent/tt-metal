@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -59,112 +57,71 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def generate_unpack_unary_operand_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
+def unpack_unary_formats(formats_list, *, is_perf=False):
+    return formats_list
+
+
+def unpack_unary_dest_acc_modes(formats, *, is_perf=False):
+    candidates = (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    )
+    return [
+        dest_acc
+        for dest_acc in candidates
+        if not (
+            formats.input_format != DataFormat.Float32
+            and formats.output_format == DataFormat.Float32
+            and dest_acc == DestAccumulation.No
+        )
+    ]
+
+
+def unpack_unary_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+def unpack_unary_transpose_modes(formats):
+    if formats.input_format.is_32_bit():
+        return [Transpose.No]
+    return [Transpose.No, Transpose.Yes]
+
+
+def unpack_unary_engines(formats):
+    if formats.input_format.is_32_bit():
+        return [UnpackerEngine.UnpDest]
+    return [UnpackerEngine.UnpA, UnpackerEngine.UnpB]
+
+
+def unpack_unary_tile_dimensions(formats, transpose, unpacker_sel, *, is_perf=False):
+    if transpose == Transpose.Yes:
+        candidates = [(32, 32)]
+    else:
+        candidates = SUPPORTED_TILE_SIZES
+    return [
+        tile_dims
+        for tile_dims in candidates
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
+        )
+        and not (
+            unpacker_sel == UnpackerEngine.UnpDest
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        )
+    ]
+
+
+def unpack_unary_input_dimensions(
+    dest_acc, dest_sync_mode, tile_dimensions, *, is_perf=False
 ):
-    """
-    Generate unpack_unary_operand combinations.
-
-    Rules:
-    1. When unpacking to dest, transpose is not yet supported.
-
-    Args: List of input-output format pairs
-
-    Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
-    """
-    combinations = []
-    perf_tile_dims = (32, 32)
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
-        transpose_modes = (
-            (Transpose.No,) if in_fmt.is_32_bit() else (Transpose.No, Transpose.Yes)
-        )
-        unpacker_engines = (
-            (UnpackerEngine.UnpDest,)
-            if in_fmt.is_32_bit()
-            else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
-        )
-
-        if is_perf:
-            if in_fmt.is_32_bit():
-                continue
-            # Same packer constraint as the correctness path: non-Fp32 input cannot
-            # pack to Fp32 when dest is in 16-bit mode.
-            if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
-                continue
-            for dest_acc in (DestAccumulation.No,):
-                for dest_sync in dest_sync_modes:
-                    for transpose_en in transpose_modes:
-                        for unpacker_sel in unpacker_engines:
-                            for dimensions in generate_perf_input_dimensions(dest_acc):
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        transpose_en,
-                                        unpacker_sel,
-                                        runtime(dimensions),
-                                        runtime(perf_tile_dims),
-                                    )
-                                )
-            continue
-
-        for dest_acc in dest_acc_modes:
-            if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
-                and dest_acc == DestAccumulation.No
-            ):
-                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
-                # This combination is not supported in the Quasar Packer format conversions
-                continue
-            for dest_sync in dest_sync_modes:
-                for transpose_en in transpose_modes:
-                    for unpacker_sel in unpacker_engines:
-                        # transpose is not supported for tiny-tiles
-                        tile_sizes = (
-                            ((32, 32),)
-                            if transpose_en == Transpose.Yes
-                            else SUPPORTED_TILE_SIZES
-                        )
-                        for tile_dims in tile_sizes:
-                            if is_mx_unsupported_tile_dims(
-                                in_fmt, fmt.output_format, tile_dims
-                            ):
-                                continue
-                            if (
-                                unpacker_sel == UnpackerEngine.UnpDest
-                                and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                            ):
-                                continue
-                            tile_shape = construct_tile_shape(tile_dims)
-                            for dimensions in generate_unary_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                            ):
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        transpose_en,
-                                        unpacker_sel,
-                                        runtime(dimensions),
-                                        runtime(tile_dims),
-                                    )
-                                )
-
-    return combinations
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc)
+    return generate_unary_input_dimensions(
+        dest_acc,
+        dest_sync=dest_sync_mode,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
 
 
 UNPACK_FORMATS = input_output_formats(
@@ -178,23 +135,36 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
-    UNPACK_FORMATS
-)
-PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
-    UNPACK_FORMATS,
-    is_perf=True,
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    formats=lambda: unpack_unary_formats(UNPACK_FORMATS, is_perf=False),
+    dest_acc=lambda formats: unpack_unary_dest_acc_modes(formats, is_perf=False),
+    dest_sync_mode=lambda: unpack_unary_dest_sync_modes(is_perf=False),
+    transpose=unpack_unary_transpose_modes,
+    unpacker_sel=unpack_unary_engines,
+    tile_dimensions=runtime(
+        lambda formats, transpose, unpacker_sel: unpack_unary_tile_dimensions(
+            formats, transpose, unpacker_sel, is_perf=False
+        )
+    ),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode, tile_dimensions: unpack_unary_input_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    transpose,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -202,16 +172,6 @@ def test_unpack_unary_operand_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        transpose_en,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -227,7 +187,7 @@ def test_unpack_unary_operand_quasar(
     golden_src = (
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
     )  # use A for UnpA and UnpDest
-    if transpose_en == Transpose.Yes:
+    if transpose == Transpose.Yes:
         if formats.input_format.is_mx_format():
             golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
 
@@ -282,8 +242,8 @@ def test_unpack_unary_operand_quasar(
                 else DataCopyType.A2D
             ),
             DEST_SYNC(dest_sync_mode),
-            UNPACK_TRANS_FACES(transpose_en),
-            UNPACK_TRANS_WITHIN_FACE(transpose_en),
+            UNPACK_TRANS_FACES(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
         ],
         "runtimes": [
             generate_input_dim(

@@ -19,7 +19,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -107,8 +106,6 @@ def get_valid_dest_acc_unary_broadcast(formats):
 
 
 def unary_broadcast_input_dimensions(dest_acc, *, is_perf=False):
-    if is_perf:
-        return generate_perf_input_dimensions(dest_acc, TILE_DIMENSIONS)
     return INPUT_DIMENSIONS
 
 

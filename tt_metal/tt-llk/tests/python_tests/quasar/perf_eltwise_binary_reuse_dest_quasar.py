@@ -33,7 +33,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(PERF_INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=PERF_RUN_TYPES_QUASAR,

@@ -105,7 +105,7 @@ def reduce_input_dimensions(*, is_perf=False):
 def reduce_perf_tile_dimensions(formats):
     return [
         tile_dimensions
-        for tile_dimensions in ((32, 32), (1, 32), (16, 32))
+        for tile_dimensions in SUPPORTED_TILE_SIZES
         if not is_mx_unsupported_tile_dims(
             formats.input_format, formats.output_format, tile_dimensions
         )

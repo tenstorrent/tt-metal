@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
-from typing import List
 
 import pytest
 import torch
@@ -38,7 +37,6 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
@@ -46,7 +44,6 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
-    PERF_RUN_TYPE,
     SFPU_BINARY_OP,
     SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
@@ -479,33 +476,20 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     return in0, in1
 
 
-def _generate_max_min_combinations(
-    formats_list: List[FormatConfig],
-    dest_acc_for_format,
-    implied_math_formats=(ImpliedMathFormat.No, ImpliedMathFormat.Yes),
-    input_dimensions_list=([32, 32],),
+def max_min_dest_acc_modes(formats, dest_acc_for_format):
+    return [
+        dest_acc
+        for dest_acc in dest_acc_for_format(formats)
+        if not is_invalid_quasar_sfpu_format_combination(formats, dest_acc)
+    ]
+
+
+def max_min_implied_math_formats(
+    formats,
+    candidates=(ImpliedMathFormat.No, ImpliedMathFormat.Yes),
 ):
-    """Generate max/min (fmt, dest_acc, implied_math_format, is_max_op, input_dims) tuples."""
-    combinations = []
-    for fmt in formats_list:
-        for dest_acc in dest_acc_for_format(fmt):
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
-                continue
-            for implied_math_format in implied_math_formats:
-                if implied_math_format not in _get_valid_implied_math_formats(fmt):
-                    continue
-                for is_max_op in [True, False]:
-                    for input_dimensions in input_dimensions_list:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                implied_math_format,
-                                is_max_op,
-                                input_dimensions,
-                            )
-                        )
-    return combinations
+    valid = _get_valid_implied_math_formats(formats)
+    return [mode for mode in candidates if mode in valid]
 
 
 def _run_max_min(
@@ -657,14 +641,21 @@ def _run_max_min(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=max_min_float_dest_acc_for_format,
+    formats=SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+    dest_acc=lambda formats: max_min_dest_acc_modes(
+        formats, max_min_float_dest_acc_for_format
     ),
+    implied_math_format=lambda formats: max_min_implied_math_formats(formats),
+    is_max_op=[True, False],
+    input_dimensions=[[32, 32]],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats,
+    dest_acc,
+    implied_math_format,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -673,9 +664,6 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (float + MX)."""
-    formats, dest_acc, implied_math_format, is_max_op, input_dimensions = (
-        formats_dest_acc_implied_math_is_max_input_dims
-    )
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
     _run_max_min(
         formats,
@@ -695,15 +683,23 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=max_min_int32_dest_acc_for_format,
-        implied_math_formats=(ImpliedMathFormat.No,),
+    formats=SFPU_BINARY_MAX_MIN_INT32_FORMATS,
+    dest_acc=lambda formats: max_min_dest_acc_modes(
+        formats, max_min_int32_dest_acc_for_format
     ),
+    implied_math_format=lambda formats: max_min_implied_math_formats(
+        formats, (ImpliedMathFormat.No,)
+    ),
+    is_max_op=[True, False],
+    input_dimensions=[[32, 32]],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats,
+    dest_acc,
+    implied_math_format,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -712,15 +708,12 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
-    formats, dest_acc, _implied_math_format, is_max_op, input_dimensions = (
-        formats_dest_acc_implied_math_is_max_input_dims
-    )
     iinfo = torch.iinfo(format_dict[formats.input_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
     _run_max_min(
         formats,
         dest_acc,
-        ImpliedMathFormat.No,
+        implied_math_format,
         is_max_op,
         input_dimensions,
         spec,
@@ -774,7 +767,16 @@ def _int32_to_smag32(t: torch.Tensor) -> torch.Tensor:
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
 
-def _run_quant(binary_op, tile_indices, sign_magnitude=False):
+def _run_quant(
+    binary_op,
+    tile_indices,
+    sign_magnitude=False,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     src0_idx, src1_idx, dst_idx = tile_indices
     dest_acc = DestAccumulation.Yes  # all quant endpoints are 32-bit
     num_faces = MAX_NUM_FACES
@@ -845,29 +847,31 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
         input_format=DataFormat.Int32, output_format=output_format
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
-            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
-            LOOP_FACTOR(1),
+            LOOP_FACTOR(loop_factor),
             ZERO_POINT(zp_bits),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             buffer_A,
             DataFormat.Int32,
             buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
@@ -879,9 +883,14 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
             num_faces=num_faces,
             twos_complement=True,  # raw 32-bit identity staging
         ),
-        unpack_to_dest=True,
-        dest_acc=dest_acc,
-        disable_format_inference=True,
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+        "disable_format_inference": True,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     # Packer reads the SFPU result tile from Dest. For dequant the result is fp32;
@@ -892,6 +901,10 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
     fc.pack_dst = output_format
     fc.pack_S_src = output_format
     fc.pack_S_dst = output_format
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
@@ -910,9 +923,26 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
     sign_magnitude=[False, True],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
-def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indices):
+def test_eltwise_binary_sfpu_quant_quasar(
+    binary_op,
+    sign_magnitude,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     """Binary SFPU quant family (quant / requant / dequant), Int32-staged operands
     with a runtime fp32 zero-point; output Int32 (quant/requant) or Float32
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
-    _run_quant(binary_op, tile_indices, sign_magnitude)
+    _run_quant(
+        binary_op,
+        tile_indices,
+        sign_magnitude,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )

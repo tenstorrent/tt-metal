@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
@@ -54,84 +52,52 @@ def pack_untilize_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def generate_pack_untilize_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
+def pack_untilize_formats(formats_list):
+    return [
+        formats
+        for formats in formats_list
+        if not (formats.input_format.is_integer() ^ formats.output_format.is_integer())
+        and not (
+            (formats.input_format == DataFormat.Int16)
+            ^ (formats.output_format == DataFormat.Int16)
+        )
+        and not formats.output_format.is_mx_format()
+    ]
+
+
+def pack_untilize_dest_acc_modes(formats):
+    if formats.input_format == DataFormat.Int16:
+        return [DestAccumulation.No]
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def pack_untilize_tile_dimensions(formats, dest_acc):
+    return [
+        tile_dims
+        for tile_dims in PACK_UNTILIZE_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
+        )
+        and not (
+            formats.input_format.is_32_bit()
+            and dest_acc == DestAccumulation.Yes
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        )
+    ]
+
+
+def pack_untilize_input_dimensions(
+    dest_acc, dest_sync_mode, tile_dimensions, *, is_perf=False
 ):
-    """
-    Generate pack_untilize combinations.
-
-    Args:
-        formats_list: List of input-output format pairs
-        is_perf: Restrict combinations to performance-test dimensions, tile
-            sizes, and destination synchronization modes.
-
-    Returns: List of (format, dest_acc, dest_sync, input_dimensions, tile_dimensions) tuples
-    """
-
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # If input format is Int16, output format must also be Int16, and vice versa
-        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
-            return False
-        return True
-
-    def get_dest_acc_modes(in_fmt):
-        # Int16 requires 16bit mode dest register
-        if in_fmt == DataFormat.Int16:
-            return (DestAccumulation.No,)
-        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
-        if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
-
-    dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
-    combinations = []
-    for fmt in formats_list:
-        in_fmt, out_fmt = fmt.input_format, fmt.output_format
-
-        if not is_supported_format_conversion(in_fmt, out_fmt):
-            continue
-
-        # MX as output format produces flaky results on Quasar.
-        if out_fmt.is_mx_format():
-            continue
-
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            for dest_sync in dest_sync_modes:
-                tile_sizes = PACK_UNTILIZE_TILE_SIZES
-                for tile_dims in tile_sizes:
-                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                        continue
-                    if (
-                        in_fmt.is_32_bit()
-                        and dest_acc == DestAccumulation.Yes
-                        and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                    ):
-                        continue
-                    tile_shape = construct_tile_shape(tile_dims)
-                    dimensions_list = (
-                        generate_perf_input_dimensions(dest_acc, tile_dims)
-                        if is_perf
-                        else generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        )
-                    )
-                    for dimensions in dimensions_list:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                runtime(dimensions),
-                                runtime(tile_dims),
-                            )
-                        )
-
-    return combinations
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc, tile_dimensions)
+    return generate_unary_input_dimensions(
+        dest_acc,
+        dest_sync=dest_sync_mode,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
 
 
 PACK_UNTILIZE_FORMATS = input_output_formats(
@@ -146,34 +112,34 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
-ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
-    PACK_UNTILIZE_FORMATS
-)
-PERF_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
-    PACK_UNTILIZE_FORMATS,
-    is_perf=True,
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions_tile_dims=ALL_PACK_UNTILIZE_COMBINATIONS,
+    formats=lambda: pack_untilize_formats(PACK_UNTILIZE_FORMATS),
+    dest_acc=pack_untilize_dest_acc_modes,
+    dest_sync_mode=lambda: pack_untilize_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(pack_untilize_tile_dimensions),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode, tile_dimensions: pack_untilize_input_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_untilize_quasar(
-    formats_dest_acc_sync_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (formats, dest_acc, dest_sync_mode, input_dimensions, tile_dimensions) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()

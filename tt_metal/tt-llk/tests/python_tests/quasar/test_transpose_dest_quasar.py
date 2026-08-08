@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -48,101 +46,41 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def generate_qsr_transpose_dest_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
-):
-    """
-    Generate transpose dest combinations for Quasar tests.
+def transpose_dest_formats(formats_list):
+    return [
+        formats
+        for formats in formats_list
+        if not (formats.input_format.is_integer() ^ formats.output_format.is_integer())
+    ]
 
-    Args:
-        formats_list: List of input/output format pairs
 
-    Returns:
-        List of (format, dest_acc, dest_sync, math_transpose_faces) tuples
-    """
-
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        return True
-
-    def get_dest_acc_modes(in_fmt):
-        """Determine valid dest register modes depending on the input format."""
-        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
-        if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        # Int8/UInt8 in Src regs and Int32 in dest reg is unsupported for MOVB2D
-        # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
-        return (DestAccumulation.No,)
-
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
+def transpose_dest_acc_modes(formats):
+    in_fmt, out_fmt = formats.input_format, formats.output_format
+    candidates = [DestAccumulation.Yes] if in_fmt.is_32_bit() else [DestAccumulation.No]
+    return [
+        dest_acc
+        for dest_acc in candidates
+        if not (
             out_fmt.is_32_bit()
             and not in_fmt.is_32_bit()
             and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
+        )
+        and not (
             dest_acc == DestAccumulation.No
             and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
             and in_fmt != out_fmt
-        ):
-            return False
-        return True
-
-    dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
         )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in (DestSync.Half, DestSync.Full)
-    }
+    ]
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (Transpose.No, Transpose.Yes)
 
-    combinations = []
-    for fmt in formats_list:
-        in_fmt, out_fmt = fmt.input_format, fmt.output_format
+def transpose_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
-            continue
 
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                for dest_sync in dest_sync_modes:
-                    for math_transpose_faces in transpose_faces_modes:
-                        if is_perf:
-                            for dimensions in generate_perf_input_dimensions(dest_acc):
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        math_transpose_faces,
-                                        runtime(dimensions),
-                                    )
-                                )
-                            continue
-                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    runtime(dimensions),
-                                )
-                            )
-
-    return combinations
+def transpose_dest_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc)
+    return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
 
 
 TRANSPOSE_DEST_FORMATS = input_output_formats(
@@ -158,23 +96,29 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
-PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
-    TRANSPOSE_DEST_FORMATS,
-    is_perf=True,
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
-        TRANSPOSE_DEST_FORMATS
+    formats=lambda: transpose_dest_formats(TRANSPOSE_DEST_FORMATS),
+    dest_acc=transpose_dest_acc_modes,
+    dest_sync_mode=lambda: transpose_dest_sync_modes(is_perf=False),
+    transpose=[Transpose.No, Transpose.Yes],
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: transpose_dest_input_dimensions(
+            dest_acc, dest_sync_mode, is_perf=False
+        )
     ),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose_dims,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    transpose,
+    input_dimensions,
     implied_math_format,
     run_types,
     loop_factor,
@@ -182,10 +126,6 @@ def test_transpose_dest_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
-        formats_dest_acc_sync_transpose_dims
-    )
-
     data_copy_type = DataCopyType.A2D
     num_faces = 4
 
@@ -247,7 +187,7 @@ def test_transpose_dest_quasar(
         untilize=False,
         input_dimensions=input_dimensions,
     )
-    if math_transpose_faces == Transpose.Yes:
+    if transpose == Transpose.Yes:
         golden_tensor = t_matrix.transpose_faces_multi_tile(
             golden_tensor,
             intermediate_format,
@@ -277,8 +217,8 @@ def test_transpose_dest_quasar(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync),
-            MATH_TRANSPOSE_FACES(math_transpose_faces),
+            DEST_SYNC(dest_sync_mode),
+            MATH_TRANSPOSE_FACES(transpose),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),

@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
 from helpers.constraints import (
     get_valid_data_format_conversions,
     get_valid_dest_accumulation_modes,
 )
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ReduceGolden,
     TilizeGolden,
@@ -50,102 +48,71 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+_UNPACK_REDUCE_COL_TILIZEA_STRIDED_DIMS = {
+    (DestSync.Half, DestAccumulation.No): [
+        [32, 32],
+        [32, 256],
+        [256, 32],
+        [64, 128],
+    ],
+    (DestSync.Half, DestAccumulation.Yes): [
+        [32, 32],
+        [32, 128],
+        [128, 32],
+        [64, 64],
+    ],
+    (DestSync.Full, DestAccumulation.No): [
+        [32, 32],
+        [32, 512],
+        [512, 32],
+        [128, 128],
+    ],
+    (DestSync.Full, DestAccumulation.Yes): [
+        [32, 32],
+        [32, 256],
+        [256, 32],
+        [64, 128],
+    ],
+}
 
-def generate_unpack_reduce_col_tilizeA_strided_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
+
+def unpack_reduce_col_tilizeA_strided_formats(formats_list):
+    return [
+        formats
+        for formats in get_valid_data_format_conversions(formats_list)
+        if formats.input_format != DataFormat.Int32
+    ]
+
+
+def unpack_reduce_col_tilizeA_strided_dest_acc_modes(formats):
+    requires_dest_acc = (
+        formats.input_format in (DataFormat.Int8, DataFormat.UInt8)
+        and formats.input_format == formats.output_format
+    )
+    return [
+        dest_acc
+        for dest_acc in get_valid_dest_accumulation_modes(formats)
+        if not (requires_dest_acc and dest_acc == DestAccumulation.No)
+    ]
+
+
+def unpack_reduce_col_tilizeA_strided_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+def unpack_reduce_col_tilizeA_strided_dimensions(
+    dest_acc, dest_sync_mode, *, is_perf=False
 ):
-    """
-    Generate unpack_reduce_col_tilizeA_strided test combinations for Quasar.
-
-    Args:
-        formats_list: List of input/output format pairs
-
-    Returns:
-        List of (format, dest_acc, dest_sync, input_dimensions, pool_type) tuples
-    """
-
-    def _requires_dest_acc_for_reduce(in_fmt, out_fmt):
-        """Int8->Int8 and UInt8->UInt8 reduce ops need 32-bit dest.
-        This is in addition to the base constraints which are true for every operation.
-        """
-        return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
-
-    # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
-    # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
-    # and max-square (both loops at capacity).
-    unpack_reduce_col_tilizeA_strided_dims = {
-        (DestSync.Half, DestAccumulation.No): [
-            [32, 32],
-            [32, 256],
-            [256, 32],
-            [64, 128],
-        ],
-        (DestSync.Half, DestAccumulation.Yes): [
-            [32, 32],
-            [32, 128],
-            [128, 32],
-            [64, 64],
-        ],
-        (DestSync.Full, DestAccumulation.No): [
-            [32, 32],
-            [32, 512],
-            [512, 32],
-            [128, 128],
-        ],
-        (DestSync.Full, DestAccumulation.Yes): [
-            [32, 32],
-            [32, 256],
-            [256, 32],
-            [64, 128],
-        ],
-    }
-
     if is_perf:
-        unpack_reduce_col_tilizeA_strided_dims = {
-            (
-                DestSync.Half,
-                DestAccumulation.No,
-            ): generate_perf_input_dimensions(DestAccumulation.No),
-            (
-                DestSync.Half,
-                DestAccumulation.Yes,
-            ): generate_perf_input_dimensions(DestAccumulation.Yes),
-        }
+        return generate_perf_input_dimensions(dest_acc)
+    return _UNPACK_REDUCE_COL_TILIZEA_STRIDED_DIMS[(dest_sync_mode, dest_acc)]
 
-    combinations = []
 
-    for fmt in get_valid_data_format_conversions(formats_list):
-        in_fmt, out_fmt = fmt.input_format, fmt.output_format
-
-        # Unpack to dest is not supported for unpack tilize operands, so the input cannot be Int32
-        if in_fmt == DataFormat.Int32:
-            continue
-        for acc in get_valid_dest_accumulation_modes(fmt):
-            if (
-                _requires_dest_acc_for_reduce(in_fmt, out_fmt)
-                and acc == DestAccumulation.No
-            ):
-                continue
-            for dest_sync in (
-                (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-            ):
-                for dimensions in unpack_reduce_col_tilizeA_strided_dims[
-                    (dest_sync, acc)
-                ]:
-                    for pool_type in (
-                        ReducePool.Max,
-                        ReducePool.Sum,
-                        ReducePool.Average,
-                    ):
-                        if pool_type == ReducePool.Average and in_fmt.is_integer():
-                            continue
-                        combinations.append(
-                            (fmt, acc, dest_sync, runtime(dimensions), pool_type)
-                        )
-
-    return combinations
+def unpack_reduce_col_tilizeA_strided_pool_types(formats):
+    pools = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
+    if formats.input_format.is_integer():
+        return [pool for pool in pools if pool != ReducePool.Average]
+    return pools
 
 
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
@@ -158,17 +125,6 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
-    generate_unpack_reduce_col_tilizeA_strided_combinations(
-        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
-    )
-)
-PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
-    generate_unpack_reduce_col_tilizeA_strided_combinations(
-        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
-        is_perf=True,
-    )
-)
 
 
 def unpack_reduce_col_tilizeA_strided_implied_math_formats():
@@ -177,13 +133,29 @@ def unpack_reduce_col_tilizeA_strided_implied_math_formats():
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    formats=lambda: unpack_reduce_col_tilizeA_strided_formats(
+        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
+    ),
+    dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc_modes,
+    dest_sync_mode=lambda: unpack_reduce_col_tilizeA_strided_dest_sync_modes(
+        is_perf=False
+    ),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: unpack_reduce_col_tilizeA_strided_dimensions(
+            dest_acc, dest_sync_mode, is_perf=False
+        )
+    ),
+    pool_type=unpack_reduce_col_tilizeA_strided_pool_types,
     implied_math_format=unpack_reduce_col_tilizeA_strided_implied_math_formats,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    input_dimensions,
+    pool_type,
     implied_math_format,
     run_types,
     loop_factor,
@@ -192,10 +164,6 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
-    )
-
     num_faces = 4
     reduce_dim = ReduceDimension.Column
     math_fidelity = MathFidelity.LoFi

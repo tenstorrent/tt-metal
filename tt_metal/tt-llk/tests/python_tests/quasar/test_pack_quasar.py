@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
 from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
@@ -22,6 +20,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -53,132 +52,82 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def generate_qsr_pack_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
-):
-    """
-    Generate pack combinations for Quasar pack tests.
+def pack_is_supported_format(formats):
+    in_fmt, out_fmt = formats.input_format, formats.output_format
+    if in_fmt.is_integer() ^ out_fmt.is_integer():
+        return False
+    return not ((in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16))
 
-    Args:
-        formats_list: List of input/output format pairs
-        is_perf: Restrict combinations to SyncHalf, a 16x16 tile, and a 32x32
-            input while retaining every supported ReLU path.
 
-    Returns:
-        List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
-        tile_dimensions) tuples.
-    """
+def pack_formats(formats_list):
+    return [formats for formats in formats_list if pack_is_supported_format(formats)]
 
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # If input format is Int16, output format must also be Int16, and vice versa
-        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
-            return False
-        return True
 
-    def get_dest_acc_modes(in_fmt):
-        """Determine valid dest register modes depending on the input format."""
-        # Having Int16 in src registers and Int32 in the dest register is not supported
-        if in_fmt == DataFormat.Int16:
-            return (DestAccumulation.No,)
-        if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
-
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
+def pack_dest_acc_modes(formats):
+    in_fmt, out_fmt = formats.input_format, formats.output_format
+    if in_fmt == DataFormat.Int16:
+        candidates = [DestAccumulation.No]
+    elif in_fmt.is_32_bit():
+        candidates = [DestAccumulation.Yes]
+    else:
+        candidates = [DestAccumulation.No, DestAccumulation.Yes]
+    return [
+        dest_acc
+        for dest_acc in candidates
+        if not (
             out_fmt.is_32_bit()
             and not in_fmt.is_32_bit()
             and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
+        )
+        and not (
             dest_acc == DestAccumulation.No
             and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
             and in_fmt != out_fmt
-        ):
-            return False
-        return True
+        )
+    ]
 
-    all_relu_types = [
+
+def pack_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+def pack_relu_types(formats):
+    if formats.input_format.is_integer():
+        return [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+    return [
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,
         PackerReluType.MinThresholdRelu,
         PackerReluType.MaxThresholdRelu,
     ]
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
-    combinations = []
-    for fmt in formats_list:
-        in_fmt, out_fmt = fmt.input_format, fmt.output_format
-
-        if not is_supported_format_conversion(in_fmt, out_fmt):
-            continue
-
-        # Threshold ReLU modes are not supported for integer pack_src formats
-        # (mirroring the pytest.skip guard in the test body).
-        relu_types = (
-            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-            if in_fmt.is_integer()
-            else all_relu_types
+def pack_tile_dimensions(formats, dest_acc, *, is_perf=False):
+    return [
+        tile_dims
+        for tile_dims in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
         )
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                if is_perf:
-                    tile_dims = MX_SUPPORTED_TILE_SIZES[0]
-                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                        continue
-                    input_dimensions = [32, 32]  # [rows, columns]
-                    for dest_sync in dest_sync_modes:
-                        for relu_type in relu_types:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    runtime(input_dimensions),
-                                    runtime(relu_type),
-                                    runtime(tile_dims),
-                                )
-                            )
-                    continue
-                for dest_sync in dest_sync_modes:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
-                        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
-                        if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
-                            continue
-                        tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
-                            for relu_type in relu_types:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        runtime(dimensions),
-                                        runtime(relu_type),
-                                        runtime(tile_dims),
-                                    )
-                                )
+        and not (
+            formats.input_format.is_32_bit()
+            and dest_acc == DestAccumulation.Yes
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        )
+    ]
 
-    return combinations
+
+def pack_input_dimensions(dest_acc, dest_sync_mode, tile_dimensions, *, is_perf=False):
+    if is_perf:
+        return [
+            [32, 32],
+            *generate_perf_input_dimensions(dest_acc, tile_dimensions),
+        ]
+    return generate_unary_input_dimensions(
+        dest_acc,
+        dest_sync=dest_sync_mode,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
 
 
 PACK_FORMATS = input_output_formats(
@@ -196,18 +145,32 @@ PACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
-PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=ALL_PACK_COMBINATIONS,
+    formats=lambda: pack_formats(PACK_FORMATS),
+    dest_acc=pack_dest_acc_modes,
+    dest_sync_mode=lambda: pack_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(
+        lambda formats, dest_acc: pack_tile_dimensions(formats, dest_acc, is_perf=False)
+    ),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode, tile_dimensions: pack_input_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
+        )
+    ),
+    relu_type=runtime(pack_relu_types),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_quasar(
-    formats_dest_acc_sync_dims_relu,
+    formats,
+    dest_acc,
+    dest_sync_mode,
+    input_dimensions,
+    relu_type,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -215,15 +178,6 @@ def test_pack_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(

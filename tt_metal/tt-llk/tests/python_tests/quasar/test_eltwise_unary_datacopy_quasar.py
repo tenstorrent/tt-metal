@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     get_golden_generator,
@@ -21,6 +19,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -55,98 +54,60 @@ def datacopy_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
 
 
-def generate_eltwise_unary_datacopy_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
-):
-    """
-    Generate eltwise_unary_datacopy combinations.
+def datacopy_dest_acc_modes(formats):
+    if (
+        formats.input_format != DataFormat.Float32
+        and formats.output_format == DataFormat.Float32
+    ):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
 
-    Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
-    """
-    combinations = []
+def datacopy_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
 
-        dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-        dest_sync_modes = (
-            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+def datacopy_tile_dimensions(formats, *, is_perf=False):
+    return [
+        tile_dims
+        for tile_dims in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
         )
-        data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
+    ]
 
-        if is_perf:
-            tile_dims = (16, 16)
-            tile_shape = construct_tile_shape(tile_dims)
-            dimensions = [32, 32]
-            for dest_acc in dest_acc_modes:
-                if (
-                    in_fmt != DataFormat.Float32
-                    and fmt.output_format == DataFormat.Float32
-                    and dest_acc == DestAccumulation.No
-                ):
-                    continue
-                for dest_sync in dest_sync_modes:
-                    for data_copy_type in data_copy_types:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                data_copy_type,
-                                runtime(dimensions),
-                                dest_sync,
-                                runtime(0),
-                                runtime(tile_dims),
-                            )
-                        )
-            continue
 
-        for dest_acc in dest_acc_modes:
-            if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
-                and dest_acc == DestAccumulation.No
-            ):
-                continue
+def datacopy_input_dimensions(
+    dest_acc, dest_sync_mode, tile_dimensions, *, is_perf=False
+):
+    if is_perf:
+        return [
+            [32, 32],
+            *generate_perf_input_dimensions(dest_acc, tile_dimensions),
+        ]
+    return generate_unary_input_dimensions(
+        dest_acc,
+        dest_sync=dest_sync_mode,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
 
-            for dest_sync in dest_sync_modes:
-                for data_copy_type in data_copy_types:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
-                        if is_mx_unsupported_tile_dims(
-                            in_fmt, fmt.output_format, tile_dims
-                        ):
-                            continue
-                        tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
-                            for (
-                                _,
-                                edgecase_dest_index,
-                            ) in calculate_edgecase_dest_indices(
-                                True if dest_acc == DestAccumulation.Yes else False,
-                                dimensions[0]
-                                // tile_dims[0]
-                                * dimensions[1]
-                                // tile_dims[1],
-                                [dest_sync],
-                            ):
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        data_copy_type,
-                                        runtime(dimensions),
-                                        dest_sync,
-                                        runtime(edgecase_dest_index),
-                                        runtime(tile_dims),
-                                    )
-                                )
 
-    return combinations
+def datacopy_dest_indices(
+    dest_acc, dest_sync_mode, input_dimensions, tile_dimensions, *, is_perf=False
+):
+    if is_perf:
+        return [0]
+    tile_count = (input_dimensions[0] // tile_dimensions[0]) * (
+        input_dimensions[1] // tile_dimensions[1]
+    )
+    return [
+        dest_index
+        for _, dest_index in calculate_edgecase_dest_indices(
+            dest_acc == DestAccumulation.Yes,
+            tile_count,
+            [dest_sync_mode],
+        )
+    ]
 
 
 DATACOPY_FORMATS = input_output_formats(
@@ -159,27 +120,43 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
-    DATACOPY_FORMATS
-)
-PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
-    DATACOPY_FORMATS,
-    is_perf=True,
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
-    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: datacopy_implied_math_formats(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0]
+    formats=DATACOPY_FORMATS,
+    dest_acc=datacopy_dest_acc_modes,
+    data_copy_type=[DataCopyType.A2D, DataCopyType.B2D],
+    dest_sync_mode=lambda: datacopy_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(
+        lambda formats: datacopy_tile_dimensions(formats, is_perf=False)
     ),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode, tile_dimensions: datacopy_input_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
+        )
+    ),
+    dest_index=runtime(
+        lambda dest_acc, dest_sync_mode, input_dimensions, tile_dimensions: datacopy_dest_indices(
+            dest_acc,
+            dest_sync_mode,
+            input_dimensions,
+            tile_dimensions,
+            is_perf=False,
+        )
+    ),
+    implied_math_format=lambda formats: datacopy_implied_math_formats(formats),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats,
+    dest_acc,
+    data_copy_type,
+    input_dimensions,
+    dest_sync_mode,
+    dest_index,
+    tile_dimensions,
     implied_math_format,
     run_types,
     loop_factor,
@@ -187,16 +164,6 @@ def test_eltwise_unary_datacopy_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        data_copy_type,
-        input_dimensions,
-        dest_sync_mode,
-        dest_index,
-        tile_dimensions,
-    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
-
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     if (
         formats.input_format.is_mx_format()
