@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <string>
+
+#include "ttnn/tensor/tensor.hpp"
+#include <tt_stl/span.hpp>
+
+namespace ttnn::operations::data_movement {
+
+// Dispatch predicate deciding whether a call lands on PermuteCodegenDeviceOperation vs. the
+// native prim. Must replicate PermuteCodegen.permute's ops/permute/spec.py gating (row-major only,
+// and rejecting the fused-WH delegation to TransposeCodegen — see permute.yaml's scope=out cases).
+// Correctness-only: never folds in perf demotions (see is_demoted below).
+// `output_mem_config` is the caller's requested memory_config, not the input's: native permute
+// accepts an interleaved input with a sharded output, which these kernels cannot produce.
+bool supported_by_codegen(
+    const Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& dims,
+    const std::optional<MemoryConfig>& output_mem_config);
+
+// Perf-only routing gate, consulted by the "auto" selector alone (never by validate or a forced
+// "codegen" call). Demotes the blocked path as a whole -- any permutation that moves the last axis
+// -- because it measures at parity with native; only the row-invariant path is routed here.
+bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims);
+
+enum class ImplementationSelector { Auto, Native, Codegen };
+
+// Parses the "implementation" kwarg ("auto" | "native" | "codegen"); TT_THROWs otherwise.
+ImplementationSelector parse_implementation(const std::string& value);
+
+}  // namespace ttnn::operations::data_movement

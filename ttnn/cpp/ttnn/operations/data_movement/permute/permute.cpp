@@ -7,6 +7,8 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_supported.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -205,7 +207,8 @@ ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+    float pad_value,
+    const std::string& implementation) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -216,9 +219,26 @@ ttnn::Tensor permute(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
-    if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
+    // Parsed before the no-op shortcut so an invalid selector is rejected on every call, and so a
+    // forced "codegen" request is not silently answered by the shortcut's memory-config copy.
+    const auto selector = operations::data_movement::parse_implementation(implementation);
+    if (selector != operations::data_movement::ImplementationSelector::Codegen &&
+        operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
+
+    if (selector == operations::data_movement::ImplementationSelector::Codegen) {
+        TT_FATAL(
+            operations::data_movement::supported_by_codegen(input_tensor, normalized_dims, memory_config),
+            "PermuteCodegen: call does not satisfy supported_by_codegen()");
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+    }
+    if (selector == operations::data_movement::ImplementationSelector::Auto &&
+        operations::data_movement::supported_by_codegen(input_tensor, normalized_dims, memory_config) &&
+        !operations::data_movement::is_demoted(input_tensor, normalized_dims)) {
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+    }
+    // "native" selector, or "auto" falling back to native.
 
     auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
         ttsl::SmallVector<uint32_t> new_order;
@@ -255,8 +275,12 @@ ttnn::Tensor permute(
     return output_tensor;
 }
 
-ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {
-    return permute(input_tensor, dims, std::nullopt, pad_value);
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    float pad_value,
+    const std::string& implementation) {
+    return permute(input_tensor, dims, std::nullopt, pad_value, implementation);
 }
 
 }  // namespace ttnn
