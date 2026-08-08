@@ -13,8 +13,8 @@
 //
 // Stimuli generator buffers and the perf-counter region are kept in this header
 // so that the disjoint ranges are visible side-by-side and any future allocation
-// has to be reconciled against both. The perf-counter macros are only defined in
-// the WC build (counter machinery in counters.h is gated by the same flag).
+// has to be reconciled against both. The perf-counter macros are only defined when perf
+// counters are compiled (the counter machinery in counters.h is gated by the same flag).
 
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
