@@ -13,9 +13,13 @@
 
 // Expert-id sender + activation-gather leader kernel (runs on core {0,0}).
 //
-// 1. Reads the routing-weight row and computes the selected ("hit") expert ids on
-//    device (matching the host `hit = (rw.abs().sum(0) > 0).nonzero()`), compacted
-//    ascending at the front of cb_bcast and padded with the sentinel.
+// 1. Reads the B routing-weight rows (one per token) and computes the selected ("hit") expert ids
+//    on device (matching the host `hit = (rw.abs().sum(0) > 0).nonzero()`), compacted ascending at
+//    the front of cb_bcast and padded with the sentinel. The scan is over experts, testing all B
+//    rows per expert, so the id list is the DEDUPLICATED UNION of the tokens' selections: an expert
+//    that several tokens picked appears exactly once and is therefore fetched exactly once by every
+//    core, with one matmul serving all of those tokens. Alongside the ids it publishes each hit's
+//    per-token routing weights, which is what keeps the tokens distinguishable after the dedup.
 // 2. Multicasts the ids buffer to all other compute cores' L1 (cb_bcast).
 // 3. Sets + multicasts a semaphore (sem_id) to signal the other cores.
 // 4. Waits for the activation broadcast and publishes it to this core's compute.
@@ -27,7 +31,7 @@
 //   0: num_weights (total experts whose weights are provided; routing-row width)
 //   1: num_active  (routing-selected experts to run)
 //   2: sentinel value for unused id slots (= num_weights)
-//   3: cb_routing  (L1 scratch for the routing-weight row)
+//   3: cb_routing  (L1 scratch for the routing-weight rows)
 //   4: cb_bcast    (L1 buffer holding the expert ids; broadcast to all cores)
 //   5: routing_page_bytes
 //   6: bcast_page_bytes
@@ -48,7 +52,12 @@
 //   21: sem_bcast
 //   22: cb_rscalar
 //   23: down_prefetch (down slices to fetch before the gather/broadcast sync)
-//   24+: TensorAccessorArgs(routing_weights), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   24: batch        (token rows, B <= 32; one routing row each)
+//   25: routing_row_stride (aligned page stride between routing rows in cb_routing)
+//   26: experts_block (experts per block; the activation block held in L1 at once)
+//   27: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
+//   28: down_reserve_tiles    (pages a down slice reserves in cb_weights)
+//   29+: TensorAccessorArgs(routing_weights), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -82,8 +91,13 @@ void kernel_main() {
     constexpr uint32_t sem_bcast_id = get_compile_time_arg_val(21);
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(22);
     constexpr uint32_t down_prefetch = get_compile_time_arg_val(23);
+    constexpr uint32_t batch = get_compile_time_arg_val(24);
+    constexpr uint32_t routing_row_stride = get_compile_time_arg_val(25);
+    constexpr uint32_t experts_block = get_compile_time_arg_val(26);
+    constexpr uint32_t gate_up_reserve_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t down_reserve_tiles = get_compile_time_arg_val(28);
 
-    constexpr auto routing_args = TensorAccessorArgs<24>();
+    constexpr auto routing_args = TensorAccessorArgs<29>();
     constexpr auto gate_up_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -106,9 +120,14 @@ void kernel_main() {
     CircularBuffer cb_routing(cb_routing_id);
     CircularBuffer cb_bcast(cb_bcast_id);
 
-    // ---- 1. Read routing row + compute expert ids into cb_bcast. ----
+    // ---- 1. Read the B routing rows + compute expert ids into cb_bcast. ----
+    // One ROW_MAJOR page per token row, placed at the buffer's aligned page stride so each read's
+    // L1 destination shares the alignment of the DRAM page it comes from.
     cb_routing.reserve_back(1);
-    noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    for (uint32_t b = 0; b < batch; ++b) {
+        noc.async_read(
+            routing, cb_routing, routing_page_bytes, {.page_id = b}, {.offset_bytes = b * routing_row_stride});
+    }
     noc.async_read_barrier();
 
     cb_bcast.reserve_back(1);
@@ -116,20 +135,49 @@ void kernel_main() {
 
     CoreLocalMem<volatile uint16_t> rw(cb_routing.get_write_ptr());
     CoreLocalMem<volatile uint32_t> ids(bcast_l1);
+    constexpr uint32_t rw_row_elems = routing_row_stride / 2;  // bf16 elements between token rows
 
-    // ids[0..num_weights)        : compacted ascending hit ids, padded with the sentinel.
-    // ids[num_weights..+num_active): each hit's routing-weight scalar as an fp32 bit pattern
-    //   (bf16 value << 16), in the same hit order, for the down-output scalar broadcast.
+    // ids[0..num_weights)                : compacted ascending hit ids, padded (see below).
+    // ids[num_weights..+num_active*batch): each hit's per-token routing weights as fp32 bit
+    //   patterns (bf16 value << 16), hit-major then token row, for the down-output multiply.
+    //
+    // The scan is expert-major and a hit is recorded ONCE for the whole batch, so the id list is the
+    // deduplicated union of the tokens' selections: experts shared by several tokens are fetched and
+    // multiplied once, and the tokens stay distinguishable purely through their weight column (which
+    // is zero for the tokens that did not select the expert).
     uint32_t n = 0;
     for (uint32_t e = 0; e < num_weights; ++e) {
-        if ((rw[e] & 0x7FFF) != 0) {
-            ids[n] = e;
-            ids[num_weights + n] = static_cast<uint32_t>(rw[e]) << 16;
-            ++n;
+        bool hit = false;
+        for (uint32_t b = 0; b < batch; ++b) {
+            // & 0x7FFF ignores the sign bit, so -0.0 counts as "not selected" like +0.0.
+            if ((rw[b * rw_row_elems + e] & 0x7FFF) != 0) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) {
+            continue;
+        }
+        ids[n] = e;
+        for (uint32_t b = 0; b < batch; ++b) {
+            ids[num_weights + n * batch + b] = static_cast<uint32_t>(rw[b * rw_row_elems + e]) << 16;
+        }
+        ++n;
+    }
+    // `num_active` may over-provision the union (its exact size is data dependent once B > 1, while
+    // the program -- and any trace containing it -- is compiled for a fixed expert count). Unused
+    // slots inside the loop bound therefore have to be *harmless* rather than merely unread: they
+    // name expert 0 (a valid weight address, so the fetch cannot run off the compile-time address
+    // table) with an all-zero weight column, contributing nothing to any token. They do cost one
+    // redundant weight fetch each, so passing the exact union size is still the fast path.
+    for (uint32_t i = n; i < num_active; ++i) {
+        ids[i] = 0;
+        for (uint32_t b = 0; b < batch; ++b) {
+            ids[num_weights + i * batch + b] = 0;
         }
     }
-    for (uint32_t i = n; i < num_weights; ++i) {
-        ids[i] = sentinel;
+    for (uint32_t i = (n > num_active ? n : num_active); i < num_weights; ++i) {
+        ids[i] = sentinel;  // never read by the fetch loop; keeps the broadcast buffer well defined
     }
 
     // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
@@ -156,7 +204,7 @@ void kernel_main() {
     Semaphore<>(sem_input_id).wait(1);
     publish_input(cb_input_id, k_tiles);
 
-    // ---- 5. Two-phase reader loop (leader role): all gate_up, single gather+broadcast, all down. ----
+    // ---- 5. Blocked reader loop (leader role): per block, gate_up, gather+broadcast, down. ----
     run_reader_loop<true>(
         noc,
         num_active,
@@ -185,5 +233,12 @@ void kernel_main() {
         kDownAddrBase,
         cb_rscalar_id,
         num_weights,
-        down_prefetch);
+        down_prefetch,
+        batch,
+        experts_block,
+        gate_up_reserve_tiles,
+        down_reserve_tiles,
+        // The leader gathers into its own L1, so it never sends itself a slot-free ack.
+        /*leader_noc_x=*/0,
+        /*leader_noc_y=*/0);
 }

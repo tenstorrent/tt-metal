@@ -63,6 +63,7 @@ struct FusedExpertsDeviceOperation {
         uint32_t num_experts,
         uint32_t intermediate_size,
         float swiglu_limit,
+        uint32_t experts_block_size,
         const std::optional<MemoryConfig>& memory_config);
 };
 
@@ -78,5 +79,6 @@ fused_experts(
     uint32_t num_experts,
     uint32_t intermediate_size,
     float swiglu_limit,
+    uint32_t experts_block_size = 0,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 }  // namespace ttnn::prim

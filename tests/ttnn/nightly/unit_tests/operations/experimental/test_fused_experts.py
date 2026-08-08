@@ -7,11 +7,16 @@
 The op takes *all* experts' weights and uses the routing weights to select which
 experts to run. For the routing-selected ("hit") experts, in ascending hit-id order,
 it computes the gate_up matmul, the SwiGLU gate, the down matmul, *and* the
-routing-weighted accumulation into a single output row on device:
+routing-weighted accumulation into a single output tile row on device:
 
-    gu     = x @ gate_up_w[hit_ids[i]]                          # [1, H] @ [H, 2I] -> [1, 2I]
-    act    = silu(clamp(gu[:I], max=L)) * clamp(gu[I:], -L, L)  # -> [1, I]
-    output = sum_i routing_weights[hit_ids[i]] * (act @ down_w[hit_ids[i]])  # -> [1, H]
+    gu     = x @ gate_up_w[hit_ids[i]]                          # [B, H] @ [H, 2I] -> [B, 2I]
+    act    = silu(clamp(gu[:, :I], max=L)) * clamp(gu[:, I:], -L, L)  # -> [B, I]
+    output = sum_i routing_weights[:, hit_ids[i]] * (act @ down_w[hit_ids[i]])  # -> [B, H]
+
+B tokens (<= 32) are packed into dim -2 and processed together. The hit set is the *union* of the
+tokens' selections, so an expert several tokens picked has its weights fetched from DRAM once and its
+matmuls run once; the tokens are separated only by the per-token routing weight in the final
+accumulation (0 for a token that did not select the expert).
 
 The I SwiGLU columns are distributed across the compute grid: each SwiGLU core owns a
 2-tile (64-column) slice and needs both the gate columns [64c, 64c+64) and the paired up
@@ -19,11 +24,9 @@ columns [I+64c, I+64c+64) of the gate_up weight, kept in a *single* [H, 128] DRA
 (host-permuted into per-core [gate_64 | up_64] blocks). The down matmul contracts over the
 full I, so each SwiGLU core scatters its activation slice to core {0,0}, which gathers the
 full activation and broadcasts it to every core; each core then multiplies it by its
-[I, H/64] down shard to produce its 64-column slice of each expert's [1, H] row, scales it
-by the expert's routing weight (SCALAR broadcast) and accumulates across experts. The output
-tensor is [1, 1, H] in TILE layout (the decode token row padded to a 32-row tile), BFLOAT16.
-
-Decode-only: sequence length T == 1.
+[I, H/64] down shard to produce its 64-column slice of each expert's [B, H] rows, scales it
+by the per-token routing weights for that expert and accumulates across experts. The output
+tensor is [1, B, H] in TILE layout (the B token rows padded to a 32-row tile), BFLOAT16.
 """
 
 import pytest
@@ -90,25 +93,49 @@ def _swiglu(gu: torch.Tensor, intermediate: int, limit: float) -> torch.Tensor:
         (4096, 2048, 64, 6),
     ],
 )
-def test_fused_experts_gate_up(device, hidden, intermediate, num_experts, num_nonzero):
+# The B tokens are the rows of dim -2 and share one 32-row tile. Every token is scaled by its own
+# routing row, and experts selected by several tokens are fetched and multiplied ONCE for the batch
+# (the op iterates the deduplicated union of the rows' selections), so the cases below deliberately
+# include tokens with fully shared and only partly shared expert sets.
+@pytest.mark.parametrize("batch", (1, 2, 32), ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("share_experts", (True, False), ids=("shared_experts", "disjoint_rows"))
+# ``experts_block_size`` bounds how many experts' activations are held in L1 at once, so the op runs
+# the selected experts in blocks of that size instead of all at once. It must not change the result.
+# 0 is the default single block; with 6 hit experts, 2 gives three full blocks (so a block reuses an
+# earlier block's activation slot, the case the inter-block handoff exists for) and 4 gives a short
+# final block.
+@pytest.mark.parametrize("experts_block_size", (0, 2, 4), ids=lambda b: f"block{b}")
+def test_fused_experts_gate_up(
+    device, hidden, intermediate, num_experts, num_nonzero, batch, share_experts, experts_block_size
+):
     torch.manual_seed(0)
     limit = 7.0
-    tokens = 1  # decode: sequence length T == 1
+    tokens = batch
     two_intermediate = 2 * intermediate
 
     x = (torch.rand((tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
     x_flat = x.reshape(1, 1, tokens, hidden)
 
-    # Routing weights [T, E]; nonzero columns are the routing-selected ("hit") experts.
-    # The op runs the gate_up matmul only for those, in ascending hit-id order.
+    # Routing weights [T, E]; the columns nonzero in *any* row are the routing-selected ("hit")
+    # experts, and the op runs each of them once, in ascending hit-id order, for all tokens.
+    #
+    # ``share_experts``: every token draws from the same ``num_nonzero`` experts, so the union is
+    # num_nonzero however large the batch is (the weight-sharing case). Otherwise each token zeroes a
+    # different one of them, so rows differ while the union stays num_nonzero -- which also covers a
+    # token contributing nothing to an expert that other tokens did select.
     routing = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.5
     nonzero_cols = random.sample(range(num_experts), num_nonzero)
     for c in range(num_experts):
         if c not in nonzero_cols:
             routing[:, c] = 0.0
+    if not share_experts and num_nonzero > 1:
+        for t in range(tokens):
+            routing[t, nonzero_cols[t % num_nonzero]] = 0.0
     routing_4d = routing.reshape(1, 1, tokens, num_experts)
-    # Device scans experts 0..E-1, so the hit ids land in ascending order.
-    hit_ids = sorted(nonzero_cols)
+    # The hit set is the union over tokens, and the device scans experts 0..E-1, so the hit ids land
+    # in ascending order. This is the count the op is given: one fetch + one matmul per hit expert.
+    hit_ids = (routing.abs().sum(0) > 0).nonzero().flatten().tolist()
+    num_active = len(hit_ids)
 
     gate_up_weights = [
         (torch.rand((hidden, two_intermediate), dtype=torch.bfloat16) - 0.5).float() for _ in range(num_experts)
@@ -153,25 +180,28 @@ def test_fused_experts_gate_up(device, hidden, intermediate, num_experts, num_no
         routing_weights=routing_tt,
         gate_up_weights=gate_up_tt,
         down_weights=down_tt,
-        num_experts=num_nonzero,
+        num_experts=num_active,
         intermediate_size=intermediate,
         swiglu_limit=limit,
+        experts_block_size=experts_block_size,
     )
 
-    out_torch = ttnn.to_torch(tt_out).float()  # [1, 1, H]
-    assert list(out_torch.shape) == [1, 1, hidden], f"unexpected output shape {out_torch.shape}"
+    out_torch = ttnn.to_torch(tt_out).float()  # [1, B, H]
+    assert list(out_torch.shape) == [1, tokens, hidden], f"unexpected output shape {out_torch.shape}"
 
-    # The op returns the routing-weighted sum over the selected experts:
-    #   out = sum_i routing_weights[hit_ids[i]] * (swiglu(x @ gate_up_w) @ down_w).
-    # Reference uses the bf16-rounded input and routing weights to match the device path; the
-    # chained bf4 matmuls add quantization error, so PCC (not exact match) is checked.
+    # The op returns, per token, the routing-weighted sum over the selected experts:
+    #   out[b] = sum_i routing_weights[b, hit_ids[i]] * (swiglu(x[b] @ gate_up_w) @ down_w).
+    # Every hit expert is evaluated for every token and masked by that token's weight, which is
+    # exactly how one shared fetch serves several tokens. Reference uses the bf16-rounded input and
+    # routing weights to match the device path; the chained bf4 matmuls add quantization error, so
+    # PCC (not exact match) is checked.
     x_dev = ttnn.to_torch(x_tt).float().reshape(tokens, hidden)
-    rw_dev = ttnn.to_torch(routing_tt).float().reshape(num_experts)
+    rw_dev = ttnn.to_torch(routing_tt).float().reshape(tokens, num_experts)
     ref = torch.zeros((tokens, hidden), dtype=torch.float32)
     for e in hit_ids:
-        gu = (x_dev @ gate_up_weights[e]).reshape(tokens, two_intermediate)  # [1, 2I]
-        act = _swiglu(gu, intermediate, limit)  # [1, I]
-        ref = ref + rw_dev[e] * (act @ down_weights[e])  # [1, H], weighted-accumulated
+        gu = (x_dev @ gate_up_weights[e]).reshape(tokens, two_intermediate)  # [B, 2I]
+        act = _swiglu(gu, intermediate, limit)  # [B, I]
+        ref = ref + rw_dev[:, e : e + 1] * (act @ down_weights[e])  # [B, H], weighted-accumulated
 
     got = out_torch.reshape(tokens, hidden)
     passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
