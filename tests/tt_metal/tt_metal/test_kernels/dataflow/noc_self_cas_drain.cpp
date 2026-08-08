@@ -14,6 +14,10 @@
 //   decrement: noc_semaphore_inc(-1) -- the exact INCR_GET EXTERNAL down() emits
 //   release  : CAS(lock, cmp=1, swap=0); pre-op must be 1 (we held it)
 //
+// Production down() additionally drains prior in-flight atomics at entry (a remote up() does not
+// barrier); here every atomic is barriered or sentinel-consumed before the hart's next one, and a
+// locking hart's first atomic is the acquire CAS, so no entry drain is needed.
+//
 // Modes (mode arg):
 //   0 pure drain: every user hart does increment_times lock-protected decrements.
 //   1 mixed: even user harts do increment_times PLAIN noc_semaphore_inc(+1) -- exactly
@@ -68,8 +72,8 @@ void kernel_main() {
 
     // Every INCR_GET this hart issues ALSO returns its pre-op word to the sticky ret_slot.
     // Consume it with the same sentinel discipline as the CASes, or a late-landing return
-    // could overwrite the NEXT CAS's sentinel and corrupt the lock verdict. (Sem pre-op is
-    // bounded by pairs*iterations + one poison, so it can never equal the sentinel.)
+    // could overwrite the NEXT CAS's sentinel and corrupt the lock verdict. (Sem pre-op is a
+    // small count plus 0x10000000-sized poisons in both modes -- never the sentinel.)
     auto consumed_inc = [&](uint64_t noc_addr, uint32_t incr) {
         *uncached(ret_slot) = SENTINEL;
         noc_semaphore_inc(noc_addr, incr);

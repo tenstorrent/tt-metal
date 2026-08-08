@@ -155,7 +155,7 @@ struct KernelSpec {
         // (ResolveSemaphoreScope): writer classes count toward concurrency; OBSERVE does not.
         //   INCREMENT: up() / inc_multicast()
         //   CONSUME:   down()
-        //   SET:       set() / set_multicast()
+        //   SET:       set() / set_multicast() / relay_* destination
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
         // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
         // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
@@ -168,7 +168,8 @@ struct KernelSpec {
         // Mark OBSERVE to opt a read-only binding out of the writer census. OBSERVE is compile-time
         // enforced: the emitted sem:: token carries read_only, and every Semaphore mutator
         // static_asserts on it -- but only through the token; the raw-id Semaphore(uint32_t) ctor
-        // bypasses it. SET and CONSUME are unenforced hints for the AUTO classifier.
+        // bypasses it. SET and CONSUME are unenforced hints for the host's scope checks: the AUTO
+        // census, plus the off-node CONSUME rejection, which also fires under forced EXTERNAL.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
@@ -255,8 +256,8 @@ using SemaphoreAccessType = KernelSpec::SemaphoreBinding::AccessType;
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
-// The AUTO classifier + the honesty FATALs rely on designated-init inertness of the added
-// access_type field, which requires SemaphoreBinding to stay an aggregate.
+// Existing braced initializers must keep compiling with access_type defaulted to INCREMENT,
+// so SemaphoreBinding must stay an aggregate.
 static_assert(std::is_aggregate_v<SemaphoreBinding>);
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 

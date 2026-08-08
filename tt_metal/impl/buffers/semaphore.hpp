@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 // MEM_DM_CACHED_SEM_BASE + id * L1_ALIGNMENT). NUM_SEMAPHORES is not visible to device code, so the
 // device enforces this per USED id (noc_semaphore.h: static_assert on the token path, ASSERT on the
 // raw-id path). When changing NUM_SEMAPHORES, keep MEM_DM_CACHED_SEM_SIZE >= NUM_SEMAPHORES *
-// L1_ALIGNMENT in quasar/dev_mem_map.h.
+// L1_ALIGNMENT and MEM_NOC_SEM_LOCK_SIZE >= NUM_SEMAPHORES * 4 in quasar/dev_mem_map.h.
 constexpr std::uint32_t NUM_SEMAPHORES = 16;
 
 class Semaphore {
