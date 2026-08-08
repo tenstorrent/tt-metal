@@ -43,6 +43,7 @@ class TransformerBlock(Module):
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -118,6 +119,7 @@ class TransformerBlock(Module):
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
+            lora_enabled=lora_enabled,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -138,6 +140,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            lora_enabled=lora_enabled,
         )
 
         self.norm2_context = None
@@ -161,6 +164,7 @@ class TransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
+                lora_enabled=lora_enabled,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
