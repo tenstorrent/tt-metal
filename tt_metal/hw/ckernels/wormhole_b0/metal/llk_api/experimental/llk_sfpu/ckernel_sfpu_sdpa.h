@@ -9,16 +9,16 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_recip.h"
-#include "ckernel_sfpu_softplus.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
 
-constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) & 0xFFFFu); };
-constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
+constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(uint32_t, x); };
+constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<uint16_t>(sdpa_bits(x) & 0xFFFFu); };
+constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<uint16_t>(sdpa_bits(x) >> 16); };
 
 constexpr auto sdpa_addr_mod_x_instr = ADDR_MOD_3;
 constexpr auto sdpa_addr_mod_x_config = ADDR_MOD_7;
@@ -266,7 +266,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+inline void calculate_softplus_first_column(uint32_t param0, uint32_t param1, uint32_t param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);

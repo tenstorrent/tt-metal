@@ -16,6 +16,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    SdpaOp,
     DataCopyType,
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -27,6 +28,7 @@ from .llk_params import (
     NarrowTile,
     PerfRunType,
     ReducePool,
+    SdpaFwOp,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -501,6 +503,45 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
+
+
+@dataclass
+class SDPA_OP(TemplateParameter):
+    op: SdpaOp = SdpaOp.RecipLegacy
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int COLVEC_OP = {self.op.value};"
+
+
+@dataclass
+class SDPA_EXP_SCALE(TemplateParameter):
+    scale_bf16: int = 0x3F80  # bf16(1.0)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint16_t EXP_SCALE_BF16 = {self.scale_bf16}u;"
+
+
+@dataclass
+class SDPA_SOFTPLUS_PARAMS(TemplateParameter):
+    beta_bits: int = 0x3F800000  # 1.0f
+    beta_reciprocal_bits: int = 0x3F800000  # 1.0f
+    threshold_bits: int = 0x41A00000  # 20.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.beta_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.beta_reciprocal_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.threshold_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_FW_OP(TemplateParameter):
+    op: SdpaFwOp = SdpaFwOp.Recip
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_FW_OP = {self.op.value};"
 
 
 @dataclass
