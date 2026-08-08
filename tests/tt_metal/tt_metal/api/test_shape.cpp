@@ -47,4 +47,19 @@ TEST(TensorShapeTests, IdenticalShapesProduceSameHash) {
     EXPECT_EQ(hash_a, hash_b);
 }
 
+TEST(TensorShapeTests, GetNormalizedIndexInRange) {
+    tt::tt_metal::Shape shape({32, 64, 128});
+
+    EXPECT_EQ(shape.get_normalized_index(2), 2u);
+    EXPECT_EQ(shape.get_normalized_index(-3), 0u);
+}
+
+TEST(TensorShapeTests, GetNormalizedIndexOutOfRangeThrows) {
+    tt::tt_metal::Shape shape({32, 64});
+
+    EXPECT_ANY_THROW(shape.get_normalized_index(2));
+    // Regression: normalized_index was unsigned, so this wrapped past the `>= 0` guard.
+    EXPECT_ANY_THROW(shape.get_normalized_index(-3));
+}
+
 }  // namespace tt::tt_metal
