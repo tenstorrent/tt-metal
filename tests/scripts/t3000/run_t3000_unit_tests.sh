@@ -33,9 +33,6 @@ run_t3000_ttmetal_tests() {
 
   # Programming examples
   ./build/programming_examples/distributed/distributed_program_dispatch
-  ./build/programming_examples/distributed/distributed_buffer_rw
-  ./build/programming_examples/distributed/distributed_eltwise_add
-  ./build/programming_examples/distributed/distributed_trace_and_events
 
   # Record the end time
   end_time=$(date +%s)

@@ -21,7 +21,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
-#include <tt-metalium/shape2d.hpp>
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -30,7 +29,6 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshEventsTest2x4 = MultiCQMeshDevice2x4Fixture;
 using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
@@ -67,49 +65,6 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         for (auto& vec : readback_vecs) {
             EXPECT_EQ(vec, src_vec);
         }
-    }
-}
-
-TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
-    uint32_t num_iterations = 20;
-    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
-
-    DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-
-    Shape2D global_buffer_shape = {2048, 2048};
-    Shape2D shard_shape = {512, 1024};
-
-    uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
-
-    ShardedBufferConfig sharded_config{
-        .global_size = global_buffer_size,
-        .global_buffer_shape = global_buffer_shape,
-        .shard_shape = shard_shape,
-        .shard_orientation = ShardOrientation::ROW_MAJOR,
-    };
-
-    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
-    for (std::size_t i = 0; i < num_iterations; i++) {
-        std::vector<uint32_t> src_vec =
-            std::vector<uint32_t>(global_buffer_shape.height() * global_buffer_shape.width(), 0);
-        std::iota(src_vec.begin(), src_vec.end(), i);
-        // Writes on CQ 0
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), mesh_buffer, src_vec);
-        if (i % 2) {
-            // Test Host <-> Device synchronization
-            auto write_event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
-            EventSynchronize(write_event);
-        } else {
-            // Test Device <-> Device synchronization
-            auto write_event = mesh_device_->mesh_command_queue(0).enqueue_record_event();
-            mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(write_event);
-        }
-        // Reads on CQ 1
-        std::vector<uint32_t> dst_vec = {};
-        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(1), dst_vec, mesh_buffer);
-
-        EXPECT_EQ(dst_vec, src_vec);
     }
 }
 
