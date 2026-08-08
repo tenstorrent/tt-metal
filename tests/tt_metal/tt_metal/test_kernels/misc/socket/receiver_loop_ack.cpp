@@ -40,6 +40,11 @@ void kernel_main() {
         sizeof(SocketReceiverInterface) /* Not the correct sizes */,
         num_worker_cores,
         true);
+#ifdef ARCH_BLACKHOLE
+    // Separate cmd-buffer FIFOs can reorder payload vs flag on Blackhole; flush the config
+    // payload multicast before signaling so workers don't read a stale config.
+    noc_async_writes_flushed();
+#endif
     noc_semaphore_set_multicast((uint32_t)worker_config_sem_ptr, worker_config_sem_mcast_noc_addr, num_worker_cores);
 
     constexpr uint32_t num_pages = data_size / page_size;

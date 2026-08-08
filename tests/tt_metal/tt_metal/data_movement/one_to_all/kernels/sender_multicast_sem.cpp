@@ -52,11 +52,19 @@ void kernel_main() {
             if constexpr (loopback) {
                 noc_async_write_multicast_loopback_src(
                     mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
+#ifdef ARCH_BLACKHOLE
+                // Separate cmd-buffer FIFOs can reorder payload vs flag on Blackhole; flush
+                // the payload multicast before signaling so receivers don't read stale data.
+                noc_async_writes_flushed();
+#endif
                 noc_semaphore_set_multicast_loopback_src(
                     sender_valid_sem_addr, dst_sem_noc_addr_multicast, num_subordinates, is_linked);
             } else {
                 noc_async_write_multicast(
                     mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
+#ifdef ARCH_BLACKHOLE
+                noc_async_writes_flushed();
+#endif
                 noc_semaphore_set_multicast(
                     sender_valid_sem_addr, dst_sem_noc_addr_multicast, num_subordinates, is_linked);
             }
@@ -71,11 +79,19 @@ void kernel_main() {
         if constexpr (loopback) {
             noc_async_write_multicast_loopback_src(
                 mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, false);
+#ifdef ARCH_BLACKHOLE
+            // Separate cmd-buffer FIFOs can reorder payload vs flag on Blackhole; flush
+            // the payload multicast before signaling so receivers don't read stale data.
+            noc_async_writes_flushed();
+#endif
             noc_semaphore_set_multicast_loopback_src(
                 sender_valid_sem_addr, dst_sem_noc_addr_multicast, num_subordinates, false);
         } else {
             noc_async_write_multicast(
                 mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, false);
+#ifdef ARCH_BLACKHOLE
+            noc_async_writes_flushed();
+#endif
             noc_semaphore_set_multicast(sender_valid_sem_addr, dst_sem_noc_addr_multicast, num_subordinates, false);
         }
     }
