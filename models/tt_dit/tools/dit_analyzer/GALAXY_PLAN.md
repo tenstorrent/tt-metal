@@ -20,13 +20,19 @@ Companion status of record: [`DitStaticAnalyzerRoadmap.md`](DitStaticAnalyzerRoa
 
 ## The plan — six workstreams, in priority order
 
-**1. Re-conform the proven three, at true scale** *(start here — hours).*
-The 2×4 could only show 1 of 2 SP rows redundant and TP=2; the Galaxy shows the real
-**7 of 8** and **TP=4**, on the Ring fabric the model actually uses.
-- `conform_encoder.py --mesh 4 8` and `conform_dit_heads.py --mesh 4 8` (they parameterize on
-  mesh, and now default to `--topology ring`).
-- Confirms the headline numbers (encoder 168 MiB × 7/8, audio & output-head waste) are real,
-  not proxy-scaled.
+**1. Re-conform the proven three, at true scale** — **DONE 2026-08-08, all three green on
+4×8 Ring.** The 2×4 could only show 1 of 2 SP rows redundant and TP=2; the Galaxy shows the
+real **7 of 8** and **TP=4**, on the Ring fabric the model actually uses.
+
+| finding | 2×4 (Linear) | 4×8 (Ring) | evidence |
+|---|---|---|---|
+| encoder `replicated_stage` | 1 of 2 SP rows | **7 of 8**, TP=4 | `max\|Δ\|=0` on every TP column |
+| audio `unused_gather` (node_360) | 1 of 2 shards | **7 of 8** SP shards | `max\|Δ\|=0`, audio ⊂ shard 0 |
+| output-head `participant_shrink` (node_348) | TP=2 | **TP=4**, 3 of 4 copies unread | `max\|Δ\|=0` across all 32 devices |
+
+No verdict changed between the proxy and true scale — only the counts — which is exactly the
+bar the watch-out below sets. Three harness defects had to be cleared first; see
+[§ What the first Galaxy run cost](#what-the-first-galaxy-run-cost).
 
 **2. Conform the rest of the report.**
 The other classes — `replicated_stage ×10`, `overwide_gather`, `participant_shrink` — are
@@ -79,13 +85,20 @@ export PYTHON_ENV_DIR=$TT_METAL_HOME/python_env
 export ARCH_NAME=<galaxy arch, e.g. blackhole | wormhole_b0>
 
 # workstream 1 — the fastest credible win (ring is the default now)
-python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py   --mesh 4 8
+python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py   --mesh 4 8 --sp-axis 1 --tp-axis 0
 python3 models/tt_dit/tools/dit_analyzer/conform_dit_heads.py --mesh 4 8
 # expect: encoder 7 of 8 SP rows redundant · audio 7 of 8 shards · output-head TP=4, all max|Δ|=0
 
 # on the 2x4 Loudbox instead (Linear links):
 python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 2 4 --topology linear
 ```
+
+**`--sp-axis 1 --tp-axis 0` is not optional on the Galaxy.** Which axis carries which
+parallelism is a property of the *config*, not the mesh: production H3/LTX runs `sp1tp0`, so a
+4×8 is SP=8 / TP=4 — that is where 7-of-8 comes from. `conform_encoder` defaults to the 2×4
+Loudbox's `sp0tp1`, which on a 4×8 silently measures SP=4 / TP=8 and reports a true but
+different finding ("3 of 4"). `conform_dit_heads` derives SP from the larger axis, so it needs
+no flag.
 
 If you drive the device through the `tt-device-mcp` broker rather than a direct shell, pass the
 same three env vars as `inherited_env` and tag the job owner; the harness command is unchanged.
@@ -102,6 +115,30 @@ python3 models/tt_dit/tools/dit_analyzer/scouts/render_full.py              # al
 Presets: `2x4` (quick smoke), `4x8` (packed_seq 2048), `prod` (production 768p/5s).
 
 ---
+
+## What the first Galaxy run cost
+
+Nothing in workstream 1 failed because a finding was wrong. Every failure was the harness or
+the box meeting 32 chips for the first time. Recorded so the next workstream doesn't re-pay:
+
+1. **Ring topology needs a ring fabric.** Both harnesses set `FabricConfig.FABRIC_1D` while
+   asking `CCLManager` for `Topology.Ring` — a ring hop across the seam then has no route and
+   ttnn aborts with `Could not find any forwarding direction from src (M0, D0) to dst (M0, D28)`.
+   On the 2×4 this never showed: Linear was the only topology ever run. Fixed — the fabric now
+   follows the topology (`FABRIC_1D_RING`), matching every other in-tree Galaxy ring config
+   (`gpt_oss`, `gemma3` 6U).
+2. **The mesh axes were the Loudbox's, hardcoded.** See the runbook note above.
+3. **A probe constant that only modelled SP=2.** `conform_dit_heads` packed `SEQ=4096`, so at
+   SP=8 the shard is 512 rows and the audio block `[512:926)` no longer lands in shard 0 — the
+   assertion fired. That is a property of the *probe*, not the model: production packs 38400
+   rows, where audio sits well inside the first shard. The probe sequence now scales with SP
+   (7424 at SP=8, tile-aligned), with `--seq` to override.
+4. **The board needed a reset before it would open at all.** Every device init — even a
+   single-chip `open_device` — threw `IndexError: unordered_map::at` from
+   `Cluster::initialize_ethernet_sockets`, with UMD's `system_health` showing chan 8/9 wrap
+   links split three ways (garbage peer id / local peer / down). `tt-smi -glx_reset` cleared it.
+   An aborted run wedges an eth core (`Timed out while waiting for active ethernet core ... to
+   become active again`) and needs the same reset before the next attempt.
 
 ## Where the code lives (the branch story) — read before running the scout
 

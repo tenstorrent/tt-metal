@@ -51,7 +51,7 @@ def _load_random_weights(module, torch, _top=True) -> int:
     return count
 
 
-def run(mesh_shape, topo: str = "ring") -> int:
+def run(mesh_shape, topo: str = "ring", seq_len: int | None = None) -> int:
     import torch
 
     import ttnn
@@ -64,8 +64,10 @@ def run(mesh_shape, topo: str = "ring") -> int:
     tp_axis = 1 - sp_axis
     sp_f, tp_f = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
+    # A ring topology needs a ring fabric — FABRIC_1D has no wrap link, so a hop across the
+    # seam has no route ("Could not find any forwarding direction from src ... to dst ...").
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricConfig.FABRIC_1D_RING if topo == "ring" else ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -80,21 +82,31 @@ def run(mesh_shape, topo: str = "ring") -> int:
         devs = list(range(mesh_shape[0] * mesh_shape[1]))
 
         # ---- A) node_360: the audio SP all_gather is unused (audio ⊂ shard 0) ----
-        shard = SEQ // sp_f
+        # The packed sequence has to be long enough that the audio block [512:926) still lands
+        # inside the first SP shard — that is a property of production packing (38400 rows over
+        # SP), not of this probe. SEQ=4096 models it at SP=2 but not at SP=8 (shard 512 < 926),
+        # so scale the probe with SP rather than shrinking the claim.
+        seq = SEQ if seq_len is None else seq_len
+        min_seq = A_HI * sp_f
+        if seq < min_seq:
+            tile = 32 * sp_f  # keep every shard tile-aligned
+            seq = ((min_seq + tile - 1) // tile) * tile
+            print("packed seq %d too short for SP=%d (audio ends at %d); using %d" % (SEQ, sp_f, A_HI, seq))
+        shard = seq // sp_f
         assert A_HI <= shard, "audio must fit in the first SP shard"
-        full = torch.arange(SEQ, dtype=torch.float32).view(1, 1, SEQ, 1).expand(1, 1, SEQ, AUDIO_CH).contiguous()
+        full = torch.arange(seq, dtype=torch.float32).view(1, 1, seq, 1).expand(1, 1, seq, AUDIO_CH).contiguous()
         seq_sharded = bf16_tensor(full, device=mesh, mesh_axis=sp_axis, shard_dim=2)
         pre0 = ttnn.to_torch(ttnn.get_device_tensors(seq_sharded)[0]).float()
         gathered = ccl.all_gather_persistent_buffer(seq_sharded, dim=2, mesh_axis=sp_axis)
         ttnn.synchronize_device(mesh)
         g0 = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0]).float()
-        ref = torch.arange(SEQ, dtype=torch.float32).to(torch.bfloat16).to(torch.float32)
-        gather_ok = g0.shape[2] == SEQ and torch.equal(g0[0, 0, :, 0], ref)
+        ref = torch.arange(seq, dtype=torch.float32).to(torch.bfloat16).to(torch.float32)
+        gather_ok = g0.shape[2] == seq and torch.equal(g0[0, 0, :, 0], ref)
         d_audio = (g0[:, :, A_LO:A_HI, :] - pre0[:, :, A_LO:A_HI, :]).abs().max().item()
         a_ok = gather_ok and d_audio == 0.0 and A_HI <= shard
         print(
             "A) node_360 audio unused_gather  (SP=%d, seq %d -> %d/shard, audio [%d:%d))"
-            % (sp_f, SEQ, shard, A_LO, A_HI)
+            % (sp_f, seq, shard, A_LO, A_HI)
         )
         print(
             "   gather reassembles: %s   audio slice == device-0 pre-gather: max|Δ|=%.3g   audio ⊂ shard 0: %s"
@@ -167,8 +179,14 @@ def main() -> None:
         default="ring",
         help="collective topology; production H3 runs ring (the 2x4 Loudbox used linear)",
     )
+    ap.add_argument(
+        "--seq",
+        type=int,
+        default=None,
+        help="packed sequence length for check A (default %d, raised automatically when SP needs it)" % SEQ,
+    )
     args = ap.parse_args()
-    raise SystemExit(run(args.mesh, args.topology))
+    raise SystemExit(run(args.mesh, args.topology, args.seq))
 
 
 if __name__ == "__main__":

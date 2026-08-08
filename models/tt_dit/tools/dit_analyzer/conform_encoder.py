@@ -23,7 +23,7 @@ no HF). We keep the real H3 structure that decides the sharding (hidden 5120, 40
 heads, head_dim 128, 8 KV heads, mrope [16,24,24], TP=4) and shrink only the two dims
 that change compute cost but not distribution: vocab and the MLP intermediate.
 
-    python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 4 8              # Galaxy, ring (default)
+    python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 4 8 --sp-axis 1 --tp-axis 0  # Galaxy, prod layout
     python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 2 4 --topology linear   # 2x4 Loudbox
 """
 
@@ -66,7 +66,7 @@ def _load_random_weights(module, torch, _top=True) -> int:
     return count
 
 
-def run(mesh_shape, topo: str = "ring") -> int:
+def run(mesh_shape, topo: str = "ring", sp_axis: int = 0, tp_axis: int = 1) -> int:
     import torch
 
     import ttnn
@@ -75,11 +75,15 @@ def run(mesh_shape, topo: str = "ring") -> int:
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils.tensor import float32_tensor
 
-    sp_axis, tp_axis = 0, 1
+    assert {sp_axis, tp_axis} == {0, 1}, "sp_axis and tp_axis must be 0 and 1 in some order"
     sp_f, tp_f = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
+    # Ring collectives need a ring *fabric*: FABRIC_1D has no wrap link, so a ring hop that
+    # crosses the seam has no route and ttnn aborts with "Could not find any forwarding
+    # direction from src ... to dst ...". Every in-tree Galaxy ring config (gpt_oss, gemma3 6U)
+    # pairs Topology.Ring with FABRIC_1D_RING; keep the two in step here too.
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricConfig.FABRIC_1D_RING if topo == "ring" else ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -131,7 +135,8 @@ def run(mesh_shape, topo: str = "ring") -> int:
         out = enc.forward(ids, pos_embeds=(cos, sin))[0]
         ttnn.synchronize_device(mesh)
 
-        # -- read back every device shard; index in row-major mesh order: sp*tp_f + tp --
+        # -- read back every device shard; get_device_tensors is row-major over the mesh, so
+        # the shard for (sp=r, tp=j) sits at the flat index of its (row, col) coordinate --
         shards = ttnn.get_device_tensors(out)
         assert len(shards) == sp_f * tp_f, "expected %d shards, got %d" % (sp_f * tp_f, len(shards))
         per_dev = [ttnn.to_torch(s).float() for s in shards]
@@ -149,14 +154,19 @@ def run(mesh_shape, topo: str = "ring") -> int:
         print("!! output is constant — equality across rows would be vacuous. ABORT.")
         return 1
 
-    # -- THE CLAIM: for each TP column, the two SP rows are bit-identical --
-    print("\nSP-row equality per TP column  (device %d vs %d ...):" % (0, tp_f))
+    def dev_index(sp: int, tp: int) -> int:
+        coord = [0, 0]
+        coord[sp_axis], coord[tp_axis] = sp, tp
+        return coord[0] * mesh_shape[1] + coord[1]
+
+    # -- THE CLAIM: for each TP column, the SP rows are bit-identical --
+    print("\nSP-row equality per TP column  (device %d vs %d ...):" % (dev_index(0, 0), dev_index(1, 0)))
     worst = 0.0
     for j in range(tp_f):
-        a = per_dev[0 * tp_f + j]
+        a = per_dev[dev_index(0, j)]
         col_worst = 0.0
         for r in range(1, sp_f):
-            d = (a - per_dev[r * tp_f + j]).abs().max().item()
+            d = (a - per_dev[dev_index(r, j)]).abs().max().item()
             col_worst = max(col_worst, d)
         worst = max(worst, col_worst)
         print("  TP col %d:  max|Δ| across SP rows = %.3g  %s" % (j, col_worst, "EXACT" if col_worst == 0 else ""))
@@ -193,8 +203,14 @@ def main() -> None:
         default="ring",
         help="collective topology; production H3 runs ring (the 2x4 Loudbox used linear)",
     )
+    # Which mesh axis carries which parallelism is a property of the *config*, not the mesh:
+    # the production H3/LTX Galaxy config is sp1tp0 (SP on axis 1, TP on axis 0), so on a 4x8
+    # that is SP=8 / TP=4 — the layout the 7-of-8 headline refers to. The 2x4 Loudbox runs
+    # sp0tp1, which is the default here.
+    ap.add_argument("--sp-axis", type=int, choices=[0, 1], default=0, help="mesh axis carrying sequence parallel")
+    ap.add_argument("--tp-axis", type=int, choices=[0, 1], default=1, help="mesh axis carrying tensor parallel")
     args = ap.parse_args()
-    raise SystemExit(run(args.mesh, args.topology))
+    raise SystemExit(run(args.mesh, args.topology, args.sp_axis, args.tp_axis))
 
 
 if __name__ == "__main__":
