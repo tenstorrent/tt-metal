@@ -13,7 +13,7 @@ during execution, enabling 1:1 correlation between host-side Tracy zones
 | **dispatch_s** (signal source) | `cq_dispatch_subordinate.cpp` | NCRISC | NOC 1 |
 | **BRISC reader** (fast path) | `cq_realtime_profiler.cpp` | reserved profiler tensix BRISC | NOC 0 |
 | **NCRISC pusher** (slow path) | `cq_realtime_profiler_push.cpp` | reserved profiler tensix NCRISC | NOC 1 |
-| **host manager** | `realtime_profiler_manager.cpp` | CPU threads | PCIe |
+| **host receiver** | `realtime_profiler_receiver.cpp` | CPU threads | PCIe |
 
 The data mover is split across two RISCs on a reserved dedicated tensix core — an otherwise-unused core taken from the back of the dispatch core pool.
 The BRISC reader pulls timestamps off dispatch_s and drops them into an L1 ring
@@ -41,7 +41,7 @@ dispatch_s            BRISC reader          NCRISC pusher          host
     |                      |                      |   (coalesced PCIe    |
     |                      |                      |    writes, ~420 ns) ->| hugepage
     |                      |                      |                      |-- read pages
-    |                      |                      |                      |   -> callbacks
+    |                      |                      |                      |   -> record ring
 ```
 
 ## Double-Buffer Protocol
@@ -61,8 +61,7 @@ The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
 buffer into the next ring slot, then advances `write_index` (records for
 unprofiled programs are read but not committed). If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
-host drains records faster than they are produced. The reader also services host
-clock-sync requests, enqueueing sync-marker records into the same ring.
+host drains records faster than they are produced.
 
 The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
 `write_index`/`read_index`, and if the ring is non-empty it pushes *all*
@@ -103,9 +102,8 @@ sustain, since blank kernels minimize per-program dispatch overhead — and asse
 every record arrives with the device ring and host D2H FIFO never filling.
 
 ## Implementation Notes
-
 - The host side runs a receiver thread that drains device→host pages and
   publishes decoded records onto a `BroadcastRing`; separate per-callback
   consumer threads read from the ring and invoke the registered callbacks. A slow
-  callback only drops records for that consumer (tracked in `Consumer::dropped`);
-  it never stalls page draining or dispatch.
+  callback only drops records for that consumer (reported via
+  `ProgramRealtimeRecordBatch::dropped`); it never stalls page draining or dispatch.

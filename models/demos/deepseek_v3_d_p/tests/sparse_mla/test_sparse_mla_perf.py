@@ -446,7 +446,7 @@ def _require_perf(request):
 # ============================================================================
 def _require_rt_profiler() -> None:
     """The realtime profiler is auto-enabled on eligible hardware; a False here means the current
-    dispatch/fabric config disabled it (see realtime_profiler_manager eligibility) — fail loudly rather
+    dispatch/fabric config disabled it (see realtime_profiler_receiver eligibility) — fail loudly rather
     than silently mis-measure with an empty record set."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for sparse MLA perf checks (eligible Blackhole HW required)")

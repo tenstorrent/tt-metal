@@ -10,6 +10,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -517,12 +518,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
-        this->write_program_cmds_to_subgrid(
-            device_range,
-            program_cmd_seq,
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program,
-            chip_ids_in_workload);
+        {
+            ZoneNamedN(write_cmds_zone, "WriteProgramCmds", !tt::tt_metal::getDeviceProfilerState());
+            this->write_program_cmds_to_subgrid(
+                device_range,
+                program_cmd_seq,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program,
+                chip_ids_in_workload);
+        }
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.
@@ -691,7 +695,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive()) {
+    if (tt::tt_metal::experimental::IsProgramRealtimeProfilerActive()) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->get_devices()) {
@@ -727,11 +731,6 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
-
-    {
-        TTZoneScopedDN(RT_PROFILER, "RealtimeProfilerSyncCheck");
-        mesh_device_->impl().trigger_realtime_profiler_sync_check();
-    }
 
     // Barrier across all active hosts of the mesh
     active_distributed_context_->barrier();
@@ -861,13 +860,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 

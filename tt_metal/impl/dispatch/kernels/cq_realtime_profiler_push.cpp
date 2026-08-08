@@ -14,11 +14,11 @@
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include <cstddef>
+
 #include "hostdev/realtime_profiler_msgs.h"
-// Uncomment to compile in ncrisc_debug L1 heartbeats (RT_PROF_NCRISC_DBG_* in realtime_profiler_ring_buffer.hpp):
-// #define RT_PROFILER_NCRISC_DEBUG
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
-#include "api/debug/dprint.h"
 
 // Real-time profiler page size - must match host-side
 // RealtimeProfilerRuntimeSizes::page_size (which is also RT_PROFILER_ENTRY_SIZE).
@@ -57,11 +57,8 @@ __attribute__((noinline)) void push_entries_to_host(
     uint32_t& host_write_ptr,
     uint32_t host_fifo_start,
     uint32_t fifo_page_aligned_size) {
-    RT_PROF_NCRISC_DBG_INC(ring_buffer, socket_reserve_pages_enter_count);
     socket_reserve_pages(socket, num_pages);
-    RT_PROF_NCRISC_DBG_INC(ring_buffer, socket_reserve_pages_exit_count);
 
-    noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
     constexpr uint32_t kMaxPagesPerWrite = NOC_MAX_BURST_SIZE / realtime_profiler_page_size;
     uint32_t remaining = num_pages;
     while (remaining > 0) {
@@ -88,37 +85,23 @@ __attribute__((noinline)) void push_entries_to_host(
         }
         remaining -= run;
     }
-
+    noc_async_writes_flushed();
     socket_push_pages(socket, num_pages);
     socket_notify_receiver(socket);
-    noc_async_write_barrier();
-    RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
 void kernel_main() {
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_STARTED);
-    RT_PROF_NCRISC_DBG_SET(
-        ring_buffer, config_buffer_addr_field_l1_ptr, reinterpret_cast<uint32_t>(&rt_profiler_msg->config_buffer_addr));
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, ring_buffer_addr_literal, RING_BUFFER_ADDR);
-
     // Wait for config_buffer_addr to be written by the host
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_CONFIG_WAIT);
     uint32_t socket_config_addr = 0;
-    uint32_t wait_iters = 0;
     while (socket_config_addr == 0) {
         invalidate_l1_cache();
         socket_config_addr = rt_profiler_msg->config_buffer_addr;
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, config_buffer_addr_raw, socket_config_addr);
-        wait_iters++;
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, wait_iters);
         if (ring_buffer->terminate) {
             return;
         }
     }
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, socket_config_addr, socket_config_addr);
 
     // Initialize socket from the config buffer (fresh read every launch)
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_SOCKET_INIT);
     invalidate_l1_cache();
     SocketSenderInterface profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
@@ -136,28 +119,22 @@ void kernel_main() {
     uint32_t host_write_ptr = data_addr_lo;
     uint32_t host_fifo_start = data_addr_lo;
 
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, pcie_xy_enc, pcie_xy_enc);
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
-
-    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
-    uint32_t loop_count = 0;
-    uint32_t push_count = 0;
+    noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+    noc_write_init_state<write_reg_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
 
     while (true) {
         invalidate_l1_cache();
-        loop_count++;
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, loop_count);
 
         const uint32_t read_index = ring_buffer->read_index;
         const uint32_t write_index = ring_buffer->write_index;
         if (write_index == read_index) {
             if (ring_buffer->terminate) {
+                noc_async_write_barrier();
                 return;
             }
             continue;
         }
 
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_PUSHING);
         const uint32_t available = write_index - read_index;
         push_entries_to_host(
             profiler_socket,
@@ -169,8 +146,5 @@ void kernel_main() {
             host_fifo_start,
             fifo_page_aligned_size);
         ring_buffer->read_index = read_index + available;
-        push_count += available;
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, push_count, push_count);
-        RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
     }
 }

@@ -14,7 +14,6 @@
 #include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
-#include "api/debug/dprint.h"
 
 // Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
 constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);  // 32 bytes
@@ -37,7 +36,6 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
     // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
-    // Host post-mortems can pair it with ncrisc_debug.socket_reserve_pages_{enter,exit}_count.
     if (rt_ring_full(ring_buffer)) {
         ring_buffer->ring_full_wait_count++;
         while (rt_ring_full(ring_buffer)) {
@@ -59,54 +57,7 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     }
 }
 
-// Handle sync requests from host: capture device timestamp and enqueue
-// a sync marker record into the ring buffer for the NCRISC pusher.
-__attribute__((noinline)) void realtime_profiler_sync() {
-    DPRINT("REALTIME: entering sync\n");
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    uint32_t sync_count = 0;
-    while (rt_profiler_msg->sync_request) {
-        invalidate_l1_cache();
-
-        uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
-        if (host_time > 0) {
-            DPRINT("REALTIME: sync got host_time={}\n", host_time);
-
-            // Spin until ring buffer has space
-            while (rt_ring_full(ring_buffer)) {
-                invalidate_l1_cache();
-            }
-
-            uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
-            tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
-
-            uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-            uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-
-            l1_data[0] = time_hi;
-            l1_data[1] = time_lo;
-            l1_data[2] = host_time;
-            l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
-            l1_data[4] = 0;
-            l1_data[5] = 0;
-            l1_data[6] = 0;
-            l1_data[7] = 0;
-
-            ring_buffer->write_index++;
-
-            rt_profiler_msg->sync_host_timestamp = 0;
-            sync_count++;
-            DPRINT("REALTIME: sync pushed count={}\n", sync_count);
-        }
-    }
-    DPRINT("REALTIME: exiting sync, total={}\n", sync_count);
-}
-
 void kernel_main() {
-    DPRINT("REALTIME BRISC: kernel started\n");
-
     // Initialize ring buffer
     ring_buffer->write_index = 0;
     ring_buffer->read_index = 0;
@@ -120,12 +71,7 @@ void kernel_main() {
         RealtimeProfilerState state = static_cast<RealtimeProfilerState>(rt_profiler_msg->realtime_profiler_state);
 
         switch (state) {
-            case REALTIME_PROFILER_STATE_IDLE:
-                if (rt_profiler_msg->sync_request) {
-                    DPRINT("REALTIME: sync_request detected!\n");
-                    realtime_profiler_sync();
-                }
-                continue;
+            case REALTIME_PROFILER_STATE_IDLE: continue;
 
             case REALTIME_PROFILER_STATE_PUSH_A:
                 realtime_profiler_read_and_enqueue(true);
