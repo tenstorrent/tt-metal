@@ -24,8 +24,8 @@ NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
-# Mirrors kSyncErrorP50Ns et al in test_realtime_profiler_sanity.cpp, which asserts the same distribution with the
-# array idle: the point of this test is that a power virus does not move it.
+# The C++ sync suite (test_realtime_profiler_sync.cpp) bounds every claim at 15us with the array idle; the point of
+# this test is that a power virus does not move the distribution.
 MAX_SYNC_ERROR_P50_NS = 6_000
 MAX_SYNC_ERROR_P90_NS = 10_000
 MAX_SYNC_ERROR_P99_NS = 15_000

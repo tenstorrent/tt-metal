@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -13,7 +12,6 @@
 #include <optional>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "context/context_types.hpp"
 
@@ -26,11 +24,11 @@ namespace tt::tt_metal {
 class IDevice;
 
 // Maps device tick timestamps onto host time by interpolating between retained clock probes. Pure arithmetic over
-// what it is fed: probes come from whoever reads the device clock -- RealtimeProfilerClockSync in production, tests
+// what it is fed: probes come from whoever reads the device clock -- DeviceClockSync in production, tests
 // directly -- and nothing here touches a device.
 //
 // Single-threaded: retain() and map_record() belong to the thread draining the device.
-class RealtimeProfilerClockMapping {
+class DeviceClockMapping {
 public:
     // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
     // them via their secant, whatever the clock did in between.
@@ -40,7 +38,9 @@ public:
         std::chrono::nanoseconds bracket{};
     };
 
-    // What one record publishes with, covering both of its timestamps.
+    // What one record publishes with, covering both of its timestamps: an affine device-to-host mapping
+    // host_ns = (ticks - device_cycle_offset) / frequency, with sync_error the estimated error of a host time
+    // derived from it.
     //
     // The rate is the secant over the widest measured window the record itself spans: its probe pair, its own two
     // placements, or -- for a record that outlived the ring -- the whole retained history. Timestamps land exactly
@@ -51,7 +51,8 @@ public:
     // change older than the retained history, which is unobservable in principle. It is an estimate that tracks the
     // measured clock, not a worst-case ceiling; the didt suite bounds what the gap costs in practice.
     struct RecordMapping {
-        experimental::ProgramRealtimeClockSync clock_sync;
+        int64_t device_cycle_offset = 0;
+        std::chrono::nanoseconds sync_error{};
         double frequency = 0.0;
     };
 
@@ -160,17 +161,15 @@ private:
     std::chrono::nanoseconds last_sync_error_{};
 };
 
-// Reads the profiler core's cycle counter and feeds the probes into the RealtimeProfilerClockMapping it owns. Nothing
-// runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
-// push loop.
+// Reads a tensix core's free-running cycle counter over PCIe and feeds the probes into the DeviceClockMapping it
+// owns. Nothing runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by
+// whatever kernels the core is running.
 //
-// warm_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here needs
-// a publication protocol except the cost counters, which the receiver's reporter thread reads; those are relaxed
-// atomics for that reason alone.
-class RealtimeProfilerClockSync {
+// Single-threaded: warm_up() runs before the driving thread starts and every later call belongs to that thread.
+class DeviceClockSync {
 public:
-    using Anchor = RealtimeProfilerClockMapping::Anchor;
-    using RecordMapping = RealtimeProfilerClockMapping::RecordMapping;
+    using Anchor = DeviceClockMapping::Anchor;
+    using RecordMapping = DeviceClockMapping::RecordMapping;
 
     // Floor on how often each device's clock is read, under the probe every non-empty read already takes. Probe
     // spacing is the width of the pair a record is placed between, and a rate step inside that pair misplaces it by
@@ -187,29 +186,10 @@ public:
     // 5.05us and max from 1.28us to 25.06us.
     static constexpr int kResyncProbes = 4;
 
-    // What the sync path costs its caller. `busy` is wall time inside resync(), which is dominated by the blocking
-    // clock read, so on the receiver thread it is time not spent draining.
-    struct Cost {
-        uint64_t resyncs = 0;
-        // Reads taken to satisfy those resyncs. Reported to enough precision to see the rare second read, since that
-        // is what kResyncProbes exists for.
-        uint64_t clock_reads = 0;
-        std::chrono::nanoseconds busy{};
-
-        Cost& operator+=(const Cost& o) {
-            resyncs += o.resyncs;
-            clock_reads += o.clock_reads;
-            busy += o.busy;
-            return *this;
-        }
-        [[nodiscard]] Cost since(const Cost& earlier) const {
-            return Cost{resyncs - earlier.resyncs, clock_reads - earlier.clock_reads, busy - earlier.busy};
-        }
-    };
-
-    // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
-    RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core);
-    ~RealtimeProfilerClockSync();
+    // `clock_core` is the tensix whose wall-clock register is read; every tensix serves the same counter, so any
+    // core the caller already owns will do.
+    DeviceClockSync(ContextId context_id, IDevice* device, CoreCoord clock_core);
+    ~DeviceClockSync();
 
     // False when no UC window could be mapped onto the clock register. There is no slower path to fall back to: the
     // generic register read holds a chip-wide mutex and rewrites the window's configuration over PCIe on every call,
@@ -220,11 +200,10 @@ public:
     // clock's departure from. Runs before the receiver thread starts.
     void warm_up();
 
-    // Takes one probe and retains it, returning what the clock read blocked the calling thread for -- on the receiver
-    // thread that is time not spent draining. Cannot fail: the read is a load through an already-mapped window, and a
+    // Takes one probe and retains it. Cannot fail: the read is a load through an already-mapped window, and a
     // device without one is refused at construction, so the probe history only grows and a caller that has just
     // resynced can take a usable pair for granted.
-    std::chrono::nanoseconds resync();
+    void resync();
 
     // Whether this device is due a probe on the interval floor, having drained nothing to trigger one.
     [[nodiscard]] bool due_for_probe(std::chrono::steady_clock::time_point now) const {
@@ -249,13 +228,6 @@ public:
     // sync_error of the last record mapped, which is the bound currently standing for this device.
     [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return mapping_.last_sync_error(); }
 
-    [[nodiscard]] Cost cost() const {
-        return Cost{
-            resyncs_.load(std::memory_order_relaxed),
-            clock_reads_.load(std::memory_order_relaxed),
-            std::chrono::nanoseconds(busy_ns_.load(std::memory_order_relaxed))};
-    }
-
 private:
     void configure_clock_read_path();
     // Placed at the midpoint of its read's bracket, which is where the counter could have been read.
@@ -266,7 +238,7 @@ private:
     ContextId context_id_;
     uint32_t chip_id_ = 0;
     // Resolved once so the resolve does not sit inside the bracket.
-    CoreCoord profiler_core_virtual_;
+    CoreCoord clock_core_virtual_;
     uint32_t wall_clock_addr_lo_ = 0;
     uint32_t wall_clock_addr_hi_ = 0;
     // A UC window makes a probe a plain load. Required, not preferred: see has_direct_clock_read.
@@ -287,11 +259,7 @@ private:
     uint32_t last_clock_lo_ = 0;
     std::chrono::steady_clock::time_point last_probe_at_;
 
-    std::atomic<uint64_t> resyncs_{0};
-    std::atomic<uint64_t> clock_reads_{0};
-    std::atomic<int64_t> busy_ns_{0};
-
-    RealtimeProfilerClockMapping mapping_;
+    DeviceClockMapping mapping_;
 };
 
 }  // namespace tt::tt_metal

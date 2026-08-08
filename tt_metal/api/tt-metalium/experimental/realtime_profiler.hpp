@@ -122,9 +122,9 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  * asserting on collected record counts — the canonical use case is for tests that
  * want to gracefully skip when RT profiler is not supported.
  *
- * This is safe to call at any time after device construction. It becomes true after
- * the init-sync handshake for the first device completes, and returns to false when
- * every RT-profiler-enabled device has been closed.
+ * This is safe to call at any time after device construction. It becomes true once
+ * the first device's profiler is brought up (during mesh open), and returns to false
+ * when every RT-profiler-enabled device has been closed.
  */
 bool IsProgramRealtimeProfilerActive();
 

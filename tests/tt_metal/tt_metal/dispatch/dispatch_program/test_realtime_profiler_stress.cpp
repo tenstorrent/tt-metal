@@ -38,7 +38,6 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "tt_metal/common/env_lib.hpp"
-#include "tt_metal/impl/realtime_profiler/realtime_profiler_clock_sync.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
@@ -51,9 +50,11 @@ using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
-// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp. Trace length == ring capacity is the worst
-// case for back-pressure: BRISC fills the ring in roughly the time NCRISC takes to push 1-2 entries over PCIe, so by
-// enqueue ~80 of 4096 the ring is at capacity and stays there for the rest of the trace.
+// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
+// Picking the trace length equal to the ring capacity is the worst case for
+// the back-pressure path: BRISC can fill the ring in roughly the time it
+// takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
+// the ring is at capacity and stays there for the rest of the trace.
 constexpr uint32_t kNumProgramsInTrace = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
@@ -62,17 +63,26 @@ constexpr uint32_t kDefaultDropAccountingSeconds = 60;
 
 constexpr uint32_t kDefaultClockDriftSeconds = 60;
 
-// Sized generously so a future change to the dispatch packet layout can't silently OOM the trace region: blank-kernel
-// programs are tiny (~hundreds of bytes), so 64 MB comfortably covers 4096 of them.
+// Trace stores one EnqueueProgram dispatch packet per program. Blank-kernel
+// programs with no CBs / no runtime args are tiny (~hundreds of bytes), so
+// 64 MB is comfortably more than 4096 of them need; sized generously so a
+// future change to the dispatch packet layout can't silently OOM the trace
+// region and turn this into a flake. Lives in DRAM, not L1, so it doesn't
+// interact with the worker_l1_size eligibility check we just added.
 constexpr size_t kTraceRegionSize = 64 * 1024 * 1024;
 
-// runtime_id == 0 is reserved for infrastructure traffic and dropped host-side.
+// Programs in the trace use this runtime_id so every record we receive can
+// be attributed to this test (records with runtime_id == 0 are reserved for
+// infrastructure traffic and dropped host-side).
 constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 
-// 1s upper bound per record: dispatch_s' kernel_start/end pulse spread should never reach the millisecond range, so
-// anything beyond 1s means a timestamp got corrupted (e.g. wraparound, swapped halves) under load.
+// 1s upper bound per record: even a blank kernel still has dispatch_s'
+// kernel_start/end pulse spread by at least a handful of cycles, but it
+// should never be in the millisecond range. Anything beyond 1s means a
+// timestamp got corrupted (e.g. wraparound, swapped halves) under load.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
+// Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
 constexpr auto kStressReportInterval = std::chrono::seconds(10);
@@ -167,8 +177,11 @@ StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTal
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
 
-    // Single core minimizes dispatch payload (one launch_msg per RISC, one core's worth of kernel-config state), so
-    // the dispatch_s -> RT-profiler mailbox pulse rate is dominated by trace cmd consumption, not launch overhead.
+    // Blank kernels on BRISC + NCRISC + TRISC on a single core. Single-core
+    // minimizes dispatch payload (one launch_msg per RISC, one core's worth
+    // of kernel-config state) so the dispatch_s -> RT-profiler mailbox
+    // pulse rate is dominated by trace cmd consumption, not program
+    // launch overhead.
     const CoreCoord stress_core{0, 0};
     CreateKernel(
         program,
@@ -189,13 +202,20 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
     return workload;
 }
 
-// Warms the workload up outside the capture so the trace holds only steady-state dispatch packets, then captures
-// kNumProgramsInTrace back-to-back enqueues of it.
 distributed::MeshTraceId capture_blank_kernel_trace(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
     auto& cq = mesh_device->mesh_command_queue(0);
+
+    // Compile + warm up the workload outside the trace capture so the trace
+    // contains only steady-state dispatch packets (no compile/upload hops).
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
+    // Capture: 4096 back-to-back EnqueueMeshWorkload calls of the same
+    // blank-kernel workload. Reusing one workload (vs. building 4096
+    // distinct programs) keeps compile time near zero and avoids host-side
+    // memory pressure; the dispatch commands captured in the trace are
+    // independent per-enqueue, so dispatch_s still fires 4096 separate
+    // kernel_start pulses on replay.
     const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
@@ -218,13 +238,17 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
         DispatchCoreConfig{DispatchCoreType::WORKER});
 }
 
-// Null (mesh already closed) when the dispatch config leaves the profiler off, which the caller turns into a skip.
 template <typename Opener>
 std::shared_ptr<distributed::MeshDevice> open_profiler_mesh(Opener opener) {
     auto mesh_device = opener();
     if (mesh_device == nullptr) {
         return nullptr;
     }
+    // RT profiler activation is decided at mesh open, so by the time the mesh is
+    // opened this query is stable. When false, the dispatch config (ETH dispatch,
+    // non-MMIO chip, kernels nullified, no valid RT core, worker_l1_size shrunk
+    // below the ring size, ...) leaves RT profiler off; the test has nothing to
+    // assert in that case so it skips cleanly.
     if (!IsProgramRealtimeProfilerActive()) {
         mesh_device->close();
         return nullptr;
@@ -232,11 +256,12 @@ std::shared_ptr<distributed::MeshDevice> open_profiler_mesh(Opener opener) {
     return mesh_device;
 }
 
-// The slope of the published device_cycle_offset against an independent host clock is the rate the fitted frequency
-// is off from the chip's actual session-average frequency -- every reported duration is divided by that frequency,
-// and no re-anchoring corrects it. Brief AICLK steps are far larger (~5200ppm) but average out over a run; this
-// bounds what's left after they do. Measured under trace replay so the chip is hot, which is when the fit made at
-// cold bring-up is furthest off.
+// The slope of the published device_cycle_offset against an independent host clock is the rate the published
+// frequencies are systematically off from the chip's actual session-average rate -- every reported duration is
+// divided by a published frequency, so a systematic bias puts the same fraction on every duration. Each record's
+// frequency is its own probe-pair secant, so record-to-record scatter is expected and cancels here; what the
+// regression catches is a bias common to all of them. Brief AICLK steps are far larger (~5200ppm) but average out
+// over a run; this bounds what's left after they do. Measured under trace replay so the chip is hot.
 TEST(RealtimeProfilerStress, FittedFrequencyTracksTheSessionAverage) {
     // 50ppm is 50ns on a 1ms program. Measured on Blackhole: under 10ppm.
     constexpr double kMaxSessionFrequencyErrorPpm = 50.0;
@@ -411,21 +436,17 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         ++num_replays;
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
-            const uint64_t pub_batches = rt->num_published_batches();
-            const double mean_batch =
-                pub_batches ? static_cast<double>(rt->num_published_records()) / pub_batches : 0.0;
             const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s replays={} published={} peak_fifo={} this window, {} all-time of {} pages "
-                "mean_batch={:.1f} | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
+                "| sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - replay_start).count(),
                 num_replays,
                 rt->num_published_records(),
                 rt->take_peak_fifo_pages(),
                 rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
-                mean_batch,
                 sync_us.p50,
                 sync_us.p90,
                 sync_us.p99,
@@ -442,9 +463,6 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
     const uint32_t ring_full_waits = rt->read_ring_full_wait_count();
-    const uint64_t published_batches = rt->num_published_batches();
-    const double mean_publish_batch =
-        published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
     UnregisterProgramRealtimeProfilerCallback(handle);
     mesh_device->release_mesh_trace(trace_id);
 
@@ -455,14 +473,13 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} "
+        "peak_fifo={}/{} pages, ring_full_waits={}, {} "
         "malformed-timestamp drops, {} bad-frequency, {} implausible-duration; "
         "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
         stress_records.load(),
         num_active_devices,
         num_replays,
         max_callback_batch.load(),
-        mean_publish_batch,
         peak_fifo_pages,
         fifo_capacity_pages,
         ring_full_waits,
@@ -509,14 +526,12 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     constexpr uint32_t kPacedId = 0x6AC0;
     constexpr std::array<std::chrono::microseconds, 6> kGaps = {5us, 50us, 200us, 1000us, 5000us, 5us};
     constexpr uint32_t kOpsPerGap = 100;
-    // A record cannot be published until a probe has read past it, so most of its delivery latency is the staging wait
-    // -- up to a whole sync interval, averaging half of one. That is a deliberate cadence, not a delivery cost, so
-    // bounding the total against a fixed number would make this a test of kSyncInterval. What is worth holding is the
-    // part after a record becomes publishable: the ring hand-off and the consumer wake.
-    const double staging_wait_us =
-        std::chrono::duration<double, std::micro>{RealtimeProfilerClockSync::sync_interval()}.count() / 2.0;
-    const double kMaxPacedLatencyP50Us = staging_wait_us + 250.0;
-    const double kMaxPacedLatencyP99Us = staging_wait_us + 750.0;
+    // Nothing gates publication: the receiver reads, probes, and publishes in one pass, so delivery latency is the
+    // receiver's idle backoff (capped at 100us) plus the consumer wake. Measured worst per-gap p50 is ~74us and
+    // p99 ~121us; the limits leave a few times that for CI noise while still catching a fixed oversleep anywhere
+    // in the path.
+    constexpr double kMaxPacedLatencyP50Us = 250.0;
+    constexpr double kMaxPacedLatencyP99Us = 600.0;
 
     constexpr uint32_t num_gaps = static_cast<uint32_t>(kGaps.size());
     constexpr uint32_t total_paced = kOpsPerGap * num_gaps;
@@ -688,6 +703,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     // calls. quiesce_devices() stops the devices but does not wait for the profiler to drain.
     std::this_thread::sleep_for(kPostQuiesceDrain);
 
+    // fraction of the production rate each consumer can sustain
     constexpr double kBorderlineSustainFraction = 0.95;
     constexpr double kSlowSustainFraction = 0.1;
 
@@ -749,14 +765,11 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
-            const uint64_t pub_batches = rt->num_published_batches();
-            const double mean_batch =
-                pub_batches ? static_cast<double>(rt->num_published_records()) / pub_batches : 0.0;
             const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s keeps_up: recv={} drop={} | borderline: recv={} drop={} | slow: recv={} "
-                "drop={} | peak_fifo={} this window, {} all-time of {} pages | mean_batch={:.1f} | sync error us: "
+                "drop={} | peak_fifo={} this window, {} all-time of {} pages | sync error us: "
                 "p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
                 keeps_up.received.load(),
@@ -768,7 +781,6 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 rt->take_peak_fifo_pages(),
                 rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
-                mean_batch,
                 sync_us.p50,
                 sync_us.p90,
                 sync_us.p99,
@@ -785,9 +797,6 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
 
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
-    const uint64_t published_batches = rt->num_published_batches();
-    const double mean_publish_batch =
-        published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
 
     const uint64_t keeps_up_received = keeps_up.received.load();
     const uint64_t keeps_up_dropped = keeps_up.dropped.load();
@@ -816,14 +825,13 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const auto sync_us = stress_sync_percentiles_us(sync_errors);
     log_info(
         tt::LogTest,
-        "[RT profiler stress] devices={} total={} peak_fifo={}/{} pages mean_publish_batch={:.1f} | "
+        "[RT profiler stress] devices={} total={} peak_fifo={}/{} pages | "
         "borderline: recv={} drop={} sum={} | slow: recv={} drop={} sum={} | "
         "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
         num_devices,
         keeps_up_received,
         peak_fifo_pages,
         fifo_capacity_pages,
-        mean_publish_batch,
         borderline_received,
         borderline_dropped,
         borderline_total,

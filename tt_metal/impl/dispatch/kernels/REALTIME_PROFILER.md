@@ -41,7 +41,7 @@ dispatch_s            BRISC reader          NCRISC pusher          host
     |                      |                      |   (coalesced PCIe    |
     |                      |                      |    writes, ~420 ns) ->| hugepage
     |                      |                      |                      |-- read pages
-    |                      |                      |                      |   -> manager ring
+    |                      |                      |                      |   -> record ring
 ```
 
 ## Double-Buffer Protocol
@@ -106,5 +106,5 @@ every record arrives with the device ring and host D2H FIFO never filling.
 - The host side runs a receiver thread that drains device→host pages and
   publishes decoded records onto a `BroadcastRing`; separate per-callback
   consumer threads read from the ring and invoke the registered callbacks. A slow
-  callback only drops records for that consumer (tracked in `Consumer::dropped`);
-  it never stalls page draining or dispatch.
+  callback only drops records for that consumer (reported via
+  `ProgramRealtimeRecordBatch::dropped`); it never stalls page draining or dispatch.

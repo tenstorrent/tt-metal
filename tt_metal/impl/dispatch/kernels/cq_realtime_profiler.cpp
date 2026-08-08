@@ -14,7 +14,6 @@
 #include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
-#include "api/debug/dprint.h"
 
 // Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
 constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);  // 32 bytes
@@ -37,7 +36,6 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
     // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
-    // Host post-mortems can pair it with ncrisc_debug.socket_reserve_pages_{enter,exit}_count.
     if (rt_ring_full(ring_buffer)) {
         ring_buffer->ring_full_wait_count++;
         while (rt_ring_full(ring_buffer)) {
@@ -60,8 +58,6 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
 }
 
 void kernel_main() {
-    DPRINT("REALTIME BRISC: kernel started\n");
-
     // Initialize ring buffer
     ring_buffer->write_index = 0;
     ring_buffer->read_index = 0;

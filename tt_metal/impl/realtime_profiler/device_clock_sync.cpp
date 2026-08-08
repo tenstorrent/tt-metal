@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/realtime_profiler/realtime_profiler_clock_sync.hpp"
+#include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -44,7 +44,7 @@ constexpr auto kMaxProbeGapBeforeRereadingHi = std::chrono::seconds(1);
 
 }  // namespace
 
-void RealtimeProfilerClockMapping::retain(const Anchor& probe) {
+void DeviceClockMapping::retain(const Anchor& probe) {
     if (probes_end_ > oldest_probe()) {
         const Anchor& newest = probe_at(probes_end_ - 1);
         if (probe.ticks <= newest.ticks || probe.host <= newest.host) {
@@ -55,7 +55,7 @@ void RealtimeProfilerClockMapping::retain(const Anchor& probe) {
     ++probes_end_;
 }
 
-uint64_t RealtimeProfilerClockMapping::first_probe_at_or_past(uint64_t ticks) const {
+uint64_t DeviceClockMapping::first_probe_at_or_past(uint64_t ticks) const {
     uint64_t lo = oldest_probe();
     uint64_t hi = probes_end_;
     while (lo < hi) {
@@ -72,7 +72,7 @@ uint64_t RealtimeProfilerClockMapping::first_probe_at_or_past(uint64_t ticks) co
 // A probe inside the chord is a point the secant was not fitted to, so its distance from the secant is the clock's
 // departure there. Reads zero on a plateau, which is nearly always; zero with no interior probe means no evidence
 // rather than no bow.
-std::chrono::nanoseconds RealtimeProfilerClockMapping::departure_from_chord(
+std::chrono::nanoseconds DeviceClockMapping::departure_from_chord(
     const Anchor& open, const Anchor& close, const Anchor& interior) {
     const double span_ns =
         static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(close.host - open.host).count());
@@ -88,7 +88,7 @@ std::chrono::nanoseconds RealtimeProfilerClockMapping::departure_from_chord(
     return departure - std::min(departure, explained_by_reads);
 }
 
-std::chrono::nanoseconds RealtimeProfilerClockMapping::measured_bow(uint64_t close_index) const {
+std::chrono::nanoseconds DeviceClockMapping::measured_bow(uint64_t close_index) const {
     // The pair placing a record is adjacent, so nothing lies inside it and the departure has to be read one probe out.
     // Scaled by the span ratio, because a rate step bows the trajectory in proportion to the span it acts over.
     if (close_index < oldest_probe() + 2) {
@@ -106,7 +106,7 @@ std::chrono::nanoseconds RealtimeProfilerClockMapping::measured_bow(uint64_t clo
     return departure * pair_span.count() / triple_span.count();
 }
 
-std::optional<RealtimeProfilerClockMapping::Chord> RealtimeProfilerClockMapping::chord_around(uint64_t ticks) const {
+std::optional<DeviceClockMapping::Chord> DeviceClockMapping::chord_around(uint64_t ticks) const {
     const uint64_t begin = oldest_probe();
     if (probes_end_ - begin < 2) {
         return std::nullopt;
@@ -134,17 +134,15 @@ std::optional<RealtimeProfilerClockMapping::Chord> RealtimeProfilerClockMapping:
     };
 }
 
-RealtimeProfilerClockMapping::RecordMapping RealtimeProfilerClockMapping::anchored(
+DeviceClockMapping::RecordMapping DeviceClockMapping::anchored(
     double frequency, uint64_t anchor_ticks, double anchor_host_ns, std::chrono::nanoseconds error) {
     return RecordMapping{
-        experimental::ProgramRealtimeClockSync{
-            .device_cycle_offset = std::llround(static_cast<double>(anchor_ticks) - frequency * anchor_host_ns),
-            .sync_error = error,
-        },
-        frequency};
+        .device_cycle_offset = std::llround(static_cast<double>(anchor_ticks) - frequency * anchor_host_ns),
+        .sync_error = error,
+        .frequency = frequency};
 }
 
-void RealtimeProfilerClockMapping::pin_start(uint64_t ticks) {
+void DeviceClockMapping::pin_start(uint64_t ticks) {
     if (ticks == 0 || ticks == last_pin_ticks_) {
         return;
     }
@@ -156,7 +154,7 @@ void RealtimeProfilerClockMapping::pin_start(uint64_t ticks) {
     pinned_start_ = Pin{ticks, host_ns_on(*chord, ticks), chord->sync_error};
 }
 
-std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClockMapping::map_record(
+std::optional<DeviceClockMapping::RecordMapping> DeviceClockMapping::map_record(
     uint64_t start_ticks, uint64_t end_ticks) {
     if (!chord_.has_value() || start_ticks > chord_->close_ticks) {
         chord_ = chord_around(start_ticks);
@@ -212,20 +210,20 @@ std::optional<RealtimeProfilerClockMapping::RecordMapping> RealtimeProfilerClock
     if (pinned_start_.has_value() && start_ticks >= pinned_start_->ticks) {
         pinned_start_.reset();
     }
-    last_sync_error_ = mapping.clock_sync.sync_error;
+    last_sync_error_ = mapping.sync_error;
     return mapping;
 }
 
-std::chrono::nanoseconds RealtimeProfilerClockSync::sync_interval() {
+std::chrono::nanoseconds DeviceClockSync::sync_interval() {
     static const std::chrono::nanoseconds interval =
         std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 500));
     return interval;
 }
 
-RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core) :
+DeviceClockSync::DeviceClockSync(ContextId context_id, IDevice* device, CoreCoord clock_core) :
     context_id_(context_id),
     chip_id_(device->id()),
-    profiler_core_virtual_(device->virtual_core_from_logical_core(profiler_core, CoreType::WORKER)) {
+    clock_core_virtual_(device->virtual_core_from_logical_core(clock_core, CoreType::WORKER)) {
     TTZoneScopedDN(RT_PROFILER, "ClockSyncConfigure");
     const auto& hal = MetalContext::instance(context_id_).hal();
     wall_clock_addr_lo_ = hal.get_tensix_wall_clock_reg_addr_lo();
@@ -233,9 +231,9 @@ RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevi
     configure_clock_read_path();
 }
 
-RealtimeProfilerClockSync::~RealtimeProfilerClockSync() = default;
+DeviceClockSync::~DeviceClockSync() = default;
 
-void RealtimeProfilerClockSync::configure_clock_read_path() {
+void DeviceClockSync::configure_clock_read_path() {
     try {
         auto* tlb_manager =
             MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tlb_manager();
@@ -248,8 +246,8 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         }
         tt::umd::tlb_data cfg{};
         cfg.local_offset = wall_clock_addr_lo_;
-        cfg.x_end = profiler_core_virtual_.x;
-        cfg.y_end = profiler_core_virtual_.y;
+        cfg.x_end = clock_core_virtual_.x;
+        cfg.y_end = clock_core_virtual_.y;
         cfg.ordering = tt::umd::tlb_data::Strict;
         clock_tlb_ = tlb_manager->allocate_tlb_window(cfg, tt::umd::TlbMapping::UC);
         if (clock_tlb_ == nullptr) {
@@ -269,7 +267,7 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
     }
 }
 
-void RealtimeProfilerClockSync::configure_program_start_peek(
+void DeviceClockSync::configure_program_start_peek(
     CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr) {
     try {
         const tt_xy_pair tlb_core(dispatch_s_virtual.x, dispatch_s_virtual.y);
@@ -297,7 +295,7 @@ void RealtimeProfilerClockSync::configure_program_start_peek(
     }
 }
 
-void RealtimeProfilerClockSync::peek_running_program_start() {
+void DeviceClockSync::peek_running_program_start() {
     if (peek_start_a_ == nullptr) {
         return;
     }
@@ -308,7 +306,7 @@ void RealtimeProfilerClockSync::peek_running_program_start() {
     mapping_.pin_start(std::max(a, b));
 }
 
-RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
+DeviceClockSync::Anchor DeviceClockSync::probe() {
     TTZoneScopedDN(RT_PROFILER, "Probe");
     // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a gap
     // long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low word
@@ -334,7 +332,6 @@ RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
     }
     last_clock_lo_ = lo;
     last_probe_at_ = host_after;
-    clock_reads_.fetch_add(1, std::memory_order_relaxed);
     const auto bracket = host_after - host_before;
     TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
     const auto bracket_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(bracket);
@@ -342,7 +339,7 @@ RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::probe() {
         host_before + placement_error(bracket_ns), (static_cast<uint64_t>(cached_clock_hi_) << 32) | lo, bracket_ns};
 }
 
-RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::best_of(int probes) {
+DeviceClockSync::Anchor DeviceClockSync::best_of(int probes) {
     Anchor best = probe();
     for (int i = 1; i < probes; i++) {
         // Each read blocks the calling thread on PCIe, so the remaining ones are only worth taking while they might
@@ -365,7 +362,7 @@ RealtimeProfilerClockSync::Anchor RealtimeProfilerClockSync::best_of(int probes)
 // Enough probes for the first record to have a pair to be placed between and a third to read the departure from,
 // spaced a sync interval apart so the first chords are the same width as every later one. This replaced a 100-probe
 // half-second fit whose result never reached a consumer.
-void RealtimeProfilerClockSync::warm_up() {
+void DeviceClockSync::warm_up() {
     TTZoneScopedDN(RT_PROFILER, "ClockWarmUp");
     constexpr int kWarmUpProbes = 4;
     // Warms the cold PCIe path; its bracket is not representative and it is not retained.
@@ -378,15 +375,9 @@ void RealtimeProfilerClockSync::warm_up() {
     }
 }
 
-std::chrono::nanoseconds RealtimeProfilerClockSync::resync() {
+void DeviceClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
-    const auto started_at = std::chrono::steady_clock::now();
-    resyncs_.fetch_add(1, std::memory_order_relaxed);
     mapping_.retain(best_of(kResyncProbes));
-    const auto blocked_for = std::chrono::steady_clock::now() - started_at;
-    busy_ns_.fetch_add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(blocked_for).count(), std::memory_order_relaxed);
-    return blocked_for;
 }
 
 }  // namespace tt::tt_metal
