@@ -61,7 +61,7 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Compile time varargs
     //--------------------------------
-    // Values of the varargs for the kernel.
+    // Values of the compile-time varargs for the kernel.
     std::vector<uint32_t> compile_time_varargs;
 
     //--------------------------------

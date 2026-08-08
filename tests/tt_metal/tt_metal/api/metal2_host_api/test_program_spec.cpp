@@ -4140,12 +4140,12 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 }
 
 // ============================================================================
-// Compile-time varargs — mock-device bake & JIT smoke
+// Compile-time varargs — positional CTA prefix + JIT smoke
 // ============================================================================
 //
-// Host: KernelAdvancedOptions::compile_time_varargs (values fixed at ProgramSpec time).
-// Kernel: get_compile_time_vararg* — literals baked into kernel_args_generated.h (Metal 2.0).
-// Separate from positional KERNEL_COMPILE_TIME_ARGS (TensorBinding DSpec / legacy CreateKernel).
+// Host: KernelAdvancedOptions::compile_time_varargs (folded into compile_time_args_ as a prefix).
+// Kernel: get_compile_time_vararg* — thin wrappers over kernel_compile_time_args[0..N).
+// TensorBinding CTA payloads follow that prefix in KERNEL_COMPILE_TIME_ARGS.
 
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     NodeCoord node{0, 0};
@@ -4155,7 +4155,7 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 // std::array::operator== is not constexpr until C++20; walk elements instead.
 constexpr bool compile_time_varargs_match_expected() {
-    constexpr auto& varargs = get_compile_time_varargs();
+    constexpr auto varargs = get_compile_time_varargs();
     constexpr std::array<uint32_t, 3> expected = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
     if (varargs.size() != expected.size()) {
         return false;
@@ -4243,7 +4243,7 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 constexpr bool compile_time_varargs_are_iota() {
-    constexpr auto& varargs = get_compile_time_varargs();
+    constexpr auto varargs = get_compile_time_varargs();
     if (varargs.size() != 1024u) {
         return false;
     }
@@ -4271,21 +4271,20 @@ void kernel_main() {}
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
-// CTA varargs must not share KERNEL_COMPILE_TIME_ARGS with TensorBinding payloads.
-// Verifies independence: binding cta_offset stays 0; positional compile_args are binding-only;
-// baked get_compile_time_vararg* and TensorAccessor still both work.
-TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIndependentOfTensorBindingCTAs) {
+// CTA varargs are a positional prefix ahead of TensorBinding CTA payloads.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsPrefixBeforeTensorBindingCTAs) {
     NodeCoord node{0, 0};
     constexpr uint32_t kVararg0 = 0xCAFEBABEu;
     constexpr uint32_t kVararg1 = 0xDEADBEEFu;
     const std::vector<uint32_t> cta_varargs = {kVararg0, kVararg1};
+    const uint32_t n = static_cast<uint32_t>(cta_varargs.size());
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
-    // Binding CTA_OFFSET stays 0 (varargs are not a positional prefix).
+    // Binding CTA_OFFSET is shifted past the CTA-vararg prefix.
     static_assert(tensor::input_ta_t::args_t::is_dram);
     TensorAccessor accessor(tensor::input_ta);
     auto noc_addr = accessor.get_noc_addr(0);
@@ -4306,16 +4305,18 @@ void kernel_main() {
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
-    EXPECT_EQ(handles[0].cta_offset, 0u)
-        << "TensorBinding CTA payload must start at 0; user CTA varargs are not a positional prefix";
+    EXPECT_EQ(handles[0].cta_offset, n) << "TensorBinding CTA payload must start after the CTA-vararg prefix";
+    EXPECT_EQ(kernel->get_compile_time_vararg_count(), n);
 
     const auto compile_args = kernel->compile_time_args();
-    ASSERT_FALSE(compile_args.empty()) << "positional CTAs should hold the binding args_config word";
-    EXPECT_THAT(kernel->get_compile_time_varargs(), ::testing::ElementsAreArray(cta_varargs));
+    ASSERT_GE(compile_args.size(), n + 1u) << "positional CTAs should hold varargs then binding args_config";
+    EXPECT_THAT(
+        std::vector<uint32_t>(compile_args.begin(), compile_args.begin() + n),
+        ::testing::ElementsAreArray(cta_varargs));
     const auto args_config =
-        tensor_accessor::ArgsConfig(static_cast<tensor_accessor::ArgsConfig::Underlying>(compile_args[0]));
+        tensor_accessor::ArgsConfig(static_cast<tensor_accessor::ArgsConfig::Underlying>(compile_args[n]));
     EXPECT_TRUE(args_config.test(tensor_accessor::ArgConfig::IsDram))
-        << "positional compile_args[0] must be the tensor args_config, not a CTA vararg";
+        << "positional compile_args[N] must be the tensor args_config after the CTA-vararg prefix";
 
     IDevice* device = mesh_device_->get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));

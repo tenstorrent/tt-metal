@@ -145,13 +145,9 @@ public:
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
 
-    // Metal 2.0: user compile-time varargs.
-    // Separate from positional compile_args / Legacy CTA infrastructure
-    // Default empty for non–Metal 2.0 kernels.
-    virtual const std::vector<uint32_t>& get_compile_time_varargs() const {
-        static const std::vector<uint32_t> k_empty;
-        return k_empty;
-    }
+    // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
+    // Default 0 for non–Metal 2.0 kernels.
+    virtual uint32_t get_compile_time_vararg_count() const { return 0; }
 
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
