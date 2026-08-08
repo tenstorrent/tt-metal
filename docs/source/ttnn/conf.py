@@ -108,6 +108,11 @@ html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_con
 html_static_path = ["_static"]
 html_js_files = ["posthog.js"]
 
+# Drop the "View page source" link from the breadcrumb bar at build time,
+# instead of removing it in the browser. The theme still renders the (now
+# empty) .wy-breadcrumbs-aside slot, which tt_theme.css hides.
+html_show_sourcelink = False
+
 html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
 
 
