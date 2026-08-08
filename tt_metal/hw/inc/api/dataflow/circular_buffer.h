@@ -132,12 +132,28 @@ public:
         return rd_ptr_bytes;
     }
 
+#ifndef COMPILE_FOR_TRISC
+    // Byte extent that scoped_lock() locks: the CB's whole backing region. Exposed so a caller that
+    // has to name that extent (e.g. publishing it to a remote core) gets the same address the lock
+    // records, rather than rediscovering it.
+    struct LockRegion {
+        uint32_t addr;
+        uint32_t num_bytes;
+    };
+
+    LockRegion get_lock_region() const {
+        const auto& iface = get_local_cb_interface(cb_id_);
+        // cb_addr_shift is 0 outside TRISC (circular_buffer_interface.h), so the fifo fields are
+        // already byte values here -- same convention get_write_ptr()/get_read_ptr() return.
+        return {iface.fifo_limit - iface.fifo_size, iface.fifo_size};
+    }
+#endif
+
     [[nodiscard]] auto scoped_lock() {
 #ifndef COMPILE_FOR_TRISC
-        auto& iface = get_local_cb_interface(cb_id_);
-        uint32_t base_16b = iface.fifo_limit - iface.fifo_size;
-        uint32_t addr = base_16b << 4;
-        uint32_t num_bytes = iface.fifo_size << 4;
+        const LockRegion region = get_lock_region();
+        const uint32_t addr = region.addr;
+        const uint32_t num_bytes = region.num_bytes;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
         return Lock([this, addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
