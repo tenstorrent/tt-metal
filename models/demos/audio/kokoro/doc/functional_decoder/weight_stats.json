@@ -1,0 +1,286 @@
+{
+  "albert_config": {
+    "transformers_version": "5.11.0",
+    "architectures": null,
+    "output_hidden_states": false,
+    "return_dict": true,
+    "dtype": null,
+    "chunk_size_feed_forward": 0,
+    "is_encoder_decoder": false,
+    "id2label": {
+      "0": "LABEL_0",
+      "1": "LABEL_1"
+    },
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "problem_type": null,
+    "vocab_size": 178,
+    "embedding_size": 128,
+    "hidden_size": 768,
+    "num_hidden_layers": 12,
+    "num_hidden_groups": 1,
+    "num_attention_heads": 12,
+    "intermediate_size": 2048,
+    "inner_group_num": 1,
+    "hidden_act": "gelu_new",
+    "hidden_dropout_prob": 0.0,
+    "attention_probs_dropout_prob": 0.0,
+    "max_position_embeddings": 512,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "classifier_dropout_prob": 0.1,
+    "pad_token_id": 0,
+    "bos_token_id": 2,
+    "eos_token_id": 3,
+    "tie_word_embeddings": true,
+    "_name_or_path": "",
+    "dropout": 0.1,
+    "model_type": "albert",
+    "output_attentions": false
+  },
+  "tensor_stats": {
+    "embeddings.word_embeddings.weight": {
+      "shape": [
+        178,
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": 7.190019823610783e-05,
+      "std": 0.060745421797037125,
+      "min": -0.3370845317840576,
+      "max": 0.32849422097206116
+    },
+    "embeddings.position_embeddings.weight": {
+      "shape": [
+        512,
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": 0.00013679973199032247,
+      "std": 0.06530047953128815,
+      "min": -0.3143881559371948,
+      "max": 0.2921552360057831
+    },
+    "embeddings.token_type_embeddings.weight": {
+      "shape": [
+        2,
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.0018865480087697506,
+      "std": 0.05225411802530289,
+      "min": -0.3349117040634155,
+      "max": 0.6565565466880798
+    },
+    "embeddings.LayerNorm.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": 0.7008109092712402,
+      "std": 0.07696101814508438,
+      "min": 0.3366166353225708,
+      "max": 0.8745803833007812
+    },
+    "embeddings.LayerNorm.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": 0.006948726251721382,
+      "std": 0.12865883111953735,
+      "min": -0.5903204679489136,
+      "max": 0.49102145433425903
+    },
+    "encoder.embedding_hidden_mapping_in.weight": {
+      "shape": [
+        768,
+        128
+      ],
+      "dtype": "torch.float32",
+      "mean": 8.630513912066817e-05,
+      "std": 0.06031709164381027,
+      "min": -0.44841980934143066,
+      "max": 0.4760008156299591
+    },
+    "encoder.embedding_hidden_mapping_in.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.0005556941032409668,
+      "std": 0.06526703387498856,
+      "min": -0.7437697649002075,
+      "max": 0.21428193151950836
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.full_layer_layer_norm.weight": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": 1.8365821838378906,
+      "std": 0.14670073986053467,
+      "min": 0.5322332978248596,
+      "max": 2.6558167934417725
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.full_layer_layer_norm.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.04023124277591705,
+      "std": 0.1367894560098648,
+      "min": -1.145550012588501,
+      "max": 2.970500946044922
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.query.weight": {
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": 1.3307657354744151e-05,
+      "std": 0.06245534121990204,
+      "min": -0.31301209330558777,
+      "max": 0.357038289308548
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.query.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.004258448723703623,
+      "std": 0.079197958111763,
+      "min": -0.2265290915966034,
+      "max": 0.3461879789829254
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.key.weight": {
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -3.579111216822639e-05,
+      "std": 0.06406264007091522,
+      "min": -1.4658300876617432,
+      "max": 1.2147194147109985
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.key.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.1465194821357727,
+      "std": 2.2802441120147705,
+      "min": -10.4337158203125,
+      "max": 12.233077049255371
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.value.weight": {
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -5.734006117563695e-05,
+      "std": 0.05729334428906441,
+      "min": -0.3223011791706085,
+      "max": 0.2876228392124176
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.value.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": 0.0011500576511025429,
+      "std": 0.03592877835035324,
+      "min": -0.31176701188087463,
+      "max": 0.35529187321662903
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.dense.weight": {
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -1.0215486327069812e-05,
+      "std": 0.05809028819203377,
+      "min": -2.2118964195251465,
+      "max": 2.240363597869873
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.dense.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.0005534964730031788,
+      "std": 0.12207094579935074,
+      "min": -2.835655450820923,
+      "max": 0.2906237840652466
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.LayerNorm.weight": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": 0.7416176795959473,
+      "std": 0.0657501369714737,
+      "min": 0.41501864790916443,
+      "max": 1.4500795602798462
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.attention.LayerNorm.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.01920641027390957,
+      "std": 0.08622090518474579,
+      "min": -0.6468747854232788,
+      "max": 0.3044241964817047
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.ffn.weight": {
+      "shape": [
+        2048,
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.0001482882653363049,
+      "std": 0.06546624004840851,
+      "min": -0.6759824156761169,
+      "max": 0.47770369052886963
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.ffn.bias": {
+      "shape": [
+        2048
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.05104817450046539,
+      "std": 0.0391814149916172,
+      "min": -0.20030413568019867,
+      "max": 0.34978511929512024
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.ffn_output.weight": {
+      "shape": [
+        768,
+        2048
+      ],
+      "dtype": "torch.float32",
+      "mean": 2.7237389076617546e-05,
+      "std": 0.06618740409612656,
+      "min": -2.544764280319214,
+      "max": 2.7088699340820312
+    },
+    "encoder.albert_layer_groups.0.albert_layers.0.ffn_output.bias": {
+      "shape": [
+        768
+      ],
+      "dtype": "torch.float32",
+      "mean": -0.0009094670531339943,
+      "std": 0.12266158312559128,
+      "min": -2.567599296569824,
+      "max": 0.2530428171157837
+    }
+  }
+}
