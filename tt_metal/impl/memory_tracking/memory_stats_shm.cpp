@@ -30,7 +30,7 @@ class Allocator;
 // Implementation of SharedMemoryStatsProvider
 
 SharedMemoryStatsProvider::SharedMemoryStatsProvider(
-    uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose) :
+    uint64_t asic_id, int device_id, bool tracking_disabled, bool cb_tracking_enabled, bool verbose) :
     asic_id_(asic_id),
     device_id_(device_id),
     shm_fd_(-1),
@@ -40,6 +40,7 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     // MetalContext's rtoptions) -- it's a process-wide debug toggle, no need to look it up
     // again per allocation.
     per_pid_tracking_enabled_(!tracking_disabled),
+    cb_tracking_enabled_(cb_tracking_enabled),
     verbose_enabled_(verbose),
     is_creator_(false) {
     // Format: /tt_device_<chip_unique_id>_memory
