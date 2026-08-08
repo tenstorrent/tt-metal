@@ -15,9 +15,16 @@
 > now 10/10 clean and slow dispatch is unblocked. **All previously recorded slow-dispatch cells are void.**
 > `14-2..14-11` are TENSIX WORKERS (one column), not the DRAM/DRISC column.
 >
-> **§N+25 (newest): the DRISC drainer now polls the FULL 120-core grid by default** (verified lossless),
+> **§N+25: the DRISC drainer now polls the FULL 120-core grid by default** (verified lossless),
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
+>
+> **§N+26/§N+27 (newest) kill BOTH standing wedge hypotheses.** The IOMMU page-fault lead is
+> decorrelated in both directions — do not resurrect it. The drainer/`dram_membar` subchannel collision
+> is REFUTED and inverted: bank 0 (which collides) is the safe default at 0/61, bank 1 (which does not)
+> hangs at 15.6%. **Keep `TT_METAL_PERF_DEBUG_DRISC_BANK` at 0**, and validate every bank before running
+> more than one drainer. Also in §N+26: WEDGE / MMIO-timeout / NocHangError are ONE state, so cascades
+> must be **scored per event, not per run** — per-run scoring turned a p~0.001 effect into "noise".
 
 <!--
 SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
@@ -2578,3 +2585,104 @@ undrained; their rings fill and they block. Match them, or use `FULL_GRID=1`."* 
 entirely and voided a 2x2. **A known footgun buried in a long audit log is a footgun you will pay for
 twice.** §N+6 also independently confirms full-grid runs are clean ("4 runs at the 110 grid, 6 at 120"),
 which is corroborating evidence for this default change.
+
+## §N+26 — The IOMMU lead is DEAD, and three failure names are one state (bh-05, 2026-08-07/08)
+
+### RETRACT the IOMMU page-fault lead (§N+21 C's "BEST LEAD")
+
+Decorrelated in **both** directions on the same day:
+
+- **Faults without wedges.** The last `AMD-Vi IO_PAGE_FAULT` burst was **16:58:41**; the block running
+  at that time was entirely clean.
+- **Wedges without faults.** Two wedges at ~**18:50** and ~**19:10**. No fault logged at either, and
+  none after 16:58:41 at all (53 fault lines total, all earlier).
+
+The four near-zero IOVAs are real and still unexplained, but they are **not** the wedge. Do not spend
+more time correlating them. §N+22/§N+23's "it fits the IOMMU lead" conclusions lose that support --
+the DRISC-only asymmetry stands, its proposed explanation does not.
+
+### The wedge reproduces with a fixed signature
+
+120 runs, slow dispatch, DRISC, delay 125: **3 events**, each identical -- two aborts on a **healthy**
+card, then `Unknown|63`. Rate ~2.5%, matching §N+21 A's 4/200 under fast dispatch.
+
+The first symptom is not a dead endpoint, it is a **slow** one:
+
+```
+MMIO per-op timeout: 4B load took 220212 us (budget=2 ms), 4 of 4 bytes remaining.
+  LaunchProgram -> Cluster::dram_barrier -> LocalChip::dram_membar
+    -> insert_host_to_device_barrier -> set_membar_flag -> read_from_device
+```
+
+A 4 B MMIO load taking **220 ms** against a 2 ms budget. Note this is the DISCOVERY site, not
+necessarily the fault site: `dram_barrier` is the first substantial MMIO read in a fresh process, so it
+is simply where a card that died earlier gets noticed.
+
+### WEDGE / MMIO_HANG / NocHangError are ONE state -- and this breaks per-run scoring
+
+Three different-looking failures are the same hung card:
+
+| surface | what it is |
+|---|---|
+| card `Unknown\|63` | endpoint config space all-ones |
+| `MMIO per-op timeout` | a load that never completed |
+| `NocHangError: NOC0 is hung on PCIe device ID 0` | UMD noticing at device open |
+
+A hung card fails **every following run** until a reset, so one event produces an 8-9 run cascade. A
+harness that resets only on `Unknown` lets cascades span many runs -- and if arms are interleaved, the
+cascade contaminates **both** arms.
+
+**SCORE CASCADES PER EVENT, NOT PER RUN.** An event is the first non-clean run after a clean one;
+runs inside an ongoing cascade are uninformative and must leave the denominator. In §N+27 the same
+data read 6-vs-3 ("probably noise") per run and 10-vs-0 (p ~ 0.001) per event. Randomizing arm order
+does **not** rescue per-run scoring here -- it spreads the contamination evenly and hides the effect.
+
+### One more scoring trap: a drainer that never starts
+
+A run whose drainer fails to start **disarms the producers**, finishes fast, and scores CLEAN -- with
+no egress at all, so no wedge was ever possible. An early 120-run wedge-rate block was scored entirely
+this way and was void; the tell was `stalls=NA` on every row. Always record whether the drainer came
+up (`resident on logical` in the log) and exclude runs where it did not.
+
+## §N+27 — REFUTED: the drainer/`dram_membar` subchannel collision is not the wedge (bh-26, 2026-08-08)
+
+**The hypothesis.** `pick_unused_dram_logical_core()` reserves a bank's WORKER and ETH endpoints and
+returns the first subchannel left. UMD's `dram_membar()` barriers **subchannel 0** of every channel
+(`dram_membar(channels, subchannel = 0)`; `Cluster::dram_barrier` passes no subchannel). On banks 0 and
+4-7 the worker/eth endpoints are `[2,1]`, so the only free port **is** subchannel 0 -- the drainer lands
+exactly on the core the host barriers, and the profiler puts that core in **stream mode**, which
+redefines what an inbound DRAM-range address does. Banks 1-3 have endpoints `[0,1]`, so the drainer
+gets subchannel 2, which the barrier never polls. Prediction: bank 0 wedges, bank 1 does not.
+
+**The test.** `TT_METAL_PERF_DEBUG_DRISC_BANK` shifts the drainer's bank. Verified placement first:
+bank 0 -> noc0 (0,0) = ch0 sub 0 (**collides**); bank 1 -> noc0 (0,3) = ch1 sub 2 (**clear**).
+Everything else identical -- same drain, same 120-core poll list, same egress, same NIU flip. 200 runs,
+randomized, delay 125, `--iters 500`.
+
+| bank | vs barrier core | events | informative n | rate |
+|---|---|---|---|---|
+| **0** (default) | **collides** | **0** | 61 | **0.0%** |
+| **1** | clear | **10** (all MMIO timeouts) | 64 | **15.6%** |
+
+**Fisher p ~ 0.001**, events spread evenly across the block (k = 10, 24, 35, 84, 106, 122, 138, 154,
+171, 197), so not an ordering or warm-up artifact.
+
+**The prediction is not merely unsupported, it is inverted.** The colliding port is the SAFE one and
+moving off it is ~15% fatal per run. The collision is not the mechanism.
+
+**What it does establish:** the port `pick_unused_dram_logical_core()` hands back on bank 1 -- noc0
+(0,3), channel 1 subchannel 2 -- is **not actually free to repurpose**, despite being neither a worker
+nor an eth endpoint. "Unused" is again narrower than it reads (cf. §N+24, where "unused" column meant
+unused-by-dispatch).
+
+**KEEP THE DEFAULT AT BANK 0.** It is the known-good port. Bank 0 is NOT wedge-free -- it is the
+baseline the wedge was always measured on (3/120 here, 4/200 in §N+21 A, ~1.7% pooled) -- but 0/61 at
+that rate is unremarkable (p ~ 0.2), not immunity.
+
+**CONSEQUENCE FOR MULTI-DRISC:** drainer `d` takes bank `d`, so scaling past one drainer places
+drainers on exactly the banks measured dangerous here. **Validate every bank before running more than
+one drainer**, or the socket-per-DRISC work sits on a substrate that hangs ~15% of the time.
+
+**Still open after two dead hypotheses** (IOMMU §N+26, subchannel collision here): DRISC-only,
+~2% per run, `tt-smi -r` recovers, and the NIU stream-mode flip remains the only state that outlives
+the process.

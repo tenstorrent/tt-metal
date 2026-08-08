@@ -231,6 +231,17 @@ bool reserve_column_env() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_DRISC_BANK: first DRAM bank the DRISC drainers take (default 0 = unchanged).
+// See the call site for why the bank matters -- banks 0 and 4-7 hand the drainer subchannel 0, which is
+// the subchannel UMD's dram_membar() barriers, while banks 1-3 hand it subchannel 2, which it does not.
+uint32_t drisc_bank_base() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_BANK");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
 // make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
 uint32_t nstage_cap(uint32_t computed) {
@@ -704,7 +715,37 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             ctx.drisc_l1_noc[d] = ctx.drisc_l1_base[d];  // worker L1 is addressed directly, no DRAM-view offset
             region = ctx.device->l1_size_per_core() - static_cast<uint32_t>(ctx.drisc_l1_base[d]);
         } else {
-            ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(d);
+            // TT_METAL_PERF_DEBUG_DRISC_BANK shifts which DRAM bank drainer d takes. DEFAULT 0, AND
+            // BANK 0 IS THE ONE THAT IS KNOWN GOOD -- do not "fix" this to something else.
+            //
+            // It was added to test a hypothesis that turned out to be WRONG, and the measurement is worth
+            // more than the hypothesis. The theory: pick_unused_dram_logical_core() reserves the bank's
+            // WORKER and ETH endpoints and returns the first subchannel left, while UMD's dram_membar()
+            // barriers SUBCHANNEL 0 of every channel (dram_membar(channels, subchannel = 0); Cluster::
+            // dram_barrier passes no subchannel). On banks 0 and 4-7 the worker/eth endpoints are [2,1],
+            // so the only free port IS subchannel 0 -- the drainer lands exactly on the core the host
+            // barriers, and we put that core in stream mode. Banks 1-3 have endpoints [0,1], so the
+            // drainer gets subchannel 2, which the barrier never polls. That predicted bank 0 wedges and
+            // bank 1 does not.
+            //
+            // MEASURED (bh-26, 2026-08-08, 200 runs randomized, delay 125, full 120-core drain, scored by
+            // CASCADE-INITIATING event because a hung card fails every following run until a reset):
+            //
+            //     bank 0 (collides with the barrier core):  0 events / 61 informative runs   0.0%
+            //     bank 1 (clear of the barrier core):      10 events / 64 informative runs  15.6%
+            //     all 10 were MMIO per-op timeouts, spread evenly k=10..197. Fisher p ~ 0.001.
+            //
+            // So the collision is NOT the wedge mechanism -- the colliding port is the SAFE one, and
+            // moving off it is ~15% fatal per run. Something about the subchannel that
+            // pick_unused_dram_logical_core() hands back on bank 1 (noc0 (0,3), channel 1 subchannel 2)
+            // is NOT actually free to repurpose, despite not being a worker or eth endpoint.
+            //
+            // CONSEQUENCE FOR MULTI-DRISC: drainer d takes bank d, so scaling past one drainer puts
+            // drainers on exactly the banks this measured as dangerous. Validate every bank before
+            // running more than one drainer.
+            const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
+            ctx.drisc_logical[d] =
+                mesh_device->impl().pick_unused_dram_logical_core((d + drisc_bank_base()) % nbanks);
             const CoreCoord translated =
                 soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
             const tt::umd::CoreCoord phys = soc.translate_coord_to(
