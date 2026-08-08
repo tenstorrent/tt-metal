@@ -74,9 +74,9 @@ void kernel_main() {
             for (uint32_t k = 0; k < tile_height; ++k) {
                 input_token_t token = input_l1_ptr[k];
                 read_token_async(noc, token, weights, l1_write_addr, weight_chunk_size, weight_chunk_offset);
+                noc.async_read_barrier();
                 l1_write_addr += weight_chunk_size;
             }
-            noc.async_read_barrier();
             cb_in0.push_back(this_chunk_tiles);
         }
 

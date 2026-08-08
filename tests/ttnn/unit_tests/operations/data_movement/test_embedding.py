@@ -591,3 +591,30 @@ def test_embedding_chunked_partial_last_chunk(
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("vocab_size", [151936])
+@pytest.mark.parametrize("hidden_dim", [5120])
+@pytest.mark.parametrize("seq_len", [32])
+def test_embedding_large_vocab_tile_boundary(device, vocab_size, hidden_dim, seq_len):
+    """Test for bug where indices near tile boundaries return wrong rows."""
+    torch.manual_seed(1234)
+
+    # Test indices including the problematic band 218-222
+    test_indices = [1, 200, 218, 219, 220, 221, 222, 240, 264]
+
+    w = torch.randn(1, 1, vocab_size, hidden_dim, dtype=torch.float32) * 0.02
+    weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.untilize(weight)
+
+    for idx in test_indices:
+        ids = torch.full((1, 1, 1, seq_len), idx, dtype=torch.int32)
+        x = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+        out = ttnn.embedding(x, weight, layout=ttnn.TILE_LAYOUT)
+        out_row = ttnn.to_torch(out).float().reshape(-1, hidden_dim)[0]
+        ref = w[0, 0, idx, :].to(torch.bfloat16).float()
+
+        max_diff = (out_row - ref).abs().max().item()
+        assert max_diff <= 1e-2, f"Index {idx} failed with max_diff={max_diff}"
+
