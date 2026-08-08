@@ -230,7 +230,7 @@
   skus:
     bh_galaxy:
       timeout: 15
-  owner_id: U081GCJ8NDN # Nour Ardo
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
 
 # ============================================================================
@@ -270,39 +270,3 @@
       timeout: 40
   owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
-
-# ============================================================================
-# Wan 2.2 Tests (T3K)
-# ============================================================================
-
-- name: t3k_wan2.2_tests_demo
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: wan22
-
-- name: t3k_DiT_Wan2.2_model_perf_tests
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: wan22
-  model-type: DiT
-  save-perf-data: true
-
-- name: t3k_wan2.2_tests_integration
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: wan2.2

@@ -40,7 +40,13 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    full_indexer_rank,
+    get_fused_ring_host_timing,
+    num_full_indexer_layers,
+    reset_fused_ring_host_timing,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
@@ -1512,6 +1518,7 @@ def run_chunked_transformer_updated(
             # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
             # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
             # uses self.indexed_rope. The small (first_token) return is discarded.
+            reset_fused_ring_host_timing()
             transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
@@ -1523,8 +1530,16 @@ def run_chunked_transformer_updated(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
             ttnn.deallocate(tt_tokens)
-            chunk_times.append(time.time() - chunk_start)
+            chunk_seconds = time.time() - chunk_start
+            chunk_times.append(chunk_seconds)
+            if fused_host_calls:
+                logger.info(
+                    f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
+                    f"host_submit={fused_host_seconds * 1000:.2f} ms "
+                    f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
+                )
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
