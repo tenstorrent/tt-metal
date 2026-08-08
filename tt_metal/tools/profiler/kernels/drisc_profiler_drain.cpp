@@ -215,6 +215,17 @@ void kernel_main() {
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
     // Two staging generations: one fills while the other drains.
     constexpr uint32_t kGenSlots = kNStage / 2;
+    // READ-NOC SPLIT (compile arg 19; 0 = off, all reads on kReadNoc).
+    //
+    // The busy sweep is READ-LATENCY bound: unrolling the scan halved `proc` (42% -> 23%) and the busy
+    // sweep barely moved, because the read time it had been hiding simply surfaced (28% -> 46%). The batch
+    // cannot grow -- DRISC L1 holds only kNStage=7 spans of 10,560 B, so kGenSlots is 3 and just 3 cores'
+    // reads are ever in flight. More generations does not help either: the read barrier is global, so it
+    // waits on every outstanding read regardless.
+    //
+    // What is left is issuing those reads on BOTH NoCs, which doubles outstanding transactions without
+    // needing more L1. Writes are only ~0.9% of the sweep, so sharing NOC_INDEX with them costs little.
+    constexpr uint32_t kReadSplit = get_compile_time_arg_val(19);
     static_assert(kGenSlots >= 1, "need at least one slot per staging generation");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
@@ -258,6 +269,7 @@ void kernel_main() {
     // NOC_INDEX. If they diverge, the barrier guarding staging reuse watches the wrong NoC.
     const uint32_t noc_index_before = noc_index;
     Noc noc{kReadNoc};
+    Noc noc_b{static_cast<uint8_t>(NOC_INDEX)};  // second read NoC when kReadSplit != 0
     const uint32_t noc_index_after = noc_index;
     UnicastEndpoint src;
 
@@ -344,6 +356,9 @@ void kernel_main() {
     uint64_t c_busy = 0;
     uint32_t sweeps_idle = 0;
     uint32_t max_sweep = 0;
+    // Phase breakdown of the WORST sweep specifically. The knee is set by the worst sweep beating ring
+    // fill time, and the worst is ~2.5x the mean (105-143 us vs ~46 us) -- averages cannot say why.
+    uint32_t ws_read = 0, ws_proc = 0, ws_rsv = 0, ws_wr = 0, ws_bar = 0;
     uint32_t max_reserve = 0;
     // Set when a bounded write barrier expires: egress is dead, so STOP SHIPPING for good.
     // Never means "continue anyway" -- staging reuse depends on that barrier having flushed.
@@ -443,6 +458,8 @@ void kernel_main() {
         *phase = kPhasePoll;
         const uint64_t t_sweep0 = get_timestamp();
         const uint32_t frames_at_sweep_start = frames;
+        const uint64_t s_read0 = c_read, s_proc0 = c_proc, s_rsv0 = c_reserve, s_wr0 = c_write,
+                       s_bar0 = c_barrier;
         const uint64_t words_at_sweep_start = total_words;
         sweep_max_run = 0;
 
@@ -508,23 +525,34 @@ void kernel_main() {
                     seeded[c] = 1;
                 }
 
-                uint32_t runs[kNumRisc];
-                uint32_t live = 0;
-                for (uint32_t r = 0; r < kNumRisc; r++) {
-                    uint32_t run = cv[kernel_profiler::SPSC_RING_TAIL_0 + r] - mine[r];
-                    if (run > kRingWords) {
-                        overflows++;  // torn snapshot: a lossless producer blocks at capacity
-                        run = kRingWords;
-                    }
-                    if (run > max_occ) {
-                        max_occ = run;
-                    }
-                    if (run > sweep_max_run) {
-                        sweep_max_run = run;
-                    }
-                    runs[r] = run;
-                    live += run;
-                }
+                // SCAN, UNROLLED INTO REGISTERS. This is the single largest busy-sweep cost (~42% of busy,
+                // ~356 ns/core = ~480 cycles) and it is not arithmetic-bound -- ~40 ops cannot cost 480
+                // cycles. It is L1-ACCESS bound: `runs[]` and the head mirror are arrays the compiler
+                // spills, so each core paid ~25 L1 round trips (5 tail loads + 10 for runs[] + 10 for
+                // mine[]). Hoisting the mirror into scalars and dropping runs[] entirely leaves only the
+                // 5 tail loads and one mirror load/store per RISC, which is the irreducible part.
+                //
+                // kNumRisc is 5 and fixed, so this unrolls cleanly; a loop over an indexed array does not
+                // keep its elements in registers on this core.
+                uint32_t m0 = mine[0], m1 = mine[1], m2 = mine[2], m3 = mine[3], m4 = mine[4];
+                uint32_t r0 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 0] - m0;
+                uint32_t r1 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 1] - m1;
+                uint32_t r2 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 2] - m2;
+                uint32_t r3 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 3] - m3;
+                uint32_t r4 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 4] - m4;
+                if (r0 > kRingWords) { overflows++; r0 = kRingWords; }
+                if (r1 > kRingWords) { overflows++; r1 = kRingWords; }
+                if (r2 > kRingWords) { overflows++; r2 = kRingWords; }
+                if (r3 > kRingWords) { overflows++; r3 = kRingWords; }
+                if (r4 > kRingWords) { overflows++; r4 = kRingWords; }
+                uint32_t peak = r0;
+                if (r1 > peak) { peak = r1; }
+                if (r2 > peak) { peak = r2; }
+                if (r3 > peak) { peak = r3; }
+                if (r4 > peak) { peak = r4; }
+                if (peak > max_occ) { max_occ = peak; }
+                if (peak > sweep_max_run) { sweep_max_run = peak; }
+                const uint32_t live = r0 + r1 + r2 + r3 + r4;
                 if (live == 0) {
                     ship_run(run_start, run_len);
                     run_len = 0;
@@ -537,9 +565,8 @@ void kernel_main() {
 
                 // Head write-back releases the producer. Safe at once: the payload is a snapshot already
                 // resident in staging, so those ring slots are free regardless of when it reaches the host.
-                for (uint32_t r = 0; r < kNumRisc; r++) {
-                    mine[r] += runs[r];
-                }
+                m0 += r0; m1 += r1; m2 += r2; m3 += r3; m4 += r4;
+                mine[0] = m0; mine[1] = m1; mine[2] = m2; mine[3] = m3; mine[4] = m4;
                 // HEAD WRITE-BACK, timed separately. `proc` is the largest busy-sweep phase (~46% at
                 // 120 cores) and it is two very different things: a local scan of the staged control
                 // vectors, and THIS -- one 20 B noc_async_write per live core per sweep, i.e. up to 120
@@ -550,9 +577,7 @@ void kernel_main() {
                 const uint64_t t_h0 = get_timestamp();
                 const uint32_t sc = kHeadScratch + hb_slot * 32u;
                 volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
-                for (uint32_t r = 0; r < kNumRisc; r++) {
-                    scp[r] = mine[r];
-                }
+                scp[0] = m0; scp[1] = m1; scp[2] = m2; scp[3] = m3; scp[4] = m4;
                 noc_async_write(
                     sc,
                     get_noc_addr(
@@ -566,7 +591,14 @@ void kernel_main() {
             }
             ship_run(run_start, run_len);
             gen_shipped[g] = true;
-            c_proc += (get_timestamp() - t_p0) - ((c_reserve + c_write) - flush_at);
+            // SATURATING. The nested ship_run time is subtracted out so it is not double-counted against
+            // proc, but if that term ever exceeds the elapsed span the unsigned subtract wraps -- observed
+            // once as "proc 18727729111430.1%", which silently corrupts the whole phase breakdown.
+            {
+                const uint64_t span = get_timestamp() - t_p0;
+                const uint64_t nested = (c_reserve + c_write) - flush_at;
+                c_proc += (span > nested) ? (span - nested) : 0;
+            }
         };
 
         for (uint32_t base_c = 0; base_c < num_cores; base_c += kGenSlots) {
@@ -589,8 +621,32 @@ void kernel_main() {
             for (uint32_t i = 0; i < n; i++) {
                 const uint32_t xy = coords[base_c + i];
                 CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
-                noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
-                    src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                if constexpr (kReadSplit == 2) {
+                    // SPLIT WITHIN THE CORE: both NoCs carry half of the SAME span. Alternating whole
+                    // cores (kReadSplit==1) left only ~3 transactions outstanding -- kGenSlots is 3 -- and
+                    // measured as a no-op. Halving each span doubles outstanding transactions (3 cores x 2
+                    // halves) without needing more L1, which is the only free variable left.
+                    constexpr uint32_t kHalf = (kSpanBytes / 2u) & ~0x1Fu;  // 32 B aligned
+                    noc.async_read<NocOptions::DEFAULT, kHalf>(
+                        src, dst, kHalf, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                    CoreLocalMem<uint32_t> dst2(
+                        kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u + kHalf);
+                    noc_b.async_read<NocOptions::DEFAULT, kSpanBytes - kHalf>(
+                        src, dst2, kSpanBytes - kHalf,
+                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kHalf}, {});
+                } else if constexpr (kReadSplit == 1) {
+                    // Alternate cores between the two NoCs so both have transactions outstanding.
+                    if ((i & 1u) == 0u) {
+                        noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
+                            src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                    } else {
+                        noc_b.async_read<NocOptions::DEFAULT, kSpanBytes>(
+                            src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                    }
+                } else {
+                    noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
+                        src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                }
             }
             const uint64_t t_issue = get_timestamp();
 
@@ -604,6 +660,9 @@ void kernel_main() {
             // did, and the phases summed to 133%.
             const uint64_t t_after_proc = get_timestamp();
             noc.async_read_barrier();
+            if constexpr (kReadSplit != 0) {
+                noc_b.async_read_barrier();  // staging reuse is only safe once BOTH read NoCs have landed
+            }
             c_read += (t_issue - t_batch0) + (get_timestamp() - t_after_proc);
 
             pend_base = base_c;
@@ -630,6 +689,11 @@ void kernel_main() {
         const uint32_t sweep_cyc = static_cast<uint32_t>(get_timestamp() - t_sweep0);
         if (sweep_cyc > max_sweep) {
             max_sweep = sweep_cyc;
+            ws_read = static_cast<uint32_t>(c_read - s_read0);
+            ws_proc = static_cast<uint32_t>(c_proc - s_proc0);
+            ws_rsv = static_cast<uint32_t>(c_reserve - s_rsv0);
+            ws_wr = static_cast<uint32_t>(c_write - s_wr0);
+            ws_bar = static_cast<uint32_t>(c_barrier - s_bar0);
         }
         if (frames == frames_at_sweep_start) {
             sweeps_idle++;
@@ -732,6 +796,11 @@ void kernel_main() {
     out[37] = noc_index_after;
     out[38] = NOC_INDEX;
     out[39] = kReadNoc;
+    out[43] = ws_read;
+    out[44] = ws_proc;
+    out[45] = ws_rsv;
+    out[46] = ws_wr;
+    out[47] = ws_bar;
     out[42] = gap;  // where the pacing controller settled
     out[40] = static_cast<uint32_t>(c_ph_head & 0xFFFFFFFFu);
     out[41] = static_cast<uint32_t>(c_ph_head >> 32);
