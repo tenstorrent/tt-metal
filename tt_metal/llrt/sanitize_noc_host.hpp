@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 
 namespace tt {
 
@@ -125,6 +126,17 @@ static void watcher_sanitize_host_noc(
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.get_cores(CoreType::L2CPU, CoordSystem::NOC0), core)) {
+        // L2CPU (X280) tiles. Host access targets LIM, which -- unlike Tensix L1 --
+        // does not start at 0, so the worker/eth address predicates do not apply.
+        // Validate against the LIM aperture the per-tile static TLB covers, since
+        // that is the range every host writer (H2D/D2H socket config buffers, the
+        // HOST_PUSH data FIFO) is restricted to. On architectures without L2CPU
+        // tiles get_cores() is empty and this branch is unreachable.
+        if (addr < ll_api::kL2cpuLimBase || addr + lbytes > ll_api::kL2cpuLimTlbEnd) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} L2CPU LIM address {}", what, noc_address(core, addr, lbytes));
         }
     } else {
         // Bad COORD
