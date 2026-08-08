@@ -3391,6 +3391,58 @@ def test_matmul_height_sharded_input_with_padding(device):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
+@pytest.mark.parametrize(
+    "batch_size, m_size, k_size, n_size, num_cores_height, per_core_height",
+    [
+        (1, 384, 32, 32, 1, 384),
+        (2, 32, 32, 32, 1, 64),
+        (2, 2688, 288, 288, 10, 544),
+    ],
+    ids=["single_core", "single_core_batched", "multi_core"],
+)
+def test_matmul_default_height_sharded(device, batch_size, m_size, k_size, n_size, num_cores_height, per_core_height):
+    """Height-sharded A/output matmul with no explicit program_config."""
+    torch.manual_seed(0)
+    core_grid = device.compute_with_storage_grid_size()
+
+    input_a_shape = (batch_size, m_size, k_size)
+    input_b_shape = (k_size, n_size)
+
+    torch_input_tensor_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_a_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(num_cores_height, core_grid, row_wise=True),
+            (per_core_height, k_size),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
