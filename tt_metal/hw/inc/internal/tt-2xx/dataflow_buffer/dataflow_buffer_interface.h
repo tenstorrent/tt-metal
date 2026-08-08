@@ -112,7 +112,9 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-    uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
+    uint8_t block_size;    // BLOCKED block size for this RISC's side (>=1); implicit commit advances
+                           // tc_idx per-BLOCK (every block_size entries). Non-BLOCKED sides use 1.
+                           // Also pads bytes [8,20) so tc_slots[] stays 4B-aligned.
 
     uint16_t num_entries;
 
