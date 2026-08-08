@@ -42,7 +42,7 @@ def random_torch_tensor(dtype, shape):
     ],
 )
 @pytest.mark.parametrize("value", [0, 1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.float32])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
@@ -1284,3 +1284,33 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
             use_multicore=True,
             memory_config=output_memory_config,
         )
+
+
+@pytest.mark.parametrize(
+    "padding,torch_padding",
+    [
+        (((0, 0), (0, 0), (0, 16)), (0, 16, 0, 0, 0, 0)),
+    ],
+)
+@pytest.mark.parametrize("value", [float("-inf"), float("inf")])
+def test_pad_rm_non_finite_value_float32(device, padding, torch_padding, value):
+    """A float32 pad value must reach the padding as its own 32-bit pattern.
+
+    -inf is the ordinary way to build an attention mask, and it is the case where a
+    16-bit packing is not merely imprecise: two bfloat16 halves of -inf form
+    0xFF80FF80, which is a NaN, and a NaN in a mask poisons the whole row after
+    softmax. A PCC comparison cannot see this, so this test compares exactly.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((1, 4, 16), dtype=torch.float32)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=value))
+
+    assert not torch.isnan(output_tensor).any(), (
+        f"pad(value={value}) produced NaN in the padding: "
+        f"{int(torch.isnan(output_tensor).sum())} of {output_tensor.numel()} elements"
+    )
+    assert torch.equal(torch_output_tensor, output_tensor)

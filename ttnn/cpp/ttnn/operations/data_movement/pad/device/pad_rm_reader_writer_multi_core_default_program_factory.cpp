@@ -4,6 +4,7 @@
 
 #include "pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 
+#include <bit>
 #include <algorithm>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -106,6 +107,11 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         packed_pad_value = pad_value;
     } else if (a.dtype() == DataType::UINT16) {
         packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+    } else if (a.dtype() == DataType::FLOAT32) {
+        // FLOAT32 needs the raw 32-bit pattern: the branch below packs two 16-bit halves,
+        // which is correct for the 16-bit dtypes and wrong here. Matches
+        // pad_tile_multicore_program_factory.cpp.
+        packed_pad_value = std::bit_cast<uint32_t>(pad_value);
     } else {
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
