@@ -10,11 +10,26 @@ The Expert FFN follows the SwiGLU architecture:
     up_out = x @ up_proj.T
     activated = silu(gate_out) * up_out
     output = activated @ down_proj.T
+
+Kimi K3 replaces the SiLU gate with SiTU-GLU (``activation="situ_glu"``), which
+tanh-caps both halves before the product.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# Kimi K3 SiTU-GLU betas. Must match SituGluConfigKimi in situ_glu_sfpu.h, which the
+# fused kernel bakes in; a mismatch here silently loosens the PCC comparison.
+SITU_BETA_GATE = 4.0
+SITU_BETA_UP = 25.0
+
+
+def situ_glu(gate: torch.Tensor, up: torch.Tensor, beta_gate=SITU_BETA_GATE, beta_up=SITU_BETA_UP) -> torch.Tensor:
+    """SiTU-GLU (Kimi K3): (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up))."""
+    gate_half = beta_gate * torch.tanh(gate / beta_gate) * torch.sigmoid(gate)
+    up_half = beta_up * torch.tanh(up / beta_up)
+    return gate_half * up_half
 
 
 class TorchExpert(nn.Module):
@@ -39,6 +54,7 @@ class TorchExpert(nn.Module):
         hidden_dim: int,
         torch_weights: dict = None,
         use_identity: bool = False,
+        activation: str = "silu",
     ):
         """
         Initialize Expert module.
@@ -52,8 +68,12 @@ class TorchExpert(nn.Module):
             use_identity: If True and torch_weights is None, initialize with identity
                          matrices (requires emb_dim == hidden_dim). Useful for flow testing.
                          If False and torch_weights is None, uses random normal init.
+            activation: "silu" (default, DeepSeek) or "situ_glu" (Kimi K3).
         """
         super().__init__()
+        if activation not in ("silu", "situ_glu"):
+            raise ValueError(f"unsupported activation {activation!r}, expected 'silu' or 'situ_glu'")
+        self.activation = activation
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
 
@@ -96,8 +116,11 @@ class TorchExpert(nn.Module):
         # Up projection
         up_out = F.linear(x, self.up_proj)
 
-        # SiLU activation and element-wise multiplication
-        activated = F.silu(gate_out) * up_out
+        if self.activation == "situ_glu":
+            activated = situ_glu(gate_out, up_out)
+        else:
+            # SiLU activation and element-wise multiplication
+            activated = F.silu(gate_out) * up_out
 
         # Down projection
         output = F.linear(activated, self.down_proj)

@@ -21,8 +21,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import SITU_BETA_GATE, SITU_BETA_UP, TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -35,6 +36,13 @@ SINGLE_CHIP_MESH_PARAMS = [
     ),
 ]
 
+# Device activation -> the TorchExpert reference that must match it. Keeping the pairing
+# in one place stops a case from measuring one activation against another's golden.
+_TORCH_ACTIVATION = {
+    ttnn.RoutedExpertActivation.Silu: "silu",
+    ttnn.RoutedExpertActivation.SituGlu: "situ_glu",
+}
+
 
 def run_single_routed_expert(
     device,
@@ -43,6 +51,9 @@ def run_single_routed_expert(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = False,
+    activation=None,
+    weight_scale: float = 0.02,
+    weights_dtype=ttnn.bfloat4_b,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -55,12 +66,31 @@ def run_single_routed_expert(
     count-aware sparsity: the kernel must (a) produce correct output on the active slice and
     (b) not do matmuls on the inactive padding rows. The ROW_MAJOR variant additionally drives
     the reader's clamp-read of the inactive rows past the runtime count.
+
+    ``activation`` selects the fused kernel's activation and the matching torch reference;
+    it defaults to SiLU (the DeepSeek path all pre-existing cases measure).
+
+    ``weight_scale`` sets the gate/up/down init std. The default keeps the gate/up matmul
+    outputs near O(1); raising it pushes them into the saturating region of the tanh-capped
+    activations, which is the only way a SiTU-GLU case actually exercises the caps rather
+    than their near-linear middle.
+
+    ``weights_dtype`` defaults to the production bfloat4_b. Raise it to bfloat8_b when a
+    case deliberately saturates a capped activation: saturation turns the output nearly
+    two-level, so bf4 weight error stops passing through proportionally and instead flips
+    whole terms of the down matmul. That is a property of bf4 + saturation, not of the
+    kernel (measured: SiTU-GLU holds 0.999 PCC at every scale with bf8/bf16 weights, and
+    the SFPU op passes its own saturation-coverage test), but it would otherwise make a
+    saturation case look like an activation bug.
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
+    if activation is None:
+        activation = ttnn.RoutedExpertActivation.Silu
+    torch_activation = _TORCH_ACTIVATION[activation]
     experts_per_chip = 1
 
-    signpost(f"SingleRoutedExpert {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=}")
+    signpost(f"SingleRoutedExpert {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=} {activation=}")
 
     logger.debug(f"Testing single routed expert: {allocated_tokens=}, {active_tokens=}, {emb_dim=}, {hidden_dim=}")
     logger.debug(f"Mesh: {device.shape}, num_devices={device.get_num_devices()}")
@@ -68,13 +98,13 @@ def run_single_routed_expert(
     # Create random weights
     torch.manual_seed(42)
     weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
     }
 
     # Create torch reference
-    torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
+    torch_expert = TorchExpert(emb_dim, hidden_dim, weights, activation=torch_activation)
 
     # 2D input (allocated_tokens, emb_dim) — the single expert's dispatch buffer. The first
     # active_tokens rows hold real data; the rest is zero padding (a no-op when active==allocated).
@@ -87,6 +117,16 @@ def run_single_routed_expert(
     logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
+        if torch_activation == "situ_glu":
+            # Report how far into each tanh cap the inputs actually reach, so a passing
+            # case can't silently be measuring only the near-linear middle.
+            gate_out = torch.nn.functional.linear(torch_active, weights["gate_proj"])
+            up_out = torch.nn.functional.linear(torch_active, weights["up_proj"])
+            gate_frac = (gate_out.abs() > SITU_BETA_GATE).float().mean().item()
+            up_frac = (up_out.abs() > SITU_BETA_UP).float().mean().item()
+            logger.info(
+                f"SiTU-GLU cap coverage: |gate|>{SITU_BETA_GATE}: {gate_frac:.1%}, |up|>{SITU_BETA_UP}: {up_frac:.1%}"
+            )
     logger.debug(f"Torch output shape: {torch_output_active.shape}")
 
     # Create TTNN input: 2D (allocated_tokens, emb_dim), replicated across the 1-device mesh.
@@ -129,8 +169,8 @@ def run_single_routed_expert(
         max_tokens=allocated_tokens,
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
-        activation=ttnn.RoutedExpertActivation.Silu,
+        weights_dtype=weights_dtype,
+        activation=activation,
     )
 
     # Run TTNN forward
@@ -277,4 +317,56 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+    )
+
+
+# Kimi K3 token sweep. Unlike the ISL sweeps above (fixed 5K buffer, varying active count,
+# which measures count-aware sparsity) this runs allocated == active, so each case is a
+# fully-packed buffer at that token count -- the shape the DRAM-bandwidth / utilization /
+# raw-time numbers are read off. 32 is one tile-row, 5120 the prefill dispatch width.
+_K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
+
+
+@pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.extended_model
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
+def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
+    """Kimi K3 routed expert: SiTU-GLU activation at the post-projection dims.
+
+    K3 down-projects the embedding (EMB_SIZE -> MOE_LATENT_SIZE) before the routed
+    experts, so the op's K axis is MOE_LATENT_SIZE=3584 with hidden 3072 -- the
+    projection itself is a separate op and is not measured here.
+    """
+    run_single_routed_expert(
+        device,
+        num_tokens,
+        KimiK3Config.MOE_LATENT_SIZE,
+        KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=x_row_major,
+        activation=ttnn.RoutedExpertActivation.SituGlu,
+    )
+
+
+@pytest.mark.parametrize("weight_scale", [0.15, 0.4], ids=["sat_partial", "sat_deep"])
+@pytest.mark.extended_model
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
+def test_single_routed_expert_k3_saturated(device, weight_scale: float):
+    """Kimi K3 SiTU-GLU driven into the saturating region of both tanh caps.
+
+    The sweep above runs at the default weight scale, where gate/up land around O(1) --
+    well inside the near-linear middle of tanh(x/4) and tanh(x/25). A kernel that dropped
+    either cap entirely would still pass there. These cases scale the weights so the caps
+    carry the result (sat_deep reaches ~87% of gate and ~30% of up past their beta), so the
+    betas are actually under test. bfloat8_b weights keep this measuring the activation
+    rather than bf4 quantization amplified by saturation -- see run_single_routed_expert.
+    """
+    run_single_routed_expert(
+        device,
+        512,
+        KimiK3Config.MOE_LATENT_SIZE,
+        KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        activation=ttnn.RoutedExpertActivation.SituGlu,
+        weight_scale=weight_scale,
+        weights_dtype=ttnn.bfloat8_b,
     )

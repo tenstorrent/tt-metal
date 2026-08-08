@@ -26,6 +26,15 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    // SiTU-GLU is scoped to Blackhole, matching the ttnn::softcap / ttnn::situ_glu
+    // ops it shares its formula with (issue #51350). The SFPU primitives it builds
+    // on exist on Wormhole too, but that combination is unverified.
+    if (op.activation == RoutedExpertActivation::SituGlu) {
+        TT_FATAL(
+            t.x.device()->arch() == tt::ARCH::BLACKHOLE,
+            "unified_routed_expert_ffn: SiTU-GLU is implemented for Blackhole only, got arch {}",
+            t.x.device()->arch());
+    }
     // x layout/dtype depends on x_is_row_major:
     //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
     //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams

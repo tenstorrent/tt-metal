@@ -18,7 +18,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
     // function bindings so it can serve as a default kwarg value.
     nb::enum_<RoutedExpertActivation>(mod, "RoutedExpertActivation")
         .value("Silu", RoutedExpertActivation::Silu)
-        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai);
+        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
+        .value("SituGlu", RoutedExpertActivation::SituGlu);
 
     ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -89,7 +90,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 reader streams sticks and the compute kernel tilizes them to bf8_b
                 before the matmul (fusing to_layout). Default False (TILE bf8_b).
             activation (ttnn.RoutedExpertActivation, optional):
-                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
+                Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
+                or SituGlu (tanh-capped, Kimi K3; Blackhole only).
 
         The kernel picks chunk_M_tiles / per_core_M / num_chunks at RUNTIME from
         the device-resident token count, so there is no chunk-sizing argument.
@@ -147,7 +149,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             activation (ttnn.RoutedExpertActivation, optional):
-                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
+                Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
+                or SituGlu (tanh-capped, Kimi K3; Blackhole only).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token

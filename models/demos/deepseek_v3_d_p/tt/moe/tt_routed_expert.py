@@ -282,9 +282,10 @@ class TtRoutedExpert(LightweightModule):
                           global ids. Required.
             activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
                           activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
-                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
-                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
-                          without a default so the caller must choose explicitly.
+                          (byte-identical), RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation, or
+                          RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
+                          and without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -302,12 +303,13 @@ class TtRoutedExpert(LightweightModule):
         # Activation variant for the fused unified_routed_expert_moe kernel.
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
-        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation. Enforcing presence avoids silently running the
-        # wrong activation when a caller forgets to set it.
+        # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
+        # avoids silently running the wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
-                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+                "TtRoutedExpert requires an explicit `activation` "
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
             )
         self.activation = activation
 
