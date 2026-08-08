@@ -50,6 +50,19 @@ struct DramSenderStateBlock {
     // uniform across senders and the host can pack every sender's page identically); the kernel
     // reads it to recover that stride. Constant across senders, unlike num_receivers above.
     uint32_t max_num_receivers;
+    // ----- Multicast rectangle -----
+    // This sender's receiver bounding box in *virtual* worker coordinates (the same space as the
+    // receiver NOC XY table below), stored in NOC0 orientation: min corner in `mcast_start_*`, max
+    // corner in `mcast_end_*`. The kernel swaps the corners when running on NOC1, whose torus flows
+    // the other way. Always stamped, because the receiver set is fixed for the GCB's lifetime;
+    // whether a given push *uses* it is a per-tensor decision (TensorPrefetcherTensorLayout's
+    // `broadcast`), so one GCB can mix scatter and broadcast tensors. Only meaningful when this
+    // sender's receivers form a single row or column — the host refuses a broadcast tensor against
+    // a GCB whose receivers don't, so the kernel can trust the rectangle whenever broadcast is set.
+    uint32_t mcast_start_x;
+    uint32_t mcast_start_y;
+    uint32_t mcast_end_x;
+    uint32_t mcast_end_y;
     // ----- Followed in L1 by the receiver NOC XY table -----
     // 2 * num_receivers uint32s (x0, y0, x1, y1, ...), appended by the caller after
     // this struct's bytes since its length is dynamic; pointed to by receiver_noc_xy_ptr.
@@ -59,7 +72,7 @@ struct DramSenderStateBlock {
     // not stamped into L1. See tensor_prefetcher_request.hpp.)
 } __attribute__((packed));
 
-static_assert(sizeof(DramSenderStateBlock) == 12 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
+static_assert(sizeof(DramSenderStateBlock) == 16 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
 static_assert(
     offsetof(DramSenderStateBlock, is_sender) == 6 * sizeof(uint32_t),
     "config block must stay contiguous right after the loaded interface fields");

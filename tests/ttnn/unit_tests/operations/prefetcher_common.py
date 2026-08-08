@@ -116,6 +116,27 @@ def make_recv_contig_weight(
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
+def make_broadcast_weight(device, pt_weight, dtype, bank_idx: int = 0):
+    """Allocate ``pt_weight`` ((1, 1, K, N)) as a single-shard DRAM ND tensor pinned to one
+    DRAM bank -- the layout a broadcast (mcast-in1) Tensor prefetcher expects.
+
+    There is no per-receiver partition here: the one shard spans the whole (K, N), and the
+    prefetcher multicasts each full-width K-block to every matmul worker. The GCB must be
+    built with that same bank as its only sender.
+    """
+    K = pt_weight.shape[-2]
+    N = pt_weight.shape[-1]
+    dram_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(bank_idx, 0), ttnn.CoreCoord(bank_idx, 0))})
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape([K, N]),
+        dram_core_range_set,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
 @contextlib.contextmanager
 def tensor_prefetcher_session(device):
     """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)

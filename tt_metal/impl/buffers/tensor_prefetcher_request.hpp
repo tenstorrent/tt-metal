@@ -110,6 +110,14 @@ struct TensorPrefetcherTensorLayout {
     // appended rotation bytes extend each layout slot's stride and are deduped together with
     // the geometry, so tensors that differ only in rotation get distinct slots.
     uint32_t streaming = 0;
+    // Broadcast delivery (receiver-contiguous only): when nonzero, every receiver of a sender gets
+    // byte-identical pages, pushed by one NoC multicast per chunk to the receiver rectangle in the
+    // sender's state block instead of a per-receiver unicast scatter. The tensor is then a single
+    // (K, N) shard rather than one slab per receiver, so recv_stride_bytes is 0 and the kernel makes
+    // one source visit per round. Per-tensor, like `streaming`: the same GCB can carry scatter and
+    // broadcast tensors in the same request, since the receiver set (and therefore the multicast
+    // rectangle) is a property of the GCB while the delivery pattern is a property of the tensor.
+    uint32_t broadcast = 0;
 } __attribute__((packed));
 
 // One prefetched tensor: its bank-local address plus an index into the page's layout

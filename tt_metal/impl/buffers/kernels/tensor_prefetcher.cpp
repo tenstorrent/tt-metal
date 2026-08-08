@@ -316,6 +316,21 @@ void kernel_main() {
         // split a bank's receivers, the second core's local receiver r maps to bank-local
         // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
         const uint32_t recv_index_base = state->recv_index_base;
+        // Multicast rectangle for broadcast tensors, built once per request: this sender's receiver
+        // set is fixed for the GCB's lifetime, while whether a given tensor is pushed through it is
+        // decided per tensor below (TensorPrefetcherTensorLayout::broadcast), so one GCB can mix
+        // scatter and broadcast tensors in the same request. The state block stores the box
+        // min-corner-first; NOC1 runs the opposing torus and enters at the max corner, so swap the
+        // corners there (DYNAMIC_NOC_X/Y then mirrors each coordinate).
+        const uint32_t mcast_sx = noc_index == 0 ? state->mcast_start_x : state->mcast_end_x;
+        const uint32_t mcast_sy = noc_index == 0 ? state->mcast_start_y : state->mcast_end_y;
+        const uint32_t mcast_ex = noc_index == 0 ? state->mcast_end_x : state->mcast_start_x;
+        const uint32_t mcast_ey = noc_index == 0 ? state->mcast_end_y : state->mcast_start_y;
+        const uint32_t mcast_noc_xy = uint32_t(NOC_MULTICAST_ENCODING(
+            DYNAMIC_NOC_X(noc_index, mcast_sx),
+            DYNAMIC_NOC_Y(noc_index, mcast_sy),
+            DYNAMIC_NOC_X(noc_index, mcast_ex),
+            DYNAMIC_NOC_Y(noc_index, mcast_ey)));
         // Each layout slot in the page is the geometry struct immediately followed by this GCB's
         // per-sender streaming rotation table, sized for the largest sender (max_num_receivers) so
         // the slot stride is uniform across senders. Recover that stride to index the slot table.
@@ -350,6 +365,13 @@ void kernel_main() {
             // Streaming (receiver-contiguous only) is a per-tensor layout attribute: deliver
             // this tensor's blocks in ring-rotated order so the matmul can consume them FIFO.
             const bool streaming = g->streaming != 0;
+            // Broadcast (receiver-contiguous only) is a per-tensor delivery attribute: every
+            // receiver gets byte-identical pages, so the round below makes one source visit and
+            // multicasts each chunk into mcast_noc_xy instead of walking per-receiver slabs. The
+            // host pins recv_stride_bytes to 0 for these, collapsing the slab address to
+            // tensor_base, and refuses the tensor outright if this sender's receivers are not a
+            // line (which is what makes mcast_noc_xy exact).
+            const bool broadcast = g->broadcast != 0;
             // Per-receiver streaming rotation table, appended right after this tensor's geometry
             // in the page (host-sliced for this sender). rotation_local[r] is the lead block for
             // local receiver r, so the kernel sources block (rotation_local[r] + p) mod block_count.
@@ -590,7 +612,10 @@ void kernel_main() {
                     // never wraps. (This is the two-DMA-read streaming split; the older legacy-clamp
                     // and ragged-tail/head modes have been removed.)
                     const uint32_t uniform_chunks_per_visit = (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                    const uint32_t total_chunks_round = num_receivers * uniform_chunks_per_visit;
+                    // Broadcast reads each block once and multicasts it, so the round is a single
+                    // source visit no matter how many receivers consume it.
+                    const uint32_t num_visits = broadcast ? 1u : num_receivers;
+                    const uint32_t total_chunks_round = num_visits * uniform_chunks_per_visit;
 
                     // ---- Depth-2 software pipeline over 3 stage slots ----
                     // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
@@ -660,7 +685,7 @@ void kernel_main() {
                         if (gen_boff >= bytes_per_recv) {
                             gen_r += 1;
                             gen_boff = 0;
-                            if (gen_r < num_receivers) {
+                            if (gen_r < num_visits) {
                                 recv_wrap(gen_r, gen_blk, gen_wrap_boff);
                             }
                         }
@@ -706,13 +731,19 @@ void kernel_main() {
                             PROF_DECL_TS(t_df0);
                             PROF_DECL_TS(t_df1);
                             PROF_TICK(t_df0);
-                            noc_async_posted_writes_flushed();
+                            // Multicast has no posted form (see the write loop below), so the
+                            // broadcast path drains the non-posted issue counter instead.
+                            if (broadcast) {
+                                noc_async_writes_flushed();
+                            } else {
+                                noc_async_posted_writes_flushed();
+                            }
                             PROF_TICK(t_df1);
                             PROF_ACC(prof_defer_flush, t_df1, t_df0);
                         }
 
-                        // ---- set_state on the first chunk of a new receiver ----
-                        if (r != cur_r) {
+                        // ---- set_state on the first chunk of a new receiver (unicast only) ----
+                        if (!broadcast && r != cur_r) {
                             cur_r = r;
                             volatile tt_l1_ptr uint32_t* xy_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
@@ -736,10 +767,33 @@ void kernel_main() {
                         PROF_DECL_TS(t_w0);
                         PROF_DECL_TS(t_w1);
                         PROF_TICK(t_w0);
-                        for (uint32_t p = 0; p < num_packets; ++p) {
-                            noc_async_write_one_packet_with_state</*posted=*/true>(src_addr, dest_addr, noc_index);
-                            src_addr += t_coal_page_size;
-                            dest_addr += t_coal_page_size;
+                        if (broadcast) {
+                            // Multicast reserves a NoC path, and there is no multicast
+                            // set_state/with_state pair, so every transaction re-reserves it unless
+                            // it is linked to the previous one. (noc_async_write_multicast's
+                            // any-length form is no help: it forwards one `linked` value to every
+                            // burst, so it can hold the path or release it, but not "hold, then
+                            // release on the last".)
+                            // Link within the chunk and release on its last packet. Linking across
+                            // chunks measured neutral and would hold the path reservation across the
+                            // DMA wait between chunks, where we have nothing to send.
+                            for (uint32_t p = 0; p < num_packets; ++p) {
+                                noc_async_write_multicast_one_packet</*enable_noc_tracing=*/false>(
+                                    src_addr,
+                                    get_noc_addr_helper(mcast_noc_xy, dest_addr),
+                                    t_coal_page_size,
+                                    num_receivers,
+                                    /*linked=*/(p + 1u) < num_packets,
+                                    noc_index);
+                                src_addr += t_coal_page_size;
+                                dest_addr += t_coal_page_size;
+                            }
+                        } else {
+                            for (uint32_t p = 0; p < num_packets; ++p) {
+                                noc_async_write_one_packet_with_state</*posted=*/true>(src_addr, dest_addr, noc_index);
+                                src_addr += t_coal_page_size;
+                                dest_addr += t_coal_page_size;
+                            }
                         }
                         PROF_TICK(t_w1);
                         PROF_ACC(prof_writes, t_w1, t_w0);
@@ -758,10 +812,16 @@ void kernel_main() {
                     // ---- Final flush: drain any remaining writes before finalize bumps semaphore.
                     // (Finalize's per-receiver semaphore inc rides the same NoC VC, so a
                     // drained NIU also implies data writes are committed in-order on the wire.)
+                    // Broadcast writes ride the multicast VC while the credit incs stay unicast, so
+                    // in-order delivery no longer covers them: wait for the multicast acks instead.
                     PROF_DECL_TS(t_f0);
                     PROF_DECL_TS(t_f1);
                     PROF_TICK(t_f0);
-                    noc_async_posted_writes_flushed();
+                    if (broadcast) {
+                        noc_async_write_barrier();
+                    } else {
+                        noc_async_posted_writes_flushed();
+                    }
                     PROF_TICK(t_f1);
                     PROF_ACC(prof_flush, t_f1, t_f0);
 
