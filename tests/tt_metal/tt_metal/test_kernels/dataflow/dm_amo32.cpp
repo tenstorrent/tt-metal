@@ -15,12 +15,22 @@
 // unsupported on L1.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Cached alias (plain L1 address): RISC-V AMOs hang on the uncached alias (dev_mem_map.h).
     uint32_t* counter = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(get_arg(args::sem_addr)));
     const uint32_t increment_times = get_arg(args::increment_times);
+
+#if defined(ARCH_QUASAR)
+    // Rerun safety: discard any cache-resident copy so the host's fresh TL1 preload is seen.
+    // One thread invalidates, all rendezvous (see dm_cas32.cpp).
+    if (get_my_thread_id() == 0u) {
+        invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(counter));
+    }
+    sync_threads(0);
+#endif
 
     for (uint32_t i = 0; i < increment_times; i++) {
         __atomic_add_fetch(counter, 1u, __ATOMIC_SEQ_CST);  // 32-bit amoadd.w

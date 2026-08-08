@@ -66,12 +66,23 @@ void kernel_main() {
         return *uncached(ret_slot);
     };
 
+    // Every INCR_GET this hart issues ALSO returns its pre-op word to the sticky ret_slot.
+    // Consume it with the same sentinel discipline as the CASes, or a late-landing return
+    // could overwrite the NEXT CAS's sentinel and corrupt the lock verdict. (Sem pre-op is
+    // bounded by pairs*iterations + one poison, so it can never equal the sentinel.)
+    auto consumed_inc = [&](uint64_t noc_addr, uint32_t incr) {
+        *uncached(ret_slot) = SENTINEL;
+        noc_semaphore_inc(noc_addr, incr);
+        noc_async_atomic_barrier();
+        while (*uncached(ret_slot) == SENTINEL) {
+        }
+    };
+
     // release: pre-op must be 1 (we held the lock). Anything else means the lock was
     // lost or double-granted; poison the count so the host's exact-0 check fails.
     auto release_lock = [&]() {
         if (lock_cas(1 /*cmp*/, 0 /*swap*/) != 1) {
-            noc_semaphore_inc(sem_noc_addr, 0x10000000u);
-            noc_async_atomic_barrier();
+            consumed_inc(sem_noc_addr, 0x10000000u);
         }
     };
 
@@ -91,8 +102,7 @@ void kernel_main() {
                 continue;
             }
             // The exact INCR_GET decrement EXTERNAL down() emits (wrap=31 => modular -1).
-            noc_semaphore_inc(sem_noc_addr, (uint32_t)(-1));
-            noc_async_atomic_barrier();
+            consumed_inc(sem_noc_addr, (uint32_t)(-1));
             release_lock();
             return;
         }
