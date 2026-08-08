@@ -2571,5 +2571,40 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
     EXPECT_NE(FindKernel(merged, "compute_kernel"), nullptr);
 }
 
+// ============================================================================
+// SECTION 9: GetDataflowBufferFootprints
+// ============================================================================
+//
+// Both mappings exist to stop L1 over-reporting in graph capture (#51674), so each needs a test
+// that fails if it is dropped.
+
+TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsCollapsesAliasGroup) {
+    // Equal totals (512*8 == 1024*4) so the assertion holds whichever member becomes primary.
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Guards against passing vacuously if aliasing silently failed to apply.
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    ASSERT_TRUE(a->alias_primary_id.has_value() || !a->alias_secondary_ids.empty()) << "dfb_a not aliased";
+
+    const auto footprints = GetDataflowBufferFootprints(program);
+
+    ASSERT_EQ(footprints.size(), 1u) << "aliased DFBs must report one region, not one per member";
+    EXPECT_EQ(footprints[0].total_size, 4096u);
+    EXPECT_FALSE(footprints[0].borrows_memory);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsFlagsBorrowedMemory) {
+    // entry_size 16 * num_entries 2 = 32 bytes.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto footprints = GetDataflowBufferFootprints(program);
+
+    ASSERT_EQ(footprints.size(), 1u);
+    EXPECT_TRUE(footprints[0].borrows_memory) << "borrowed DFB must be flagged so its L1 isn't double-counted";
+    EXPECT_EQ(footprints[0].total_size, 32u);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
