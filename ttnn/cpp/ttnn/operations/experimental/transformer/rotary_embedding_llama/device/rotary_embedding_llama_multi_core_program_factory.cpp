@@ -52,7 +52,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t rotary_seq_len_t = std::min({seq_len_t, cos_seq_len_t, sin_seq_len_t});
 
     if (seq_len_t != cos_seq_len_t || seq_len_t != sin_seq_len_t) {
-        log_warning(
+        // This is expected during decode: the cos/sin caches are pre-allocated for the full context length while
+        // the input carries only the current token(s), so input_Ht is routinely smaller than cos_Ht/sin_Ht on every
+        // decode iteration. Logged at debug rather than warning since it reflects normal decode-mode operation, not
+        // an unexpected condition.
+        log_debug(
             tt::LogOp,
             "rotary_embedding_llama sequence tile coverage mismatch: input_Ht={}, cos_Ht={}, sin_Ht={}, "
             "rotary_Ht={}. Tiles beyond rotary_Ht will be zero-filled in the output.",
