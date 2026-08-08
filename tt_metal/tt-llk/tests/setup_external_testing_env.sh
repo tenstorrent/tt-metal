@@ -31,8 +31,15 @@ check_deps() {
 # Check for supported Python version
 check_python_version() {
     PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
-    if [[ "$PYTHON_VERSION" != "3.10"* ]]; then
-        echo "Error: Only Python 3.10 is supported. Detected: $PYTHON_VERSION" >&2
+    local PYTHON_MAJOR PYTHON_MINOR
+    PYTHON_MAJOR=$(printf '%s' "$PYTHON_VERSION" | cut -d. -f1)
+    PYTHON_MINOR=$(printf '%s' "$PYTHON_VERSION" | cut -d. -f2)
+    if ! [[ "$PYTHON_MAJOR" =~ ^[0-9]+$ && "$PYTHON_MINOR" =~ ^[0-9]+$ ]]; then
+        echo "Error: Unable to parse Python version: $PYTHON_VERSION" >&2
+        exit 1
+    fi
+    if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 10) )); then
+        echo "Error: Python 3.10 or newer is required. Detected: $PYTHON_VERSION" >&2
         exit 1
     fi
     echo "Supported Python version detected: $PYTHON_VERSION"
