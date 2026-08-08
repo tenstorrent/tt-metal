@@ -77,12 +77,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     if dim is None:
         dim = -1
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-    # The traced configs carry use_multicore=True, but the current ttnn.argmax
-    # API dropped that kwarg (multicore is automatic now; it exposes keepdim /
-    # sub_core_grids instead). Passing it raises "incompatible function
-    # arguments", so strip it — the default behavior is already multicore.
-    op_kwargs.pop("use_multicore", None)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, exclude={"use_multicore"})
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
