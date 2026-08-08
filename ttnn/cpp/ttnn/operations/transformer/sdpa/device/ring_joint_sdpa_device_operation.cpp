@@ -377,21 +377,17 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Sparse computation (windowed / block-sparse pattern): tokens_per_frame + num_frames_padded + a
-    // bit-packed uint32 vector `sparse_frame_mask` describe the frame-block-sparse pattern the
-    // kernel applies. Constraints:
-    //   * sparse_frame_mask is required, bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.
-    //   * tokens_per_frame (tokens) is a multiple of TILE_HEIGHT AND is a multiple of both
+    // Sparse compute constraints:
+    //   * sparse_frame_mask is required.
+    //   * tokens_per_frame is a multiple of TILE_HEIGHT and is a multiple of both
     //     q_chunk_size and k_chunk_size — i.e. each SDPA chunk sits inside one frame. Chunks
-    //     smaller than a frame are allowed (multiple chunks per frame, each mapped to the same
-    //     q_frame/k_frame index via integer division in the compute kernel); a chunk that
-    //     straddles a frame boundary would misindex sparse_frame_mask.
+    //     smaller than a frame are allowed.
     //   * num_frames_padded divides ring_size (each SP shard = whole number of frames), and is
     //     <= 32 (packed representation caps at 32*32 = 1024 bits).
     //   * logical_n == num_frames_real * tokens_per_frame (un-padded); the padded frames are all-zero
-    //     rows AND columns in the pattern (no queries, no keys attended).
+    //     rows and columns in the pattern.
     //   * incompatible with is_causal (softmax mask semantics differ — causal is triangular,
-    //     ours is arbitrary block-sparse).
+    //     this is arbitrary block-sparse).
     //   * incompatible with chunked-prefill and kv-pad rotation.
     if (args.has_sparse_frames()) {
         const uint32_t fsl = args.tokens_per_frame.value();
@@ -423,9 +419,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             nf_pad);
         TT_FATAL(
             nf_pad % args.ring_size == 0,
-            "num_frames_padded ({}) must divide ring_size ({}) so each SP shard holds whole frames",
-            nf_pad,
-            args.ring_size);
+            "ring_size ({}) must divide num_frames_padded ({}) so each SP shard holds whole frames",
+            args.ring_size,
+            nf_pad);
         TT_FATAL(
             static_cast<std::size_t>(nf_pad) * fsl >= args.logical_n,
             "num_frames_padded * tokens_per_frame ({}) must be >= logical_n ({})",

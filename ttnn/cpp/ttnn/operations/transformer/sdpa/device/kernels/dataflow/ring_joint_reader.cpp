@@ -508,15 +508,11 @@ void kernel_main() {
         }
     }
 
-    // Reader must skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast
-    // rounds fire only for chunks that will actually be processed — otherwise sparse's variable-rate
-    // compute path breaks chain lockstep at high work-items-per-core.
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 7);
 
-    // Packed sparse_frame_mask bitmap (32 uint32 words) present only
-    // when sparse_frames_enabled (the host omits them otherwise).
+    // Packed sparse_frame_mask bitmap (32 uint32 words) present only when sparse_frames_enabled.
     [[maybe_unused]] uint32_t sparse_frame_mask_words[32];
     if constexpr (sparse_frames_enabled) {
         for (uint32_t w = 0; w < 32; ++w) {
@@ -675,8 +671,8 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
-    // Sparse computation: detect a shard whose Q frames are ALL padding, i.e. no q_frame
-    // attends any k_frame. The per-k_chunk aggregate skip below would then push ZERO chunks for the
+    // Sparse computation: detect a shard whose Q frames are all padding, i.e. no q_frame
+    // attends any k_frame. The per-k_chunk skip below would then push zero chunks for the
     // whole device — but the skip sits above k_chain.forward and cb_k.push_back, so it also strands
     // the head-chain multicast and the ring balance every other device depends on. For such
     // a shard we disable the skip: it participates fully in data movement (push + forward every
@@ -899,7 +895,7 @@ void kernel_main() {
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
-            // Sparse computation: an ACTIVE ring iter can have EVERY k_chunk shard-aggregate-skipped (no
+            // Sparse computation: an active ring iter can have every k_chunk shard-aggregate-skipped (no
             // q_frame in this shard attends any of this iter's k-frames), so the in-loop first_k_for_q
             // push never fires — yet compute's zero-work fast path still pops cb_q_in. Push Q up front
             // here so cb_q_in stays balanced; suppress the in-loop push.

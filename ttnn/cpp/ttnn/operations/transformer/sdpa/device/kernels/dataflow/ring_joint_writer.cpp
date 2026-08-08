@@ -496,9 +496,7 @@ void kernel_main() {
         argidx += 32;
     }
 
-    // Per-q_chunk work bitmap. bit iter set iff (q_chunk has attended k in ring_iter) AND (iter
-    // is mask-active). Host-precomputed to match compute. Writer uses this to gate restore push,
-    // save/output write, and prefetch on a per-(q_chunk, iter) basis.
+    // Per-q_chunk work bitmap. bit set iff (q_chunk has attended k in ring_iter) && (iter is mask-active).
     uint32_t q_work_bitmap[num_q_chunks];
     for (uint32_t q = 0; q < num_q_chunks; ++q) {
         q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
@@ -601,7 +599,7 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
-    // Bitmap-derived helpers. All decisions come from q_work_bitmap[q_chunk], which host precomputed to match compute.
+    // Sparse compute helpers.
     auto q_has_work = [&](uint32_t q_chunk, uint32_t ring_iter) -> bool {
         if constexpr (sparse_frames_enabled != 1) {
             (void)q_chunk;
@@ -800,20 +798,19 @@ void kernel_main() {
             // barrier rule. Only barrier when next Q's TRID hasn't been cleared yet this ring
             // iter: Q[0] -> wB(TRID_INNER), Q[N-2] -> wB(TRID_LAST), Q[1..N-3] -> skip
             // (TRID_INNER already cleared at Q[0]).
-            // Sparse gating: if the next Q chunk has zero attended K in THIS ring iter, compute
-            // will take the zero-work fast path and NOT consume the prefetched restore CBs.
-            // Skip the prefetch push in that case to avoid stranding data in cb_prev_out/max_in/
-            // sum_in that compute never pops.
+            // Sparse gating: if the next Q chunk has zero attended K in this ring iter, compute
+            // will take the zero-work fast path and not consume the prefetched restore CBs.
+            // Skip the prefetch push in that case to avoid stranding data in cb_prev_out/max_in/sum_in
+            // that compute never pops.
             auto prefetch_intra_ring = [&](uint32_t next_q_index) {
                 if (next_q_index >= q_per_core) {
                     return;
                 }
                 if constexpr (sparse_frames_enabled == 1) {
-                    // Bitmap check: if the target (next_q_chunk, current ring_iter) is not a
-                    // work iter for that q_chunk, compute takes the fast path there and does
-                    // NOT consume the prefetched restore CBs — skip the push.
-                    // Also skip if this iter is next_q_chunk's FIRST work iter — no prior save
-                    // exists yet to prefetch (writer's complete_restore is gated by !is_first_work_iter_for_q).
+                    // If the target (next_q_chunk, current ring_iter) is not a work iter for
+                    // that q_chunk, compute takes the fast path there and does not consume the
+                    // prefetched restore CBs — skip the push. Also skip if this iter is
+                    // next_q_chunk's first work iter — no prior save exists yet to prefetch.
                     const uint32_t next_gq =
                         remap_q_index(global_q_start + next_q_index, num_q_chunks, use_zigzag_balancing);
                     const uint32_t next_q_chunk = next_gq % num_q_chunks;
@@ -922,22 +919,21 @@ void kernel_main() {
                     prefetch_intra_ring(q_index + 1);
                 }
                 // Cross-ring: Q[N-1] -> Q[0] of next ring iter.
-                // Under sparse: only prefetch if Q[0] has work in the next ring iter. Otherwise
-                // compute's fast path in next iter won't consume the prefetched data → cb_prev_out
-                // fills → writer stalls at reserve_back after a few iters.
+                // Under sparse compute only prefetch if Q[0] has work in the next ring iter. Otherwise
+                // compute's fast path in next iter won't consume the prefetched data -> cb_prev_out
+                // fills -> writer stalls at reserve_back after a few iters.
                 if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
                     bool do_cross_ring_prefetch = true;
                     if constexpr (sparse_frames_enabled == 1) {
                         // Look up Q[0]'s q_chunk index (after remap for zigzag).
                         const uint32_t gq0 = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
                         const uint32_t q_chunk_0 = gq0 % num_q_chunks;
-                        // Q[0]'s restore lands on the next ACTIVE ring iter, not ring_iter+1:
-                        // the writer and compute `continue` past inactive iters, so ring_iter+1 may be skipped
+                        // Q[0]'s restore lands on the next active ring iter, not ring_iter+1:
+                        // the writer and compute continue past inactive iters, so ring_iter+1 may be skipped
                         // entirely. Gating the prefetch on ring_iter+1 then mis-fires when that iter is inactive: the
                         // prefetch is skipped, but the next active iter still restores Q[0] via complete_restore, which
                         // then barriers on no reads and pushes stale CB data — silently wiping the accumulator built up
-                        // before the hole (per-frame PCC drops on exactly the SP shards whose OOB iter is
-                        // mid-sequence).
+                        // before the hole.
                         uint32_t next_iter = ring_iter + 1;
                         while (next_iter < ring_size && !((active_ring_iter_mask >> next_iter) & 1u)) {
                             next_iter++;
@@ -967,7 +963,7 @@ void kernel_main() {
                     continue;
                 }
 
-                // Sparse zero-work skip: compute's fast path DOES push cb_signal, but does NOT
+                // Sparse zero-work skip: compute's fast path pushes cb_signal, but does not
                 // push cb_out/max_out/sum_out. So writer waits signal but must skip deferred save.
                 // We wait signal below then continue. For last-iter zero-work q_chunks,
                 // compute's fast path never normalizes and never pushes a real output. Guard against that.

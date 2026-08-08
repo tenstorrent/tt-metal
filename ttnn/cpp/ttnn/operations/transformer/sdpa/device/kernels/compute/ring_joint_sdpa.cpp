@@ -86,8 +86,7 @@ void kernel_main() {
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
-    // Sparse computation (windowed / block-sparse pattern).
-    // All three set together at the host or all zero (feature disabled).
+    // Sparse computation. All three set together at the host or all zero (feature disabled).
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(79) == 1;
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(80);
     constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(81);
@@ -208,11 +207,7 @@ void kernel_main() {
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
 
-    // Attention-sink and frame-block-sparse are mutually exclusive (enforced host-side in
-    // ring_joint_sdpa_device_operation.cpp::validate). Guard here too so a mis-set config fails
-    // loudly at compile time rather than silently corrupting the windowed softmax (the sink folds
-    // an exp(sink - max) term into the denominator, which is fatal for sparse where a Q may attend
-    // few frames).
+    // Attention-sink and frame-block-sparse are mutually exclusive.
     static_assert(
         !(sparse_frames_enabled && use_attention_sink),
         "Sparse computation and attention-sink cannot both be enabled on the ring-joint SDPA path");
@@ -273,10 +268,6 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
 
-    // Sparse computation per-device q_frame offset — maps this device's local q_chunks to their GLOBAL
-    // q_frame indices for sparse_frame_mask lookup. Q is SP-sharded across `ring_size` devices, and
-    // sparse_frame_mask is a broadcast global table indexed by GLOBAL q_frame; without this offset, every
-    // device would look up sparse_frame_mask row 0. Used by sdpa_ring_v2's per-chunk try_skip decisions.
     uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
         const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;

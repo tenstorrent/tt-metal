@@ -440,7 +440,8 @@ class TestSparseFramesRing:
             pytest.param(True, True, id="sparse_allow_all"),
         ],
     )
-    def test_720p_shape(
+    @pytest.mark.parametrize("tokens_per_frame", [pytest.param(3840, id="720p"), pytest.param(1920, id="480p")])
+    def test_video_shape(
         self,
         mesh_device,
         num_links,
@@ -453,8 +454,10 @@ class TestSparseFramesRing:
         reset_seeds,
         sparse_frames_enabled,
         force_allow_all,
+        tokens_per_frame,
     ):
-        """720p-scale geometry representative of a real workload."""
+        """Video-DiT-scale geometry. 720p uses frame-size=3840; 480p uses frame-size=1920.
+        The 320/384-token chunk sizes divide both values."""
         nf_real = 21
         nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
         _run_sparse_frames_op(
@@ -466,15 +469,15 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            tokens_per_frame=3840,
+            tokens_per_frame=tokens_per_frame,
             b=1,
             nh=40,
             d=128,
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
-            q_chunk_size_tokens=320,  # 320 tokens = 10 tiles
-            k_chunk_size_tokens=384,  # 384 tokens = 12 tiles
+            q_chunk_size_tokens=320,  # 10 tiles
+            k_chunk_size_tokens=384,  # 12 tiles
             sparse_frames_enabled=sparse_frames_enabled,
             force_allow_all=force_allow_all,
         )
@@ -487,7 +490,8 @@ class TestSparseFramesRing:
             pytest.param(True, True, id="sparse_allow_all"),
         ],
     )
-    def test_720p_multi_oob(
+    @pytest.mark.parametrize("tokens_per_frame", [pytest.param(3840, id="720p"), pytest.param(1920, id="480p")])
+    def test_video_multi_oob(
         self,
         mesh_device,
         num_links,
@@ -500,9 +504,10 @@ class TestSparseFramesRing:
         reset_seeds,
         sparse_frames_enabled,
         force_allow_all,
+        tokens_per_frame,
     ):
-        """Same 720p multi-Q-per-core regime as test_720p_shape, but nf_real chosen so that
-        multiple whole SP shards are padding (fully out-of-bounds)."""
+        """Same multi-Q-per-core regime as test_video_shape, but nf_real chosen so that multiple whole
+        SP shards are padding (fully out-of-bounds). 720p: fsl=3840; 480p: fsl=1920."""
         nf_real = 18
         nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
         _run_sparse_frames_op(
@@ -514,7 +519,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            tokens_per_frame=3840,
+            tokens_per_frame=tokens_per_frame,
             b=1,
             nh=40,
             d=128,
