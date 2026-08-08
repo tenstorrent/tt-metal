@@ -8,11 +8,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-template <typename T>
+template <typename D, typename T>
 void write_mean_rstd(
     const Noc& noc,
-    uint32_t cb_id,
+    D dfb,
     uint32_t tile_offset,
     uint32_t num_inner,
     uint32_t normalized_dims,
@@ -25,8 +26,7 @@ void write_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer dfb(cb_id);
-    const uint32_t cb_tile_bytes = get_tile_size(cb_id);
+    const uint32_t cb_tile_bytes = dfb.get_tile_size();
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     dfb.wait_front(onetile);
@@ -95,36 +95,33 @@ void write_mean_rstd(
 
 void kernel_main() {
     using namespace tt::constants;
-    const auto output_addr = get_arg_val<uint32_t>(0);
-    const auto mean_addr = get_arg_val<uint32_t>(1);
-    const auto rstd_addr = get_arg_val<uint32_t>(2);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(3);
-    const auto num_inner = get_arg_val<uint32_t>(4);
-    const auto tile_offset = get_arg_val<uint32_t>(5);
-    const auto mean_rstd_height = get_arg_val<uint32_t>(6);
-    const auto mean_rstd_width = get_arg_val<uint32_t>(7);
-    const auto normalized_dims = get_arg_val<uint32_t>(8);
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto num_inner = get_arg(args::num_inner);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto mean_rstd_height = get_arg(args::mean_rstd_height);
+    const auto mean_rstd_width = get_arg(args::mean_rstd_width);
+    const auto normalized_dims = get_arg(args::normalized_dims);
 
-    constexpr bool mean_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool rstd_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t block_size = get_compile_time_arg_val(2);
-    constexpr auto output_args = TensorAccessorArgs<3>();
-    constexpr auto mean_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
+    constexpr auto block_size = get_arg(args::block_size);
 
-    constexpr uint32_t cb_id_output = tt::CBIndex::c_16;
-    constexpr uint32_t cb_id_mean = tt::CBIndex::c_17;
-    constexpr uint32_t cb_id_rstd = tt::CBIndex::c_18;
+    Noc noc;
 
     // output
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr);
+    DataflowBuffer dfb_output(dfb::output);
+    const uint32_t output_tile_bytes = dfb_output.get_tile_size();
+    const auto output_addrg = TensorAccessor(tensor::output);
 
+#ifdef MEAN_HAS_VALUE
     // mean
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
+    DataflowBuffer dfb_mean(dfb::mean);
+    const auto mean_addrg = TensorAccessor(tensor::mean);
+#endif
 
+#ifdef RSTD_HAS_VALUE
     // rstd
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
+    DataflowBuffer dfb_rstd(dfb::rstd);
+    const auto rstd_addrg = TensorAccessor(tensor::rstd);
+#endif
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
@@ -132,39 +129,36 @@ void kernel_main() {
     uint32_t Wt = (mean_rstd_width + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    Noc noc;
-    DataflowBuffer dfb_output(cb_id_output);
-
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
-        if (mean_has_value) {
-            write_mean_rstd(
-                noc,
-                cb_id_mean,
-                tile_offset,
-                num_inner,
-                normalized_dims,
-                outer_idx,
-                mean_rstd_height,
-                mean_rstd_width,
-                Ht,
-                Wt,
-                mean_addrg);
-        }
+#ifdef MEAN_HAS_VALUE
+        write_mean_rstd(
+            noc,
+            dfb_mean,
+            tile_offset,
+            num_inner,
+            normalized_dims,
+            outer_idx,
+            mean_rstd_height,
+            mean_rstd_width,
+            Ht,
+            Wt,
+            mean_addrg);
+#endif
 
-        if (rstd_has_value) {
-            write_mean_rstd(
-                noc,
-                cb_id_rstd,
-                tile_offset,
-                num_inner,
-                normalized_dims,
-                outer_idx,
-                mean_rstd_height,
-                mean_rstd_width,
-                Ht,
-                Wt,
-                rstd_addrg);
-        }
+#ifdef RSTD_HAS_VALUE
+        write_mean_rstd(
+            noc,
+            dfb_rstd,
+            tile_offset,
+            num_inner,
+            normalized_dims,
+            outer_idx,
+            mean_rstd_height,
+            mean_rstd_width,
+            Ht,
+            Wt,
+            rstd_addrg);
+#endif
 
         // output
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
