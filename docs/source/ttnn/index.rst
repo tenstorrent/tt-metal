@@ -15,6 +15,7 @@ Welcome to TT-NN documentation!
    ttnn/tutorials/tutorials/ttnn_intro.ipynb
    ttnn/tensor
    ttnn/api
+   ttnn/moreh
    ttnn/tutorials
    ttnn/onboarding
    ttnn/converting_torch_model_to_ttnn
