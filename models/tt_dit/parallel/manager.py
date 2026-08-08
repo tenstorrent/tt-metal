@@ -39,6 +39,11 @@ class CCLManager:
         # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
         self._mm_progress_counters_buffer = None
 
+        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op,
+        # keyed by (mesh_axis, num_workers_per_link). See get_strided_ag_mm_semaphore.
+        self._strided_ag_mm_sem_cache = {}
+        self._strided_ag_mm_sem_idx = {}
+
         # Setup semaphores
         self._init_subdevice()
 
@@ -273,6 +278,37 @@ class CCLManager:
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
+    def get_strided_ag_mm_semaphore(self, mesh_axis, num_workers_per_link):
+        """
+        Get semaphores for the strided all-gather-matmul op (strided_all_gather_minimal_matmul_async).
+
+        Unlike the 2-semaphore all-gather path, the strided op needs 2 out-ready semaphores plus
+        2 * num_links * num_workers_per_link per-worker aggregator semaphores (incremented over the
+        fabric by writer workers on the receiving device), all in a single list. A 2-deep ping-pong
+        pool is allocated lazily per (mesh_axis, num_workers_per_link) and rotated on each call.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+            num_workers_per_link: The op's num_workers_per_link (sets the aggregator-sem count)
+
+        Returns:
+            List of (2 + 2 * num_links * num_workers_per_link) GlobalSemaphores for this cycle
+        """
+        cache_key = (mesh_axis, num_workers_per_link)
+        if cache_key not in self._strided_ag_mm_sem_cache:
+            ttnn.synchronize_device(self.mesh_device)
+            n_sems = 2 + 2 * self.num_links * num_workers_per_link
+            self._strided_ag_mm_sem_cache[cache_key] = [
+                [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(n_sems)]
+                for _ in range(2)
+            ]
+            self._strided_ag_mm_sem_idx[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
+
+        cur_idx = self._strided_ag_mm_sem_idx[cache_key]
+        self._strided_ag_mm_sem_idx[cache_key] = 1 - cur_idx
+        return self._strided_ag_mm_sem_cache[cache_key][cur_idx]
+
     def get_fused_norm_stats_buffer(self, key, create_buffer):
         """Own the ping-pong pool + lifetime of the fused distributed-norm op's persistent
         stats (all-gather scratch) buffer.
@@ -505,6 +541,11 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+        # Lazily-allocated, so keyed by (mesh_axis, num_workers_per_link) rather than axis.
+        for sem_sets in self._strided_ag_mm_sem_cache.values():
+            for sem_set in sem_sets:
+                for sem in sem_set:
+                    ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False

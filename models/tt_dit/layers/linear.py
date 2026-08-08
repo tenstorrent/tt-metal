@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -266,6 +266,60 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
+    def _forward_fabric_agmm(self, x, weight, fabric_cfg, parallel_config, compute_kernel_config) -> ttnn.Tensor:
+        """Optimized fabric-bound TP all-gather-matmul via strided_all_gather_minimal_matmul_async.
+
+        The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
+        run on the rows starting at ``fabric_cfg.ag_core_grid_offset`` (disjoint region). Returns the
+        single (chunks==1) matmul output; the op's first output is the gathered-K scratch.
+
+        Under fused SwiGLU the weight is the packed [gate|up] matrix, so ``fabric_cfg`` blocks on the
+        doubled width and the returned tensor is half as wide. The op has no dtype override, so the
+        output follows the input/weight dtype rather than the caller's requested one.
+        """
+        mesh_axis = parallel_config.tensor_parallel.mesh_axis
+        if self.fuse_swiglu:
+            # The factory partitions gate/up PAIRS across cores, so a pair must never straddle an
+            # N block. N_tiles and N_tiles_per_core are even by construction of the packed weight.
+            assert (
+                fabric_cfg.N_block_size % 2 == 0
+            ), f"fuse_swiglu needs an even N_block_size (in tiles), got {fabric_cfg.N_block_size}"
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=fabric_cfg.M_block_size,
+            K_block_size=fabric_cfg.K_block_size,
+            N_block_size=fabric_cfg.N_block_size,
+            subblock_h=fabric_cfg.subblock_h,
+            subblock_w=fabric_cfg.subblock_w,
+            compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
+        )
+        ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
+        ag_global_semaphores = self.ccl_manager.get_strided_ag_mm_semaphore(mesh_axis, fabric_cfg.num_workers_per_link)
+        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+            x,
+            weight,
+            persistent_output_buffer=ag_persistent_buffer,
+            dim=3,
+            multi_device_global_semaphore=ag_global_semaphores,
+            strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
+            num_links=self.ccl_manager.num_links,
+            memory_config_ag=dram,
+            topology=self.ccl_manager.topology,
+            cluster_axis=mesh_axis,
+            bias=self.bias.data if self.bias is not None else None,
+            fused_activation=self.fused_activation_fn,
+            config=matmul_config,
+            memory_config_mm=dram,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            num_workers_per_link=fabric_cfg.num_workers_per_link,
+            num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
+            read_local_slice_from_input=True,
+            chunks=1,
+            fuse_swiglu=self.fuse_swiglu,
+        )
+        # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
+        return _apply_activation_fn(outputs[1], self.activation_fn)
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -300,7 +354,18 @@ class ColParallelLinear(Module):
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            print(f"M: {M}, K: {K}, N: {N}", flush=True)
             full_grid = self.mesh_device.compute_with_storage_grid_size()
+
+            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
+            # N is the weight width, so a fused-SwiGLU layer keys on its packed [gate|up] width.
+            # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
+            # path below. The op hard-requires a rank-4 input with unit batch dims and dim==3.
+            fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
+            is_4d_unit_batch = len(x.padded_shape) == 4 and x.padded_shape[0] == 1 and x.padded_shape[1] == 1
+            if fabric_cfg is not None and self.chunks in (None, 1) and is_4d_unit_batch:
+                return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config)
+
             core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
