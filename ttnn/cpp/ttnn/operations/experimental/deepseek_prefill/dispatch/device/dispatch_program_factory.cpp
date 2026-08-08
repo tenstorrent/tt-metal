@@ -406,15 +406,26 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // enabled only for a 1D line: Ring, or Linear with one mesh dimension == 1. Excludes 2D meshes
     // (both dims > 1) whose Topology::Linear would otherwise match — those route along an axis and were
     // never validated for the grouped path.
-    const bool enable_sparse_mcast =
-        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
-        (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
+    const bool sparse_topology_ok =
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear);
+    const bool sparse_mesh_is_1d_line = (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1);
+    const bool sparse_has_fabric = (operation_attributes.num_links > 0);
+    const bool enable_sparse_mcast = sparse_topology_ok && sparse_mesh_is_1d_line && sparse_has_fabric;
+    // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
+    // disabled, print each gate so the reason is obvious (wrong topology / not a 1D-line mesh / no fabric).
     log_info(
         tt::LogOp,
-        "[dispatch][tile] enable_sparse_mcast={} (topology={}, num_links={})",
-        enable_sparse_mcast,
+        "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
+        "[gates: topology_ok={}, mesh_1d_line={}, has_fabric={}]",
+        enable_sparse_mcast ? "ENABLED" : "DISABLED",
+        is_row_major ? "row-major" : "tile",
         (int)topology,
-        operation_attributes.num_links);
+        mesh_view.num_rows(),
+        mesh_view.num_cols(),
+        operation_attributes.num_links,
+        sparse_topology_ok,
+        sparse_mesh_is_1d_line,
+        sparse_has_fabric);
     constexpr uint32_t grouped_route_info_u32 = 23;
     const uint32_t route_info_slot_stride_bytes =
         enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
