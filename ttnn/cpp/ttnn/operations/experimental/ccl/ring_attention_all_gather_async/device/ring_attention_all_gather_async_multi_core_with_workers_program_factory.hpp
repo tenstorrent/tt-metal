@@ -15,6 +15,20 @@
 
 namespace ttnn::experimental::prim {
 
+// These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
+// lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
+namespace ring_attention_all_gather_async_dynamic {
+inline constexpr uint32_t kNumSendersPerLink = 2;
+inline constexpr uint32_t kReaderForwardKernelIdx = 0;
+inline constexpr uint32_t kWriterForwardKernelIdx = 1;
+inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
+inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
+inline constexpr uint32_t kReaderSemaphoreArg = 2;
+inline constexpr uint32_t kWriterSemaphoreArg = 4;
+inline constexpr uint32_t kForwardSemaphoreIdx = 1;
+inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+}  // namespace ring_attention_all_gather_async_dynamic
+
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
 
@@ -27,6 +41,13 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::experimental::prim
 
