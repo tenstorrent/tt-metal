@@ -127,6 +127,7 @@
       { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" },
       { "id": "S09QQRK1CF8", "name": "ops-data-movement" }
     ] },
+    { "job-name-component": "Multi-user Isolation", "owner": { "id": "U08FBKRKTB8", "name": "Kohei Yamaguchi" } },
     { "job-name-component": "galaxy-e2e-tests / Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
     { "job-name-component": "Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
     { "job-name-component": "galaxy-e2e-tests / Galaxy Fabric 2D Torus Nightly Tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
