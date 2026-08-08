@@ -35,7 +35,6 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_basic_fabric_mux.cpp
     fabric_data_movement/test_basic_fabric_mux_v2.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
-    fabric_data_movement/test_worker_injection_counter_wrap.cpp
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)

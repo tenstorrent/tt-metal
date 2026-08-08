@@ -44,68 +44,7 @@ using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
     void update_credits_and_slots(WorkerToFabricEdmSender*);
-}
-
-/*
- * Layout of the producer-position word that a worker leaves in the router's L1 at
- * `edm_copy_of_wr_counter_addr` when it closes a connection, and that the next worker to connect
- * picks up. One 32-bit inline write, one 32-bit read -- the router itself never touches it.
- *
- *     [31:24] slot index    - which buffer slot the next producer must write first
- *     [23: 0] write counter - total packets ever injected on this channel, modulo 2^24
- *
- * WHY THE INDEX IS STORED RATHER THAN DERIVED
- * -------------------------------------------
- * This word used to hold the bare write counter, and the reconnecting producer recovered its slot
- * index as `counter % num_buffers`. That is only correct while the counter has never wrapped,
- * because the router's own cursor is a pure mod-num_buffers counter that never passes through a
- * uint32 (fabric_erisc_datamover_channels.hpp: it is zeroed once at bring-up and bumped per packet).
- * After P packets the router sits at `P % num_buffers` but the producer computes
- * `(P % 2^W) % num_buffers`, and those agree for every P only if num_buffers divides 2^W -- i.e.
- * only for power-of-two depths. At depth 18, `2^32 % 18 == 4`, so the first wrap left the producer
- * permanently 4 slots behind the router and the channel silently transmitted stale slots with
- * credits still balanced. Storing the index removes the constraint for every depth.
- *
- * WHY TRUNCATING THE COUNTER TO 24 BITS IS LOSSLESS
- * -------------------------------------------------
- * 24 bits cannot hold the write counter -- it is monotonic for the life of the fabric and is exactly
- * the thing that runs past 2^24 and 2^32. But this word does not have to carry P; it only has to
- * carry enough of P to disambiguate it, because the reader already holds a full-width anchor.
- *
- * At open the producer has R (the router's read counter, exact, 32-bit) and counter_field = P mod
- * 2^24, and it knows 0 <= P - R <= num_buffers. Then
- *     (counter_field - R) mod 2^24 == (P - R) mod 2^24   [counter_field == P mod 2^24, so the
- *                                                         congruence survives subtracting R]
- *                                  == P - R              [0 <= P - R <= 255 < 2^24, so the
- *                                                         reduction is a no-op -- the ONLY step
- *                                                         that needs the occupancy bound]
- * and P = R + that. See open_finish. Truncating to W bits aliases P with P +/- k*2^W; that is
- * resolvable against an exact R iff every possible P - R is below 2^W. The largest is 255, so the
- * minimum workable W is 8 -- 24 is simply what is left after the 8-bit slot index.
- *
- * The 0 <= P - R <= num_buffers bound is the ring occupancy, enforced by the producer's own
- * admission control: wait_for_empty_write_slot() spins until used_slots < num_buffers and exactly one
- * cursor advance follows each admitted packet. Exceeding it would mean overwriting a slot the router
- * has not drained, so this is a pre-existing invariant, not a new requirement.
- *
- * The producer's live counter stays full width while connected and may cross 2^24 freely; only this
- * snapshot is truncated, and it is re-anchored to R on the next open. The per-packet path is
- * unaffected -- get_num_free_write_slots() keeps its plain wrap-safe uint32 subtraction, no mask.
- */
-namespace connection_handoff {
-constexpr uint32_t COUNTER_BITS = 24;
-constexpr uint32_t COUNTER_MASK = (1u << COUNTER_BITS) - 1;
-
-constexpr uint32_t pack(uint8_t slot_index, uint32_t write_counter) {
-    return (static_cast<uint32_t>(slot_index) << COUNTER_BITS) | (write_counter & COUNTER_MASK);
-}
-constexpr uint8_t slot_index_of(uint32_t packed) { return static_cast<uint8_t>(packed >> COUNTER_BITS); }
-constexpr uint32_t counter_of(uint32_t packed) { return packed & COUNTER_MASK; }
-
-// A freshly zeroed word must decode to "slot 0, counter 0", which is the correct state for the
-// first producer to connect after fabric bring-up.
-static_assert(slot_index_of(0) == 0 && counter_of(0) == 0);
-}  // namespace connection_handoff
+    }
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -284,6 +223,11 @@ struct WorkerToFabricEdmSenderBase {
         ASSERT(is_l1_address(edm_copy_of_wr_counter_addr));  // must be a L1 address
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
+        // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
+        // Semaphores are strided by L1_ALIGNMENT (16B), so this address both is 16B aligned and owns
+        // a full 16B slot -- a whole-block read here cannot disturb a neighbouring semaphore.
+        this->local_producer_cursor_addr = local_buffer_index_addr;
+        ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
         this->edm_buffer_base_addr = edm_buffer_base_addr;
         this->buffer_size_bytes = buffer_size_bytes;
         this->num_buffers_per_channel = num_buffers_per_channel;
@@ -505,15 +449,15 @@ struct WorkerToFabricEdmSenderBase {
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
 
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
-            // then once we get it we will use that address for the teardown ack
-            // Note this is safe because only the worker can initiate teardown (and it will not do it until)
-            // some time at least after it copied the wrptr out of the worker_teardown_addr
+            const uint64_t remote_producer_cursor_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
+            // Read back the whole SenderChannelProducerCursor block left by the previous producer on
+            // this channel. Both fields are full width, so the write index is taken verbatim in
+            // open_finish() rather than re-derived from the counter.
+            ASSERT(local_producer_cursor_addr % 16 == 0);
             noc_async_read(
-                remote_buffer_index_addr,
-                reinterpret_cast<size_t>(this->worker_teardown_addr),
-                sizeof(uint32_t),
+                remote_producer_cursor_addr,
+                local_producer_cursor_addr,
+                sizeof(tt::tt_fabric::SenderChannelProducerCursor),
                 WORKER_HANDSHAKE_NOC);
 
             const uint64_t edm_read_free_slots_or_read_counter_addr =
@@ -575,28 +519,20 @@ struct WorkerToFabricEdmSenderBase {
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            // Restore the producer position from the packed handoff word the previous producer left
-            // behind (see connection_handoff above for the layout and the reasoning).
-            //
-            // The slot index is taken verbatim -- it is NOT re-derived as `counter % num_buffers`,
-            // because the counter only survives modulo 2^COUNTER_BITS and re-deriving would only be
-            // correct when num_buffers divides that modulus, i.e. only for power-of-two depths.
-            //
-            // The full-width counter is then reconstructed from the router's read counter:
-            //     outstanding = (P - R) mod 2^COUNTER_BITS, and outstanding <= num_buffers < 2^24,
-            //     so R + outstanding == P exactly.
-            // That keeps `counter - edm_read_counter` in get_num_free_write_slots() a plain
-            // wrap-safe uint32 subtraction with no masking in the hot path.
+            // Adopt the previous producer's cursor verbatim. The write index is NOT re-derived as
+            // `write_counter % num_buffers`: the counter is free-running and wraps at 2^32, and that
+            // derivation only survives the wrap when num_buffers divides 2^32 (i.e. for power-of-two
+            // depths only). The router's own cursor is a pure mod-num_buffers counter that never
+            // passes through a uint32, so at any other depth the two silently drift apart.
             invalidate_l1_cache();
-            const uint32_t handoff = *this->worker_teardown_addr;
-            const uint32_t edm_read_counter = *this->edm_buffer_local_free_slots_read_ptr;
-            const uint32_t outstanding =
-                (connection_handoff::counter_of(handoff) - edm_read_counter) & connection_handoff::COUNTER_MASK;
+            const auto* cursor = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::SenderChannelProducerCursor*>(
+                local_producer_cursor_addr);
+            // Restores the bound the modulo used to provide implicitly.
+            ASSERT(cursor->write_index < this->num_buffers_per_channel);
             this->buffer_slot_write_counter.reset();
-            this->buffer_slot_write_counter.counter = edm_read_counter + outstanding;
-            this->buffer_slot_write_counter.index = BufferIndex{connection_handoff::slot_index_of(handoff)};
+            this->buffer_slot_write_counter.counter = cursor->write_counter;
+            this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(cursor->write_index)};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
-            ASSERT(this->buffer_slot_index.get() < this->num_buffers_per_channel);
         } else {
             this->buffer_slot_index = BufferIndex(0);
         }
@@ -634,20 +570,26 @@ struct WorkerToFabricEdmSenderBase {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC) & ~(uint64_t)NOC_COORDINATE_MASK;
 
-        // buffer index stored at location after handshake addr
-        if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            // Hand off BOTH the slot index and the write counter. The index must be carried
-            // explicitly; it cannot be recovered from the counter alone (see connection_handoff).
+        // Persist the producer cursor for the next connection on this channel. Only
+        // worker-style producers participate in this protocol: the block is read back
+        // in open_start()/open_finish() under the same condition.
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            const uint64_t remote_producer_cursor_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
-                remote_buffer_index_addr,
-                connection_handoff::pack(this->get_buffer_slot_index(), this->buffer_slot_write_counter.counter),
+                remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
+                this->buffer_slot_write_counter.counter,
+                0xF,
+                WORKER_HANDSHAKE_NOC);
+            noc_inline_dw_write<InlineWriteDst::L1, posted>(
+                remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_index),
+                static_cast<uint32_t>(this->get_buffer_slot_index()),
                 0xF,
                 WORKER_HANDSHAKE_NOC);
         } else {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            noc_inline_dw_write<InlineWriteDst::L1, posted>(
-                remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, WORKER_HANDSHAKE_NOC);
+            // Deliberate no-op: stream-reg (EDM-style) producers never read the cursor
+            // block in open_start(), so there is nothing to hand off. This must stay a
+            // no-op: writing a bare index here (as this branch used to) would leave an
+            // incompatible encoding in a word the worker path reads back as a counter.
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
@@ -698,6 +640,8 @@ struct WorkerToFabricEdmSenderBase {
     // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
     // slots addr
     size_t edm_copy_of_wr_counter_addr;
+    // Worker-local landing zone for the SenderChannelProducerCursor block fetched in open_start().
+    uint32_t local_producer_cursor_addr;
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
