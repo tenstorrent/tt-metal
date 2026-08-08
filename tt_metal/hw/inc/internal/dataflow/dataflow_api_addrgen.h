@@ -11,6 +11,12 @@
 #include "api/debug/waypoint.h"
 #include "api/alignment.h"
 
+#if defined(NOC_ATT_ENABLED)
+// Quasar V2 ATT backend: runtime's selected address map defines the flat global-address
+// ABI. Other architectures never define NOC_ATT_ENABLED.
+#include "noc/att/att_address_map.h"
+#endif
+
 #include <type_traits>
 
 namespace interleaved_addr_gen {
@@ -179,6 +185,9 @@ inline constexpr bool has_required_addrgen_traits_v =
  * | noc         | Which NOC to use for the transaction                   | uint8_t   | 0 or 1             | False    |
  */
 // clang-format on
+// Under ATT this remains an opaque software descriptor. Quasar V2 decodes the
+// logical start/end rectangle at issue time, translates the start through ATT,
+// and programs DEST_COORD with width/height for router multicast.
 FORCE_INLINE
 uint64_t get_noc_multicast_addr(
     uint32_t noc_x_start,
@@ -187,12 +196,21 @@ uint64_t get_noc_multicast_addr(
     uint32_t noc_y_end,
     uint32_t addr,
     uint8_t noc = noc_index) {
+#if defined(NOC_ATT_ENABLED)
+    return NOC_MULTICAST_ADDR(
+        active_att::worker_logical_x_from_api(noc_x_start),
+        active_att::worker_logical_y_from_api(noc_y_start),
+        active_att::worker_logical_x_from_api(noc_x_end),
+        active_att::worker_logical_y_from_api(noc_y_end),
+        addr);
+#else
     return NOC_MULTICAST_ADDR(
         DYNAMIC_NOC_X(noc, noc_x_start),
         DYNAMIC_NOC_Y(noc, noc_y_start),
         DYNAMIC_NOC_X(noc, noc_x_end),
         DYNAMIC_NOC_Y(noc, noc_y_end),
         addr);
+#endif
 }
 
 // clang-format off
@@ -211,7 +229,13 @@ uint64_t get_noc_multicast_addr(
 // clang-format on
 FORCE_INLINE
 uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc = noc_index) {
+#if defined(NOC_ATT_ENABLED)
+    // Preserve the public API's UMD-visible coordinate contract. The active
+    // map converts it to that map's logical worker selector.
+    return active_att::worker_address_api_xy(noc_x, noc_y, addr);
+#else
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
+#endif
 }
 
 /*
@@ -224,8 +248,38 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
+#if defined(NOC_ATT_ENABLED)
+    return active_att::worker_address_api_xy(NOC_UNICAST_COORDINATE_X(noc_xy), NOC_UNICAST_COORDINATE_Y(noc_xy), addr);
+#else
     return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
+#endif
 }
+
+namespace interleaved_addr_gen {
+
+// Full 64-bit NOC address for `addr` inside bank `bank_index`.
+//
+// This is the single place the bank -> destination mapping happens, so the
+// coordinate and ATT encodings differ here and nowhere else.
+template <bool DRAM>
+FORCE_INLINE uint64_t get_bank_noc_addr(uint32_t bank_index, uint32_t addr, uint8_t noc = noc_index) {
+#if defined(NOC_ATT_ENABLED)
+    // The active address map owns selector numbering. qsr.s1 DRAM selectors are
+    // sparse, while an L1 bank can follow the allocator's core order rather
+    // than row-major order. Preserve those two distinctions here.
+    if constexpr (DRAM) {
+        return active_att::dram_address(bank_index, addr);
+    } else {
+        const uint32_t noc_xy = get_noc_xy<false>(bank_index, noc);
+        return active_att::worker_address_api_xy(
+            NOC_UNICAST_COORDINATE_X(noc_xy), NOC_UNICAST_COORDINATE_Y(noc_xy), addr);
+    }
+#else
+    return get_noc_addr_helper(get_noc_xy<DRAM>(bank_index, noc), addr);
+#endif
+}
+
+}  // namespace interleaved_addr_gen
 
 uint64_t get_dram_noc_addr(
     const uint32_t id,
@@ -238,9 +292,7 @@ uint64_t get_dram_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
+    return interleaved_addr_gen::get_bank_noc_addr<true>(bank_index, addr, noc);
 }
 
 uint64_t get_l1_noc_addr(
@@ -254,9 +306,7 @@ uint64_t get_l1_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
+    return interleaved_addr_gen::get_bank_noc_addr<false>(bank_index, addr, noc);
 }
 
 uint64_t get_system_memory_noc_addr(
@@ -278,7 +328,11 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
         Get an encoding which contains the address in L1 on the current core that you want to
         read from/write to via the noc
     */
+#if defined(NOC_ATT_ENABLED)
+    return active_att::embed_local_address(addr);
+#else
     return NOC_XY_ADDR(my_x[noc], my_y[noc], addr);
+#endif
 }
 
 template <bool DRAM>
@@ -304,10 +358,7 @@ struct InterleavedAddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -338,10 +389,7 @@ struct InterleavedPow2AddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -368,10 +416,7 @@ struct InterleavedAddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -402,10 +447,7 @@ struct InterleavedPow2AddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -530,14 +572,10 @@ FORCE_INLINE uint64_t get_noc_addr(
 template <bool DRAM>
 FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
-    uint64_t noc_addr = 0;
     if constexpr (DRAM) {
-        noc_addr = dram_bank_to_noc_xy[noc][bank_id];
         bank_address_offset += bank_to_dram_offset[bank_id];
-    } else {
-        noc_addr = l1_bank_to_noc_xy[noc][bank_id];
     }
-    return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
+    return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_id, bank_address_offset, noc);
 }
 
 template <bool DRAM, uint32_t page_size>

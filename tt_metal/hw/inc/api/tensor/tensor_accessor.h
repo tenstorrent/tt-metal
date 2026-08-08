@@ -35,9 +35,9 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(bank_id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(bank_id, bank_offset_index);
     uint32_t bank_offset = interleaved_addr_gen::get_bank_offset<true>(bank_index);
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, bank_offset);
-    return noc_addr;
+    // Shares the single bank -> destination mapping with the interleaved address
+    // generators, so the coordinate and ATT encodings cannot drift apart here.
+    return interleaved_addr_gen::get_bank_noc_addr<true>(bank_index, bank_offset, noc);
 }
 #endif
 }  // namespace tensor_accessor
@@ -306,7 +306,7 @@ private:
         auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
-                                         : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
+                                         : ::get_noc_addr(bank_x, bank_y, 0, noc);
         return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
     }
 
