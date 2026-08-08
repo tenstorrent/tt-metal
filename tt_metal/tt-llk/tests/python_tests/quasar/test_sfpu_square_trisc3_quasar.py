@@ -49,6 +49,12 @@ from test_eltwise_unary_sfpu_quasar import (
 )
 
 
+def _is_unpack_to_dest(fmt, dest_acc):
+    """UNPACK→DEST is selected only for a 32-bit input with a 32-bit Dest; MATH does the
+    SrcA→Dest datacopy otherwise."""
+    return fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+
 def generate_sfpu_square_combinations(formats_list):
     """
     Square-only sweep for the TRISC3 variant: (fmt, dest_acc, dest_sync,
@@ -68,7 +74,9 @@ def generate_sfpu_square_combinations(formats_list):
             else (DestAccumulation.No, DestAccumulation.Yes)
         )
         for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+            if is_invalid_quasar_sfpu_format_combination(
+                fmt, dest_acc, _is_unpack_to_dest(fmt, dest_acc)
+            ):
                 continue
             for dest_sync in dest_sync_modes:
                 for implied_math_format in implied_math_modes:
@@ -128,9 +136,7 @@ def test_sfpu_square_trisc3_quasar(
         input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
     configuration = TestConfig(
         "sources/quasar/sfpu_square_trisc3_quasar_test.cpp",
         formats,
