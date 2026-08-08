@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# NavSim hydra agent config for the in-process TTNN agent (single-env path).
+# Copy this into  navsim/planning/script/config/common/agent/  and run
+#   run_pdm_score.py ... agent=diffusiondrive_ttnn_inproc_agent
+# Run in the navsim conda env (no separate ttnn server process needed).
+# Override paths on the CLI, e.g. agent.checkpoint_path=$CKPT agent.anchors_path=$ANCHORS
+
+_target_: diffusiondrive_ttnn_inproc_agent.DiffusionDriveTtnnInprocAgent
+_convert_: 'all'
+
+config:
+  _target_: navsim.agents.diffusiondrive.transfuser_config.TransfuserConfig
+  _convert_: 'all'
+
+  trajectory_sampling:
+    _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
+    _convert_: 'all'
+    time_horizon: 4
+    interval_length: 0.5
+
+  latent: False
+
+# Weights are loaded in-process and run on the Wormhole device.
+# Paths resolve from env vars (export DD_CHECKPOINT_PATH / DD_ANCHOR_PATH, themselves
+# derived from DD_DATA_ROOT — see the demo README "Eval environment" block); the
+# literal after the comma is only the last-resort default. CLI overrides still work:
+#   agent.checkpoint_path=$DD_CHECKPOINT_PATH agent.anchors_path=$DD_ANCHOR_PATH
+checkpoint_path: ${oc.env:DD_CHECKPOINT_PATH,/mnt/diffusion-drive/weights/diffusiondrive_navsim_88p1_PDMS.pth}
+anchors_path: ${oc.env:DD_ANCHOR_PATH,/mnt/diffusion-drive/resnet34/kmeans_navsim_traj_20.npy}
+lr: 6e-4
+device_id: 0
