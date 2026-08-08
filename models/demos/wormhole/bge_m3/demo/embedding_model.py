@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""BGE-M3 demo: sample input, load model, PCC/cosine validation, return sparse + colbert scores from BgeM3Model."""
+"""BGE-M3 demo: compare HF vs TT on encoded queries (PCC/cosine), then return sparse/ColBERT scores from ``compute_score``."""
 import numpy as np
 import torch
 from loguru import logger
@@ -61,10 +61,9 @@ def run_bge_demo_inference(
     device,
     sentence_pairs,
     model_name="BAAI/bge-m3",
-    # sequence_length=8192,
     sequence_length=1024,
 ):
-    """Run inference: PCC/cosine validation (ref vs TT), then return sparse + colbert scores from BgeM3Model only."""
+    """PCC/cosine on the query batch, then sparse/ColBERT scores (query forward is reused for ``compute_score``)."""
     sentence_pairs = list(sentence_pairs)
     if not sentence_pairs:
         raise ValueError("sentence_pairs must be a non-empty list of (query, passage) tuples.")
@@ -86,7 +85,6 @@ def run_bge_demo_inference(
         state_dict=reference_model.state_dict(),
     )
 
-    # Cosine similarity block: same as reference — encode queries, run ref + TT, comp_pcc, mean_pool, log
     encoded_input = model_args.encode_prompts(queries)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
@@ -134,7 +132,7 @@ def run_bge_demo_inference(
         similarity_diff < tolerance
     ), f"Cosine similarities differ by {similarity_diff:.4f}, which exceeds tolerance of {tolerance}"
 
-    # Reuse query TT forward from PCC block (avoid duplicate ttnn_model pass for queries).
+    # Reuse ``ttnn_output`` from the query forward (no second ``ttnn_model`` call for queries).
     scores = compute_score(
         device,
         sentence_pairs,
@@ -144,8 +142,6 @@ def run_bge_demo_inference(
         to_torch_auto_compose,
         tt_q_hidden=ttnn_output,
     )
-    # logger.info(f"Sparse scores: {scores['sparse']}")
-    # logger.info(f"ColBERT scores: {scores['colbert']}")
     for i, (q, p) in enumerate(sentence_pairs):
         logger.info(f"  pair {i}: sparse={scores['sparse'][i]:.4f}, colbert={scores['colbert'][i]:.4f}")
     return {"sparse": scores["sparse"], "colbert": scores["colbert"]}
