@@ -7,17 +7,17 @@ from typing import TYPE_CHECKING, List, Union
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import GoldenType
 
 from .arch_common import fpu_common, pack_common, unpack_common
+from .base_fpu import Fpu
+from .base_sfpu import Sfpu
+from .base_unpacker import Unpacker
 from .block_data import BlockData
 from .fpu_node import FpuNode
-from .fused_fpu import Fpu
-from .fused_sfpu import Sfpu
-from .fused_unpacker import Unpacker
 from .pack_node import PackNode
 from .sfpu_node import SfpuNode
 
@@ -68,7 +68,7 @@ class ComputePipeline:
 
     def _batch_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         body_fn,
         init_fn=None,
@@ -186,14 +186,7 @@ class ComputePipeline:
         code += "}\n"
         return code
 
-    def unpacker_sync_with_packer(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-    ) -> str:
-        return unpack_common.sync_with_packer(operation.needs_pack_sync)
-
-    def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+    def unpack_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         unpack_ops = [
             cu
             for cu in self.math_nodes
@@ -207,13 +200,15 @@ class ComputePipeline:
             quasar_use_dvalid=config.quasar_use_dvalid
         )
         init_code += config.sentinel.hw_configure_unpack(config, operation)
-        if hoist_reconfig and unpack_ops:
-            init_code += unpack_ops[0].unpack_reconfig(operation, config)
+        if hoist_reconfig and unpack_ops and not config.skip_unpack_init:
+            init_code += config.sentinel.configure_unpack(
+                config, operation, unpack_ops[0]
+            )
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(operation, config, None)
         code = self._zone(config, "INIT", init_code)
 
-        code += self.unpacker_sync_with_packer(operation, config)
+        code += unpack_common.sync_with_packer(config, operation)
 
         init_fn = None
         uninit_fn = None
@@ -228,8 +223,12 @@ class ComputePipeline:
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
                     continue
-                if not hoist_reconfig and cu.unpacker is not None:
-                    body += cu.unpack_reconfig(operation, config)
+                if (
+                    not hoist_reconfig
+                    and cu.unpacker is not None
+                    and not config.skip_unpack_init
+                ):
+                    body += config.sentinel.configure_unpack(config, operation, cu)
                 if not hoist:
                     body += cu.unpack_init(operation, config, block)
                 body += cu.unpack_run(operation, config, block)
@@ -250,53 +249,16 @@ class ComputePipeline:
 
         return code
 
-    def _math_wait_for_dest(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        if config.skip_sync:
-            return ""
-        return fpu_common.math_wait_for_dest(
-            operation.dest_sync.cpp_enum_value,
-            quasar_use_dvalid=config.quasar_use_dvalid,
-        )
-
-    def _math_dest_section_done(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        if config.skip_sync:
-            return ""
-        return fpu_common.math_dest_section_done(
-            operation.dest_sync.cpp_enum_value,
-            config.dest_acc.cpp_enum_value,
-            quasar_use_dvalid=config.quasar_use_dvalid,
-        )
-
-    def _math_pack_sync_init(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        if not config.quasar_use_dvalid and operation.stage_id != 1:
-            return ""
-        return fpu_common.math_pack_sync_init(
-            operation.dest_sync.cpp_enum_value,
-            config.dest_acc.cpp_enum_value,
-            quasar_use_dvalid=config.quasar_use_dvalid,
-        )
-
-    def _math_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        return f"// Operation {operation.stage_id}: Math Setup\n"
-
-    def math_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        code = self._math_constants(operation, config)
+    def math_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        code = f"// Operation {operation.stage_id}: Math Setup\n"
         fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
         init_code = config.sentinel.hw_configure_math(config, operation)
-        init_code += self._math_pack_sync_init(operation, config)
-        if hoist_reconfig and fpu_ops:
-            init_code += fpu_ops[0].math_reconfig(operation, config)
+        init_code += fpu_common.math_pack_sync_init(config, operation)
+        if hoist_reconfig and fpu_ops and not config.skip_math_init:
+            init_code += config.sentinel.configure_math(config, operation, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(operation, config, None)
         code += self._zone(config, "INIT", init_code)
@@ -308,11 +270,11 @@ class ComputePipeline:
             uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
 
         def batch_body(block: BlockData):
-            body = self._math_wait_for_dest(operation, config)
+            body = fpu_common.math_wait_for_dest(config, operation)
             for cu in self.math_nodes:
                 if isinstance(cu, FpuNode):
-                    if not hoist_reconfig:
-                        body += cu.math_reconfig(operation, config)
+                    if not hoist_reconfig and not config.skip_math_init:
+                        body += config.sentinel.configure_math(config, operation, cu)
                     if not hoist:
                         body += cu.fpu_init(operation, config, block)
                     body += cu.fpu_run(operation, config, block)
@@ -322,7 +284,7 @@ class ComputePipeline:
                     body += cu.sfpu_init(operation, config, block)
                     body += cu.sfpu_run(operation, config, block)
                     body += cu.sfpu_uninit(operation, config, block)
-            body += self._math_dest_section_done(operation, config)
+            body += fpu_common.math_dest_section_done(config, operation)
             return body
 
         code += self._zone_loop(
@@ -338,52 +300,6 @@ class ComputePipeline:
 
         return code
 
-    def _packer_wait_for_math(self, config: "GlobalConfig") -> str:
-        if config.skip_sync:
-            return ""
-        return pack_common.packer_wait_for_math(
-            quasar_use_dvalid=config.quasar_use_dvalid
-        )
-
-    def _packer_dest_section_done(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        if config.skip_sync:
-            return ""
-        return pack_common.packer_dest_section_done(
-            operation.dest_sync.cpp_enum_value,
-            config.dest_acc.cpp_enum_value,
-            quasar_use_dvalid=config.quasar_use_dvalid,
-        )
-
-    def _pack_dest_init(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-        pack_nodes: List[PackNode],
-    ) -> str:
-        if not config.quasar_use_dvalid and operation.stage_id != 1:
-            return ""
-        return pack_common.pack_dest_init(
-            operation.dest_sync.cpp_enum_value,
-            config.dest_acc.cpp_enum_value,
-            quasar_use_dvalid=config.quasar_use_dvalid,
-            pack_mode=pack_nodes[0].packer.pack_mode,
-        )
-
-    def _pack_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        return f"// Operation {stage}: Packer\n"
-
-    def packer_sync_with_unpacker(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-    ) -> str:
-        return pack_common.packer_sync_with_unpacker(operation.has_pack_consumer)
-
     def _all_same_pack_formats(self) -> bool:
         pack_only = self._get_pack_nodes()
         if len(pack_only) <= 1:
@@ -391,29 +307,29 @@ class ComputePipeline:
         first_fmt = pack_only[0].output.data_format
         return all(pn.output.data_format == first_fmt for pn in pack_only[1:])
 
-    def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        code = self._pack_constants(operation, config)
+    def pack_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        code = f"// Operation {operation.stage_id}: Packer\n"
         pack_only = self._get_pack_nodes()
         hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
         hoist_reconfig = hoist or self._all_same_pack_formats()
 
         init_code = config.sentinel.hw_configure_pack(config, operation, pack_only)
         if hoist_reconfig and pack_only:
-            init_code += pack_only[0].reconfig(operation, config)
+            init_code += config.sentinel.configure_pack(config, operation, pack_only[0])
         init_code += pack_common.pack_reduce_mask_config(operation)
-        init_code += self._pack_dest_init(operation, config, pack_only)
+        init_code += pack_common.pack_dest_init(config, operation, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
-            init_code += pack_only[0].configure(operation, config, None)
+            init_code += pack_only[0].init(operation, config, None)
         code += self._zone(config, "INIT", init_code)
 
         init_fn = None
         uninit_fn = None
         if hoist and pack_only[0].packer.per_block_init:
-            init_fn = lambda block: pack_only[0].configure(operation, config, block)
+            init_fn = lambda block: pack_only[0].init(operation, config, block)
             uninit_fn = lambda block: pack_only[0].uninit(operation, config)
 
         def batch_body(block: BlockData):
-            body = self._packer_wait_for_math(config)
+            body = pack_common.packer_wait_for_math(config, operation)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
             prev_was_pack = False
@@ -427,14 +343,16 @@ class ComputePipeline:
                     prev_was_pack = False
                 elif isinstance(pack_node, PackNode):
                     if not hoist_reconfig:
-                        body += pack_node.reconfig(operation, config)
+                        body += config.sentinel.configure_pack(
+                            config, operation, pack_node
+                        )
                     if not hoist:
-                        body += pack_node.configure(operation, config, block)
+                        body += pack_node.init(operation, config, block)
                     body += pack_node.pack_loop(operation, config, block)
                     if not hoist:
                         body += pack_node.uninit(operation, config)
                     prev_was_pack = True
-            body += self._packer_dest_section_done(operation, config)
+            body += pack_common.packer_dest_section_done(config, operation)
             return body
 
         code += self._zone_loop(
@@ -443,7 +361,7 @@ class ComputePipeline:
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
-        uninit_code = self.packer_sync_with_unpacker(operation, config)
+        uninit_code = pack_common.packer_sync_with_unpacker(config, operation)
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
@@ -453,7 +371,7 @@ class ComputePipeline:
 
     def golden(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         golden_type: GoldenType,
     ):

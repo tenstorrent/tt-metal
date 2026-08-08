@@ -5,18 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import BroadcastGolden, get_golden_generator
-from helpers.tilize_untilize import tilize_block, untilize_block
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnaryBroadcastFpu(Fpu):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
 
     def get_headers(self) -> List[str]:
         return [
@@ -29,43 +27,17 @@ class UnaryBroadcastFpu(Fpu):
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
         tensor_dst: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        tile_dims = (
-            operation.tile_shape.total_row_dim(),
-            operation.tile_shape.total_col_dim(),
+        return self.datacopy_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-        num_faces = operation.tile_shape.total_num_faces()
-        tilized_b = tilize_block(
-            tensor_b,
-            compute_unit.src_b.dimensions,
-            compute_unit.src_b.data_format,
-            num_faces=num_faces,
-            tile_dimensions=tile_dims,
-        )
-        broadcast_golden = get_golden_generator(BroadcastGolden)
-        broadcast_result = broadcast_golden(
-            compute_unit.broadcast_type,
-            tilized_b,
-            compute_unit.src_b.data_format,
-            num_faces,
-            compute_unit.src_b.tile_count,
-            operation.tile_shape.face_r_dim,
-        )
-        golden_tensor = untilize_block(
-            broadcast_result,
-            compute_unit.src_b.data_format,
-            compute_unit.src_b.dimensions,
-            tile_dimensions=tile_dims,
-            num_faces=num_faces,
-        )
-        return tensor_a, tensor_b, golden_tensor
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -81,7 +53,7 @@ class UnaryBroadcastFpu(Fpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -90,7 +62,7 @@ class UnaryBroadcastFpu(Fpu):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
