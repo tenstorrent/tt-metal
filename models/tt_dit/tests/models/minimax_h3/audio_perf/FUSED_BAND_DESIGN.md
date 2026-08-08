@@ -106,15 +106,45 @@ so appending to the tensor alone leaves the extra tiles unread. Widening that co
 tap is the one host change required, and it is the same work the optional-tensor route would have
 needed for its own CB anyway.
 
+### Correction: "2 files" was too optimistic
+
+That estimate came from reasoning about the route, not from reading the CB machinery. Reading it:
+
+    conv2d_op_program_factory_common.cpp:207   Conv2dCb::WEIGHTS  num_pages = weight_block_num_tiles
+    sharded_program_factory.cpp:477            weight_block_h_ntiles = act_block_h_ntiles
+                                                                       * (coalesce ? filter_w : 1)
+    sharded_program_factory.cpp:955            compute arg: weight_matrix_width_ntiles * weight_block_h_ntiles
+
+The weights CB is sized and addressed **per block**, not per tap, and the reader walks the weight
+matrix with `weight_matrix_width_ntiles * weight_block_h_ntiles` as a stride. So appending rows to the
+weight tensor does not simply add two tiles at the end of what the kernel sees -- it shifts the stride
+every block is addressed with, and the appended tiles land nowhere any block expects them.
+
+Carrying the parameters in the weights CB therefore needs, at minimum:
+
+1. program factory -- CB page count, the compute arg, and the stride
+2. the weights reader kernel -- push the two extra tiles per block at the right offsets
+3. the compute kernel -- pop them on the last tap (written)
+
+plus host-side placement that matches the reader's block addressing rather than a plain append. Three
+files with non-trivial stride math, not two with an append. **The optional-input-tensor route is worth
+re-comparing on those terms** -- it is more files but each is mechanical, and a dedicated CB has no
+stride to disturb. The all-or-nothing objection to it still stands; the choice is now genuinely close
+rather than clear-cut, and should be made by whoever picks this up with a full build cycle available.
+
 Remaining, in order:
 
-1. Program factory: widen the last tap's `weight_block_num_tiles` by 2 when snake is requested, and
-   emit `SNAKE_PARAMS_CB_ID` pointing at the in1 CB. Rebuild.
-2. Host/Python: append the alpha and inv_beta tiles -- per-channel value replicated down all 32 rows,
-   `inv_beta = 1/(beta+eps)` precomputed -- to the prepared weight tensor, in that order.
-3. Verify against `band_stencil_cpu.py`'s float64 golden at rel_rmse ~1e-07, matching what GELU
-   achieved through the scalar seam.
-4. Then the chunk-wise band mode on top, which is where the op-count win actually is.
+1. Decide the carrier on the corrected comparison above.
+2. Program factory: size the CB, emit `SNAKE_PARAMS_CB_ID`, fix the stride. Rebuild (~5-10 min
+   incremental for one .cpp plus link; the 40 min figure elsewhere was a cold build of a fresh tree).
+3. Reader: place the parameter tiles per block.
+4. Host: build the alpha and inv_beta tiles -- per-channel value replicated down all 32 rows,
+   `inv_beta = 1/(beta+eps)` precomputed.
+5. Verify against `band_stencil_cpu.py`'s float64 golden at rel_rmse ~1e-07, matching what GELU
+   achieved through the scalar seam. Expect a cycle or two purely on CB bookkeeping: the two accumulate
+   paths consume in1 differently (one tile per tap non-coalesced, whole block coalesced), so the push
+   and pop counts must agree in both.
+6. Then the chunk-wise band mode on top, which is where the op-count win actually is.
 
 ## Cost, honestly
 
