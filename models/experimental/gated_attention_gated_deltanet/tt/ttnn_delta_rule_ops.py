@@ -225,14 +225,12 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
         return None
 
 
-def l2_norm_ttnn(x, dim=-1, eps=1e-6):
-    """L2 norm along dim. Last dim: fused rms_norm path (~3 fewer kernels)."""
-    # L1 for T<=512; DRAM otherwise
-    T = x.shape[1] if len(x.shape) >= 3 else x.shape[0]
-    mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
+def l2_norm_ttnn(x, dim=-1, eps=1e-6, memory_config=None):
+    """L2 norm along dim, preserving placement by default."""
+    mc = x.memory_config() if memory_config is None else memory_config
     if dim in (-1, len(x.shape) - 1):
         K = x.shape[-1]
-        normed = ttnn.rms_norm(x, epsilon=eps / K)
+        normed = ttnn.rms_norm(x, epsilon=eps / K, memory_config=mc)
         return ttnn.multiply(normed, K**-0.5, memory_config=mc)
     x_sq = ttnn.multiply(x, x, memory_config=mc)
     norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=mc)
