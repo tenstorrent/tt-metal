@@ -437,3 +437,43 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=["kv_bfp8_q_bf16"],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    [
+        [4, 8, 1, 2048, 128, (8, 4)],
+    ],
+    ids=["share_cache_b4"],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_share_cache(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
+    """Test share_cache=True: K/V have batch=1 while Q has batch>1.
+
+    Validates that the output batch dimension is taken from Q (b), not from
+    K (which would be 1).  Regression test for compute_output_specs incorrectly
+    using K's batch dimension instead of Q's when share_cache=True.
+    """
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor=False,
+        sharded_in=False,
+        sharded_out=False,
+        causal=False,
+        share_cache=True,
+    )
