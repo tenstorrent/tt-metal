@@ -74,8 +74,14 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
 4. **Confirm the FIFO calls are used** — in each binding kernel:
 
    ```bash
-   grep -nE "<the dfb's local>\.(reserve_back|push_back|wait_front|pop_front)" <the binding kernel>
+   grep -nE "<the dfb's local>\.(reserve_back|push_back|wait_front|pop_front|pages_reservable_at_back|pages_available_at_front)" <the binding kernel>
    ```
+
+   **A hit on either of the last two is a stop, not a site.** Those read the DFB's credit counters
+   without blocking, and this pass's translation deletes the credit posts along with the calls that
+   made them — sound only while nothing reads them, which here something does. Note also that neither
+   name contains any of the first four as a substring, so a grep written from memory will miss them.
+   Report the site and carry on surveying; see [When to stop](#when-to-stop).
 
    **Grep for calls on *that DFB's handle*, not for the method names loose in the file.** A kernel
    binding several buffers will show plenty of hits belonging to the others, and a bare name-grep
@@ -208,12 +214,16 @@ it is the same expression as the spec's `entry_size` — and be wary of a near-m
 op may carry several aligned variants of one size that agree on the architecture you are looking at
 and diverge on another. Getting this wrong gives a stride that is quietly a few bytes off.
 
-If the kernel has no argument equal to the spec's `entry_size`, add one as a compile-time arg:
-`KernelSpec::compile_time_args` (a top-level field, *not* part of `compiler_options`), read
-kernel-side as `constexpr uint32_t entry_size = get_arg(args::<name>);`. A CTA is a constant in a
-generated header and costs nothing, so prefer adding one over reusing an argument you had to reason
-about. A stride that varies with input shape is still fine as a CTA — shape participates in the
-program-cache key, so a different shape rebuilds the kernel rather than reusing a stale constant.
+**If the kernel has no value equal to the spec's `entry_size`, stop.** Do not add a compile-time arg
+to supply one. A CTA is baked into the generated header when the program is built, so it stays
+correct only if the program is rebuilt whenever the stride changes — and that depends on the op's
+program-cache key. Most ops put shape in that key; some deliberately do not, and Metal 2.0 supports
+both. Working out which one you are looking at is not this pass's job.
+
+Reusing a constant the kernel *already* has is a different matter and is fine: the op already depends
+on that value being right for this invocation, so you introduce no new dependency on the cache key.
+Adding one is where this pass would have to start guessing, so it stops there instead. Report the
+buffer, the spec's `entry_size` expression, and what the kernel does have.
 
 **The division must be exact.** If `entry_size % sizeof(T) != 0` then `T` is wrong for this buffer —
 the kernel is viewing it as something the entries do not align to — and every index built on the
@@ -308,10 +318,9 @@ Two mechanical details that will otherwise cost you a build:
 
 - **`KernelSpec` fields are written in declaration order**, and designated initializers are compiled
   with `-Werror=reorder-init-list`, so the new entries go in their declared positions rather than
-  appended. **Read the order off `kernel_spec.hpp`.** The fields this pass touches fall in the
-  relative order `dfb_bindings` → `scratchpad_bindings` → `compile_time_args`, but that is a subset:
-  the struct carries other fields before, between and after them, and it grows. Do not treat the
-  three above as the list — they are only the ones you are editing.
+  appended. **Read the order off `kernel_spec.hpp`.** `dfb_bindings` precedes `scratchpad_bindings`,
+  but that is a subset: the struct carries other fields before, between and after them, and it grows.
+  Do not treat those two as the list — they are only the ones you are editing.
 - **The spec-name constant changes type**, from `DFBSpecName` to `ScratchpadSpecName` — different
   `StrongType`s, so the declaration must be edited regardless. While you are on that line, rename it
   off any `cb`/`dfb` wording: a scratchpad named `input_cb` is exactly the thing these passes exist
@@ -553,12 +562,15 @@ Per [When the fix doesn't fit](../pass_procedure.md#when-the-fix-doesnt-fit). Sp
 
 - **The DFB is built on borrowed memory** (`borrowed_from` set) — it is a view onto a tensor the op
   owns, and a scratchpad is not. See survey step 5.
+- **The kernel reads the DFB's credit counters** via `pages_reservable_at_back` or
+  `pages_available_at_front`. The translation drops the credit posts, so anything observing them
+  loses state the conversion cannot reproduce. See survey step 4.
 - **The kernel does `evil_*` pointer surgery on the same DFB.** `evil_get_*` / `evil_set_*` move the
   FIFO pointers outside the four calls, so a local replay does not capture the buffer's state and the
   translation would be silently wrong.
-- **A rotating buffer whose `entry_size` is not available kernel-side and cannot be added as a
-  compile-time arg**, so the stride cannot be written at all. (Single-entry buffers need no stride
-  and never reach this.)
+- **A rotating buffer whose `entry_size` is not already available kernel-side**, so the stride cannot
+  be written without inventing one. Do not add a compile-time arg to supply it — see [the
+  stride](#the-translation). (Single-entry buffers need no stride and never reach this.)
 - **`entry_size` is not a whole number of `T`** — `entry_size % sizeof(T) != 0` means `T` is wrong
   for this buffer, and every index built on the stride will be off.
 - **The buffer's entries are not uniform** — a variable-size `reserve_back` is fine, but a buffer
