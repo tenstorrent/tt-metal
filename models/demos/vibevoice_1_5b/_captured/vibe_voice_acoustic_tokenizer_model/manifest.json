@@ -1,0 +1,45 @@
+{
+  "component": "vibe_voice_acoustic_tokenizer_model",
+  "submodule_path": "model.acoustic_tokenizer",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1,
+          64000
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1,
+          64000
+        ],
+        "dtype": "torch.bfloat16"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          20,
+          64
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  }
+}

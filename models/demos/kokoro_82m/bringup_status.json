@@ -1,0 +1,338 @@
+{
+  "new_model_id": "hexgrad/Kokoro-82M",
+  "new_model_type": null,
+  "sibling_hf_id": "/local/ttuser/apande/models/XTTS-v2-hf",
+  "sibling_model_type": null,
+  "backend": {
+    "name": "XTTS-v2 (multilingual TTS)",
+    "demo_path": "models/demos/xtts_v2"
+  },
+  "counts": {
+    "REUSE": 1,
+    "ADAPT": 0,
+    "NEW": 24
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "decoder",
+      "kind": "Decoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=229 sample_paths=['decoder']",
+      "submodule_path": "decoder",
+      "class_name": "Decoder"
+    },
+    {
+      "name": "generator",
+      "kind": "Generator",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=171 sample_paths=['decoder.generator']",
+      "submodule_path": "decoder.generator",
+      "class_name": "Generator"
+    },
+    {
+      "name": "ada_i_n_res_block1",
+      "kind": "AdaINResBlock1",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=8 leaves=160 sample_paths=['decoder.generator.noise_res.0', 'decoder.generator.noise_res.1']",
+      "submodule_path": "decoder.generator.noise_res.0",
+      "class_name": "AdaINResBlock1"
+    },
+    {
+      "name": "ada_i_n1d",
+      "kind": "AdaIN1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=70 leaves=140 sample_paths=['predictor.F0.0.norm1', 'predictor.F0.0.norm2']",
+      "submodule_path": "predictor.F0.0.norm1",
+      "class_name": "AdaIN1d"
+    },
+    {
+      "name": "adain_res_blk1d",
+      "kind": "AdainResBlk1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=11 leaves=117 sample_paths=['predictor.F0.0', 'predictor.F0.1']",
+      "submodule_path": "predictor.F0.0",
+      "class_name": "AdainResBlk1d"
+    },
+    {
+      "name": "prosody_predictor",
+      "kind": "ProsodyPredictor",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=73 sample_paths=['predictor']",
+      "submodule_path": "predictor",
+      "class_name": "ProsodyPredictor"
+    },
+    {
+      "name": "instance_norm1d",
+      "kind": "InstanceNorm1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=70 leaves=70 sample_paths=['predictor.F0.0.norm1.norm', 'predictor.F0.0.norm2.norm']",
+      "submodule_path": "predictor.F0.0.norm1.norm",
+      "class_name": "InstanceNorm1d"
+    },
+    {
+      "name": "custom_albert",
+      "kind": "CustomAlbert",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=20 sample_paths=['bert']",
+      "submodule_path": "bert",
+      "class_name": "CustomAlbert"
+    },
+    {
+      "name": "text_encoder",
+      "kind": "TextEncoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=14 sample_paths=['text_encoder']",
+      "submodule_path": "text_encoder",
+      "class_name": "TextEncoder"
+    },
+    {
+      "name": "albert_transformer",
+      "kind": "AlbertTransformer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=13 sample_paths=['bert.encoder']",
+      "submodule_path": "bert.encoder",
+      "class_name": "AlbertTransformer"
+    },
+    {
+      "name": "albert_layer",
+      "kind": "AlbertLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=12 sample_paths=['bert.encoder.albert_layer_groups.0.albert_layers.0']",
+      "submodule_path": "bert.encoder.albert_layer_groups.0.albert_layers.0",
+      "class_name": "AlbertLayer"
+    },
+    {
+      "name": "albert_layer_group",
+      "kind": "AlbertLayerGroup",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=12 sample_paths=['bert.encoder.albert_layer_groups.0']",
+      "submodule_path": "bert.encoder.albert_layer_groups.0",
+      "class_name": "AlbertLayerGroup"
+    },
+    {
+      "name": "up_sample1d",
+      "kind": "UpSample1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=11 leaves=11 sample_paths=['predictor.F0.0.upsample', 'predictor.F0.1.upsample']",
+      "submodule_path": "predictor.F0.0.upsample",
+      "class_name": "UpSample1d"
+    },
+    {
+      "name": "albert_attention",
+      "kind": "AlbertAttention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=1 leaves=7 sample_paths=['bert.encoder.albert_layer_groups.0.albert_layers.0.attention']",
+      "submodule_path": "bert.encoder.albert_layer_groups.0.albert_layers.0.attention",
+      "class_name": "AlbertAttention"
+    },
+    {
+      "name": "duration_encoder",
+      "kind": "DurationEncoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=6 sample_paths=['predictor.text_encoder']",
+      "submodule_path": "predictor.text_encoder",
+      "class_name": "DurationEncoder"
+    },
+    {
+      "name": "l_s_t_m",
+      "kind": "LSTM",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=6 leaves=6 sample_paths=['predictor.text_encoder.lstms.0', 'predictor.text_encoder.lstms.2']",
+      "submodule_path": "predictor.text_encoder.lstms.0",
+      "class_name": "LSTM"
+    },
+    {
+      "name": "albert_embeddings",
+      "kind": "AlbertEmbeddings",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=5 sample_paths=['bert.embeddings']",
+      "submodule_path": "bert.embeddings",
+      "class_name": "AlbertEmbeddings"
+    },
+    {
+      "name": "ada_layer_norm",
+      "kind": "AdaLayerNorm",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=3 leaves=3 sample_paths=['predictor.text_encoder.lstms.1', 'predictor.text_encoder.lstms.3']",
+      "submodule_path": "predictor.text_encoder.lstms.1",
+      "class_name": "AdaLayerNorm"
+    },
+    {
+      "name": "source_module_hn_n_s_f",
+      "kind": "SourceModuleHnNSF",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=3 sample_paths=['decoder.generator.m_source']",
+      "submodule_path": "decoder.generator.m_source",
+      "class_name": "SourceModuleHnNSF"
+    },
+    {
+      "name": "leaky_re_l_u",
+      "kind": "LeakyReLU",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=2 leaves=2 sample_paths=['predictor.F0.0.actv', 'text_encoder.cnn.0.2']",
+      "submodule_path": "predictor.F0.0.actv",
+      "class_name": "LeakyReLU"
+    },
+    {
+      "name": "custom_s_t_f_t",
+      "kind": "CustomSTFT",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=1 sample_paths=['decoder.generator.stft']",
+      "submodule_path": "decoder.generator.stft",
+      "class_name": "CustomSTFT"
+    },
+    {
+      "name": "linear_norm",
+      "kind": "LinearNorm",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=1 sample_paths=['predictor.duration_proj']",
+      "submodule_path": "predictor.duration_proj",
+      "class_name": "LinearNorm"
+    },
+    {
+      "name": "reflection_pad1d",
+      "kind": "ReflectionPad1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=1 sample_paths=['decoder.generator.reflection_pad']",
+      "submodule_path": "decoder.generator.reflection_pad",
+      "class_name": "ReflectionPad1d"
+    },
+    {
+      "name": "sine_gen",
+      "kind": "SineGen",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=1 sample_paths=['decoder.generator.m_source.l_sin_gen']",
+      "submodule_path": "decoder.generator.m_source.l_sin_gen",
+      "class_name": "SineGen"
+    },
+    {
+      "name": "upsample",
+      "kind": "Upsample",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "module-tree: occ=1 leaves=1 sample_paths=['decoder.generator.f0_upsamp']",
+      "submodule_path": "decoder.generator.f0_upsamp",
+      "class_name": "Upsample"
+    }
+  ],
+  "notes": [
+    "Sibling config could not be fetched; classification falls back to NEW for components without a clear file match. Set HF_TOKEN or pre-download `/local/ttuser/apande/models/XTTS-v2-hf` and re-run for a sharper diff."
+  ]
+}

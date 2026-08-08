@@ -1,0 +1,31 @@
+{
+  "component": "speech_connector",
+  "submodule_path": "model.acoustic_connector",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          8,
+          64
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      8,
+      1536
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

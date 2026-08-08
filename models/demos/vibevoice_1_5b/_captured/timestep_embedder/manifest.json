@@ -1,0 +1,28 @@
+{
+  "component": "timestep_embedder",
+  "submodule_path": "model.prediction_head.t_embedder",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          8
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      8,
+      1536
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}
