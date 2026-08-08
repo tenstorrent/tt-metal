@@ -36,6 +36,8 @@ namespace tt::tt_metal {
 //     (noc_semaphore_inc with incr=-1, wrap=31). Highest-confidence.
 //   - TestAtomicDecrementAmo     : decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD).
 //   - TestAtomicCas              : 4-bit compare-and-swap via a raw NOC_AT_INS_CAS.
+//   - TestAtomicCasReturnsPreOpValue : noc_fast_atomic_cas4 return path -- the response
+//     delivers the PRE-OP word (on success AND failure) to a caller-supplied slot.
 // ============================================================================
 class NocAtomicOpsFixture : public MeshDispatchFixture {
 protected:
@@ -164,6 +166,71 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     const uint32_t observed = run("PROBE_CAS", 5u);
     log_info(LogTest, "CAS result: {} (expected 9: 5->9 on match, then no-op on mismatch)", observed);
     EXPECT_EQ(observed, 9u) << "Raw NOC_AT_INS_CAS did not compare-and-swap as expected.";
+}
+
+// CAS return-value keystone: noc_fast_atomic_cas4 with program_ret_addr=true must deliver the
+// PRE-OP word to the caller-supplied slot on success AND on failure -- what lets a CAS loser
+// learn the current value (the multi-consumer EXTERNAL down() upgrade builds on this). Word
+// starts at 5: CAS(5->9) succeeds returning 5; CAS(5->2) fails (word is 9) returning 9 and
+// leaving 9; word2=0x15 has upper-28 bits set, so CAS(cmp=5) must fail (success requires
+// word[31:4]==0) yet still return 0x15. The kernel also records the slot value read right
+// after noc_async_atomic_barrier (no poll) to show whether the barrier orders the return write.
+TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "noc_fast_atomic_cas4 (RoCC builtin emit) is Quasar-only";
+    }
+    // Scratch layout -- must match noc_atomic_ops_probe.cpp PROBE_CAS_RET exactly.
+    constexpr uint32_t WORD2_OFF = 16u;
+    constexpr uint32_t REPORT_OFF = 128u;
+    constexpr uint32_t REPORT_WORDS = 7u;
+
+    // run() preloads word = 5; preload word2 and clear the report here.
+    std::vector<uint32_t> word2_init{0x15u};
+    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base + WORD2_OFF, word2_init);
+    std::vector<uint32_t> report_init(REPORT_WORDS, 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base + REPORT_OFF, report_init);
+
+    run("PROBE_CAS_RET", 5u);
+
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        device_, core, l1_unreserved_base + REPORT_OFF, REPORT_WORDS * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), REPORT_WORDS);
+    log_info(
+        LogTest,
+        "CAS return probe: success imm/polled={:#x}/{:#x}, fail imm/polled={:#x}/{:#x}, word={:#x}, "
+        "word2 polled/word={:#x}/{:#x}",
+        result[0],
+        result[1],
+        result[2],
+        result[3],
+        result[4],
+        result[5],
+        result[6]);
+
+    // HARD asserts: CAS return-value semantics.
+    EXPECT_EQ(result[1], 5u)
+        << "successful CAS did not return the pre-op word (expected 5): a CAS winner cannot confirm "
+           "what it swapped out, so cas4's return path is unusable for a lock/down() upgrade.";
+    EXPECT_EQ(result[3], 9u)
+        << "FAILED CAS did not return the pre-op word (expected 9): a CAS loser cannot learn the "
+           "current value, so a CAS retry loop cannot be built on cas4 returns.";
+    EXPECT_EQ(result[4], 9u)
+        << "failed CAS modified the target word (expected 9 unchanged): CAS failure is not "
+           "side-effect-free, so any concurrent use of cas4 corrupts the word.";
+    EXPECT_EQ(result[5], 0x15u)
+        << "CAS on a word with upper-28 bits set did not return the pre-op word (expected 0x15): the "
+           "return path is unreliable outside the [0,15] value range.";
+    EXPECT_EQ(result[6], 0x15u)
+        << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
+           "the 4-bit CAS is NOT safe next to words that can exceed 15.";
+
+    // ORDERING signal (not a correctness gate for the CAS semantics above).
+    EXPECT_EQ(result[0], result[1])
+        << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
+           "any consumer of cas4 returns is REQUIRED, not optional.";
+    EXPECT_EQ(result[2], result[3])
+        << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
+           "any consumer of cas4 returns is REQUIRED, not optional.";
 }
 
 }  // namespace tt::tt_metal
