@@ -52,23 +52,46 @@ _LINE = {**_SDPA_L1, **line_params}  # no router_config for line (matches siblin
 _RING = {**_SDPA_L1, **ring_params_8k}  # ring uses the 8k router config
 
 
+# Galaxy configs, running all tests.
 _MESH_TOPOLOGY_CONFIGS = [
     # (mesh_device_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, device_params, topology)
     [(4, 8), 2, 1, 8, 0, 4, _LINE, ttnn.Topology.Linear],
     [(4, 8), 2, 1, 8, 0, 4, _RING, ttnn.Topology.Ring],
-    [(2, 4), 1, 1, 4, 0, 2, _LINE, ttnn.Topology.Linear],
     [(4, 8), 4, 1, 8, 0, 4, _LINE, ttnn.Topology.Linear],
     [(4, 8), 4, 1, 8, 0, 4, _RING, ttnn.Topology.Ring],
 ]
 _MESH_TOPOLOGY_IDS = [
     "bh_4x8_sp8tp4_line",
     "bh_4x8_sp8tp4_ring",
-    "wh_2x4_sp4tp2_line",
     "wh_4x8_sp8tp4_line",
     "wh_4x8_sp8tp4_ring",
 ]
+
+# Configs running only the cheaper tests.
+_MESH_TOPOLOGY_SMALL_CONFIGS = [
+    [(2, 4), 1, 1, 4, 0, 2, _LINE, ttnn.Topology.Linear],
+    [(1, 4), 1, 1, 4, 0, 1, _LINE, ttnn.Topology.Linear],
+]
+_MESH_TOPOLOGY_SMALL_IDS = [
+    "wh_2x4_sp4tp2_line",
+    "bh_qb2_sp4tp1_line",
+]
+
+_MESH_TOPOLOGY_ARGS = (
+    "mesh_device, num_links, sp_axis, sp_factor, tp_axis, tp_factor, device_params, all_gather_topology"
+)
+
+# Small tests.
 _MESH_TOPOLOGY = pytest.mark.parametrize(
-    "mesh_device, num_links, sp_axis, sp_factor, tp_axis, tp_factor, device_params, all_gather_topology",
+    _MESH_TOPOLOGY_ARGS,
+    _MESH_TOPOLOGY_CONFIGS + _MESH_TOPOLOGY_SMALL_CONFIGS,
+    ids=_MESH_TOPOLOGY_IDS + _MESH_TOPOLOGY_SMALL_IDS,
+    indirect=["mesh_device", "device_params"],
+)
+
+# Large tests.
+_MESH_TOPOLOGY_GALAXY = pytest.mark.parametrize(
+    _MESH_TOPOLOGY_ARGS,
     _MESH_TOPOLOGY_CONFIGS,
     ids=_MESH_TOPOLOGY_IDS,
     indirect=["mesh_device", "device_params"],
@@ -431,7 +454,7 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @_MESH_TOPOLOGY
+    @_MESH_TOPOLOGY_GALAXY
     @pytest.mark.parametrize(
         ("sparse_frames_enabled", "force_allow_all"),
         [
@@ -482,7 +505,7 @@ class TestSparseFramesRing:
             force_allow_all=force_allow_all,
         )
 
-    @_MESH_TOPOLOGY
+    @_MESH_TOPOLOGY_GALAXY
     @pytest.mark.parametrize(
         ("sparse_frames_enabled", "force_allow_all"),
         [
