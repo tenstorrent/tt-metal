@@ -41,6 +41,7 @@ CPMAddPackage(
         "BLAKE3_FETCH_TBB OFF"
         "BUILD_TESTING OFF"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -214,7 +215,8 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    CUSTOM_CACHE_KEY "0_12_0_patched"
+        FIND_PACKAGE_ARGUMENTS GLOBAL
+CUSTOM_CACHE_KEY "0_12_0_patched"
 )
 
 ############################################################################################################################
@@ -260,7 +262,8 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
-    CUSTOM_CACHE_KEY "0_8_0_patched"
+        FIND_PACKAGE_ARGUMENTS GLOBAL
+CUSTOM_CACHE_KEY "0_8_0_patched"
 )
 CPMAddPackage(
     NAME xtensor
@@ -271,7 +274,8 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
-    CUSTOM_CACHE_KEY "0_26_0_patched"
+        FIND_PACKAGE_ARGUMENTS GLOBAL
+CUSTOM_CACHE_KEY "0_26_0_patched"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -282,7 +286,8 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
-    CUSTOM_CACHE_KEY "0_22_0_patched"
+        FIND_PACKAGE_ARGUMENTS GLOBAL
+CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
 # Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
