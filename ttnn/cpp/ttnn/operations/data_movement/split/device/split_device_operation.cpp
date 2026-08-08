@@ -31,6 +31,7 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         args.dim >= 0 && args.dim < static_cast<int>(input_tensor.padded_shape().rank()),
         "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
+    TT_FATAL(args.num_splits > 0, "num_splits must be non-zero");
     TT_FATAL(
         input_tensor.padded_shape()[args.dim] % args.num_splits == 0,
         "Dim being split must be evenly divisible by number of splits");
