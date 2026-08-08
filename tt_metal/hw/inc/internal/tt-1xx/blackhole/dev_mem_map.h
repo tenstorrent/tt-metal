@@ -229,7 +229,13 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
+// LOCAL PATCH (jjovicic/socket-experiment): bumped 25K -> 32K to fit the current
+// FABRIC_2D router program (~26000 bytes) on ACTIVE_ETH cores. The upstream 25K
+// limit was set when the router was smaller; recent commits grew it past 25K
+// for our intra-galaxy cross-mesh path (bh_galaxy_dual_2x4_intermesh.textproto
+// with assign_z_direction=true). Production multi-galaxy paths happen to land
+// under 25K so don't trigger this. Tracked upstream as related to #43079/#43085.
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (32 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.

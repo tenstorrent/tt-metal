@@ -1,0 +1,30 @@
+# Two-rank, two-host rank binding for the cross-mesh socket smoke on 2 galaxies.
+#
+# rank 0 -> mesh_id=0, runs on galaxy A (whole 32-chip galaxy as one (4, 8) mesh)
+# rank 1 -> mesh_id=1, runs on galaxy B (whole 32-chip galaxy as one (4, 8) mesh)
+#
+# Each rank takes its host's full galaxy. Intermesh fabric runs over the
+# inter-host network (configure --tcp-interface in runme_2galaxy_cross_mesh_smoke.sh
+# to whatever NIC carries fabric traffic on your cluster, e.g. ens5f0np0).
+#
+# Pairs with our forked bh_galaxy_dual_4x8_intermesh.textproto:
+#   - 2 meshes of (4, 8), 1 host each
+#   - 2 intra-mesh channels per link, RELAXED
+#   - 8 inter-mesh channels (4 exit nodes × 2 channels), RELAXED, assign_z_direction
+# Channel counts match the physical BH-galaxy fabric topology so the socket
+# infra can route over all available channels (previously 4 STRICT, which
+# under-declared the available inter-galaxy bandwidth).
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_4x8_intermesh.textproto"
