@@ -20,7 +20,8 @@ B) node_348 -- output-head `participant_shrink`. proj_out / audio_proj_out are p
    only one TP row's result is ever read -- the TP all_gather delivers to 4 when 1 would do.
    Verified by running the real projections on the gathered hidden and diffing the TP rows.
 
-    python3 models/tt_dit/tools/dit_analyzer/conform_dit_heads.py --mesh 2 4
+    python3 models/tt_dit/tools/dit_analyzer/conform_dit_heads.py --mesh 4 8              # Galaxy, ring (default)
+    python3 models/tt_dit/tools/dit_analyzer/conform_dit_heads.py --mesh 2 4 --topology linear   # 2x4 Loudbox
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def _load_random_weights(module, torch, _top=True) -> int:
     return count
 
 
-def run(mesh_shape) -> int:
+def run(mesh_shape, topo: str = "ring") -> int:
     import torch
 
     import ttnn
@@ -74,7 +75,8 @@ def run(mesh_shape) -> int:
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
     a_ok = b_ok = False
     try:
-        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=ttnn.Topology.Linear)
+        topology = ttnn.Topology.Ring if topo == "ring" else ttnn.Topology.Linear
+        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=topology)
         devs = list(range(mesh_shape[0] * mesh_shape[1]))
 
         # ---- A) node_360: the audio SP all_gather is unused (audio ⊂ shard 0) ----
@@ -159,8 +161,14 @@ def run(mesh_shape) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mesh", type=int, nargs=2, default=[2, 4])
+    ap.add_argument(
+        "--topology",
+        choices=["ring", "linear"],
+        default="ring",
+        help="collective topology; production H3 runs ring (the 2x4 Loudbox used linear)",
+    )
     args = ap.parse_args()
-    raise SystemExit(run(args.mesh))
+    raise SystemExit(run(args.mesh, args.topology))
 
 
 if __name__ == "__main__":

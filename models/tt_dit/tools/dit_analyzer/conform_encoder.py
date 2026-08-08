@@ -23,7 +23,8 @@ no HF). We keep the real H3 structure that decides the sharding (hidden 5120, 40
 heads, head_dim 128, 8 KV heads, mrope [16,24,24], TP=4) and shrink only the two dims
 that change compute cost but not distribution: vocab and the MLP intermediate.
 
-    python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 2 4
+    python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 4 8              # Galaxy, ring (default)
+    python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 2 4 --topology linear   # 2x4 Loudbox
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def _load_random_weights(module, torch, _top=True) -> int:
     return count
 
 
-def run(mesh_shape) -> int:
+def run(mesh_shape, topo: str = "ring") -> int:
     import torch
 
     import ttnn
@@ -87,7 +88,8 @@ def run(mesh_shape) -> int:
     )
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
     try:
-        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=ttnn.Topology.Linear)
+        topology = ttnn.Topology.Ring if topo == "ring" else ttnn.Topology.Linear
+        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=topology)
         pconf = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_f, mesh_axis=tp_axis))
         enc = Qwen3VlTextEncoder(
             vocab_size=VOCAB,
@@ -185,8 +187,14 @@ def run(mesh_shape) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mesh", type=int, nargs=2, default=[2, 4])
+    ap.add_argument(
+        "--topology",
+        choices=["ring", "linear"],
+        default="ring",
+        help="collective topology; production H3 runs ring (the 2x4 Loudbox used linear)",
+    )
     args = ap.parse_args()
-    raise SystemExit(run(args.mesh))
+    raise SystemExit(run(args.mesh, args.topology))
 
 
 if __name__ == "__main__":
