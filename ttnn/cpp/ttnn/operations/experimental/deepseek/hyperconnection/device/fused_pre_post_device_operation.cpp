@@ -55,16 +55,13 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         fused_shape.rank());
     TT_FATAL(
         fused_shape[0] == 1 && fused_shape[1] == 1, "fused_hyperconnection_pre_post: fused_w must be [1,1,T,(2+H)*H]");
-    // Decode-only fused op: a single token (T == 1).
-    TT_FATAL(
-        fused_shape[2] == 1,
-        "fused_hyperconnection_pre_post: only T==1 (decode) is supported, got T={}",
-        fused_shape[2]);
     TT_FATAL(
         fused_shape[-1] == (2 + hc) * hc,
         "fused_hyperconnection_pre_post: fused_w last dim must be (2+H)*H = {}, got {}",
         (2 + hc) * hc,
         fused_shape[-1]);
+    const uint32_t num_tokens = static_cast<uint32_t>(fused_shape[2]);
+    TT_FATAL(num_tokens >= 1, "fused_hyperconnection_pre_post: fused_w must carry at least one token row");
 
     TT_FATAL(
         bias_shape.rank() == 4,
@@ -81,11 +78,16 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
 
     TT_FATAL(
         hidden_shape.rank() == 4,
-        "fused_hyperconnection_pre_post: hidden_streams must be rank-4 [1,1,H,D], got rank {}",
+        "fused_hyperconnection_pre_post: hidden_streams must be rank-4 [B,S,H,D], got rank {}",
         hidden_shape.rank());
+    // H <= 32 means every token's [H,D] slab occupies exactly one tile row, so the B and S dims
+    // only decide how many such slabs there are: token t is tile row t of the flattened grid.
     TT_FATAL(
-        hidden_shape[0] == 1 && hidden_shape[1] == 1,
-        "fused_hyperconnection_pre_post: hidden_streams must be [1,1,H,D] (decode, T==1)");
+        static_cast<uint32_t>(hidden_shape[0]) * static_cast<uint32_t>(hidden_shape[1]) == num_tokens,
+        "fused_hyperconnection_pre_post: hidden_streams B*S ({}*{}) must equal fused_w's token count T={}",
+        hidden_shape[0],
+        hidden_shape[1],
+        num_tokens);
     TT_FATAL(
         hidden_shape[2] == hc,
         "fused_hyperconnection_pre_post: hidden_streams stream dim ({}) must match H ({})",
@@ -114,13 +116,16 @@ FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::co
     const auto output_layout = tt::tt_metal::TensorLayout(
         fused_w.dtype(), tt::tt_metal::PageConfig(fused_w.layout()), operation_attributes.output_mem_config);
 
-    // post = 2 * sigmoid(post_w * post_scale + post_bias), shape [1,1,1,H] (same as pre/post bias H).
-    // collapsed = pre[1,H] @ hidden[H,D] -> [1,1,1,D].
-    // comb_w_mat = comb_w slice of fused_w, laid out as [1,1,H,H] (single tile).
+    // Per token t of the T == B*S tokens:
+    //   post      = 2 * sigmoid(post_w * post_scale + post_bias), emitted as a column [H,1].
+    //   collapsed = pre[1,H] @ hidden[H,D] -> [1,D].
+    //   comb_w_mat = comb_w slice of fused_w, laid out as the [H,H] grid (one tile).
+    // Tokens stay on dim 1 so the caller can split it back into [B,S,...] with a view reshape.
     const auto& hidden_shape = hidden_streams.logical_shape();
-    const ttnn::Shape post_shape({1, 1, 1, hc});
-    const ttnn::Shape collapsed_shape({1, 1, 1, hidden_shape[-1]});
-    const ttnn::Shape comb_shape({1, 1, hc, hc});
+    const uint32_t num_tokens = static_cast<uint32_t>(fused_w.logical_shape()[2]);
+    const ttnn::Shape post_shape({1, num_tokens, hc, 1});
+    const ttnn::Shape collapsed_shape({1, num_tokens, 1, hidden_shape[-1]});
+    const ttnn::Shape comb_shape({1, num_tokens, hc, hc});
     return {
         tt::tt_metal::TensorSpec(post_shape, output_layout),
         tt::tt_metal::TensorSpec(collapsed_shape, output_layout),

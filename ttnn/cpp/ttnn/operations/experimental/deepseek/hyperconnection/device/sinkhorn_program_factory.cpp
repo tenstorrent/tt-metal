@@ -4,11 +4,13 @@
 
 #include "sinkhorn_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::deepseek::hyperconnection {
 
@@ -51,8 +53,17 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
     const DataFormat tile_data_format = datatype_to_dataformat_converter(comb_w.dtype());
     const uint32_t tile_size_bytes = tile_size(tile_data_format);
 
-    const CoreRange core_range({0, 0}, {0, 0});
-    const CoreRangeSet all_cores{core_range};
+    // comb_w is [1,T,H,H] with H <= 32: one independent [H,H] tile per token, so tiles are the
+    // unit of work. Every core regenerates the shared scaler / mask tiles and re-reads the bias.
+    const uint32_t num_tiles = static_cast<uint32_t>(comb_w.logical_shape()[1]);
+
+    IDevice* device = comb_w.device();
+    const CoreCoord grid_size = device->compute_with_storage_grid_size();
+    const uint32_t max_cores =
+        std::min<uint32_t>(num_tiles, static_cast<uint32_t>(grid_size.x) * static_cast<uint32_t>(grid_size.y));
+    const CoreRangeSet work_grid = num_cores_to_corerangeset(max_cores, grid_size, /*row_wise=*/true);
+    const auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_1, tiles_per_core_2] =
+        split_work_to_cores(work_grid, num_tiles, /*row_wise=*/true);
 
     constexpr uint32_t tile_buffering = 2;
     auto make_cb = [&](uint32_t index, uint32_t num_pages) {
@@ -60,7 +71,7 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
                                           .set_page_size(index, tile_size_bytes);
         CreateCircularBuffer(program, all_cores, config);
     };
-    make_cb(kSinkCbCombW, 1);
+    make_cb(kSinkCbCombW, tile_buffering);
     make_cb(kSinkCbCombBias, 1);
     make_cb(kSinkCbScaler, 1);
     make_cb(kSinkCbMask, 1);
@@ -121,16 +132,33 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    const CoreCoord core{0, 0};
-    SetRuntimeArgs(program, reader_kernel_id, core, {comb_w.buffer()->address(), comb_bias.buffer()->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core, {comb_out.buffer()->address()});
-    SetRuntimeArgs(program, compute_kernel_id, core, {});
+    std::vector<CoreCoord> cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
+    uint32_t start_tile = 0;
+    for (const auto& core : cores) {
+        uint32_t tiles_this_core = 0;
+        if (core_group_1.contains(core)) {
+            tiles_this_core = tiles_per_core_1;
+        } else if (core_group_2.contains(core)) {
+            tiles_this_core = tiles_per_core_2;
+        }
+
+        SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {comb_w.buffer()->address(), comb_bias.buffer()->address(), start_tile, tiles_this_core});
+        SetRuntimeArgs(program, writer_kernel_id, core, {comb_out.buffer()->address(), start_tile, tiles_this_core});
+        SetRuntimeArgs(program, compute_kernel_id, core, {tiles_this_core});
+
+        start_tile += tiles_this_core;
+    }
 
     return cached_program_t{
         std::move(program),
         {.reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = writer_kernel_id,
-         .compute_kernel_id = compute_kernel_id}};
+         .compute_kernel_id = compute_kernel_id,
+         .cores = std::move(cores)}};
 }
 
 void SinkhornProgramFactory::override_runtime_arguments(
@@ -139,16 +167,20 @@ void SinkhornProgramFactory::override_runtime_arguments(
     const SinkhornInputs& tensor_args,
     SinkhornTensorReturn& tensor_return_value) {
     auto& program = cached_program.program;
-    const CoreCoord core{0, 0};
+    const auto& shared = cached_program.shared_variables;
 
-    {
-        auto& reader_args = GetRuntimeArgs(program, cached_program.shared_variables.reader_kernel_id, core);
-        reader_args[0] = tensor_args.comb_w.buffer()->address();
-        reader_args[1] = tensor_args.comb_bias.buffer()->address();
-    }
-    {
-        auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
-        writer_args[0] = tensor_return_value.buffer()->address();
+    const uint32_t comb_w_addr = tensor_args.comb_w.buffer()->address();
+    const uint32_t comb_bias_addr = tensor_args.comb_bias.buffer()->address();
+    const uint32_t out_addr = tensor_return_value.buffer()->address();
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared.reader_kernel_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared.writer_kernel_id);
+    for (const auto& core : shared.cores) {
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        reader_args[0] = comb_w_addr;
+        reader_args[1] = comb_bias_addr;
+
+        writer_args_by_core[core.x][core.y][0] = out_addr;
     }
 }
 

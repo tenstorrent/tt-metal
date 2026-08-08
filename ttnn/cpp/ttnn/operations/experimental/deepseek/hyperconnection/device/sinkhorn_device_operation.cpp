@@ -25,25 +25,27 @@ void validate_tensors(const SinkhornParams& attributes, const SinkhornInputs& te
     TT_FATAL(comb_w.dtype() == DataType::BFLOAT16, "fused_hyperconnection_sinkhorn: comb_w must be BFLOAT16");
     TT_FATAL(comb_bias.dtype() == DataType::BFLOAT16, "fused_hyperconnection_sinkhorn: comb_bias must be BFLOAT16");
 
+    const uint32_t hc = attributes.num_streams;
     const auto& shape = comb_w.logical_shape();
     TT_FATAL(
         shape.rank() == 4,
-        "fused_hyperconnection_sinkhorn: comb_w must be rank-4 [1,1,H,H], got rank {}",
+        "fused_hyperconnection_sinkhorn: comb_w must be rank-4 [1,T,H,H], got rank {}",
         shape.rank());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "fused_hyperconnection_sinkhorn: comb_w must be [1,1,H,H] (decode, T==1)");
+    TT_FATAL(shape[0] == 1, "fused_hyperconnection_sinkhorn: comb_w must be [1,T,H,H], got {}", shape);
     TT_FATAL(
-        shape[2] == attributes.num_streams && shape[3] == attributes.num_streams,
-        "fused_hyperconnection_sinkhorn: comb_w must be [1,1,H,H] with H={}, got [{},{}]",
-        attributes.num_streams,
+        shape[2] == hc && shape[3] == hc,
+        "fused_hyperconnection_sinkhorn: comb_w must be [1,T,H,H] with H={}, got [{},{}]",
+        hc,
         shape[2],
         shape[3]);
+    TT_FATAL(hc <= 32, "fused_hyperconnection_sinkhorn: only H<=32 (one tile per token) is supported, got H={}", hc);
+    // Every token normalises against the same learned bias, so it stays a single tile.
     TT_FATAL(
-        attributes.num_streams <= 32,
-        "fused_hyperconnection_sinkhorn: only H<=32 (single tile) is supported, got H={}",
-        attributes.num_streams);
-    TT_FATAL(
-        comb_w.logical_shape() == comb_bias.logical_shape(),
-        "fused_hyperconnection_sinkhorn: comb_w and comb_bias must have the same shape");
+        comb_bias.logical_shape() == ttnn::Shape({1, 1, hc, hc}),
+        "fused_hyperconnection_sinkhorn: comb_bias must be [1,1,H,H] = [1,1,{},{}], got {}",
+        hc,
+        hc,
+        comb_bias.logical_shape());
     TT_FATAL(attributes.sinkhorn_iters >= 1, "fused_hyperconnection_sinkhorn: sinkhorn_iters must be >= 1");
 }
 

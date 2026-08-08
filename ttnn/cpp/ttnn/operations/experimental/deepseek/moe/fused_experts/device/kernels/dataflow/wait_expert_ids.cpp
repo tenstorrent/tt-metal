@@ -39,11 +39,16 @@
 //   17: num_weights
 //   18: cb_rscalar
 //   19: down_prefetch (down slices to fetch before the gather/broadcast sync)
-//   20+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   20: batch        (token rows, B <= 32, sharing one activation tile row)
+//   21: experts_block (experts per block; the activation block held in L1 at once)
+//   22: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
+//   23: down_reserve_tiles    (pages a down slice reserves in cb_weights)
+//   24+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
 //   0: core_index      (this core's flat grid index, x*8 + y)
+//   1: leader_noc_x    2: leader_noc_y (core {0,0}, for the per-block slot-free ack)
 void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(0);
     constexpr uint32_t sem_input_id = get_compile_time_arg_val(1);
@@ -65,8 +70,12 @@ void kernel_main() {
     constexpr uint32_t num_weights = get_compile_time_arg_val(17);
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(18);
     constexpr uint32_t down_prefetch = get_compile_time_arg_val(19);
+    constexpr uint32_t batch = get_compile_time_arg_val(20);
+    constexpr uint32_t experts_block = get_compile_time_arg_val(21);
+    constexpr uint32_t gate_up_reserve_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t down_reserve_tiles = get_compile_time_arg_val(23);
 
-    constexpr auto gate_up_args = TensorAccessorArgs<20>();
+    constexpr auto gate_up_args = TensorAccessorArgs<24>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
@@ -74,6 +83,8 @@ void kernel_main() {
     constexpr uint32_t kDownAddrBase = kGateUpAddrBase + num_weights;
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
+    const uint32_t leader_noc_x = get_arg_val<uint32_t>(1);
+    const uint32_t leader_noc_y = get_arg_val<uint32_t>(2);
 
     // Activation arrived via multicast: publish it to the compute kernel.
     Semaphore<>(sem_input_id).wait(1);
@@ -110,5 +121,11 @@ void kernel_main() {
         kDownAddrBase,
         cb_rscalar_id,
         num_weights,
-        down_prefetch);
+        down_prefetch,
+        batch,
+        experts_block,
+        gate_up_reserve_tiles,
+        down_reserve_tiles,
+        leader_noc_x,
+        leader_noc_y);
 }

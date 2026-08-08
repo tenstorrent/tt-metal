@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode, make_shared_decode_gcb
+from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode, decode_gcb_page_bytes, make_shared_decode_gcb
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -77,14 +77,15 @@ def test_linear_decode_prefetcher_shared_global_cb_uniform_slabs(device, hoist):
 
     ``hoisted`` queues all three requests before any matmul runs, which is what the model
     does when it prefetches the next layer's weights while the current one computes: with
-    the ring only one slab deep the senders must backpressure until each matmul frees
-    credits. ``lazy`` alternates a transfer with its matmul and never exercises that.
+    the ring two pages deep and three weights queued the senders must backpressure until
+    each matmul frees credits. ``lazy`` alternates a transfer with its matmul and never
+    exercises that.
     """
     m, k, n = 32, 1024, 2048
     num_layers = 3
 
     specs = [{"K": k, "N": n, "n_blocks": 32} for _ in range(num_layers)]
-    global_cb = make_shared_decode_gcb(device, specs, ttnn.bfloat16, num_slabs=1)
+    global_cb = make_shared_decode_gcb(device, specs, ttnn.bfloat16, num_pages=2)
 
     torch.manual_seed(0)
     cases = []
@@ -103,24 +104,94 @@ def test_linear_decode_prefetcher_shared_global_cb_uniform_slabs(device, hoist):
             assert_with_pcc(ref, ttnn.to_torch(layer(x)).float(), 0.99)
 
 
-def test_linear_decode_prefetcher_shared_global_cb_rejects_mixed_slab_sizes(device, expect_error):
-    """Weights of different slab sizes are refused a shared GCB, in the constructor.
+def test_linear_decode_prefetcher_shared_global_cb_mixed_slab_sizes(device):
+    """Differently *sized* weights share one GCB by agreeing on a page size.
 
-    A GCB page is one slab, so differently sized weights change the ring's page size between
-    transfers. Both ends are written to handle that -- each re-derives the page geometry per
-    transfer and credits any skipped ring tail to the other over NOC -- but measured against
-    this path it hangs: these three shapes (128 KB, 256 KB, 256 KB slabs at bf16) wedge the
-    device, while ``..._uniform_slabs`` above passes and so does a single weight repeatedly
-    wrapping a two-slab ring. The failing case is the one that leaves the pointer mid-ring
-    and then realigns it up to a larger page.
+    These are the three shapes (128 KB, 256 KB, 256 KB slabs at bf16) that used to be refused
+    a shared buffer, because a page was a whole slab and a ring whose page size changes
+    between transfers hangs. Streaming removes the restriction rather than working around it:
+    the common page here is 128 KB, so the two larger weights arrive as two pages each and the
+    matmul accumulates across them, and the ring's geometry never changes.
 
-    Rejecting it on the host is what keeps that a diagnosable error rather than a hang, so
-    this test guards the check itself: without it the layout below is silently accepted.
+    The queueing is hoisted so all three weights are in flight against a ring that cannot hold
+    them all, which is the case that hung before and is also how the model prefetches.
     """
-    specs = [{"K": k, "N": n, "n_blocks": 32} for k, n in [(1024, 2048), (2048, 2048), (1024, 4096)]]
+    m = 32
+    shapes = [(1024, 2048), (2048, 2048), (1024, 4096)]
+    specs = [{"K": k, "N": n, "n_blocks": 32} for k, n in shapes]
+    page_bytes = decode_gcb_page_bytes(specs, ttnn.bfloat16)
+    global_cb = make_shared_decode_gcb(device, specs, ttnn.bfloat16, num_pages=2)
 
-    with expect_error(ValueError, "same slab size"):
-        make_shared_decode_gcb(device, specs, ttnn.bfloat16, num_slabs=1)
+    torch.manual_seed(0)
+    cases = []
+    for (k, n), spec in zip(shapes, specs):
+        pt_x = torch.randn((m, k), dtype=torch.bfloat16)
+        pt_w = torch.randn((n, k), dtype=torch.bfloat16)
+        layer = LinearDecode(
+            pt_w, device, use_prefetcher=True, global_cb=global_cb, global_cb_page_bytes=page_bytes, **spec
+        )
+        cases.append((layer, _activation(device, pt_x), _reference(pt_x, pt_w)))
+    # The point of the shapes is that they disagree, so a page has to be smaller than a slab.
+    assert [layer.gcb_k_blocks for layer, _, _ in cases] == [1, 2, 2]
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        for layer, _, _ in cases:
+            layer.fetch_weights()
+        for layer, x, ref in cases:
+            assert_with_pcc(ref, ttnn.to_torch(layer(x)).float(), 0.99)
+
+
+def test_shared_expert_prefetched_pcc(device):
+    """The MoE shared expert's three projections on the model's one shared GCB.
+
+    This is the whole of ``decode_prefetch``'s contract exercised end to end on the MoE side:
+    the three weights are streamed through the same buffer the attention projections use, at
+    the page size that buffer was built for, and queued up front the way the model hoists a
+    layer's weights. gate and up leave their outputs sharded exactly as down_proj wants its
+    activation, so a layout slip there shows up here as a reshard error or bad numbers.
+    """
+    from types import SimpleNamespace
+
+    from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
+    from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4MLP
+
+    tokens, hidden, inter = 32, 4096, 2048
+    dtype = ttnn.bfloat16
+    # Four pages rather than the model's 16: a bf16 page is 64 KB, and the point here is the
+    # sharing and the layouts, not the run-ahead depth.
+    buffers = make_decode_prefetch_buffers(device, dtype, num_prefetch_pages=4)
+    assert len({id(cb) for cb in buffers.values()}) == 1, "every decode weight must share one GCB"
+
+    torch.manual_seed(0)
+    pt_x = torch.randn((tokens, hidden), dtype=torch.bfloat16)
+    pt_w = {
+        "gate_proj": torch.randn((inter, hidden), dtype=torch.bfloat16),
+        "up_proj": torch.randn((inter, hidden), dtype=torch.bfloat16),
+        "down_proj": torch.randn((hidden, inter), dtype=torch.bfloat16),
+    }
+    x32 = pt_x.to(torch.float32)
+    swiglu = torch.nn.functional.silu(x32 @ pt_w["gate_proj"].float().t()) * (x32 @ pt_w["up_proj"].float().t())
+    ref = swiglu @ pt_w["down_proj"].float().t()
+
+    mlp = DeepSeekV4MLP(
+        {f"shared_experts.{name}.weight": w for name, w in pt_w.items()},
+        "shared_experts",
+        device,
+        weight_dtype=dtype,
+        config=SimpleNamespace(hidden_size=hidden, moe_intermediate_size=inter),
+        use_prefetcher=True,
+        prefetch_buffers=buffers,
+    )
+    assert [p.gcb_k_blocks for p in (mlp.gate_proj, mlp.up_proj, mlp.down_proj)] == [4, 4, 4]
+
+    x = ttnn.from_torch(pt_x.reshape(1, 1, tokens, hidden), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        mlp.prefetch_weights()
+        result = ttnn.to_torch(mlp(x)).float().reshape(tokens, hidden)
+
+    assert_with_pcc(ref, result, 0.99)
 
 
 @pytest.mark.parametrize(

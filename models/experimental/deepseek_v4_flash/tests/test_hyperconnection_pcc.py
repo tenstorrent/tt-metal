@@ -167,8 +167,7 @@ def _generate_reference(out_path: Path, batch: int, seq_len: int) -> bool:
     return out_path.is_file()
 
 
-@pytest.mark.parametrize("seq_len", (1,))
-@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("batch_size, seq_len", ((1, 1), (8, 1), (1, 4)))
 def test_hyperconnection_pcc(device, reset_seeds, tmp_path, batch_size: int, seq_len: int) -> None:
     ref_path = tmp_path / "ref_hc.pt"
     if not _generate_reference(ref_path, batch_size, seq_len):
