@@ -84,7 +84,7 @@ You can create tile layout tensors using any creation function (e.g. :ref:`ttnn.
     >>> print(t.layout)
     Layout.TILE
 
-Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
+Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each face lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
 
 .. figure:: images/tile_faces.png
     :align: center
