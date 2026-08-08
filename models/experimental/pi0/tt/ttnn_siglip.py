@@ -27,7 +27,7 @@ import ttnn
 import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
-from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
+from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
 
 
 # ============================================================================
@@ -127,6 +127,11 @@ class PatchEmbeddingTTNN:
         else:
             self._linear_bias = None
 
+        # Query device grid to use all available cores
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+
         # Compute kernel config
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -199,7 +204,6 @@ class PatchEmbeddingTTNN:
             x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_amount)], value=0.0)
 
         # Step 5: TTNN linear (already in TILE - no conversion needed!)
-        # Use L1 for intermediate computation
         out = ttnn.linear(
             x,
             self._linear_weight,
@@ -207,6 +211,7 @@ class PatchEmbeddingTTNN:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
         )
 
         ttnn.deallocate(x)
@@ -247,62 +252,45 @@ class SigLIPAttentionTTNN:
         self.hidden_size = config.hidden_size
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
+        # Query device grid to use all available cores (P150: up to 13x10)
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+
         # Pad head_dim to multiple of 32 for TTNN tile alignment
         self.padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 -> 96
         padding_size = self.padded_head_dim - self.head_dim
 
-        # Helper function to pad weights on device using ttnn.pad
-        def pad_head_dim_weight_ttnn(weight, heads_out=True):
-            """Pad weight tensor's head dimension using TTNN operations."""
-            dim = weight.shape[0]  # hidden_size
+        # Pad weights on host using pure PyTorch (avoids expensive device round-trips)
+        def pad_head_dim_weight(weight, heads_out=True):
+            """Pad weight tensor's head dimension using PyTorch on host."""
+            dim = weight.shape[0]
 
             if padding_size > 0:
                 if heads_out:
-                    weight = weight.T  # (hidden, hidden) -> transpose for reshape
-                # Reshape to expose head dimension
+                    weight = weight.T
                 weight = weight.reshape(dim, self.num_heads, self.head_dim)
-                # Transfer to device
-                weight_ttnn = ttnn.from_torch(
-                    weight.contiguous(),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                # Pad head dimension using ttnn.pad
-                weight_ttnn = ttnn.pad(weight_ttnn, padding=((0, 0), (0, 0), (0, padding_size)), value=0.0)
-                weight_ttnn = ttnn.reshape(weight_ttnn, (dim, self.num_heads * self.padded_head_dim))
-                weight = ttnn.to_torch(weight_ttnn)
+                weight = torch.nn.functional.pad(weight, (0, padding_size))
+                weight = weight.reshape(dim, self.num_heads * self.padded_head_dim)
                 if heads_out:
                     weight = weight.T
             return weight
 
-        def pad_head_dim_bias_ttnn(bias):
-            """Pad 1D bias using TTNN operations."""
+        def pad_head_dim_bias(bias):
+            """Pad 1D bias using PyTorch on host."""
             if padding_size > 0:
-                # Reshape to expose head dimension
                 bias = bias.view(self.num_heads, self.head_dim)
-                # Transfer to device
-                bias_ttnn = ttnn.from_torch(
-                    bias.contiguous(),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                # Pad using ttnn.pad
-                bias_ttnn = ttnn.pad(bias_ttnn, padding=((0, 0), (0, padding_size)), value=0.0)
-                bias_ttnn = ttnn.reshape(bias_ttnn, (self.num_heads * self.padded_head_dim,))
-                bias = ttnn.to_torch(bias_ttnn)
+                bias = torch.nn.functional.pad(bias, (0, padding_size))
+                bias = bias.reshape(self.num_heads * self.padded_head_dim)
             return bias
 
         # OPTIMIZATION: Fused QKV weights - single linear instead of 3
-        # Pad each weight using TTNN, then concatenate
-        wq_padded = pad_head_dim_weight_ttnn(weights["self_attn.q_proj.weight"])
-        wk_padded = pad_head_dim_weight_ttnn(weights["self_attn.k_proj.weight"])
-        wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
+        # Pad each weight on host, then transfer to device
+        wq_padded = pad_head_dim_weight(weights["self_attn.q_proj.weight"])
+        wk_padded = pad_head_dim_weight(weights["self_attn.k_proj.weight"])
+        wv_padded = pad_head_dim_weight(weights["self_attn.v_proj.weight"])
 
-        # Concatenate Q, K, V weights on device: [hidden, 3 * num_heads * padded_head_dim]
+        # Concatenate Q, K, V weights on device
         wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -310,9 +298,9 @@ class SigLIPAttentionTTNN:
 
         # Fused QKV biases
         if "self_attn.q_proj.bias" in weights:
-            bq_padded = pad_head_dim_bias_ttnn(weights["self_attn.q_proj.bias"])
-            bk_padded = pad_head_dim_bias_ttnn(weights["self_attn.k_proj.bias"])
-            bv_padded = pad_head_dim_bias_ttnn(weights["self_attn.v_proj.bias"])
+            bq_padded = pad_head_dim_bias(weights["self_attn.q_proj.bias"])
+            bk_padded = pad_head_dim_bias(weights["self_attn.k_proj.bias"])
+            bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
 
             # Concatenate biases on device (using tensor_1d_to_2d_ttnn to avoid torch.unsqueeze)
             bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat16)
@@ -323,7 +311,7 @@ class SigLIPAttentionTTNN:
             self.bqkv = None
 
         # Output projection - pad input head dim, output is hidden_size
-        wo_padded = pad_head_dim_weight_ttnn(weights["self_attn.out_proj.weight"], heads_out=False)
+        wo_padded = pad_head_dim_weight(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
             dtype=ttnn.bfloat16,
@@ -348,7 +336,7 @@ class SigLIPAttentionTTNN:
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,  # SDPA needs this off
+            packer_l1_acc=False,
         )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
@@ -375,14 +363,14 @@ class SigLIPAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, 3 * num_heads * padded_head_dim]
-        # Use L1 for intermediate computation
         xqkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
             bias=self.bqkv,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
+            core_grid=self.core_grid,
         )
 
         # OPTIMIZATION 2: Native TTNN head splitting
@@ -396,15 +384,14 @@ class SigLIPAttentionTTNN:
         )
         ttnn.deallocate(xqkv_fused)
 
-        # SDPA configuration
-        device_grid = self.device.compute_with_storage_grid_size()
-        grid_x = min(8, device_grid.x)
-        grid_y = min(8, device_grid.y)
+        # Chunk sizes aligned with tt_transformers prefill SDPA (64 vs 2048-boundary heuristic)
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
 
+        # SDPA configuration - use full device grid for maximum parallelism
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=min(256, seq_len),
-            k_chunk_size=min(256, seq_len),
+            compute_with_storage_grid_size=self.grid_size,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
 
@@ -431,13 +418,14 @@ class SigLIPAttentionTTNN:
         )
         ttnn.deallocate(attn_output)
 
-        # Output projection - use L1 for intermediate computation
+        # Output projection
         output = ttnn.linear(
             attn_concat,
             self.wo,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
+            core_grid=self.core_grid,
         )
         ttnn.deallocate(attn_concat)
 
@@ -473,11 +461,11 @@ class SigLIPMLPTTNN:
         self.config = config
         self.device = device
 
-        # FC1 (input -> intermediate)
+        # FC1 (input -> intermediate) - BF8_B for 2x DRAM bandwidth savings
         fc1_weight = weights["mlp.fc1.weight"].T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -488,11 +476,11 @@ class SigLIPMLPTTNN:
         else:
             self.fc1_bias = None
 
-        # FC2 (intermediate -> output)
+        # FC2 (intermediate -> output) - BF8_B for 2x DRAM bandwidth savings
         fc2_weight = weights["mlp.fc2.weight"].T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -502,6 +490,11 @@ class SigLIPMLPTTNN:
             self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.fc2_bias = None
+
+        # Query device grid to use all available cores
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
 
         # Compute kernel config
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -521,24 +514,26 @@ class SigLIPMLPTTNN:
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        # FC1 with GELU activation - use L1 for intermediate computation
+        # FC1 with GELU activation
         x = ttnn.linear(
             hidden_states,
             self.fc1_weight,
             bias=self.fc1_bias,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
             activation="gelu",
         )
 
-        # FC2 - use L1 for intermediate computation
+        # FC2
         output = ttnn.linear(
             x,
             self.fc2_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
         )
         ttnn.deallocate(x)
 
@@ -852,9 +847,6 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:
@@ -893,6 +885,11 @@ class MultiModalProjectorTTNN:
         """
         self.device = device
 
+        # Query device grid to use all available cores
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+
         # Convert weight to TTNN format (transposed)
         self.weight = ttnn.from_torch(
             weights["linear.weight"].T.contiguous(),
@@ -922,6 +919,7 @@ class MultiModalProjectorTTNN:
             self.weight,
             bias=self.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
 
 

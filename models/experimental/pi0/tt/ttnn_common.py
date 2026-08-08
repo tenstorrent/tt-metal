@@ -11,7 +11,7 @@ This module provides shared helper functions used across the PI0 model:
 """
 
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import ttnn
@@ -34,6 +34,28 @@ def get_ttnn_dtype(precision: str) -> ttnn.DataType:
         "bfloat4_b": ttnn.bfloat4_b,
     }
     return dtype_map.get(precision, ttnn.bfloat16)
+
+
+def sdpa_prefill_chunk_sizes(
+    seq_len_q: int,
+    seq_len_kv: int,
+    *,
+    tile: int = 32,
+) -> Tuple[int, int]:
+    """
+    q_chunk_size / k_chunk_size for ttnn.transformer.scaled_dot_product_attention.
+
+    Mirrors the baseline in models/tt_transformers/tt/model_config.py
+    get_attn_sdpa_prefill_program_config when chunk_start_idx is None: use 256 chunks
+    only for long sequences (>= 2048), otherwise 64 — then cap by tile-aligned lengths.
+    """
+    longest = max(seq_len_q, seq_len_kv)
+    base = 256 if longest >= 2048 else 64
+    q_aligned = ((seq_len_q + tile - 1) // tile) * tile if seq_len_q > 0 else tile
+    k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
+    q_chunk = min(base, q_aligned)
+    k_chunk = min(base, k_aligned)
+    return max(q_chunk, tile), max(k_chunk, tile)
 
 
 def create_sinusoidal_pos_embedding_ttnn(

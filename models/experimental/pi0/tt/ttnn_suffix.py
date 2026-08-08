@@ -51,6 +51,11 @@ class SuffixEmbeddingTTNN:
         self.device = device
         self.weights = weights
 
+        # Query device grid to use all available cores (P150: up to 13x10)
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+
         # OPTIMIZATION: Pre-compute attention mask pattern (saves 10 transfers per inference!)
         # Attention mask is constant for a given config: [1, 1, 0, ..., 0] for PI0
         # or [1, 0, ..., 0] for PI05
@@ -102,6 +107,7 @@ class SuffixEmbeddingTTNN:
             self.weights["action_in_proj.weight"],
             bias=self.weights["action_in_proj.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
 
     def embed_state(self, state: ttnn.Tensor) -> Optional[ttnn.Tensor]:
@@ -122,6 +128,7 @@ class SuffixEmbeddingTTNN:
             self.weights["state_proj.weight"],
             bias=self.weights["state_proj.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
 
         # Add sequence dimension
@@ -182,6 +189,7 @@ class SuffixEmbeddingTTNN:
             self.weights["action_time_mlp_in.weight"],
             bias=self.weights["action_time_mlp_in.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
         x = ttnn.silu(x)
         x = ttnn.linear(
@@ -189,10 +197,8 @@ class SuffixEmbeddingTTNN:
             self.weights["action_time_mlp_out.weight"],
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return x, None
 
@@ -272,10 +278,6 @@ class SuffixEmbeddingTTNN:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
-
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
 
     def project_output(self, expert_output: ttnn.Tensor) -> ttnn.Tensor:
@@ -293,6 +295,7 @@ class SuffixEmbeddingTTNN:
             self.weights["action_out_proj.weight"],
             bias=self.weights["action_out_proj.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
         )
 
 
