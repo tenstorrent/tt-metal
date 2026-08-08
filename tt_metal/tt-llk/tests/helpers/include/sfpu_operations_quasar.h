@@ -18,6 +18,7 @@
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
@@ -108,6 +109,10 @@ void init_unary_sfpu_operation_quasar()
     {
         _init_rsqrt_<APPROX>();
     }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        cumsum_init();
+    }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
         _init_reciprocal_<APPROX>();
@@ -197,6 +202,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
+ * @param first Whether this is the first tile of a column-tile chain; only cumsum reads it,
+ *        to zero its cross-tile carry. Every other op ignores it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -207,7 +214,7 @@ template <
     int ITERATIONS                 = SFPU_ITERATIONS,
     DataFormat TYPECAST_IN_FORMAT  = DataFormat::Float32,
     DataFormat TYPECAST_OUT_FORMAT = DataFormat::Float16_b>
-void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
+void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32, bool first = true)
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -299,6 +306,12 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             VectorMode::RC,
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+    }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        // Whole-tile op: VectorMode::RC_custom calls the functor once with Dest parked at the tile
+        // base, because the column-wise chain crosses the face boundary. `first` zeroes the carry.
+        SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, dst_index, VectorMode::RC_custom, first);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
