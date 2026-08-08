@@ -23,6 +23,8 @@ ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.
 ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	MoveProgramFactory::create_descriptor	desc = MoveProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	MoveShardedProgramFactory::create_descriptor	desc = MoveShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/data_movement/roll/device/roll_program_factory.cpp	RollShardedProgramFactory::create_descriptor	auto desc = RollShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/data_movement/roll/device/roll_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
 ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	create_descriptor	return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
