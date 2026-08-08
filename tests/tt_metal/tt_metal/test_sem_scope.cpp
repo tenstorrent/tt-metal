@@ -635,6 +635,17 @@ TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
 // semaphore's node passes cached geometry, so it must BUILD (the CONSUME FATAL was moved after
 // the cached decision), resolve DM_LOCAL_CACHED, and drain exactly. No EXTERNAL variant: a
 // multi-consumer shape resolving EXTERNAL is still host-rejected.
+// EXTERNAL multi-consumer down(): the NoC-CAS lock serializes consumers while the producer's
+// plain increments commute. Exact 0 = no credit double-spent, none lost.
+TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
+    }
+    const uint32_t observed = run_concurrent(
+        SemaphoreScope::EXTERNAL, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    EXPECT_EQ(observed, 0u) << "EXTERNAL multi-consumer down() double-spent or lost a credit";
+}
+
 TEST_F(SemScopeFixture, TestAutoMultiConsumerDown) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
@@ -1025,14 +1036,18 @@ TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
 }
 
 // A >=2-CONSUME shape that FAILS cached geometry (two 1-thread CONSUME kernels on one node ->
-// two binder kernels) resolves to EXTERNAL, whose down() is still single-consumer only.
-TEST_F(SemScopeFixture, TestCensusMultiConsumerExternalShapeFatals) {
-    EXPECT_ANY_THROW(run_census(
+// two binder kernels) resolves to EXTERNAL -- whose down() is now the NoC-CAS lock, so the
+// shape BUILDS and runs instead of FATALing.
+TEST_F(SemScopeFixture, TestCensusMultiConsumerExternalShapeResolves) {
+    const auto [scope, count] = run_census(
         core,
         {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true},
-         {.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1}}))
-        << "two CONSUME binder kernels fail cached geometry and resolve to EXTERNAL, whose down() spin "
-           "and subtract are separate steps -- the host must reject this, not silently race";
+         {.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1}});
+    (void)count;
+    log_info(LogTest, "census multi-consumer external shape: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
+        << "two CONSUME binder kernels fail cached geometry and must resolve to the (now "
+           "multi-consumer-safe) EXTERNAL mechanism";
 }
 
 TEST_F(SemScopeFixture, TestCensusSetHonestyFatal) {

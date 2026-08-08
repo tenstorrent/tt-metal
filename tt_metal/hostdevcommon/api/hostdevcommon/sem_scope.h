@@ -29,11 +29,10 @@
  *  - EXTERNAL: touched externally (NoC / another node / chip). up() and down()
  *      go through a self-targeted NoC atomic (INCR_GET; decrement = INCR_GET of a
  *      negative value, wrap=31), serializing local and remote writers at one NIU.
- *      up() is fully atomic; down()'s decrement step is atomic but its
- *      check-then-decrement is single-consumer-only (the host rejects multi-consumer
- *      shapes that AUTO-resolve to EXTERNAL; a forced EXTERNAL bypasses the guard and
- *      the caller owns the invariant. DM_LOCAL_CACHED down() is a CAS loop and
- *      multi-consumer-safe).
+ *      up() is fully atomic. down() is multi-consumer-safe on Quasar DM (a NoC-CAS
+ *      lock serializes consumers; producers' increments commute); on Gen1 it remains
+ *      single-consumer and the caller owns that invariant. Quasar EXTERNAL reserves
+ *      the value 0xFFFFFFFF (CAS-return sentinel).
  *      wait()/wait_min()/value() and set() use the plain uncached alias — set() is a
  *      non-atomic destructive store, so use it init/reset-only, never concurrently
  *      with up()/down().
