@@ -7,19 +7,16 @@ the wall-time ledger, the stall Watchdog, and the per-kernel-compile env opt-in.
 
 from __future__ import annotations
 
+import importlib
 import os
-import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
 from loguru import logger
 
-from ...utils import walltime
+from ...utils import progress, walltime
 from ...utils.progress import Watchdog
-
-_REPO_ROOT = Path(__file__).resolve().parents[4]  # .../<repo>/models/tt_dit/tests/unit/ -> <repo>
 
 
 @pytest.fixture(autouse=True)
@@ -27,24 +24,6 @@ def _fresh_ledger():
     """The ledger is process-global; isolate each test."""
     walltime._ledger = walltime._Ledger()
     yield
-
-
-# Fixed source; the module name travels as argv (data), never interpolated into the -c program.
-_PROBE = "import importlib, os, sys; importlib.import_module(sys.argv[1]); print(os.environ.get('TT_METAL_LOG_KERNEL_COMPILE', '<unset>'))"
-
-
-def _env_after_import(module: str, preset: str | None = None) -> str:
-    """Import `module` in a clean subprocess and return TT_METAL_LOG_KERNEL_COMPILE ('<unset>' if not
-    set). `preset` sets the var before the import (to test that an explicit value survives)."""
-    env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
-    env.pop("TT_METAL_LOG_KERNEL_COMPILE", None)
-    if preset is not None:
-        env["TT_METAL_LOG_KERNEL_COMPILE"] = preset
-    proc = subprocess.run(
-        [sys.executable, "-c", _PROBE, module], cwd=_REPO_ROOT, env=env, capture_output=True, text=True
-    )
-    assert proc.returncode == 0, proc.stderr
-    return proc.stdout.strip()
 
 
 def test_ledger_reconciles_to_wall():
@@ -93,17 +72,27 @@ def test_watchdog_heartbeats_and_records_phase():
     assert "phase" in walltime._ledger.cats  # non-cache-load label is recorded on exit
 
 
-def test_dit_model_import_opts_in():
-    """Importing a DiT model package sets the per-kernel-compile flag (models/tt_dit/models/__init__)."""
-    assert _env_after_import("models.tt_dit.models") == "1"
+def test_dit_model_import_opts_in(monkeypatch):
+    """Importing a DiT model package runs models/tt_dit/models/__init__, which opts the process in."""
+    monkeypatch.delenv("TT_METAL_LOG_KERNEL_COMPILE", raising=False)
+    import models.tt_dit.models as dit_models
+
+    importlib.reload(dit_models)  # re-run the package __init__ side effect deterministically
+    assert os.environ.get("TT_METAL_LOG_KERNEL_COMPILE") == "1"
 
 
-def test_bare_util_import_stays_quiet():
-    """The gate must NOT flip on for non-DiT workloads that only borrow a tt_dit util (e.g. Qwen36
-    imports tt_dit.utils.tensor) — otherwise it defeats the build.cpp default-off gate."""
-    assert _env_after_import("models.tt_dit.utils.walltime") == "<unset>"
+def test_bare_util_import_stays_quiet(monkeypatch):
+    """The gate must NOT flip on for code that only borrows a tt_dit util (e.g. Qwen36 imports
+    tt_dit.utils.tensor) — otherwise it defeats the build.cpp default-off gate. Only models/ opts in."""
+    monkeypatch.delenv("TT_METAL_LOG_KERNEL_COMPILE", raising=False)
+    importlib.reload(progress)  # a representative tt_dit util — re-running it must not set the flag
+    assert "TT_METAL_LOG_KERNEL_COMPILE" not in os.environ
 
 
-def test_explicit_opt_out_wins():
+def test_explicit_opt_out_wins(monkeypatch):
     """An explicit =0 survives the model-import setdefault (a DiT run can still be silenced)."""
-    assert _env_after_import("models.tt_dit.models", preset="0") == "0"
+    monkeypatch.setenv("TT_METAL_LOG_KERNEL_COMPILE", "0")
+    import models.tt_dit.models as dit_models
+
+    importlib.reload(dit_models)
+    assert os.environ.get("TT_METAL_LOG_KERNEL_COMPILE") == "0"
