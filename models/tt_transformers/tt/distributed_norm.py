@@ -51,6 +51,13 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
+    def update(self, *, weight: ttnn.Tensor) -> None:
+        """Pass-through to the wrapped ``RMSNorm.update`` (``DistributedNorm``
+        owns no weights of its own). Same HF-format contract: ``(1, 1, 1, dim)``,
+        TILE, bf16, DRAM-interleaved, replicated.
+        """
+        self.norm.update(weight=weight)
+
     def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
 

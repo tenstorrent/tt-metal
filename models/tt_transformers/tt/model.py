@@ -164,6 +164,66 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
+    def update_weights(
+        self,
+        hf_state_dict: dict[str, ttnn.Tensor],
+        *,
+        hf_rope: bool = False,
+    ) -> None:
+        """In-place replace every weight from an HF-keyed dict of on-device 4D
+        ttnn tensors (replicated, DRAM-interleaved, TILE, bf16). Keys follow HF
+        safetensors naming; shapes are HF Linear/gamma/embedding wrapped in two
+        leading unit dims.
+
+        Strict by construction: every required key must be present (missing ->
+        ``KeyError``) and every provided key consumed by exactly one leaf
+        ``.update()`` (extras -> ``ValueError``). No "loose" mode -- silent
+        partial updates are an expensive class of bug.
+
+        ``hf_rope=False`` (default): caller has already permuted Q/K rows into
+        this model's convention (right for the ttml -> TTT transfer, both store
+        Meta-permuted rows). ``hf_rope=True`` defers HF -> Meta permutation to
+        ``Attention.update`` (currently raises -- kernel not wired up).
+
+        Tied embeddings: the protocol still requires both
+        ``model.embed_tokens.weight`` and ``lm_head.weight`` (typically the same
+        source tensor), keeping dispatch one-to-one with device buffers.
+
+        Every existing buffer keeps its device allocation, so captured traces
+        and the prefetcher's recorded addresses stay valid.
+        """
+        unconsumed = set(hf_state_dict.keys())
+
+        def consume(key: str) -> ttnn.Tensor:
+            if key not in hf_state_dict:
+                raise KeyError(f"Transformer.update_weights: missing required HF key {key!r}")
+            unconsumed.discard(key)
+            return hf_state_dict[key]
+
+        # Top-level (always required).
+        self.embd.update(embed_tokens=consume("model.embed_tokens.weight"))
+        self.norm.update(weight=consume("model.norm.weight"))
+        self.lm_head.update(weight=consume("lm_head.weight"))
+
+        # Per-layer: prefix-strip into a layer-local dict, dispatch.
+        for i, block in enumerate(self.layers):
+            prefix = f"model.layers.{i}."
+            layer_dict = {}
+            for key in list(hf_state_dict.keys()):
+                if key.startswith(prefix):
+                    layer_dict[key[len(prefix) :]] = hf_state_dict[key]
+                    unconsumed.discard(key)
+            block.update_weights(layer_dict, hf_rope=hf_rope)
+
+        if unconsumed:
+            sample = sorted(unconsumed)[:10]
+            raise ValueError(
+                f"Transformer.update_weights: {len(unconsumed)} HF key(s) not "
+                f"consumed by any leaf .update(). This usually means a typo, "
+                f"a stray weight, or a layer-index off-by-one. "
+                f"Showing up to 10: {sample}"
+            )
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
