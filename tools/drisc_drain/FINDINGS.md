@@ -19,7 +19,14 @@
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 >
-> **§N+34 (newest): the multi-drainer bring-up hang is FIXED** — it was one `LaunchProgram` per NIU flip,
+> **§N+36 (newest): on a HEALTHY card the HOST IS NOT THE CONSTRAINT** — writer 70-83% idle, decoder ~60%,
+> while producers stall 22,000 times; the limit is the device's O(num_cores) sweep. Several host claims from
+> earlier the same day are RETRACTED as degraded-card artifacts (the "2.6 us ack", the reads-not-bytes
+> framing diagnosis, and "pacing gives 0 stalls at 20-125"). **Check the ACK-WRITE probe printed on every
+> run — healthy ~175 ns, degraded ~2,300 ns — before trusting ANY timing.** What survives: `resize`
+> eliminated (9.6 ms -> 0.0), and three instrument bugs fixed.
+>
+> **§N+34: the multi-drainer bring-up hang is FIXED** — it was one `LaunchProgram` per NIU flip,
 > so the second flip's `dram_barrier` ran across the first drainer's already-stream-mode core. All flips
 > now go in one launch. 80/80 clean (was 42/80 + a host freeze). **`kNSockets = 2` is now the default and
 > the knee is 20, not 60** — N+30's "knee 60" is RETRACTED, it was measured on a sweep whose own failed
@@ -3115,3 +3122,79 @@ At bh-05's 2.5%, a 300-run block on bh-26 should have produced ~7 events. It pro
 The bring-up tracker is in the tree and armed, so whenever a box that DOES reproduce is available, the
 next single-drainer wedge names its own stall site instead of leaving a 445 ms window to guess inside --
 which is how three hypotheses died (IOMMU N+26, subchannel collision N+27, UnsupReq N+32).
+
+## §N+36 — Decode+publish on a healthy card: the HOST IS NOT THE CONSTRAINT, and several earlier claims were degraded-card artifacts (bh-26, 2026-08-08)
+
+### ⚠ READ THIS FIRST: a large block of today's host work was measured on a DEGRADED card
+
+The box froze and rebooted at 14:01. **The card came back degraded and I did not re-check it** -- despite
+§N+33 saying to. Everything measured between 14:01 and ~17:45 ran with ack-write at **2.3 us instead of
+175 ns**, i.e. a ~13x MMIO penalty, which throttles producers as well as the host.
+
+**The ACK-WRITE probe prints on EVERY run.** It read 2,318 ns for hours. Healthy is ~175 ns. Compare it
+before trusting any timing; it costs nothing and would have caught this immediately.
+
+### RETRACTED, all measured on the degraded card
+
+- **"The ack costs 2.6 us/read, 15x the probe."** No anomaly at all: the probe ALSO read 2.3 us at the
+  time. On a healthy card the ack is **0.1 ms/run, ~110 ns/read** -- the cheapest stage in the pipeline.
+  The sfence/store-drain theory built on top of it was chasing a phantom (and was independently refuted:
+  pre-draining changed the ack by 2%).
+- **"Cost is proportional to READS, not bytes"** and the whole framing-efficiency diagnosis. That
+  signature came from a 2.3 us ack making per-read overhead dominate. On a healthy card the stalls fall
+  MONOTONICALLY with delay -- the non-monotonic inversion the theory explained does not exist.
+- **"Pacing gives 0 stalls at delay 20-125 with decode on."** On a healthy card nothing in 20-125 is
+  clean. The controller's tuned thresholds were fitted to a broken machine.
+
+### The corrected host budget (healthy card, decode+publish, Tracy off, pacing off)
+
+| | delay 20 | delay 125 |
+|---|---|---|
+| WRITER thread busy | **17%** | **30%** |
+| copy | 7.2 ms | 11.7 ms |
+| ack | 0.1 ms (168 ns/read) | 0.2 ms (131 ns/read) |
+| resize | **0.0 ms** | 2.3 ms |
+| DECODER thread | ~28 ms (60% of writer wall) | ~30 ms (62%) |
+| producer stalls | 22,368 / 22,227 / 22,093 | 98 / 7,709 / 612 |
+
+**The writer is 70-83% IDLE and the decoder ~60% loaded, while producers stall 22,000 times.** The host
+has ample headroom, so it is not what stalls the device. Device phases agree: credit-wait is only
+4-6%, i.e. the drainer is barely waiting on the host at all -- it simply cannot sweep 120 cores fast
+enough. The limit is the O(num_cores) sweep, which is why two drainers helped and host tuning does not.
+
+### What the host work DID buy: resize is gone
+
+`resize` was **9.6 ms/run, 76% of the writer's workload**, against 3.0 ms for the copy it precedes --
+pure `std::vector` value-initialization of 64 KB immediately before `memcpy` overwrote every byte.
+
+Two fixes were needed and the first alone did nothing:
+1. **Grow-only sizing** + carrying the valid length in `DecodeItem::words` (not `buf.size()`), and
+   dropping the `clear()` that reset every pooled buffer to size 0.
+2. **Pre-populating the pool** (320 buffers/socket at max read size). This was the one that mattered:
+   the decoder runs **231-253 buffers behind**, so the pool was dry and nearly every read
+   default-constructed a FRESH size-0 vector, which grow-only cannot help.
+
+Result: **9.6 ms -> 0.0 ms** at delay 20 (2.3 ms at 125), writer 27% -> 17% busy. Real, and independent
+of card health -- but it did **not** change producer stalls (22.2k at delay 20 either way), which is
+itself the evidence that the host was never the constraint.
+
+### Instrument fixes (three separate unit/attribution bugs, all of which changed conclusions)
+
+- **steady_clock::now() costs ~650 ns here.** An EMPTY timed region measured **1,303 ns** -- the
+  instrument was a third of the "ack" it was measuring. Per-read timers moved to `rdtsc` (~16 ns).
+  Always time an empty region before trusting a fine-grained split.
+- **Ticks reported as nanoseconds.** After the rdtsc move, one summary line still divided ticks by 1e6,
+  reporting the same copy as "56.0 ms" while the split line correctly showed 12.4 ms.
+- **Two threads, one budget.** `decode`/`publish` run on the DECODER thread but were charged against the
+  WRITER's wall, producing "134% busy" with NEGATIVE idle. Now reported as separate budgets.
+
+### The pacing controller is kept, UNTUNED
+
+`TT_METAL_PERF_DEBUG_FILL_PCT` (default 70) drives the inter-sweep gap from measured span fill, with a
+3-level response: hard stop to 0 above 7/8 ring occupancy, 25% back-off above 3/4, otherwise a
+multiplicative fill-error step. `TT_METAL_PERF_DEBUG_GAP_MAX` (default 200,000 cycles) bounds it; a gap
+pinned exactly at that value in the results means the ceiling is clipping the loop.
+
+**Its thresholds were fitted on the degraded card and must be re-derived**, and on current evidence the
+host is not the bottleneck it was meant to relieve. Kept because the mechanism is sound and the hook was
+always intended ("the hook a pacing controller would drive"), not because the tuning is trustworthy.

@@ -258,7 +258,7 @@ private:
     // One decoder per socket -- decode state is sequential per stream. Owns decode+publish; see
     // decode_and_publish for why that work is off the reader thread.
     void decoder_thread(uint32_t sock_idx);
-    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf);
+    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf, size_t words);
     void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler (the slow sink, now off the drain)
 
     std::vector<DeviceCtx> devices_;
@@ -280,6 +280,10 @@ private:
         DeviceCtx* ctx = nullptr;
         uint32_t sock = 0;
         std::vector<uint32_t> buf;
+        // VALID WORD COUNT, carried explicitly rather than as buf.size(). The buffer is pooled and grows
+        // MONOTONICALLY to the largest read seen, so its size is not the length of this read. Sizing by
+        // resize() instead cost 12.3 ms per run in pure zeroing -- see drain_pass.
+        size_t words = 0;
     };
     struct DecodeQueue {
         std::mutex m;
@@ -302,6 +306,13 @@ private:
     // a capture; these exist always, which is what lets us say whether the host wall is the COPY or the
     // per-marker DECODE without guessing.
     uint64_t w_read_ns_ = 0;
+    // sock-read split. `read()` is wait_for_bytes + two memcpys + pop_bytes + notify_sender(the ack), and
+    // only the memcpy scales with BYTES -- which is what makes under-packed frames a HOST problem. The ack
+    // is a single ~180 ns PCIe write and the resize is an allocation, so attributing the whole of sock-read
+    // to "the copy" would be a guess. These three separate it.
+    uint64_t w_resize_ns_ = 0;
+    uint64_t w_ack_ns_ = 0;
+    uint64_t w_predrain_ns_ = 0;  // diagnostic: store-buffer drain charged separately from the ack
     uint64_t w_decode_ns_ = 0;
     uint64_t w_publish_ns_ = 0;
     uint64_t w_reads_ = 0;
