@@ -19,7 +19,13 @@
 > which makes `--gx 0` safe by construction on that arm. `TT_METAL_PERF_DEBUG_FULL_GRID=1` is gone,
 > replaced by the opt-out `TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1`. Tensix still always reserves.
 >
-> **§N+29/§N+30 (newest): a DRISC drainer is only safe on a DRAM core in row `y == 0`** (exactly two
+> **§N+34 (newest): the multi-drainer bring-up hang is FIXED** — it was one `LaunchProgram` per NIU flip,
+> so the second flip's `dram_barrier` ran across the first drainer's already-stream-mode core. All flips
+> now go in one launch. 80/80 clean (was 42/80 + a host freeze). **`kNSockets = 2` is now the default and
+> the knee is 20, not 60** — N+30's "knee 60" is RETRACTED, it was measured on a sweep whose own failed
+> runs were depressing it. The single-drainer wedge is untouched and still open.
+>
+> **§N+29/§N+30: a DRISC drainer is only safe on a DRAM core in row `y == 0`** (exactly two
 > exist: `0-0`, `9-0`; y!=0 hangs at 12.8%, p~0.006). **Two drainers lower the knee 100 -> 60 (1.67x)
 > but FROZE THE HOST and left the card DEGRADED** — `kNSockets` stays at 1. Before trusting any timing
 > measured after a freeze, check the ACK-WRITE probe: healthy ~170-190 ns, degraded ~2300 ns.
@@ -2996,3 +3002,76 @@ the baseline landed exactly on the pre-incident numbers (idle 18.2-18.8, busy 39
 
 Also: **`sock-read` GB/s is not a PCIe indicator.** It read 17.28 GB/s on a Gen1 x16 link whose ceiling
 is ~4 GB/s, because it measures the host reading the D2H socket out of HOST DRAM.
+
+## §N+34 — FIXED: the bring-up hang was one-launch-per-NIU-flip. Two drainers now default, knee 100 -> 20 (bh-26, 2026-08-08)
+
+### The instrumented repro named the site, 4 times out of 4
+
+A bring-up step tracker (`g_bringup_step`, reported in the `init failed` message) turned a 445 ms window
+containing several MMIO paths into one line:
+
+```
+init failed at step [niu-mode(3,1)->1:LaunchProgram(dram_barrier+wait_until_cores_done)]
+```
+
+`(3,1)` is drainer 1's core (noc0 `9-0`). Every cascade-initiating run had `ndrainers=1` -- drainer 0 up
+and resident, drainer 1 dying. **The failure is the SECOND drainer's NIU flip**, not the drain loop.
+
+Mechanism: `set_drisc_niu_mode` is not a register write, it is a full `LaunchProgram` on the DRAM core,
+and every `LaunchProgram` carries a `dram_barrier` (MMIO-polls a core in EVERY DRAM channel) plus
+`wait_until_cores_done`. Done one flip per drainer, the second flip's barrier runs while the first
+drainer is **already resident with its DRAM core in stream mode** -- and stream mode is precisely what
+changes the meaning of an inbound DRAM-range address on that core. The read never completes and the host
+eats a root-port completion timeout (~210 ms, N+31).
+
+Note this is the N+27 mechanism at a trigger N+27 never tested. N+27 varied the drainer's BANK under the
+USER WORKLOAD's barrier and refuted it; the profiler's OWN barrier during bring-up was the untested case.
+
+### The fix: one launch for all NIU flips
+
+`set_drisc_niu_mode` now takes a vector of cores and issues a single `LaunchProgram` over a
+`CoreRangeSet`, as a pre-pass before the drainer loop. One barrier, and it runs **before any core is in
+stream mode**, so the ordering cannot arise.
+
+| 80 runs, 2 drainers, delay 125 | before | after |
+|---|---|---|
+| CLEAN | 42 | **80** |
+| MMIO_HANG | 4 | **0** |
+| NOC_HUNG (cascade) | 31 | **0** |
+| WEDGE | 3 | **0** |
+| host freeze | yes | **no** |
+
+Fisher on cascade-initiating events (3/45 informative vs 0/80): **p ~ 0.045**. Significant but thin on
+its own -- the mechanistic evidence (4/4 named site, fix removes exactly that ordering) is the stronger
+half.
+
+### RETRACT "the 2-socket knee is 60" (N+30). It is 20.
+
+The N+30 sweep contained **4 failed runs** -- the very hangs fixed here -- and they were not merely noise
+next to the measurement, **they were depressing the measurement**. Re-run on the fixed path, 3 warm
+repeats per point, no failed runs anywhere:
+
+| delay | stalls (3 warm) | occ |
+|---|---|---|
+| 0 | 23,286 / 23,292 / 23,287 | 511 |
+| 10 | 22,867 / 22,948 / 23,013 | 511 |
+| **20** | **0 / 0 / 0** | 432-444 |
+| 30 / 40 / 50 / 60 / 75 / 100 | 0 everywhere | 228-352 |
+
+**Knee 20**, sharp, corroborated by occupancy (pinned 511 below it, ~435 above). Against the 1-drainer
+knee of 100 that is **5x**, well beyond the ~2x that halving per-sweep cost predicts -- below the knee a
+single drainer falls into a feedback loop (producers stall -> rings pin at 511 -> sweeps cost more) that
+two drainers never enter. Volume verified, not assumed: 6,001,620 words per drainer, 12,003,240 total =
+2 words x 6M markers, split evenly, 0 overflows.
+
+**The lesson worth keeping:** the earlier sweep's failed runs were noted as contamination and the knee
+was quoted anyway. Checking that the DRAINER started was not enough -- the CARD's health has to hold
+across the whole sweep, or the knee is measured on a machine that is partly broken.
+
+### kNSockets = 2 is now the default
+
+One D2H socket per drainer. 2 is the ceiling for two independent reasons: exactly two DRAM cores measure
+safe (row y == 0, N+29), and TLB windows allow 2x7=14 of 16 while 3x7=21 does not.
+
+**Still open and NOT addressed by this fix:** the single-drainer wedge (~1.8%/run) has a different
+trigger -- one drainer only ever does one flip, so this ordering never existed there.
