@@ -40,10 +40,10 @@ class TextConfig:
     intermediate_size: int = 2112  # verified (config.json text_config.intermediate_size)
 
     # --- MoE --------------------------------------------------------------
-    num_experts: int = 128  # verified
-    num_experts_per_tok: int = 8  # verified (top-8)
-    num_shared_experts: int = 1  # verified via model card ("+1 shared MLP")
-    moe_intermediate_size: int = 704  # verified
+    num_experts: int | None = 128  # verified
+    num_experts_per_tok: int | None = 8  # verified (top-8)
+    num_shared_experts: int | None = 1  # verified via model card ("+1 shared MLP")
+    moe_intermediate_size: int | None = 704  # verified
 
     # --- attention -------------------------------------------------------
     sliding_window: int = 1024  # verified (sliding layers; full-attn interleaved)
@@ -108,6 +108,15 @@ class TextConfig:
             "hidden_activation",
         ]
         kwargs = {k: text[k] for k in field_map if text.get(k) is not None}
+        if "top_k_experts" in text:
+            kwargs["num_experts_per_tok"] = text["top_k_experts"]
+        if "num_shared_experts" in text:
+            kwargs["num_shared_experts"] = text["num_shared_experts"]
+        if text.get("num_experts") is None and "num_experts" in text:
+            kwargs["num_experts"] = None
+            kwargs["num_experts_per_tok"] = None
+            kwargs["num_shared_experts"] = None
+            kwargs["moe_intermediate_size"] = None
         layer_types = text.get("layer_types")
         if layer_types:
             full = [i for i, t in enumerate(layer_types) if t == "full_attention"]
@@ -164,6 +173,10 @@ class DiffusionConfig:
     # denoise, zeroed on encoder passes.
     use_self_conditioning: bool = True  # verified
 
+    def __post_init__(self) -> None:
+        if self.max_denoise_steps <= 0:
+            raise ValueError("max_denoise_steps must be positive")
+
 
 @dataclass(frozen=True)
 class VisionConfig:
@@ -176,9 +189,10 @@ class VisionConfig:
     hidden_size: int = 1152  # verified
     patch_size: int = 16  # verified (config.json patch_size)
     soft_tokens_per_image: int = 280  # verified (config.json vision_soft_tokens_per_image)
-    # Variable-resolution token budgets (#47467). "SigLIP" is an author-applied
-    # family label; the config model_type is gemma4_vision.
-    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)  # verified
+    # Variable-resolution token budgets from the #47467 plan, not current
+    # config.json keys. "SigLIP" is an author-applied family label; the config
+    # model_type is gemma4_vision.
+    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)
 
 
 @dataclass(frozen=True)
@@ -191,6 +205,13 @@ class DiffusionGemmaConfig:
 
     # Max context = canvas_length * max_blocks (256 * 1024 = 256K).
     max_blocks: int = 1024  # verified (256K / 256)
+
+    def __post_init__(self) -> None:
+        if self.text.canvas_length != self.diffusion.canvas_length:
+            raise ValueError(
+                f"text.canvas_length ({self.text.canvas_length}) must match "
+                f"diffusion.canvas_length ({self.diffusion.canvas_length})"
+            )
 
     @property
     def max_context(self) -> int:

@@ -93,7 +93,7 @@ def denoise_block(
     # criterion, vs HF's PER-EXAMPLE finished-masking (a finished row is frozen and
     # padded while others continue). Equivalent for batch=1 (the current scope);
     # per-request halting/freezing for batch>1 is #47557. Parity vs the exact HF
-    # criterion is locked by tests/test_upstream_parity (batch-1).
+    # criterion is locked by tests/test_model (batch-1).
     n_stable = config.stable_steps_to_halt
     argmax_history: List[torch.Tensor] = []
 
