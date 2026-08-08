@@ -17,7 +17,7 @@
 
 #include "slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
+#include "ttnn/operations/data_movement/slice/slice_program_factory_tile_for_python.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -162,13 +162,13 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
+    nb::class_<ttnn::for_python::SliceTileProgramFactory>(mod, "SliceTileProgramFactoryForPython")
         .def_static(
             "create_descriptor",
             [](const ttnn::prim::SliceParams& operation_attributes,
                const ttnn::prim::SliceInputs& tensor_args,
                Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
+                return ttnn::for_python::SliceTileProgramFactory::create_descriptor(
                     operation_attributes, tensor_args, tensor_return_value);
             },
             nb::arg("operation_attributes"),
