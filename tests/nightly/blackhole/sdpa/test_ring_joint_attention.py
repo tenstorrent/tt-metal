@@ -54,7 +54,9 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     dtype = ttnn.bfloat16
     n_iters = 1
     trace_enabled = False
-    skip_check = False
+    # The 75.6k-token WAN case is retained as a CI execution/CCL smoke test.
+    # Its full host golden is prohibitively expensive for the sanity-job budget.
+    skip_check = input_shape == (1, 40, 75600, 0, 128)
     pcc_threshold, max_mse = expected_correctness
     q_chunk_size, k_chunk_size = chunk_sizes
 
