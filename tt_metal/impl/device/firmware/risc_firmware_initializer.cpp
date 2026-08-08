@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <chrono>
 #include <future>
 #include <set>
@@ -684,37 +685,35 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
+    const uint32_t bank_to_noc_data_size =
+        dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes;
     TT_ASSERT(
-        (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <=
-            mem_bank_to_noc_size,
-        "Size of bank_to_noc table is greater than available space");
+        bank_to_noc_data_size <= mem_bank_to_noc_size, "Size of bank_to_noc table is greater than available space");
 
     if (end_core.has_value()) {
+        // The firmware consumes these tables as one tightly packed structure, but separately multicasting each table
+        // can violate Wormhole's L1-to-L1 source/destination congruence requirement. For example, the 52-byte DRAM
+        // coordinate table leaves the next destination at 4 mod 16 while UMD stages each new source at 0 mod 16.
+        // Preserve the firmware ABI and issue the packed structure as one aligned multicast.
+        std::vector<uint32_t> bank_to_noc_data(bank_to_noc_data_size / sizeof(uint32_t));
+        uint32_t offset = 0;
+        auto append_table = [&](const void* data, uint32_t size) {
+            std::memcpy(reinterpret_cast<std::byte*>(bank_to_noc_data.data()) + offset, data, size);
+            offset += size;
+        };
+        append_table(dram_noc_data, dram_to_noc_sz_in_bytes);
+        append_table(l1_noc_data, l1_to_noc_sz_in_bytes);
+        append_table(dram_bank_offset_map_[device_id].data(), dram_offset_sz_in_bytes);
+        append_table(l1_bank_offset_map_[device_id].data(), l1_offset_sz_in_bytes);
+
         auto start_core = virtual_core;
         cluster_.noc_multicast_write(
-            dram_noc_data, dram_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), mem_bank_to_noc_addr);
-
-        uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
-        cluster_.noc_multicast_write(
-            l1_noc_data, l1_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), l1_noc_addr);
-
-        uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
-        cluster_.noc_multicast_write(
-            dram_bank_offset_map_[device_id].data(),
-            dram_offset_sz_in_bytes,
+            bank_to_noc_data.data(),
+            bank_to_noc_data_size,
             device_id,
             start_core,
             end_core.value(),
-            dram_offset_addr);
-
-        uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
-        cluster_.noc_multicast_write(
-            l1_bank_offset_map_[device_id].data(),
-            l1_offset_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            l1_offset_addr);
+            mem_bank_to_noc_addr);
     } else {
         cluster_.write_core(
             dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
@@ -755,23 +754,25 @@ void RiscFirmwareInitializer::initialize_worker_logical_to_virtual_tables(
         (firmware_grid_size_x + logical_row_to_virtual_row_sz_in_bytes) <= logical_to_virtual_map_size,
         "Size of logical to virtual map is greater than available space");
 
-    uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
+    // Firmware treats the column and row maps as one tightly packed structure. Multicast them together so the row map
+    // does not start a separate Wormhole NoC transaction at a potentially non-congruent address.
+    std::vector<uint8_t> logical_to_virtual_map;
+    logical_to_virtual_map.reserve(logical_col_to_virtual_col_sz_in_bytes + logical_row_to_virtual_row_sz_in_bytes);
+    logical_to_virtual_map.insert(
+        logical_to_virtual_map.end(),
+        worker_logical_col_to_virtual_col_[device_id].begin(),
+        worker_logical_col_to_virtual_col_[device_id].end());
+    logical_to_virtual_map.insert(
+        logical_to_virtual_map.end(),
+        worker_logical_row_to_virtual_row_[device_id].begin(),
+        worker_logical_row_to_virtual_row_[device_id].end());
     cluster_.noc_multicast_write(
-        worker_logical_col_to_virtual_col_[device_id].data(),
-        logical_col_to_virtual_col_sz_in_bytes,
+        logical_to_virtual_map.data(),
+        logical_to_virtual_map.size(),
         device_id,
         start_core,
         end_core,
-        logical_col_to_virtual_col_addr);
-
-    uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
-    cluster_.noc_multicast_write(
-        worker_logical_row_to_virtual_row_[device_id].data(),
-        logical_row_to_virtual_row_sz_in_bytes,
-        device_id,
-        start_core,
-        end_core,
-        logical_row_to_virtual_row_addr);
+        logical_to_virtual_map_addr);
 }
 
 uint32_t RiscFirmwareInitializer::get_active_erisc_launch_flag_addr() {
@@ -1090,6 +1091,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     };
     const auto write_initial_go_launch_msg = [&]() {
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        uint32_t mailbox_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
         uint32_t launch_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
         uint32_t go_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint64_t launch_msg_buffer_read_ptr_addr =
@@ -1115,9 +1117,44 @@ void RiscFirmwareInitializer::initialize_firmware(
                 launch_addr);
             cluster_.noc_multicast_write(
                 go_msg.data(), go_msg.size(), device_id, start_core, end_core.value(), go_addr);
-            uint32_t zero = 0;
+            const uint32_t l1_alignment = hal_.get_alignment(HalMemType::L1);
+            // Wormhole's remote broadcast transport emits a data block only when the destination is 32-byte aligned;
+            // otherwise it splits the transfer into independently staged words. Initialize the complete first L1
+            // block so every emitted NoC transaction remains source/destination congruent. The reset vector at zero
+            // is programmed with fw_launch_addr_value below, before reset is released.
+            const DeviceAddr mailbox_prefix_addr =
+                cluster_.arch() == ARCH::WORMHOLE_B0 ? jit_build_config.fw_launch_addr : mailbox_addr;
+            constexpr uint32_t wormhole_remote_broadcast_block_alignment = 32;
+            TT_FATAL(
+                mailbox_prefix_addr % l1_alignment == 0 && launch_addr > mailbox_prefix_addr,
+                "Mailbox prefix [0x{:x}, 0x{:x}) must begin at the architectural L1 NoC write alignment {}",
+                mailbox_prefix_addr,
+                launch_addr,
+                l1_alignment);
+            TT_FATAL(
+                cluster_.arch() != ARCH::WORMHOLE_B0 ||
+                    (mailbox_prefix_addr % wormhole_remote_broadcast_block_alignment == 0 &&
+                     (launch_addr - mailbox_prefix_addr) % wormhole_remote_broadcast_block_alignment == 0),
+                "Wormhole mailbox prefix [0x{:x}, 0x{:x}) must cover complete {}-byte remote broadcast blocks",
+                mailbox_prefix_addr,
+                launch_addr,
+                wormhole_remote_broadcast_block_alignment);
+            TT_FATAL(
+                launch_msg_buffer_read_ptr_addr >= mailbox_prefix_addr &&
+                    launch_msg_buffer_read_ptr_addr + sizeof(uint32_t) <= launch_addr,
+                "Launch message read pointer at 0x{:x} must be contained in mailbox prefix [0x{:x}, 0x{:x})",
+                launch_msg_buffer_read_ptr_addr,
+                mailbox_prefix_addr,
+                launch_addr);
+            std::vector<std::byte> zeroed_mailbox_prefix(launch_addr - mailbox_prefix_addr, std::byte{0});
             cluster_.noc_multicast_write(
-                &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), launch_msg_buffer_read_ptr_addr);
+                zeroed_mailbox_prefix.data(),
+                zeroed_mailbox_prefix.size(),
+                device_id,
+                start_core,
+                end_core.value(),
+                mailbox_prefix_addr);
+            uint32_t zero = 0;
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
         }

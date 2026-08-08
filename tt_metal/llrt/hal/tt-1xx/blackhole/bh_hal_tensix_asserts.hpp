@@ -22,6 +22,7 @@ static constexpr uint32_t TENSIX_PROFILER_CHECK =
 static_assert(TENSIX_LAUNCH_CHECK == 0);
 static_assert(TENSIX_PROFILER_CHECK == 0);
 static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_messages)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(offsetof(subordinate_map_t, dm1) == 0);
 

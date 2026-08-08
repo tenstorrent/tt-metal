@@ -3380,14 +3380,18 @@ void set_core_go_message_mapping_on_device(
     // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
     // garbage in the GO message entries they aren't using.
     std::vector<uint32_t> go_data(dev_msgs::go_message_num_entries, dev_msgs::RUN_MSG_DONE);
-    TT_ASSERT(
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
-            MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
-        0);
+    const auto& hal = MetalContext::instance().hal();
+    const DeviceAddr go_msg_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    TT_FATAL(
+        go_msg_addr % l1_alignment == 0,
+        "GO message array address 0x{:x} must be aligned to the architectural L1 NoC write alignment {}",
+        go_msg_addr,
+        l1_alignment);
     command_sequence.add_dispatch_write_linear<true, true>(
         all_core_range_logical.size(),
         device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG),
+        go_msg_addr,
         go_msg_size,
         go_data.data());
     // Wait for previous writes before updating index.
