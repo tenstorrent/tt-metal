@@ -106,7 +106,37 @@ so appending to the tensor alone leaves the extra tiles unread. Widening that co
 tap is the one host change required, and it is the same work the optional-tensor route would have
 needed for its own CB anyway.
 
-### Correction: "2 files" was too optimistic
+### Correction to the correction: appending rows does *not* disturb the strides
+
+The section below claimed appending parameter rows to the weight tensor shifts every block's
+addressing. **That is wrong.** Reading the weights reader
+(`reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp:216-246`):
+
+    weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset
+    for h in weight_block_height_ntiles:
+        weight_tile_id = weight_row_start_tile_id
+        for w in weight_block_width_ntiles:
+            read page weight_tile_id
+            weight_tile_id += 1
+        weight_row_start_tile_id += weight_stride_h
+    weight_current_block_start_tile_id += weight_next_block_stride_h
+
+with `weight_stride_h = weight_matrix_width_ntiles` and
+`weight_next_block_stride_h = weight_matrix_width_ntiles * weight_block_h_ntiles`. **Both strides are
+functions of the matrix's width and the block height -- neither depends on the matrix's total
+height.** And `weight_matrix_height` appears exactly twice in the program factory: where it is
+assigned, and in a `% TILE_HEIGHT` assertion. Nothing else reads it.
+
+So appending two tile-rows is safe: strides unchanged, the divisibility check still passes (64 % 32),
+and the appended tiles occupy page ids past the last block where nothing currently looks. Better
+still, the weight matrix's width *is* the channel axis, so one appended tile-row is exactly one
+per-channel vector, and the tiles a given block needs sit at the same column offset that block already
+computes -- `param_row_start + weight_col_offset + weight_tile_w_i`.
+
+The error was conflating "the matrix gets taller" with "the strides change". They are independent.
+The original 2-3 file estimate stands; what follows below overstated the cost.
+
+### Superseded: "2 files" was too optimistic
 
 That estimate came from reasoning about the route, not from reading the CB machinery. Reading it:
 
