@@ -1155,11 +1155,10 @@ def _supports_program_config_sweep(signature: AutoMatmulSignature) -> bool:
     rhs_shape = signature.input_tensor_b.get("shape", ())
     if len(lhs_shape) < 2 or len(rhs_shape) < 2:
         return False
-    # No batch dims on either operand (leading dims must collapse to 1).
-    if any(int(dim) != 1 for dim in lhs_shape[:-2]):
-        return False
-    if any(int(dim) != 1 for dim in rhs_shape[:-2]):
-        return False
+    # Batched matmuls (leading dims > 1) are eligible: the builder routes a true
+    # batched shape (RHS batched) to the non-multicast MultiCoreReuse family; a
+    # broadcast-weight batch (LHS batched only) folds into M via fuse_batch on the
+    # multicast path.
     # Single-output-tile matmuls (both M and N fit in one 32x32 tile) cannot be
     # distributed across the core grid, so the 2D/1D multicast configs are
     # degenerate: they add rounding error without any parallelism benefit.  Leave
@@ -1184,6 +1183,17 @@ def _make_program_config(descriptor: dict[str, Any]) -> Any:
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
+        )
+    if descriptor["mode"] == "multicore_reuse":
+        # Non-multicast reuse: batched matmul (each core computes one batch's full
+        # [M,N], batch distributed across the grid).  No multicast / fuse_batch.
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=descriptor["in0_block_w"],
+            out_subblock_h=descriptor["out_subblock_h"],
+            out_subblock_w=descriptor["out_subblock_w"],
+            per_core_M=descriptor["per_core_M"],
+            per_core_N=descriptor["per_core_N"],
         )
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -1325,30 +1335,65 @@ def _build_program_config_candidates(
             "out_subblock_w": sub_w,
         }
 
-    # Rank-0 heuristic descriptors (full grid, heuristic in0_block_w, single-pick
-    # subblock): identical to the pre-widening configs, so the online candidate cap
-    # can never regress them.
     heuristic_descriptors: list[dict[str, Any]] = []
-    for mode in modes:
-        per_core_m, per_core_n = _scheme_per_core(mode, grid_x, grid_y)
-        sub_w = _pick_out_subblock_w(per_core_n, 1)
-        sub_h = 1 if mode == "2d_mcast" else _pick_out_subblock_h(per_core_m, sub_w)
-        heuristic_descriptors.append(
-            _descriptor(
-                mode, grid_x, grid_y, per_core_m, per_core_n, _heuristic_in0_block_w(mode, grid_x, grid_y), sub_h, sub_w
-            )
-        )
-
-    # Full valid sweep: grid partition x scheme x in0_block_w x out-subblock.
     sweep_descriptors: list[dict[str, Any]] = []
-    for gx, gy in _grid_candidates(grid_x, grid_y):
+
+    lhs_shape = signature.input_tensor_a.get("shape", ())
+    rhs_shape = signature.input_tensor_b.get("shape", ())
+    rhs_batch = 1
+    for dim in rhs_shape[:-2]:
+        rhs_batch *= int(dim)
+
+    if rhs_batch > 1:
+        # True batched matmul -> non-multicast MultiCoreReuse family: each core
+        # computes one batch's full [M,N] output, the batch distributed across the
+        # grid.  Use per-batch M/N/K from the operand shapes (signature.m folds the
+        # batch into M, which is only correct for the multicast fuse_batch path).
+        per_batch_m = int(lhs_shape[-1] if signature.transpose_a else lhs_shape[-2])
+        per_batch_k = int(lhs_shape[-2] if signature.transpose_a else lhs_shape[-1])
+        per_batch_n = int(rhs_shape[-2] if signature.transpose_b else rhs_shape[-1])
+        b_m, b_k, b_n = _compute_tile_counts(per_batch_m, per_batch_k, per_batch_n)
+        heur_ibw = _find_largest_divisor(max(1, b_k))
+        heur_sw = _pick_out_subblock_w(b_n, 1)
+        heur_sh = _pick_out_subblock_h(b_m, heur_sw)
+        heuristic_descriptors.append(
+            _descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, heur_ibw, heur_sh, heur_sw)
+        )
+        for in0_block_w in _in0_block_w_candidates(b_k, heur_ibw):
+            for sub_h, sub_w in _subblock_candidates(b_m, b_n):
+                sweep_descriptors.append(
+                    _descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, in0_block_w, sub_h, sub_w)
+                )
+    else:
+        # Non-batched (or broadcast-weight batch): the multicast families.  Rank-0
+        # heuristic descriptors (full grid, heuristic in0_block_w, single-pick
+        # subblock) are identical to the pre-widening configs, so the online
+        # candidate cap can never regress them.
         for mode in modes:
-            per_core_m, per_core_n = _scheme_per_core(mode, gx, gy)
-            for in0_block_w in _in0_block_w_candidates(k_tiles, _heuristic_in0_block_w(mode, gx, gy)):
-                for sub_h, sub_w in _subblock_candidates(per_core_m, per_core_n):
-                    sweep_descriptors.append(
-                        _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
-                    )
+            per_core_m, per_core_n = _scheme_per_core(mode, grid_x, grid_y)
+            sub_w = _pick_out_subblock_w(per_core_n, 1)
+            sub_h = 1 if mode == "2d_mcast" else _pick_out_subblock_h(per_core_m, sub_w)
+            heuristic_descriptors.append(
+                _descriptor(
+                    mode,
+                    grid_x,
+                    grid_y,
+                    per_core_m,
+                    per_core_n,
+                    _heuristic_in0_block_w(mode, grid_x, grid_y),
+                    sub_h,
+                    sub_w,
+                )
+            )
+        # Full valid sweep: grid partition x scheme x in0_block_w x out-subblock.
+        for gx, gy in _grid_candidates(grid_x, grid_y):
+            for mode in modes:
+                per_core_m, per_core_n = _scheme_per_core(mode, gx, gy)
+                for in0_block_w in _in0_block_w_candidates(k_tiles, _heuristic_in0_block_w(mode, gx, gy)):
+                    for sub_h, sub_w in _subblock_candidates(per_core_m, per_core_n):
+                        sweep_descriptors.append(
+                            _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
+                        )
 
     # L1-prune + de-duplicate.  Heuristics are a subset of the sweep at the full
     # grid, so keeping them first and de-duping leaves them only in `heuristics`.
