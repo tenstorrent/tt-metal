@@ -22,6 +22,7 @@ on:
           - gemma-4-12b
           - gemma-4-26b-a4b
           - gemma-4-31b
+          - sampling-common
           - dit-common
           - wan-2.2-t2v
           - wan-2.2-i2v

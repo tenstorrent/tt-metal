@@ -428,10 +428,26 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields (scalar→list already done above)
-    temperature = _pad(sampling_params.temperature, "temperature")
-    top_p = _pad(sampling_params.top_p, "top_p")
-    top_k = _pad(sampling_params.top_k, "top_k")
+    # Pad core sampling fields. When temperature is supplied per-user (a list)
+    # but a companion field is a scalar / single-element list, broadcast that
+    # scalar across the active (temperature-length) lanes so it applies
+    # uniformly, then pad the remaining inactive lanes with the field default.
+    # (A scalar top_k alongside a per-user temperature must not leave lanes
+    # 1..N-1 on the k=1 default, which would silently force them greedy.)
+    active_len = len(sampling_params.temperature)
+
+    def _pad_core(value, name):
+        if not isinstance(value, List):
+            lst = [value] * active_len
+        elif len(value) == 1:
+            lst = list(value) * active_len
+        else:
+            lst = list(value)
+        return _pad(lst, name)
+
+    temperature = _pad_core(sampling_params.temperature, "temperature")
+    top_p = _pad_core(sampling_params.top_p, "top_p")
+    top_k = _pad_core(sampling_params.top_k, "top_k")
 
     # enable_log_probs / num_logprobs: scalar → broadcast to all users.
     # Multi-element list → pad with default (False/0) for inactive slots.
@@ -575,10 +591,17 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
-    """Manages per-user RNG seeds for on-device sampling.
+    """Manage per-user RNG state and writes to the on-device seed tensor.
 
     Tracks which users have explicit seeds set (``_seed_active``) and avoids
     unnecessary host-to-device copies during decode when no seeds are active.
+
+    On the first call after a reset with no active seeds, pushes MAX_UINT32
+    (SKIP) values so the device skips ``rand_tile_init``, then skips all
+    subsequent decode pushes until the next ``reset_seed``.
+
+    `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and
+    writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
     def __init__(self, tt_sampling, max_batch_size=32):
@@ -779,6 +802,22 @@ class SeedManager:
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
+    def write_device_seed_values(self, seed_values):
+        if len(seed_values) != self.max_batch_size:
+            raise ValueError(f"Expected {self.max_batch_size} seed values, got {len(seed_values)}")
+        try:
+            wrapped = [int(seed) & 0xFFFFFFFF for seed in seed_values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("seed_values must contain integer-like values") from exc
+
+        seed_tt = ttnn.from_torch(
+            torch.tensor(wrapped, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._seed_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(seed_tt, self.tt_sampling.seeds_tt_tensor)
+
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
 
@@ -831,8 +870,5 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
-        new_seed_tt = ttnn.from_torch(
-            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
-        )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        self.write_device_seed_values(new_seeds)
         self._reseted = False
