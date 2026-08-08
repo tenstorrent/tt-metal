@@ -24,7 +24,6 @@
 
 #include "context/metal_context.hpp"
 #include "llrt/hal.hpp"
-#include "tt_metal/common/env_lib.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
@@ -162,23 +161,18 @@ std::optional<DeviceClockMapping::RecordMapping> DeviceClockMapping::map_record(
 
     RecordMapping mapping;
     if (!chord_.has_value()) {
-        // The start predates every retained probe: the program ran longer than the ring spans. Its end always has a
-        // pair -- see kProbeHistoryCapacity -- so the record stands on measured ground either way.
         const std::optional<Chord> end_chord = chord_around(end_ticks);
         if (!end_chord.has_value()) {
-            return std::nullopt;
+            return std::nullopt;  // this should be unreachable
         }
         const double end_host_ns = host_ns_on(*end_chord, end_ticks);
         if (pinned_start_.has_value() && pinned_start_->ticks == start_ticks) {
-            // The peek placed this start while its probes were fresh, so both endpoints are measured and the record
-            // takes its own secant, exactly as if it had never outlived the ring.
             const double frequency =
                 static_cast<double>(end_ticks - start_ticks) / (end_host_ns - pinned_start_->host_ns);
             mapping = anchored(
                 frequency, start_ticks, pinned_start_->host_ns, std::max(pinned_start_->error, end_chord->sync_error));
         } else {
-            // No pin, so the start rides the widest rate window there is -- the whole, by definition full, ring --
-            // charged that slope's own noise. An estimate, not a bound: rate history older than the ring is gone.
+            // this case is technically possible, but should not happen in practice
             const Anchor& ring_oldest = probe_at(oldest_probe());
             const Anchor& ring_newest = probe_at(probes_end_ - 1);
             const double ring_span_ns = static_cast<double>(
@@ -190,34 +184,20 @@ std::optional<DeviceClockMapping::RecordMapping> DeviceClockMapping::map_record(
             mapping = anchored(frequency, end_ticks, end_host_ns, end_chord->sync_error + ride_noise);
         }
     } else if (const Chord& chord = *chord_; end_ticks <= chord.close_ticks) {
-        // Both timestamps sit on this chord and the published rate is its own slope, so both land exactly where the
-        // pair places them and the pair's bound is the whole story.
         mapping = anchored(chord.frequency, start_ticks, host_ns_on(chord, start_ticks), chord.sync_error);
     } else {
-        // A record that outlives its chord takes the secant through its own two placements: any other rate puts the
-        // difference, times the record's length, onto its end -- tens of microseconds on a millisecond program,
-        // enough to place ends after the read that had already carried them to the host.
         const std::optional<Chord> end_chord = chord_around(end_ticks);
         TT_ASSERT(end_chord.has_value());  // end > chord.close_ticks, so a retained probe precedes it
         const double start_host_ns = host_ns_on(chord, start_ticks);
         const double end_host_ns = host_ns_on(*end_chord, end_ticks);
-        // The ring is strictly monotone, so the two placements are ordered and the secant is well defined.
         const double frequency = static_cast<double>(end_ticks - start_ticks) / (end_host_ns - start_host_ns);
         mapping = anchored(frequency, start_ticks, start_host_ns, std::max(chord.sync_error, end_chord->sync_error));
     }
-    // Consumed on match, superseded otherwise: records arrive in tick order, so a start at or past the pin means the
-    // pinned program's record has now been mapped (this one) or will never arrive.
     if (pinned_start_.has_value() && start_ticks >= pinned_start_->ticks) {
         pinned_start_.reset();
     }
     last_sync_error_ = mapping.sync_error;
     return mapping;
-}
-
-std::chrono::nanoseconds DeviceClockSync::sync_interval() {
-    static const std::chrono::nanoseconds interval =
-        std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 500));
-    return interval;
 }
 
 DeviceClockSync::DeviceClockSync(ContextId context_id, IDevice* device, CoreCoord clock_core) :
@@ -299,8 +279,6 @@ void DeviceClockSync::peek_running_program_start() {
     if (peek_start_a_ == nullptr) {
         return;
     }
-    // {time_hi, time_lo}, written by dispatch_s. The banks ping-pong per program, so the running program's start is
-    // the newer of the two; the retired bank's value is stale and pin_start's exact-match consumers ignore it.
     const uint64_t a = (static_cast<uint64_t>(peek_start_a_[0]) << 32) | peek_start_a_[1];
     const uint64_t b = (static_cast<uint64_t>(peek_start_b_[0]) << 32) | peek_start_b_[1];
     mapping_.pin_start(std::max(a, b));
@@ -308,23 +286,19 @@ void DeviceClockSync::peek_running_program_start() {
 
 DeviceClockSync::Anchor DeviceClockSync::probe() {
     TTZoneScopedDN(RT_PROFILER, "Probe");
-    // The device is only asked for the high word when its value cannot be derived: on the first probe, and after a gap
-    // long enough that a wrap could have gone unseen. Otherwise a wrap is counted rather than read -- the low word
-    // wrapping advances the high word by exactly one -- which is both exact and one fewer PCIe access on the one path
-    // where an access is least welcome.
     const bool must_read_hi = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
                               std::chrono::steady_clock::now() - last_probe_at_ > kMaxProbeGapBeforeRereadingHi;
 
     std::chrono::steady_clock::time_point host_before;
     std::chrono::steady_clock::time_point host_after;
     uint32_t lo = 0;
+
     {  // latency-critical
         host_before = std::chrono::steady_clock::now();
         lo = *mapped_clock_lo_;
         host_after = std::chrono::steady_clock::now();
     }
-    // Reading the low word latches the high one, so this read is of the value that goes with `lo`, and it stays
-    // outside the bracket.
+
     if (must_read_hi) {
         cached_clock_hi_ = *mapped_clock_hi_;
     } else if (lo < last_clock_lo_) {
@@ -342,9 +316,6 @@ DeviceClockSync::Anchor DeviceClockSync::probe() {
 DeviceClockSync::Anchor DeviceClockSync::best_of(int probes) {
     Anchor best = probe();
     for (int i = 1; i < probes; i++) {
-        // Each read blocks the calling thread on PCIe, so the remaining ones are only worth taking while they might
-        // still tighten the bracket. A read already at the recent typical width leaves them nothing to improve; the
-        // full count is spent only when the link is making reads late.
         if (typical_bracket_ > std::chrono::nanoseconds::zero() &&
             best.bracket <= typical_bracket_ + typical_bracket_ / 2) {
             break;
@@ -359,13 +330,9 @@ DeviceClockSync::Anchor DeviceClockSync::best_of(int probes) {
     return best;
 }
 
-// Enough probes for the first record to have a pair to be placed between and a third to read the departure from,
-// spaced a sync interval apart so the first chords are the same width as every later one. This replaced a 100-probe
-// half-second fit whose result never reached a consumer.
 void DeviceClockSync::warm_up() {
     TTZoneScopedDN(RT_PROFILER, "ClockWarmUp");
     constexpr int kWarmUpProbes = 4;
-    // Warms the cold PCIe path; its bracket is not representative and it is not retained.
     (void)probe();
     for (int i = 0; i < kWarmUpProbes; i++) {
         if (i != 0) {

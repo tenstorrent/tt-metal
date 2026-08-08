@@ -176,9 +176,9 @@ public:
     // step * width / 4. AICLK only moves on the ARC firmware's 1ms DVFS timer (dvfs.c:DVFSChange in
     // tt-zephyr-platforms), so anything well under a millisecond resolves a clock that cannot have changed within it:
     // p90 sync error is flat from 100us out to 500us and only breaks upward at the tick. Wormhole pins the upper end,
-    // failing the didt p99 limit at 1ms where Blackhole is still at 1.8us. Overridable via
-    // TT_RT_PROFILER_SYNC_INTERVAL_US.
-    static std::chrono::nanoseconds sync_interval();
+    // failing the didt p99 limit at 1ms where Blackhole is still at 1.8us.
+    static constexpr auto kSyncInterval = std::chrono::microseconds(500);
+    static constexpr std::chrono::nanoseconds sync_interval() { return kSyncInterval; }
 
     // Extra reads taken only while the bracket is still wider than reads have recently been coming back at. Fires
     // rarely -- reads per resync reads 1.00 to two decimals -- but the ones it does take are the wide reads, and the
@@ -246,15 +246,13 @@ private:
     volatile uint32_t* mapped_clock_lo_ = nullptr;
     volatile uint32_t* mapped_clock_hi_ = nullptr;
 
-    // dispatch_s's kernel_start_{a,b} {hi, lo} words, through UMD's static L1 window; null when the peek is disarmed.
+    // dispatch_s's kernel_start_{a,b} {hi, lo} words
     volatile uint32_t* peek_start_a_ = nullptr;
     volatile uint32_t* peek_start_b_ = nullptr;
-    // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
-    // whole bracket distribution shifts with record load, so a fixed target would never be met under load or never
-    // filter when quiet.
+    // Recent tightest-read bracket, as an EMA. best_of stops early against this to reduce probes.
     std::chrono::nanoseconds typical_bracket_{};
 
-    // The high word only advances when the low word wraps, every 3.2s at ~1.35GHz.
+    // The high word only advances when the low word wraps; every 3.2s at ~1.35GHz.
     uint32_t cached_clock_hi_ = 0;
     uint32_t last_clock_lo_ = 0;
     std::chrono::steady_clock::time_point last_probe_at_;

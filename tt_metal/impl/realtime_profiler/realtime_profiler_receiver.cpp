@@ -131,9 +131,8 @@ bool RealtimeProfilerReceiver::publish_pages(
             last_malformed_warn_ = now;
             log_warning(
                 tt::LogMetal,
-                "[Real-time profiler] Device {} dropped {} corrupt record(s) -- an end timestamp preceding its "
-                "start, or timestamps predating every retained clock probe; these were not delivered to consumers "
-                "({} in total)",
+                "[Real-time profiler] Device {} dropped {} corrupt record(s). These were not delivered to consumers "
+                "({} in total).",
                 dev_state.chip_id,
                 rejected,
                 num_malformed_records_.load(std::memory_order_relaxed));
@@ -166,13 +165,9 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
-    // Serial: a warm-up is a few probes a sync interval apart, so a whole mesh costs milliseconds. It replaced a
-    // half-second per-device fit, which is what the concurrency here existed for.
     for (RealtimeProfilerDevice& dev_state : devices_) {
         dev_state.clock_sync->warm_up();
     }
-    // Resized before being cleared, not just reserved: the pages have to be touched here, because a first-touch fault
-    // on the drain thread waits on mmap_lock the same way an allocation does.
     publish_batch_.resize(kMaxSocketPagesPerRead);
     publish_batch_.clear();
     realtime_profiler_service_->attach_producer(*this);
@@ -227,10 +222,6 @@ RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pag
         dev_state.socket->read(page_buf.data(), num_pages_to_read);
     }
 
-    // The probe goes here, after the read and before anything is placed: every record this read returned was pushed to
-    // the FIFO before the read, so it completed before the read, so this probe is past all of them, and the previous
-    // one is before them. That is a bracketing pair for the whole batch obtained without waiting for anything, which is
-    // the reason this path has no staging buffer, no publication gate and no deadline in it.
     {
         TTZoneScopedDN(RT_PROFILER, "ProbeAfterRead");
         TTZoneValueD(RT_PROFILER, dev_state.chip_id);
@@ -261,7 +252,7 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
                 RT_PROFILER,
                 "RT profiler D2H FIFO high-water mark (pages)",
                 static_cast<int64_t>(fifo_pages_window_max_));
-            fifo_pages_window_max_ = 0;  // cleared by its only reader, the plot above
+            fifo_pages_window_max_ = 0;
             std::chrono::nanoseconds worst_sync_error{};
             for (const auto& dev_state : devices_) {
                 worst_sync_error = std::max(worst_sync_error, dev_state.clock_sync->last_published_sync_error());
@@ -294,14 +285,12 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
             num_pages += drained.pages;
             published |= drained.published;
             if (drained.pages != 0) {
-                // Only re-read the clock after a drain that actually moved pages: an idle pass is too fast for the
-                // re-read to be worth its cost.
                 now = std::chrono::steady_clock::now();
             } else if (dev_state.clock_sync->due_for_probe(now)) {
                 TTZoneScopedDN(RT_PROFILER, "ProbeFloor");
                 TTZoneValueD(RT_PROFILER, dev_state.chip_id);
                 dev_state.clock_sync->resync();
-                // An idle device may be idle because a program is running on it; this is what keeps a start that will
+                // an idle device may be idle because a program is running on it; this is what keeps a start that will
                 // outlive the ring mappable.
                 dev_state.clock_sync->peek_running_program_start();
             }
