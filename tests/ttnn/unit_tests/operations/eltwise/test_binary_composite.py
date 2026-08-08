@@ -903,17 +903,17 @@ def test_unary_right_shift(input_shapes, device):
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
 
-# One case per intermediate-memory branch (hidden <= 2048 -> L1, hidden > 2048 -> DRAM);
+# One case per intermediate-memory branch (hidden <= 3072 -> L1, hidden > 3072 -> DRAM);
 # the two also cover both dtypes. bfp8_b re-quantizes each intermediate, so it gets a looser
 # PCC and a wider overshoot margin than near-exact bf16.
 SITU_GLU_CASES = [
-    (torch.Size([1, 1, 512, 1024]), ttnn.bfloat16),  # hidden 1024 <= 2048 -> L1
-    (torch.Size([1, 1, 512, 4096]), ttnn.bfloat8_b),  # hidden 4096 > 2048 -> DRAM
+    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
+    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
 ]
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
-@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_lt_2048", "hidden_gt_2048"])
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072"])
 def test_situ_glu(input_shape, ttnn_dtype, device):
     torch.manual_seed(0)
     # Span the saturating and near-linear regions of both halves.

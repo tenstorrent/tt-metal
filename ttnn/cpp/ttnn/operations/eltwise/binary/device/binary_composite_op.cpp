@@ -886,10 +886,11 @@ Tensor bias_gelu(
         resolved_sub_core_grids);
 }
 
-// At/below this activation width (routed-expert moe_intermediate_size) the composite's
-// intermediates fit in L1, so they are kept there to skip the DRAM round-trip between the
-// composed ops. Wider activations (shared-expert / dense FFN) fall back to DRAM.
-constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 2048;
+// At/below this activation width (Kimi K3 routed-expert moe_intermediate_size = 3072) the
+// composite's intermediates fit in L1, so they are kept there to skip the DRAM round-trip
+// between the composed ops. Wider activations -- the shared expert (moe_intermediate_size *
+// n_shared_experts = 6144) and the dense FFN (33792) -- fall back to DRAM.
+constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 3072;
 
 Tensor situ_glu(
     const Tensor& gate,
