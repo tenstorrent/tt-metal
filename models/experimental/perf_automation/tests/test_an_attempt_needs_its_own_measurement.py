@@ -32,6 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.pare
 def mcp(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
+    # AND THE KERNEL LOG, which is the one these tests actually WRITE. _KERNEL_LOG_PATH is resolved
+    # AT IMPORT as `PERF_MCP_KERNEL_LOG or state_dir()/...`, so redirecting the state dir moves it
+    # only while that variable is unset -- true in a terminal, false in every real run, where it
+    # points at the live ladder. This fixture intends isolation; leaving one path pointing at a
+    # run's own state means these tests could append to the ladder the run resumes from, and read
+    # 142 real attempts into assertions written for the two they set up.
+    monkeypatch.setenv("PERF_MCP_KERNEL_LOG", str(tmp_path / "kernel_attempts.json"))
     monkeypatch.delenv("PERF_MCP_ALLOW_UNMEASURED_ATTEMPT", raising=False)
     import models.experimental.perf_automation.cc_optimize.perf_mcp as m
 

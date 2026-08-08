@@ -3232,12 +3232,30 @@ def _preflight_tool(repo_root: Path) -> bool:
         print(f"  [optimize/cc] preflight: no test suite at {tests} — cannot verify the tool that is about to run")
         return os.environ.get("PERF_MCP_REQUIRE_PREFLIGHT") != "1"
     print(f"  [optimize/cc] preflight: running the tool's own suite against {tests}")
+    # THE SUITE TESTS THE CODE, NOT THIS RUN'S STATE, so it runs with this run's configuration
+    # STRIPPED. Inheriting it is both wrong and dangerous:
+    #
+    #   WRONG -- the same test gives different answers in different shells. Under a run's env,
+    #   test_all_boards_is_the_last_resort read the ambient PERF_MCP_DEVICES, so the config target
+    #   won and the "all" fallback it exists to check was never reached. Green in a terminal, red
+    #   here, and neither result was about the code.
+    #
+    #   DANGEROUS -- _KERNEL_LOG_PATH is resolved AT IMPORT from PERF_MCP_KERNEL_LOG. With the run's
+    #   value inherited, a suite that calls record_kernel_attempt writes into the LIVE ladder: a
+    #   check meant to protect the run would corrupt the state the run resumes from. It happened not
+    #   to fire only because the tests that write were the ones failing.
+    #
+    # Stripped by prefix rather than by list, because the failure mode of a list is that the next
+    # variable someone adds is not on it. TT_METAL_HOME and PYTHONPATH stay: those locate the code,
+    # they do not configure a run.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PERF_MCP_", "TT_PERF_"))}
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", str(tests), "-q", "--no-header", "-p", "no:cacheprovider"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
+            env=env,
             timeout=int(os.environ.get("PERF_MCP_PREFLIGHT_TIMEOUT_S", "900")),
         )
     except Exception as exc:  # noqa: BLE001 -- a preflight that cannot RUN has cleared nothing

@@ -128,6 +128,44 @@ def test_r4_it_tests_the_repo_the_run_will_use(monkeypatch, tmp_path):
     assert str(repo / "models/experimental/perf_automation/tests") in seen["cmd"]
 
 
+# --------------------------------------------------------------------------- r6 CODE, NOT STATE
+def test_r6_the_suite_does_not_inherit_this_runs_configuration(monkeypatch, tmp_path):
+    """A check meant to PROTECT the run must not be able to damage it.
+
+    _KERNEL_LOG_PATH is resolved AT IMPORT from PERF_MCP_KERNEL_LOG. With the run's value inherited,
+    a suite that calls record_kernel_attempt writes into the LIVE ladder -- the state the run
+    resumes from. It happened not to fire only because the tests that write were the ones failing.
+
+    It is also the difference between a test of the CODE and a test of this run's state:
+    test_all_boards_is_the_last_resort read the ambient PERF_MCP_DEVICES and never reached the
+    fallback it exists to check."""
+    m = _run()
+    monkeypatch.delenv("PERF_MCP_SKIP_PREFLIGHT", raising=False)
+    monkeypatch.setenv("PERF_MCP_KERNEL_LOG", "/live/ladder.json")
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", "/live/state")
+    monkeypatch.setenv("TT_PERF_LAYERS", "2")
+    monkeypatch.setenv("TT_METAL_HOME", "/repo")
+    seen = {}
+
+    def _cap(cmd, **k):
+        seen["env"] = k.get("env") or {}
+        return _result(0, "ok")
+
+    monkeypatch.setattr(m.subprocess, "run", _cap)
+    m._preflight_tool(_repo(tmp_path))
+    for gone in ("PERF_MCP_KERNEL_LOG", "PERF_MCP_STATE_DIR", "TT_PERF_LAYERS"):
+        assert gone not in seen["env"], "%s reached the suite" % gone
+    assert seen["env"].get("TT_METAL_HOME") == "/repo", "stripped a variable that locates the CODE"
+
+
+def test_r6_stripping_is_by_prefix_not_by_list():
+    """A list's failure mode is the next variable someone adds not being on it."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _preflight_tool")
+    body = src[i : src.index("\ndef ", i + 1)]
+    assert 'startswith(("PERF_MCP_", "TT_PERF_"))' in body
+
+
 # --------------------------------------------------------------------------- r5 A REFUSAL IS NOT A CRASH
 def test_r5_a_refusal_exits_with_its_own_code():
     """The auto-restart supervisor exists for a native tt-metal SIGSEGV, and read ANY non-zero exit

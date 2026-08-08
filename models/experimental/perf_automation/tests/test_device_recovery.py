@@ -39,7 +39,19 @@ def _mcp(tmp_path, monkeypatch, healthy_after=0, state_file=None, **env):
 
     `state_file` pins the persistent-counter path so a test can reload the module and still see the
     counters a previous 'process' wrote.
+
+    THE FIXTURE OWNS THE ENVIRONMENT IT DEPENDS ON. Every test here that wants a device config passes
+    one; test_all_boards_is_the_last_resort wants NO config, and expressed that by saying nothing --
+    which is not the same thing. It inherited PERF_MCP_DEVICES from whatever shell ran pytest, so it
+    passed in a clean terminal and failed under the optimize run, whose environment sets it: the
+    config target won and "all" was never reached. Found by the preflight, which runs the suite in
+    the run's OWN environment -- the more faithful place, and the reason it saw what a clean shell
+    could not. Cleared here so "no config" is stated rather than assumed, and any test wanting one
+    sets it through **env below.
     """
+    for _var in ("PERF_MCP_DEVICES", "TT_VISIBLE_DEVICES"):
+        if _var not in env:
+            monkeypatch.delenv(_var, raising=False)
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(tmp_path / "m.json"))
     (tmp_path / "m.json").write_text('{"config": {}, "perf_test_resolved": {"path": "t.py"}}')
     for k, v in env.items():
