@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "sku": "bh_loudbox",
+  "metric": "synchronized_trace_wall_ms",
+  "workload": {
+    "model": "Kimi-K3",
+    "layer": 1,
+    "weights_revision": "9f62e4e9fffbd0a83ddd60e1c209d828994b3569",
+    "batch": 1,
+    "sequence": 5120,
+    "dtype": "bfloat16",
+    "repetitions": 10
+  },
+  "provenance": {
+    "measured_at_commit": "09419e3dd635028a2ab7ad3319216f61fe223d63",
+    "measured_at_utc": "2026-08-06",
+    "method": "first of five warm synchronized trace replay averages, 10 replays per sample"
+  },
+  "targets": {
+    "SP1xTP8": {
+      "reference_ms": 9.784,
+      "max_regression_pct": 1.0
+    },
+    "SP2xTP4": {
+      "reference_ms": 9.732,
+      "max_regression_pct": 1.0
+    },
+    "SP4xTP2": {
+      "reference_ms": 10.190,
+      "max_regression_pct": 1.0
+    }
+  }
+}

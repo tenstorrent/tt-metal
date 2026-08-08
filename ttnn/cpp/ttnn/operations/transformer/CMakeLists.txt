@@ -1,4 +1,22 @@
 include(sources.cmake)
+include(kda/gated_rms/sources.cmake)
+include(kda/causal_convolution/sources.cmake)
+include(kda/chunk_preparation/sources.cmake)
+include(kda/final_scan/sources.cmake)
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_GATED_RMS_SRCS})
+include(kda/affine_composition/sources.cmake)
+include(kda/affine_prefix/sources.cmake)
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_AFFINE_COMPOSITION_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_AFFINE_PREFIX_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_CAUSAL_CONV_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_CHUNK_PREPARATION_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_SRCS ${TTNN_KDA_FINAL_SCAN_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_GATED_RMS_NANOBIND_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_CAUSAL_CONV_NANOBIND_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_CHUNK_PREPARATION_NANOBIND_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_FINAL_SCAN_NANOBIND_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_AFFINE_COMPOSITION_NANOBIND_SRCS})
+list(APPEND TTNN_OP_TRANSFORMER_NANOBIND_SRCS ${TTNN_KDA_AFFINE_PREFIX_NANOBIND_SRCS})
 
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
@@ -19,6 +37,7 @@ file(
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.cpp
+    kda/*/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer
