@@ -34,7 +34,7 @@ No verdict changed between the proxy and true scale — only the counts — whic
 bar the watch-out below sets. Three harness defects had to be cleared first; see
 [§ What the first Galaxy run cost](#what-the-first-galaxy-run-cost).
 
-**2. Conform the rest of the report** — *in progress; triage done, first survivor class conformed.*
+**2. Conform the rest of the report** — **DONE 2026-08-08. Every class is device-proven at 4×8 Ring.**
 The other classes — `replicated_stage`, `overwide_gather`, `participant_shrink` — are un-tainted
 `likely`/`provable` but never device-checked. Trace-then-conform (laptop first); only survivors
 reach silicon.
@@ -49,14 +49,20 @@ found no shim artifacts — and one shared root cause. The packed sequence is
 | output-head cluster (`unused_gather`, `participant_shrink`, `replicated_stage`) | 344, 352, 356 | — | **conformed** (workstream 1, `conform_dit_heads.py`) |
 | `replicated_stage`, DiT text branch | 63, 92, 100, rs_110 | ~477 MiB/fwd | **conformed 4×8 Ring** — `conform_dit_text.py`, both checks `max\|Δ\|=0` |
 | `replicated_stage`, encoder | 22, 78, 86, 116, rs_110 | ~588 MiB/fwd | mechanism conformed at stage level (`conform_encoder.py`); per-node intermediate readback would strengthen |
-| `overwide_gather` | 274, 296, 302 | ~67 MiB/fwd | **traced, real, not yet on silicon** — see below |
+| `overwide_gather` | 274, 296, 302 | ~67 MiB/fwd | **conformed 4×8 Ring** — `conform_overwide.py`, poison test on all 8 devices |
 
 The `overwide_gather` gap is exact, not approximate: on device 0 the spatial matmuls read
 `[512:4800)` of a `[0:4800)` shard — they skip precisely the text rows (the "11% more data"); on
-device 7 they skip `[38222:38400)`, the 178-row padding tail (the "4%"). The device check that
-fits it is a **poison test**: fill the claimed-unread region with a sentinel, run the real fused
-AGMM, and show every consumed output is bit-identical — which also pins down that the fused
-gather+matmul keeps rows independent.
+device 7 they skip `[38222:38400)`, the 178-row padding tail (the "4%").
+
+**Equality can't conform that class** — the claim is not that two things are equal but that a
+region is *never read* — so `conform_overwide.py` **poisons** it: fill exactly the claimed-unread
+rows with a sentinel, run the real fused `all_gather_minimal_matmul_async` (the call site the
+finding names), and require both halves. Every row the consumers do read came back bit-identical
+(`max|Δ|=0`, all 8 affected devices) **and** the poisoned rows' own outputs moved by ~2×10⁶, so the
+sentinel demonstrably landed and the null result is evidence rather than a no-op. That also pins
+down the property the fix depends on: the fused gather+matmul is row-independent, so trimming the
+unread rows cannot perturb anything downstream.
 
 **3. Validate the whole pipeline against a real run** *(highest value).*
 32 chips is the first machine that can run the real `pipeline_minimax_h3.generate()` — the
