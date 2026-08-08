@@ -8,20 +8,34 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
-
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 using namespace tt;
 
 namespace {
+
+const KernelSpecName SHARD_WRITER{"upsample_shard_writer"};
+const KernelSpecName SHARD_READER{"upsample_shard_reader"};
+const DFBSpecName SHARD_IN{"upsample_shard_in"};
+const DFBSpecName SHARD_OUT{"upsample_shard_out"};
+const DFBSpecName SHARD_CONFIG{"upsample_shard_config"};
+const TensorParamName SHARD_INPUT{"upsample_shard_input"};
+const TensorParamName SHARD_OUTPUT{"upsample_shard_output"};
+const TensorParamName SHARD_CONFIG_TENSOR{"upsample_shard_config_tensor"};
+
+constexpr const char* SHARD_KERNEL =
+    "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
 
 struct StickInterval {
     uint16_t core_x, core_y;
@@ -250,17 +264,18 @@ CoreRangeSet get_cores_with_work(
 
 }  // namespace
 
-namespace {
-ProgramDescriptor build_sharded_upsample_program(
-    const UpsampleParams& operation_attributes,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    tt::tt_metal::Buffer* config_buffer,
-    uint32_t config_tensor_width) {
-    TT_FATAL(config_buffer != nullptr, "config buffer must be populated before building the upsample program");
+ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory::create_program_artifacts(
+    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const auto& input = input_tensor;
     auto& output = output_tensor;
-
+    const auto& input_mesh = input.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
+    TT_FATAL(
+        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
+            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
+        "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
     const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
     const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
 
@@ -306,141 +321,7 @@ ProgramDescriptor build_sharded_upsample_program(
     const CoreRangeSet cores_with_work =
         get_cores_with_work(all_cores, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
 
-    ProgramDescriptor desc;
-
-    uint32_t next_cb_index = CBIndex::c_0;
-    constexpr uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-    const uint32_t aligned_input_stick_nbytes = tt::round_up(input_stick_nbytes, input.buffer()->alignment());
-    const uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
-    const uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
-
-    const uint32_t in_cb_id = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * in_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in_cb_id),
-            .data_format = input_cb_data_format,
-            .page_size = in_cb_pagesize,
-        }}},
-        .buffer = input.buffer(),
-    });
-
-    // output sharded CB with upsampled data
-    const uint32_t out_cb_pagesize = tt::round_up(output_stick_nbytes, output.buffer()->alignment());
-    const uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
-
-    const uint32_t out_cb_id = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_cb_pagesize * out_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(out_cb_id),
-            .data_format = output_cb_data_format,
-            .page_size = out_cb_pagesize,
-        }}},
-        .buffer = output.buffer(),
-    });
-
-    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
-    log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
-    log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
-    log_debug(
-        LogOp,
-        "input_nsticks_per_core: {}, output_nsticks_per_core: {}",
-        input_nsticks_per_core,
-        output_nsticks_per_core);
-
-    // The config buffer lives on the WorkloadDescriptor so it outlives
-    // this descriptor and the cached Program (the config CB references the
-    // buffer pointer directly via UpdateDynamicCircularBufferAddress).
-    constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    const uint32_t config_buffer_page_size = config_buffer->page_size();
-
-    // Create config CB only for cores that have work
-    const uint32_t config_cb_id = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = config_buffer_page_size,
-        .core_ranges = cores_with_work,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(config_cb_id),
-            .data_format = config_df,
-            .page_size = config_buffer_page_size,
-        }}},
-        .buffer = config_buffer,
-    });
-
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        in_cb_id,
-        out_cb_id,
-        0,  // is_reader = false
-        config_cb_id,
-        input_stick_nbytes,
-        input_nsticks_per_core,
-        scale_factor_h,
-        scale_factor_w,
-        // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
-        config_tensor_width / 4,
-    };
-
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = writer_compile_time_args;
-    reader_compile_time_args[2] = 1;  // is_reader = true
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = cores_with_work;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor reader_desc;
-    // Same kernel source as writer — branches on the is_reader CT arg.
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = cores_with_work;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(reader_desc));
-
-    return desc;
-}
-
-}  // namespace
-
-tt::tt_metal::WorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_workload_descriptor(
-    const UpsampleParams& operation_attributes,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    const auto& input = input_tensor;
-    TT_FATAL(
-        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
-            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
-        "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
-        operation_attributes.scale_factor_h,
-        operation_attributes.scale_factor_w);
-    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
-
-    distributed::MeshDevice* device = input.device();
-    const auto shard_spec = input.shard_spec().value();
-    const uint32_t in_w = input.padded_shape()[2];
-    const uint32_t input_nsticks_per_core = shard_spec.shape[0];
-    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-    const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
-
-    const TensorMemoryLayout memory_layout = input.memory_config().memory_layout();
-    TT_FATAL(
-        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
-        "Unsupported sharding layout");
-
-    const CoreRangeSet cores_with_work = get_cores_with_work(
-        shard_spec.grid, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
-
+    // --- Op-owned config tensor: construction UNCHANGED from legacy ---
     Tensor config_tensor = create_config_tensor(
         device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
 
@@ -455,32 +336,120 @@ tt::tt_metal::WorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_
 
     Tensor config_tensor_dev = config_tensor.to_device(device, config_memory_config);
     const uint32_t config_tensor_width = static_cast<uint32_t>(config_tensor_dev.logical_shape()[-1]);
-    // See pool_multi_core_program_factory.cpp for the rationale: holding a
-    // shared_ptr<MeshBuffer> is not enough because ~Tensor force-deallocates
-    // the underlying device memory.  Wrap the source Tensor in a shared_ptr
-    // and stash it in WorkloadBuffer.owner so its destructor is deferred
-    // until the cached workload is evicted.
-    auto config_tensor_owner = std::make_shared<Tensor>(std::move(config_tensor_dev));
-    tt::tt_metal::Buffer* config_buffer = config_tensor_owner->buffer();
+    const uint32_t config_buffer_page_size = config_tensor_dev.buffer()->page_size();
 
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.buffers.push_back({std::move(config_tensor_owner), config_buffer});
+    // --- Release the MeshTensor into op_owned_tensors (the Metal 2.0 tail) ---
+    std::vector<tt::tt_metal::MeshTensor> op_owned;
+    op_owned.reserve(1);
+    op_owned.push_back(config_tensor_dev.device_storage().release_mesh_tensor());
+    const auto& config_mesh_tensor = op_owned.back();
 
-    // Single-device op: the per-coord program is structurally identical for
-    // every coord in `tensor_coords` (upsample doesn't depend on cluster
-    // position). Build the descriptor ONCE and copy it into each coord-range
-    // entry.
-    auto desc = build_sharded_upsample_program(
-        operation_attributes, input_tensor, output_tensor, config_buffer, config_tensor_width);
-    auto ranges = tensor_coords.ranges();
-    workload_descriptor.programs.reserve(ranges.size());
-    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        workload_descriptor.programs.push_back({ranges[i], desc});
-    }
-    if (!ranges.empty()) {
-        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
-    }
-    return workload_descriptor;
+    constexpr uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
+    const uint32_t aligned_input_stick_nbytes = tt::round_up(input_stick_nbytes, input.buffer()->alignment());
+    const uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
+    const uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
+
+    DataflowBufferSpec in_dfb{
+        .unique_id = SHARD_IN,
+        .entry_size = in_cb_pagesize,
+        .num_entries = in_cb_npages,
+        .data_format_metadata = input_cb_data_format,
+        .borrowed_from = SHARD_INPUT,
+    };
+
+    // output sharded CB with upsampled data
+    const uint32_t out_cb_pagesize = tt::round_up(output_stick_nbytes, output.buffer()->alignment());
+    const uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
+
+    DataflowBufferSpec out_dfb{
+        .unique_id = SHARD_OUT,
+        .entry_size = out_cb_pagesize,
+        .num_entries = out_cb_npages,
+        .data_format_metadata = output_cb_data_format,
+        .borrowed_from = SHARD_OUTPUT,
+    };
+
+    // The config buffer lives on op_owned_tensors so it outlives this ProgramSpec and the cached
+    // Program (the config DFB reresolves its backing address each dispatch via borrowed_from).
+    constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
+
+    DataflowBufferSpec config_dfb{
+        .unique_id = SHARD_CONFIG,
+        .entry_size = config_buffer_page_size,
+        .num_entries = 1,
+        .data_format_metadata = config_df,
+        .borrowed_from = SHARD_CONFIG_TENSOR,
+    };
+
+    KernelSpec::CompileTimeArgs common_cta{
+        {"stick_nbytes", input_stick_nbytes},
+        {"in_nsticks_per_core", input_nsticks_per_core},
+        {"scale_h", scale_factor_h},
+        {"scale_w", scale_factor_w},
+        // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
+        {"elem_per_core", config_tensor_width / 4},
+    };
+
+    auto make_cta = [&](uint32_t is_reader) {
+        KernelSpec::CompileTimeArgs cta = common_cta;
+        cta.insert({"is_reader", is_reader});
+        return cta;
+    };
+
+    KernelSpec writer_spec{
+        .unique_id = SHARD_WRITER,
+        .source = std::filesystem::path{SHARD_KERNEL},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = SHARD_IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SHARD_OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SHARD_CONFIG, .accessor_name = "config", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .compile_time_args = make_cta(/*is_reader=*/0),
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    KernelSpec reader_spec{
+        .unique_id = SHARD_READER,
+        .source = std::filesystem::path{SHARD_KERNEL},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = SHARD_IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SHARD_OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SHARD_CONFIG, .accessor_name = "config", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = make_cta(/*is_reader=*/1),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    ProgramSpec spec{
+        .name = "upsample_multicore_sharded",
+        .kernels = {writer_spec, reader_spec},
+        .dataflow_buffers = {in_dfb, out_dfb, config_dfb},
+        .tensor_parameters =
+            {
+                {.unique_id = SHARD_INPUT, .spec = input_mesh.tensor_spec()},
+                {.unique_id = SHARD_OUTPUT, .spec = output_mesh.tensor_spec()},
+                {.unique_id = SHARD_CONFIG_TENSOR, .spec = config_mesh_tensor.tensor_spec()},
+            },
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {SHARD_WRITER, SHARD_READER},
+            .target_nodes = cores_with_work,
+        }},
+    };
+
+    // No runtime args on either kernel; provide empty entries so every kernel has a KernelRunArgs.
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {KernelRunArgs{.kernel = SHARD_WRITER}, KernelRunArgs{.kernel = SHARD_READER}};
+    run_args.tensor_args = {
+        {SHARD_INPUT, TensorArgument{input_mesh}},
+        {SHARD_OUTPUT, TensorArgument{output_mesh}},
+        {SHARD_CONFIG_TENSOR, TensorArgument{config_mesh_tensor}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = std::move(run_args), .op_owned_tensors = std::move(op_owned)};
 }
 
 }  // namespace ttnn::prim
