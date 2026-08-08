@@ -61,6 +61,10 @@ class ParallelFeedForward(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         lora_enabled: bool = False,
+        ff1_dtype=ttnn.bfloat16,
+        ff2_dtype=ttnn.bfloat16,
+        activation_dtype=None,
+        pin_output_bf16=False,
     ):
         super().__init__()
 
@@ -82,20 +86,26 @@ class ParallelFeedForward(Module):
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
         RowCls = LoRARowParallelLinear if lora_enabled else RowParallelLinear
 
+        # ff1 is the ColParallel projection whose input crosses the fabric, so it carries the
+        # activation cast + output pin; ff2 (RowParallel) only takes a weight dtype.
         self.ff1 = ColCls(
             dim,
             inner_dim,
             bias=bias,
+            dtype=ff1_dtype,
             mesh_device=mesh_device,
             activation_fn=activation_fn,
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            activation_dtype=activation_dtype,
+            pin_output_bf16=pin_output_bf16,
         )
         self.ff2 = RowCls(
             inner_dim,
             dim_out,
             bias=bias,
+            dtype=ff2_dtype,
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
