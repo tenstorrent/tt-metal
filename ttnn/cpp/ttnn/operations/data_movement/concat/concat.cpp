@@ -9,6 +9,8 @@
 #include <tt-metalium/device.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "ttnn/operations/data_movement/concat/codegen/concat_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -267,14 +269,19 @@ ttnn::Tensor concat(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     unsigned int groups,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
+    const std::string& implementation) {
+    namespace concat_codegen = ttnn::operations::data_movement::concat_codegen;
+    // Validate before any early return so an unrecognized value fails consistently.
+    const auto sel = concat_codegen::parse_implementation(implementation);
+
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     const auto mem_config =
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
 
-    if (input_tensors.size() == 1) {
+    if (input_tensors.size() == 1 && sel != concat_codegen::ImplementationSelector::Codegen) {
         return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
     }
 
@@ -329,6 +336,39 @@ ttnn::Tensor concat(
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
+
+    if (sel != concat_codegen::ImplementationSelector::Native) {
+        const bool controls_ok = concat_codegen::supported_execution_controls(groups, sub_core_grids);
+        const bool supported =
+            controls_ok && concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(dim), mem_config);
+        auto make_params = [&]() {
+            uint64_t total_out_elems = 1;
+            for (int i = 0; i < logical_output_shape.rank(); i++) {
+                total_out_elems *= logical_output_shape[i];
+            }
+            return ttnn::prim::ConcatCodegenParams{
+                .dim = static_cast<uint32_t>(dim),
+                .num_inputs = static_cast<uint32_t>(input_tensors.size()),
+                .stick_size = static_cast<uint32_t>(logical_output_shape[-1] * first_tensor.element_size()),
+                .total_out_sticks = static_cast<uint32_t>(total_out_elems / logical_output_shape[-1]),
+                .output_mem_config = mem_config,
+            };
+        };
+        if (sel == concat_codegen::ImplementationSelector::Codegen) {
+            TT_FATAL(
+                controls_ok,
+                "ttnn.concat: implementation=\"codegen\" does not support groups > 1 or a sub_core_grids override; "
+                "no ConcatCodegen builder honours either");
+            TT_FATAL(
+                supported,
+                "ttnn.concat: implementation=\"codegen\" does not support this input/dim/dtype/memory "
+                "configuration; ConcatCodegen only covers row-major int32/uint32/bfloat16 interleaved concat");
+            return ttnn::prim::concat_codegen(input_tensors, make_params());
+        }
+        if (supported && !concat_codegen::is_demoted(input_tensors, static_cast<uint32_t>(dim))) {
+            return ttnn::prim::concat_codegen(input_tensors, make_params());
+        }
+    }
 
     // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
     // which don't currently support sub_core_grids
@@ -422,14 +462,15 @@ ttnn::Tensor concat(
                     chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
                 }
 
-                chunk_outputs.push_back(
-                    ttnn::concat(chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids));
+                chunk_outputs.push_back(ttnn::concat(
+                    chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids, implementation));
             }
 
             if (chunk_outputs.size() == 1) {
                 return chunk_outputs[0];
             }
-            return ttnn::concat(chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids);
+            return ttnn::concat(
+                chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids, implementation);
         }
     }
 
