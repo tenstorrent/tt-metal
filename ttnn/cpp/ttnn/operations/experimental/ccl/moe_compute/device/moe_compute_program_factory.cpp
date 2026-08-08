@@ -197,7 +197,7 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
         final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.value_or(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
 
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
 
     for (const auto& coord : mesh_coordinates.coords()) {
