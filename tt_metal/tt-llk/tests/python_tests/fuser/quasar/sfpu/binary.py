@@ -16,6 +16,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
+    DstRoundingMode,
     MathOperation,
 )
 
@@ -29,6 +30,7 @@ class BinarySfpu(Sfpu):
         dst_index_in0: int = 0,
         dst_index_in1: int = 1,
         dst_index_out: int = 0,
+        dst_rounding_mode: DstRoundingMode = DstRoundingMode.Default,
     ):
         if not operation in MathOperation.get_sfpu_binary_operations():
             raise ValueError(
@@ -40,6 +42,7 @@ class BinarySfpu(Sfpu):
         self.dst_index_in0 = dst_index_in0
         self.dst_index_in1 = dst_index_in1
         self.dst_index_out = dst_index_out
+        self.dst_rounding_mode = dst_rounding_mode
 
     def get_headers(self) -> List[str]:
         return [
@@ -105,10 +108,11 @@ class BinarySfpu(Sfpu):
         src2 = self.dst_index_in1
         dst = self.dst_index_out
         data_format = config.sentinel._math_format.cpp_enum_value
+        dst_rounding_mode = self.dst_rounding_mode.cpp_enum_value
 
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
-            f"{op}, {dest_sync}, {en_32bit_dest}, {quasar_iterations}"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, {quasar_iterations}"
             f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 
