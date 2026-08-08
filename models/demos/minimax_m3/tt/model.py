@@ -348,6 +348,7 @@ class Model:
         kv_cache=None,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -378,6 +379,7 @@ class Model:
                 batch_size=batch_size,
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
+                actual_isl=actual_isl,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -447,8 +449,13 @@ class Model:
         on_layer_complete=None,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
-        """Prefill forward pass - processes full sequences"""
+        """Prefill forward pass - processes full sequences.
+
+        actual_isl: real (non-pad) tokens in this chunk across the SP axis, or None for a full chunk.
+        Only the MoE layers read it, to bound the gate/dispatch padding config (tt/topk.py).
+        """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
         if rot_mats_global is not None:
@@ -473,6 +480,7 @@ class Model:
             on_layer_complete=on_layer_complete,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            actual_isl=actual_isl,
         )
 
         return logits

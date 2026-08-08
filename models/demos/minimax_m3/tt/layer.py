@@ -204,6 +204,7 @@ class DecoderLayer:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -246,7 +247,13 @@ class DecoderLayer:
             )
 
             with zone("mlp", COARSE):
-                hidden_states = self.mlp(hidden_states_post_norm)
+                # actual_isl only reaches the MoE MLP — it drives the gate/dispatch padding config.
+                # The dense layers (0-2) have no router or dispatch, so DenseMLP takes no such argument.
+                hidden_states = (
+                    self.mlp(hidden_states_post_norm)
+                    if self.is_dense
+                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl)
+                )
             hidden_states_post_norm.deallocate(True)
 
             # Both MLPs close with a reduce-scatter under a sharded residual (emb/tp, matching

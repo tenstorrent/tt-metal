@@ -280,12 +280,16 @@ class TtMiniMaxMoE(LightweightModule):
             )
         return overflow
 
-    def forward(self, x, topk_indices=None, topk_weights=None):
+    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
         """Routed (expert-parallel) MoE output.
 
         x: (dispatch_group_size, seq_len_per_chip, emb_dim) — emb may be TP-sharded
            (then it's all-gathered to full) or already full (replicated, e.g. from the
            decoder layer) in which case the gather is skipped.
+        padding_config: the gate's per-device [num_real_tokens, pad_side] row for this chunk, or None
+           for a full chunk. Bounds dispatch's token loop, and MUST be the same tensor the gate used —
+           see tt/topk.py build_padding_config.
+
         topk_indices/topk_weights: optional external routing [tokens, topk] (from
            MiniMax's TopKRouter). When given, the internal DeepSeek gate is skipped —
            this is the production path (the layer feeds replicated full emb, which the
@@ -323,7 +327,12 @@ class TtMiniMaxMoE(LightweightModule):
         # Dispatch -> per-expert buffers (NO shared expert)
         with zone("dispatch"):
             dispatched_buffer, metadata = self.dispatch_module(
-                x, scores, indices, tt_expert_offsets, self.tt_expert_dispatch_table
+                x,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+                padding_config=padding_config,
             )
             ttnn.deallocate(x)
             scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)

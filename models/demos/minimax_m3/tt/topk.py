@@ -29,6 +29,7 @@ Two implementations of that rule, selected by `use_fused_gate()`:
 
 import os
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -56,7 +57,9 @@ def use_fused_gate() -> bool:
     return os.environ.get("M3_FUSED_GATE", "1" if DEFAULT_USE_FUSED_GATE else "0") not in ("0", "false", "False")
 
 
-def route_tokens_to_experts_fused(router_logits, experts_per_token, score_bias_wide, routed_scaling_factor):
+def route_tokens_to_experts_fused(
+    router_logits, experts_per_token, score_bias_wide, routed_scaling_factor, padding_config=None
+):
     """MiniMax-M3 routing in ONE device op — the ~8-op chain below collapses to this.
 
     `moe_grouped_topk`'s single-group path (n_groups=1) IS M3's rule: activation (sigmoid) -> + bias ->
@@ -72,6 +75,13 @@ def route_tokens_to_experts_fused(router_logits, experts_per_token, score_bias_w
     score_bias_wide must be the full [tokens, num_experts] broadcast: the op requires
     bias.logical_shape() == scores.logical_shape(). TopKRouter._wide_bias builds and caches it.
 
+    ``padding_config`` (ROW_MAJOR UINT32 per-device ``[num_real_tokens, pad_side]``) makes the op
+    SENTINEL-MARK the padded rows so they route nowhere. It must be the SAME tensor the dispatch op
+    gets: the two are only consistent together — the gate marks the pad rows and dispatch shortens its
+    token loop to match. Marking without shortening (or the reverse) is worse than doing neither, which
+    is why DeepSeek gates the whole thing on its gate mode (tt/moe/tt_moe.py:530). None => every row is
+    treated as real: correct, but it does the padded work.
+
     Returns (indices UINT16 TILE, weights BFLOAT16 TILE). TILE indices are what masked_bincount
     consumes natively, so nothing has to untilize them for the routing setup.
     """
@@ -84,6 +94,7 @@ def route_tokens_to_experts_fused(router_logits, experts_per_token, score_bias_w
         n_activated_experts=experts_per_token,
         route_scale=routed_scaling_factor,
         epsilon=1e-20,
+        padding_config=padding_config,
     )
     return indices, weights
 
@@ -195,12 +206,58 @@ class TopKRouter:
         if build_bias and num_tokens and self.score_bias is not None:
             self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
 
+        # Padding-config memo, keyed by real-token count. See build_padding_config.
+        self.mesh_device = mesh_device
+        self._padding_config_cache = {}
+
         # Custom compute configs can degrade routing quality; keep the default.
         self.compute_config = None
         # One log line per router recording which gate path actually ran (see __call__).
         self._gate_path_logged = False
 
-    def __call__(self, hidden_states, use_throughput_experts):
+    def build_padding_config(self, actual_isl):
+        """Per-device ``[num_real_tokens, pad_side]`` for a chunk with ``actual_isl`` real tokens, or
+        None when the chunk is full (nothing to mark).
+
+        The SAME tensor must go to the gate topk AND the dispatch op — see
+        route_tokens_to_experts_fused. Owned here and memoized per real-token count, so a chunked
+        prefill builds each distinct config once instead of per chunk.
+
+        M3's SP sharding within a chunk is CONTIGUOUS and right-padded (tt/attention/msa.py: "SP
+        sharding is CONTIGUOUS, no zigzag/balancing"), so chip c holds chunk tokens
+        [c*tokens_per_chip, (c+1)*tokens_per_chip) and its real count is the clamped remainder. That is
+        DeepSeek's non-rotated branch; M3 needs neither its zigzag nor its rotated-chunk case.
+
+        NOTE this ends in a ttnn.from_torch, i.e. a host->device write. Fine untraced — it is memoized,
+        so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
+        row on-device instead (DeepSeek's build_padding_config_device / the moe_padding_config op).
+        Port that alongside any trace work.
+        """
+        tokens_per_chip = self.num_tokens
+        sp_factor = self.mesh_device.shape[0] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
+        if actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
+            return None  # full chunk: every row is real
+        if actual_isl not in self._padding_config_cache:
+            rows = torch.zeros((sp_factor, 2), dtype=torch.int32)
+            for c in range(sp_factor):
+                rows[c, 0] = max(0, min(tokens_per_chip, actual_isl - c * tokens_per_chip))
+                rows[c, 1] = 0  # right padding
+            self._padding_config_cache[actual_isl] = ttnn.from_torch(
+                rows,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            )
+            logger.info(
+                f"[TopKRouter] padding config built for actual_isl={actual_isl} "
+                f"({sp_factor} x {tokens_per_chip} tokens): per-chip real counts "
+                f"{[int(rows[c, 0]) for c in range(sp_factor)]}"
+            )
+        return self._padding_config_cache[actual_isl]
+
+    def __call__(self, hidden_states, use_throughput_experts, padding_config=None):
         # Actual token count from volume (shape[0] after reshape is tile-padded).
         actual_tokens = hidden_states.volume() // self.hidden_dim
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
@@ -225,7 +282,7 @@ class TopKRouter:
                     self._gate_path_logged = True
                     logger.info(f"[TopKRouter] routing via the FUSED moe_grouped_topk gate ({actual_tokens} tokens)")
                 expert_indices, expert_weights = route_tokens_to_experts_fused(
-                    router_logits, self.top_k, self.score_bias_wide, self.routed_scaling_factor
+                    router_logits, self.top_k, self.score_bias_wide, self.routed_scaling_factor, padding_config
                 )
                 ttnn.deallocate(router_logits)
                 return expert_indices, expert_weights

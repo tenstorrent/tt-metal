@@ -328,6 +328,11 @@ class TtPrefillRuntime:
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
             on_layer_complete=self._on_layer_complete,
+            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
+            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
+            # is routed and dispatched as if real: wasted dispatch work that also eats the per-expert
+            # buffer capacity check_dispatch_overflow guards.
+            actual_isl=actual_end - actual_start,
         )
         if not self.config.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.
