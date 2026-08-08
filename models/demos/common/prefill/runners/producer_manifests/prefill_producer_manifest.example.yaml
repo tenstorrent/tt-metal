@@ -46,7 +46,9 @@ workload:
 
 # ---------------------------------------------------------------------------
 # Real KV migration issued BY the producer (opt-in). Needs a live migration_endpoint the runner already
-# drove to WORKER_READY. The producer migrates + writes the DONE sentinel; the RUNNER validates KV.
+# drove to WORKER_READY. migration_driver migrates, writes the DONE sentinel, and — in loopback — reads the
+# destination slots back itself (--verify-migration, see the env: block below). The runner validates
+# nothing: it publishes the KV-chunk table + device map, and every read-back happens in this process.
 migration:
   issue: false              # PREFILL_PRODUCER_ISSUE_MIGRATION (default: false) attach client + migrate
   dest_endpoint_id: 1       # PREFILL_MIGRATION_DEST_ENDPOINT_ID (default: 1) own id => loopback; other => x-ep
@@ -71,6 +73,17 @@ migration:
 # field of their own:
 env:
   PREFILL_SEND_SHUTDOWN: "0"            # (default: 0) "1" => close the stream with an all -1 sentinel so the
-                                        # runner drains + tears down after the run (sent last, after KV read).
-                                        # Set to "1" for runner-side migration validation unless shutdown is external.
-  PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold.
+                                        # runner drains + tears down after the run. Sent LAST, after both the
+                                        # KV read-back and --verify-migration, so it never pulls the mesh out
+                                        # from under a UMD read. Leave "0" only if shutdown is external —
+                                        # otherwise the runner's unbounded loop sits in recv until SIGTERM.
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold. Also the
+                                        # threshold for --verify-migration dst-golden.
+  # migration_driver only, and deliberately NOT typed fields in the `migration:` block above — set them here,
+  # export them, or pass --verify-migration / --verify-migration-layers.
+  PREFILL_VERIFY_MIGRATION: "dst-bytes" # (default: dst-bytes) destination read-back after the migrate, LOOPBACK
+                                        # only: off | dst-bytes (dst == src, golden-free, model-agnostic) |
+                                        # dst-golden (dst PCC'd vs the src's golden) | both. Feeds the exit code.
+  # PREFILL_VERIFY_MIGRATION_LAYERS: "0,30,60"  # (default: every migrated layer) spot-check subset. dst-bytes
+                                        # reads BOTH slots, so a full-depth pair is expensive; a subset makes a
+                                        # PASS a sample, not a proof, and restricts the check to config 0.

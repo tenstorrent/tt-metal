@@ -12,7 +12,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 |------|-------------------|-------|
 | **0 — standalone PCC** | Prefill writes correct KV (precondition for everything) | tt-metal tree only |
 | **1 — mock migration** | The KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy read back from the driver | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -100,13 +100,11 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   PREFILL_MIGRATION_CLIENT_DIR: "<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python"
-
-  PREFILL_VALIDATE_MIGRATION: "1"
-  PREFILL_MIGRATE_PAIRWISE: "1"                    # dst == src; omit for burst (vs golden)
-  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"         # = num_users x chunks the producer pushes
-  MIGRATION_DONE_FILE: "/tmp/migration_done.sentinel"
-  PREFILL_MIGRATE_WAIT_S: "1200"
 ```
+
+Nothing about validation appears here: the runner publishes the KV-chunk table and the device map and
+that is the whole of its involvement. Both read-backs — the source `check_pcc` and the destination
+`--verify-migration` — run out in the driver process against those two published artefacts.
 
 ---
 
@@ -117,7 +115,7 @@ global_env:
 | module | what it is |
 |--------|------------|
 | `prefill_producer` | The plain runner test. H2D push, ack drain, golden PCC. Knows nothing about migration. |
-| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, and both sidecar files. |
+| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, both sidecar files, and — for loopback — the destination read-back that proves the copy landed. |
 
 The dependency runs one way: `prefill_producer` imports nothing from `migration_driver`, so a runner-only run
 can never pull migration in. Migration has to share the producer's process — it needs that run's
@@ -159,14 +157,14 @@ workload:
   chunks: "11"
   max_requests: 2                 # one resident request per slot
   interleave: round_robin
-  check_pcc: false                # the RUNNER validates migrated KV on-device
+  check_pcc: true                 # SOURCE-slot golden PCC; the destination has its own gate below
 
 migration:
   issue: true                     # attach the client and migrate after prefill
   dest_endpoint_id: 1             # == our own id => loopback
   dst_slot_offset: 2              # dst = src + 2  (0->2, 1->3)
   timeout_ms: 3600000
-  done_file: /tmp/migration_done.sentinel                # [MATCH RUNNER]
+  done_file: /tmp/migration_done.sentinel                # driver-side only; no runner counterpart
   table_path: /tmp/prefill_kv_chunk_table.pb             # [MATCH RUNNER]
   cmd_queue: /mig_ep1_cmd                                # [MATCH ENDPOINT]
   table_queue: /mig_ep1_table
@@ -225,6 +223,71 @@ prompt; set `max_requests == num_users` for one resident request per slot.
 Coverage: `tests/test_producer_slot_prompts.py` (device-free, host logic) and
 `tests/test_producer_runner_e2e.py::test_producer_runner_multiprompt_pcc` (on-device, opt-in via
 `PREFILL_CI_MULTIPROMPT_TRACES`).
+
+---
+
+## Verifying the migrated destination
+
+`migration_driver` reads the destination slots back **itself**, in the driver process, over the same
+device-less `read_dram_umd` path the source-side `check_pcc` uses. The runner does no work for it: it does
+not hold the check, does not poll the sentinel, and exposes no validation hook. It does have to stay
+**alive** — the reads go to device DRAM — which is the default, since the driver sends no shutdown push
+unless `PREFILL_SEND_SHUTDOWN=1` (and even then, only after the read-back).
+
+Order within a run: `check_pcc` and `--dump-src-kv` read the *sources* before the migrate; this reads the
+*destinations* after `wait_complete` lands, which is also after the DONE sentinel is published. So the
+sentinel means "copied", not "verified".
+
+```
+--verify-migration {off | dst-bytes | dst-golden | both}     # env: PREFILL_VERIFY_MIGRATION
+--verify-migration-layers 0,30,60                            # env: PREFILL_VERIFY_MIGRATION_LAYERS
+```
+
+| mode | asks | needs a golden? | model-specific? |
+|------|------|-----------------|-----------------|
+| `dst-bytes` *(default)* | is dst **byte-identical** to src, chunk by chunk? | no | no — nothing is decoded |
+| `dst-golden` | does dst PCC to the src's golden trace? | yes | yes — decodes via the per-layout branch |
+| `both` | runs each in turn, reporting transport and model correctness separately | yes | yes |
+| `off` | nothing; the run proves transport only | — | — |
+
+`dst-bytes` is the default because migration is a byte copy: a correct destination is bit-identical, so
+there is no threshold to tune and no undefined-correlation hole over the all-zero pad tail or a dense
+layer's `index_k` — exactly the regions a PCC-based fidelity check has to paper over with a threshold and
+an all-zero short-circuit. `dst-golden` is not strictly stronger, it is differently strong: it proves the copy carries
+**model-correct** data rather than merely the same bytes the source held, but it decodes through the
+per-model layout branch, needs the golden on disk, and its PCC is undefined over the pad tail. `both` is
+the honest answer when you want transport and model correctness reported separately.
+
+Both feed the **exit code**, alongside the source `check_pcc`: a driver run that migrates and exits 0 has
+verified the destination unless you passed `off`.
+
+Three limits are worth internalising before reading a PASS:
+
+- **Loopback only.** Cross-endpoint P→D is skipped with a warning — the destination lives in the decode
+  galaxy's table, a separate address space, and looking `dst` up in *our* table would confidently read the
+  wrong slot. Verify P→D on the decode side against a `--dump-src-kv` reference instead.
+- **Cross-talk is invisible with one prompt.** If every slot replays the same trace, all sources are
+  byte-identical and a copy landing in the wrong destination is indistinguishable from a correct one. Use
+  `PREFILL_PRODUCER_SLOT_TRACES` (see *Per-slot prompts*) if you want that property covered. This is a
+  property of identical sources, so it applies to `dst-golden` equally.
+- **A layer subset makes a PASS a sample.** `--verify-migration-layers` (and, implicitly,
+  `PREFILL_MIGRATION_LAYERS`) restricts the read; the driver logs a warning saying so. With a subset only
+  config 0 is checked, because a sparse model's compacted index config indexes rows by full-indexer rank
+  rather than global layer id.
+
+Cost is the reason the subset flag exists: `dst-bytes` reads *both* slots, so it roughly doubles a
+`check_pcc` pass — a full-depth Kimi pair is ~215k UMD reads. Chunks whose chips are not in this host's
+device map are skipped rather than failed (multi-host), and the skip count is printed so a `PASSED` line
+cannot be mistaken for whole-model coverage. A check that compared nothing is reported as a **failure**.
+
+These two flags have no typed field in the manifest's `migration:` block. Set them on the CLI, export
+them, or put them in the manifest's raw `env:` passthrough:
+
+```yaml
+env:
+  PREFILL_VERIFY_MIGRATION: "both"
+  PREFILL_VERIFY_MIGRATION_LAYERS: "0,30,60"
+```
 
 ---
 
@@ -320,21 +383,33 @@ python -m models.demos.common.prefill.runners.migration_driver --manifest $MANIF
 
 `migration_driver`, not `prefill_producer` — this gate migrates. See "Two producer entry points" above.
 
-The driver prefills, drains the acks, migrates each pair, then writes the DONE sentinel; the runner is
-polling for it and validates on-device. **PCC is logged by the runner (terminal B), not the driver** — the
-driver only reports the transport (the `MIGRATE slot … complete` lines). Accuracy lives in the runner's
-post-loop `[kv-migrate-validate]` output.
+The driver prefills, drains the acks, migrates each pair, writes the DONE sentinel, and then reads the
+destination slots back itself. **Everything lands in terminal C** — transport as the `MIGRATE slot …
+complete` lines, accuracy as the `verify …` lines below. Terminal B is a pure serving loop and logs no PCC
+at all.
 
-**2a — pairwise** (`PREFILL_MIGRATE_PAIRWISE=1`). Each destination is asserted bit-equal to its source,
-golden-free and length-agnostic. Also catches cross-talk between concurrent migrations. Expect, in terminal
-B, `[kv-migrate-validate] AFTER pairwise src=0 dst=2 min_pcc=…` per pair, then `ALL <N> pair(s) dst==src
-PASSED` at or above `PREFILL_MIGRATE_PAIRWISE_PCC` (default `0.99`).
+**2a — byte compare** (the default, `--verify-migration dst-bytes`). Each destination is asserted
+byte-identical to its source, chunk by chunk, golden-free and model-agnostic. Expect one
+`verify bytes: slot 0 -> 2 config 0: …` planning line per pair and config, then:
 
-**2b — burst** (omit `PREFILL_MIGRATE_PAIRWISE`). Source and destination are both PCC'd against the same
-golden. Expect `BEFORE src_slot=0 …` and `AFTER dst_slot=2 …`, then `ALL <N> migrated pair(s) PASSED`.
+```
+[migration_driver] verify bytes PASSED: 2 pair(s), 1342 chunk(s) byte-identical dst == src
+```
 
-The two are either/or per run; run twice for both signals. Pairwise is the cheaper fidelity check — burst
-anchors both slots to the golden but reads the cache twice.
+**2b — golden anchor** (`--verify-migration dst-golden`). Each destination is PCC'd against the source
+slot's golden trace, at `PREFILL_STANDALONE_CHUNKED_PCC` (same threshold as `check_pcc`). Expect an
+`AFTER dst_slot=2 (src=0) min_pcc=…` line per pair — the destination half of the number `check_pcc: true`
+already reports for the sources — then `verify golden PASSED: <N> migrated dst slot(s) >= <thr>`.
+
+`--verify-migration both` runs them in one pass, which is the useful default when a model is new: the byte
+compare isolates the transport, and the golden PCC tells you whether what was transported was right in the
+first place. See *Verifying the migrated destination* above for the cost and the three coverage caveats
+(loopback only, cross-talk needs per-slot prompts, a layer subset is a sample).
+
+The runner's request loop is unbounded and the driver's chunks are not a shutdown, so set
+`PREFILL_SEND_SHUTDOWN=1` on the driver to close the stream when it is done — otherwise terminal B sits in
+`recv` until you SIGTERM it. The driver sends that sentinel **last**, after the destination read-back, so
+it never tears the mesh down under a UMD read in flight.
 
 For a multi-config cache (a sparse model publishes its index cache alongside the KV cache in one merged
 table), **config-id order is the src↔dst contract**. Loopback is self-consistent by construction, but a real
@@ -351,12 +426,14 @@ gates you intend to run require.
 |------|------|-----------------------|
 | 0 | `kv_cache_pcc_check` | accepts `trace_dir`, `first_layer_idx` |
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2a pairwise | `read_slot_kv` | returns bare host tensors, `[num_layers, heads(or 1), seq_cache, head_dim]` |
-| 2b burst | `kv_cache_pcc_check` | **also** accepts `real_len=` |
-| 2a + golden anchor | `kv_cache_pcc_check` | **also** accepts `pt_path_override=` |
+| 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
+| 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
+| 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
-`runners/validation.py` calls these by keyword, so a runtime missing `real_len` or `pt_path_override` raises
-`TypeError` before any PCC runs. It presents as a crash rather than a validation failure.
+The destination check adds no per-model surface: `dst-bytes` compares raw chunks and never decodes, and
+`dst-golden` rides on `prefill_producer._read_slot_kv_and_check_pcc` — the same layout branch Gate 1
+already needs — rather than on a runtime hook. A new model whose cache is neither MLA nor the M3 triple
+gets a branch there, and both gates work.
 
 ## Values that must agree across the three processes
 
@@ -367,15 +444,15 @@ gates you intend to run require.
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
-| sentinel | `MIGRATION_DONE_FILE` | `migration.done_file` | — |
+| sentinel | — (driver-side only) | `migration.done_file` | — |
 | queues | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` | `--prefill-{cmd,table,resp}-queue` |
 | client `.so` | `PREFILL_MIGRATION_CLIENT_DIR` | exported (not in the manifest) | — |
 | chunk budget | `PREFILL_STANDALONE_CHUNKED_NCHUNKS` | `num_users` × `chunks` | — |
 | slot count | `PREFILL_NUM_USERS` | ≥ max dst slot + 1 | — |
 
-`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is the one worth double-checking: the driver never sends a shutdown
-push, so the runner uses that count to know prefill is done before it polls the DONE sentinel. Too low and
-the runner exits mid-prefill; too high and it blocks on chunks that never come, printing no PCC either way.
+The sentinel has no runner-side counterpart: the driver writes it for an external P→D consumer, and
+nothing in the runner reads it. It also means "copied", not "verified" — the destination read-back runs
+after it is published.
 
 Deriving every row of this table from a single place is the main thing the harness buys. It also rejects
 attempts to set any of them by hand.
