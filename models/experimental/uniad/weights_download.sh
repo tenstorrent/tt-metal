@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 OUTPUT_FILE="models/experimental/uniad/uniad_base_e2e.pth"
 
