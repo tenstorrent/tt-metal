@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 from typing import List
 
 import torch
@@ -13,6 +14,40 @@ from models.common.utility_functions import is_wormhole_b0
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+
+
+def _decode_forward_sampling_params(args, kwargs):
+    """Resolve ``sampling_params`` from a ``decode_forward`` call in either form.
+
+    The sglang wrappers forward ``*args`` verbatim, so a positional call carries it in
+    ``args``. Reading only ``kwargs`` would report "no sampling params" and skip the
+    parameter upload while device sampling is active, which yields wrong token
+    distributions rather than an error. Bound to the real signature so the position
+    cannot drift out of sync with it.
+    """
+    if "sampling_params" in kwargs:
+        return kwargs["sampling_params"]
+    names = list(inspect.signature(Generator.decode_forward).parameters)
+    # ``args`` comes from a bound call, so ``self`` is not in it.
+    index = names.index("sampling_params") - 1
+    return args[index] if len(args) > index else None
+
+
+def sglang_decode_forward_commands(args=(), kwargs=None) -> dict:
+    """Decode reload commands for one sglang ``decode_forward`` call.
+
+    sglang does not negotiate the decode reload contract, so host token/position
+    inputs are authoritative on every step and no sampling state is carried across
+    steps on device. Parameters are uploaded whenever the call carries any, which is
+    also what registers per-request seeds with the sampler.
+    """
+    sampling_params = _decode_forward_sampling_params(args, kwargs or {})
+    return {
+        "reload_inputs": True,
+        "reload_page_table": False,
+        "reload_sampling_params": sampling_params is not None,
+        "reset_sampling_state": False,
+    }
 
 
 def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -152,7 +187,7 @@ class LlamaForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs, **sglang_decode_forward_commands(args, kwargs))
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -195,7 +230,7 @@ class QwenForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs, **sglang_decode_forward_commands(args, kwargs))
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -238,7 +273,7 @@ class MistralForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs, **sglang_decode_forward_commands(args, kwargs))
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -302,7 +337,7 @@ class GptOssForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs, **sglang_decode_forward_commands(args, kwargs))
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

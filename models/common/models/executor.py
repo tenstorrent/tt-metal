@@ -53,6 +53,47 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+def _apply_decode_sampling_state(model, sampling_params, batch_size, *, rng_needs_reset: bool) -> bool:
+    """Push per-request sampling params and seeds for one decode step.
+
+    Returns the caller's new RNG-reset flag. The first decode of a lifecycle resets
+    unconditionally: the conditional helper compares requested against cached seeds and
+    skips when both are None, leaving decode-only sampling with no device seed.
+
+    Routed through ``apply_decode_update`` so the ordering and the alignment decision
+    stay in one implementation. ``positions`` is deliberately withheld: this executor is
+    a contract version-0 holdout (see ``models/common/sampling/README.md``), so no caller
+    tells it whether the host positions are authoritative this step, and aligning seed
+    counters from them unconditionally is exactly what makes a seeded stream depend on
+    when an asynchronous readback landed.
+    """
+    from models.common.sampling import broadcast_sampling_params, format_sampling_params
+
+    sampling_module = model.sampling
+    # Raw, not pre-formatted: ``apply_decode_state`` formats once, and
+    # ``format_sampling_params`` inverts temperature, so a second pass inverts it back.
+    #
+    # Broadcasting slot 0's temperature/top-k/top-p across the batch holds only because
+    # every caller that reaches here shares one parameter set: the demos pass scalars,
+    # and vLLM cannot reach it at all, since this family advertises no
+    # ``supports_sample_on_device`` so the platform refuses device sampling and
+    # ``sampling_params`` arrives as None. Converting this executor to the contract has
+    # to replace this with the real per-slot arrays: vLLM sends genuine per-request
+    # values, and index 0 would silently win for the whole batch.
+    per_slot_params = broadcast_sampling_params(sampling_params, 0, slot_len=batch_size)
+    # Seeds come from the real per-request values. Taking them from the broadcast above
+    # would give every slot user 0's seed, so a seeded batch would sample identically.
+    seed_bs = sampling_module.tt_sampling.max_batch_size
+    sampling_module.apply_decode_update(
+        [per_slot_params],
+        reload_sampling_params=True,
+        reset_sampling_state=rng_needs_reset,
+        seeds=format_sampling_params(sampling_params, seed_bs).seed,
+        active_slots=list(range(batch_size)),
+    )
+    return False
+
+
 def make_contiguous_page_table(
     batch_size: int,
     max_seq_len: int,
@@ -363,7 +404,15 @@ class TensorSpec:
 
 
 class EagerLLMExecutor:
-    """Eager executor engine — owns prefill/decode implementation.
+    """Eager executor engine, owns prefill/decode implementation.
+
+    Deliberate decode input-update contract version-0 holdout. Neither this class
+    nor ``TracedLLMExecutor`` declares ``decode_input_update_contract``, so vLLM
+    drives both down the legacy ``reset_batch`` path and their model-local reload
+    inference below is what the contract would otherwise forbid. Converting them
+    needs host tests for this executor stack that do not exist yet; see
+    ``models/common/decode_contract.py`` for the command semantics and
+    ``models/common/sampling/README.md`` for the holdout list.
 
     Common LLM operations live here. Model-specific details come from
     the model object (model.model_args).
@@ -391,6 +440,7 @@ class EagerLLMExecutor:
         self._iter_named_modules = iter_named_modules
         self.mode = None
         self._kv_cache: list | None = None
+        self._sampler_rng_stale = True
 
         # todo)) this could be a composed optional for debug!
         # Output specs captured during compile (for multi-CQ pre-allocation)
@@ -829,6 +879,7 @@ class EagerLLMExecutor:
             assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
         self.mode = Mode.PREFILL
         self._assert_kv_cache_identity(kv_cache)
+        self._sampler_rng_stale = True
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -1262,14 +1313,12 @@ class EagerLLMExecutor:
             # TTTv1 SamplingGenerator pushes per-request k/p/temp into persistent device buffers
             # via apply_decode_state + seed_manager. The TTTv2 Sampling1D module holds no mutable
             # state (k/p/temp are per-call args; greedy/argmax needs none), so skip when absent.
-            from models.common.sampling import broadcast_sampling_params, format_sampling_params
-
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
-            self.model.sampling.apply_decode_state(
-                [per_request_params],
-                reset_batch=False,
+            self._sampler_rng_stale = _apply_decode_sampling_state(
+                self.model,
+                sampling_params,
+                B,
+                rng_needs_reset=self._sampler_rng_stale,
             )
-            self.model.sampling.seed_manager.get_new_values()
 
         tt_tokens, tt_current_pos, tt_rot_mat_idxs, tt_page_table = self.prepare_decode_inputs_device(
             tokens, start_pos, page_table
@@ -1322,7 +1371,12 @@ class EagerLLMExecutor:
 
 
 class TracedLLMExecutor:
-    """Traced executor engine — adds trace capture/replay to eager execution.
+    """Traced executor engine, adds trace capture/replay to eager execution.
+
+    Deliberate decode input-update contract version-0 holdout, like
+    ``EagerLLMExecutor``: ``_decode_trace_inputs_stale`` and
+    ``_prev_decode_page_table`` below infer reloads from model-local state and a
+    page-table comparison, which is what a version-1 adapter must not do.
 
     Same public API as EagerLLMExecutor. Compile methods capture traces,
     forward methods replay or fall back to eager.
@@ -1404,10 +1458,17 @@ class TracedLLMExecutor:
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
 
-        # Per sampling-mode flag: the next decode step must re-seed the persistent buffers from host
-        # (correct first token + start position). Set after every prefill and at init; cleared once
-        # the device has been seeded, after which steady-state steps carry state on device.
-        self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
+        # Per sampling-mode flag: the next decode step must restage the persistent token and
+        # position buffers from host (correct first token + start position). Set after every
+        # prefill and at init; cleared once the device has been seeded, after which
+        # steady-state steps carry state on device. Not driven by any vLLM command: this
+        # executor is a contract version-0 holdout and infers the reload itself.
+        self._decode_trace_inputs_stale: dict[bool, bool] = defaultdict(lambda: True)
+        # About the sampler only, on a different axis from the flag above: the first decode
+        # of a lifecycle must reset seed state unconditionally, because the conditional
+        # helper compares requested against cached seeds and skips when both are None,
+        # leaving decode-only sampling with no device seed.
+        self._sampler_rng_stale: dict[bool, bool] = defaultdict(lambda: True)
         # Keyed per sampling-mode (True=on-device sampling, False=host), matching the per-key
         # decode trace + device page_table buffer in trace_inputs_decode. A single shared tensor
         # would let one mode's page-table update mask a needed copy on the other mode's trace
@@ -1731,7 +1792,8 @@ class TracedLLMExecutor:
         # on-device buffers from host (correct first token + start position) before the device
         # can carry state on its own. Mark all sampling modes stale, and drop the cached page
         # tables so the first post-prefill step always re-copies (device buffers are reused).
-        self._decode_needs_reseed = defaultdict(lambda: True)
+        self._decode_trace_inputs_stale = defaultdict(lambda: True)
+        self._sampler_rng_stale = defaultdict(lambda: True)
         self._prev_decode_page_table = defaultdict(lambda: None)
 
         batch_size, batch_seq_len = tokens.shape
@@ -2169,20 +2231,18 @@ class TracedLLMExecutor:
         ):
             # TTTv1-only: push per-request k/p/temp into persistent device buffers before replay.
             # TTTv2 Sampling1D has no such state (greedy/argmax needs none) — skip when absent.
-            from models.common.sampling import broadcast_sampling_params, format_sampling_params
-
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
-            self.model.sampling.apply_decode_state(
-                [per_request_params],
-                reset_batch=False,
+            self._sampler_rng_stale[sampling_on_device] = _apply_decode_sampling_state(
+                self.model,
+                sampling_params,
+                B,
+                rng_needs_reset=self._sampler_rng_stale[sampling_on_device],
             )
-            self.model.sampling.seed_manager.get_new_values()
 
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
 
         loop_active = self._decode_loop_active(sampling_params)
-        if loop_active and not self._decode_needs_reseed[sampling_on_device]:
+        if loop_active and not self._decode_trace_inputs_stale[sampling_on_device]:
             # Steady-state on-device loop: the captured trace advanced current_pos/rot_mat_idxs
             # (in-place plus_one) and wrote the sampled token back into the persistent token buffer
             # on the previous replay, so tokens/positions need NO host staging. Refresh only the
@@ -2202,7 +2262,7 @@ class TracedLLMExecutor:
             )
             self._prev_decode_page_table[sampling_on_device] = page_table.clone()
             if loop_active:
-                self._decode_needs_reseed[sampling_on_device] = False
+                self._decode_trace_inputs_stale[sampling_on_device] = False
 
         ttnn.execute_trace(
             self.mesh_device,

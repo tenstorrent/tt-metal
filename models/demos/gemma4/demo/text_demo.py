@@ -477,7 +477,6 @@ def run_batch_generation(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 enable_trace=enable_decode_trace,
-                reset_batch=(iteration == 0),
             )
             if isinstance(decode_out, tuple):
                 logits = decode_out[0]

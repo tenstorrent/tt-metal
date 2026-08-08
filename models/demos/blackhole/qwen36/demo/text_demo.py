@@ -834,7 +834,11 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         _greedy_params = SamplingParams(
             temperature=[1.0] * _sbatch, top_k=[1] * _sbatch, top_p=[1.0] * _sbatch, seed=[0] * _sbatch
         )
-        model.sampling.apply_decode_state([_greedy_params], reset_batch=True)
+        model.sampling.apply_decode_state(
+            [_greedy_params],
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+        )
 
     _sharded_logits_mode = _mode in ("shard", "sample")
     trace_id, tt_logits, tt_idx, tt_val, tt_tok = None, None, None, None, None

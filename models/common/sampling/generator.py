@@ -103,6 +103,11 @@ class SamplingGenerator:
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
+        # Device sampling reads whatever parameters the device currently holds, so the
+        # first device-sampling step of a lifecycle must upload them. Tracked rather
+        # than assumed: nothing else distinguishes "reuse the resident parameters" from
+        # "never uploaded any", and the second silently samples from defaults.
+        self._params_uploaded = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
@@ -178,52 +183,139 @@ class SamplingGenerator:
         self,
         sampling_params_chunks: list,
         *,
-        reset_batch: bool = False,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
-        """Format, merge (if row-sharded), and apply sampling params for one model instance.
+        """Apply the explicitly requested parts of decode sampling state.
 
         Args:
             sampling_params_chunks: List of SamplingParams assigned to this instance.
                 Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
-            reset_batch: Also reset prompt tokens and output state (first decode step).
-            prompt_tokens: Prompt tokens for penalty tracking.
+            reload_sampling_params: Upload temperature/top-k/top-p/etc.
+            reset_sampling_state: Rebuild prompt/output penalty state.
+            prompt_tokens: Prompt tokens for penalty tracking. ``None`` leaves the
+                prompt mask untouched; only the caller can rebuild it.
             output_tokens: Output tokens for penalty tracking.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
         """
-        chunks_per_model = len(sampling_params_chunks)
+        if reload_sampling_params:
+            chunks_per_model = len(sampling_params_chunks)
+            max_batch_size = self.tt_sampling.max_batch_size
 
-        max_batch_size = self.tt_sampling.max_batch_size
+            if chunks_per_model == 1:
+                formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
+                self.reset_sampling_params(formatted_params)
+            else:
+                # Row-sharded case: format each chunk to max_batch_size,
+                # concatenate, then upload one merged parameter set.
+                formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
+                concat_fields = {}
+                for field in SAMPLING_PARAM_FIELDS:
+                    lists = [getattr(fc, field) for fc in formatted_chunks]
+                    if all(v is None for v in lists):
+                        concat_fields[field] = None
+                    else:
+                        concat_fields[field] = sum(
+                            (v if isinstance(v, list) else [v] for v in lists),
+                            [],
+                        )
+                formatted_params = SamplingParams(**concat_fields)
+                self.reset_sampling_params(formatted_params)
 
-        if chunks_per_model == 1:
-            formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
-            self.reset_sampling_params(formatted_params)
-        else:
-            # Row-sharded case: format each chunk to max_batch_size, concatenate.
-            # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
-            # Both TTSampling and TTPenalties use the same concatenated params.
-            formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
-            concat_fields = {}
-            for field in SAMPLING_PARAM_FIELDS:
-                lists = [getattr(fc, field) for fc in formatted_chunks]
-                if all(v is None for v in lists):
-                    concat_fields[field] = None
-                else:
-                    concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
-            formatted_params = SamplingParams(**concat_fields)
-            self.reset_sampling_params(formatted_params)
-
-        if reset_batch:
-            self.reset_prompt_tokens(prompt_tokens)
+        if reset_sampling_state:
+            # Prompt history is caller-owned and has no "clear" encoding: penalties
+            # need the real prompt tokens to rebuild the mask. Callers that request a
+            # state reset without it (warmup, demos) keep the existing mask, matching
+            # apply_prefill_state.
+            if prompt_tokens is not None:
+                self.reset_prompt_tokens(prompt_tokens)
+            # Output history does have one: reset_output_tokens(None) zeroes the
+            # per-slot output counters, which a state reset must always do.
             self.reset_output_state(output_tokens)
+
+    def apply_decode_update(
+        self,
+        sampling_params_chunks: list | None,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        seeds=None,
+        active_slots: list[int] | None = None,
+        positions: list[int] | None = None,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        advance_seeds: bool = True,
+    ):
+        """Execute one decode sampling update in the order the contract requires.
+
+        Owning the order here is the point: parameter upload, then penalty state, then
+        the seed reset, then at most one seed advance. Per-family code supplies the
+        slot layout and nothing else.
+
+        The caller must have applied any slot remap before calling: remaps are not
+        idempotent, so which layer applies one stays with the generator that owns the
+        device-slot mapping.
+
+        Args:
+            sampling_params_chunks: Raw, unformatted chunks for this instance, or None
+                when the caller uploaded parameters itself. Already-formatted params
+                must not be passed: formatting inverts temperature, so a second pass
+                would invert it back.
+            seeds: Slot-indexed seed values, padded to the sampler's batch size.
+                Required whenever either command is set and ``active_slots`` is
+                non-empty.
+            active_slots: Device slots sampling this step. None means every slot; an
+                empty list means none, which skips the reset entirely because
+                ``reset_seed_from_slots`` marks the manager reset even when it moves
+                nothing, sending the next step back through a full-batch upload.
+            positions: Slot-indexed absolute decode positions, consulted only on a
+                state reset. Host positions are authoritative only on a reloading
+                step, and a state reset only ever accompanies one, so aligning here
+                cannot tie the RNG stream to a lagging position (decode reload
+                contract, "host input authority").
+            advance_seeds: Whether to advance the seed counters now. False for
+                generators that advance inside their sampling call instead, which is
+                the only way to keep exactly one advance per sampled token when state
+                application and sampling are separate calls.
+        """
+        if not (self._params_uploaded or reload_sampling_params):
+            raise ValueError(
+                "device sampling has no resident parameters yet; the first decode of a "
+                "sampling lifecycle requires reload_sampling_params=True"
+            )
+        if sampling_params_chunks is not None:
+            self.apply_decode_state(
+                sampling_params_chunks,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
+
+        slots_to_reset = active_slots is None or len(active_slots) > 0
+        if slots_to_reset and (reload_sampling_params or reset_sampling_state):
+            assert seeds is not None, "decode sampling updates require slot-indexed seed values"
+            if reset_sampling_state:
+                # Unconditional even for seed=None: the conditional helper sees no
+                # change and skips, leaving decode-only sampling with no device seed.
+                self.seed_manager.reset_seed_from_slots(seeds, active_slots)
+                if positions is not None:
+                    self.seed_manager.align_seed_counters_to_positions(seeds, active_slots, positions)
+            else:
+                self.seed_manager.reset_seed_from_slots_if_needed(seeds, active_slots)
+
+        if advance_seeds:
+            self.seed_manager.get_new_values(active_slots)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
+        self._params_uploaded = True
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
@@ -650,7 +742,12 @@ class SeedManager:
         return int(seed)
 
     def reset_seed_from_slots(self, seeds, user_ids):
-        """Reset decode seed state from slot-indexed sampling params."""
+        """Reset decode seed state from slot-indexed sampling params.
+
+        ``seeds`` is indexed by device slot, not by request order: ``seeds[slot]``
+        belongs to ``slot``, and the params must already be padded to
+        ``max_batch_size``. See ``reset_seed`` for the request-ordered prefill variant.
+        """
         if user_ids is None:
             user_ids = range(self.max_batch_size)
         for user in user_ids:
@@ -728,10 +825,13 @@ class SeedManager:
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
 
-        ``remap`` is a 1-D int tensor of length ``max_batch_size`` where
-        ``remap[i] = j`` means slot *i* now holds the request that was
-        previously at slot *j*. Identity entries (``remap[i] == i``) are
-        no-ops. Only non-identity entries trigger a move.
+        ``remap[i] = j`` means slot *i* now holds the request that was previously at
+        slot *j*, in this instance's own slot space. Identity entries
+        (``remap[i] == i``) are no-ops; only non-identity entries trigger a move.
+
+        Shorter than ``max_batch_size`` is normal, not an error: it covers the first
+        ``len(remap)`` slots, and the scheduler's batch is often narrower than the
+        device's slot count.
         """
         if not self._seed_active:
             return
@@ -762,9 +862,14 @@ class SeedManager:
         """Update RNG state for the given user slots after a prefill.
 
         Args:
-            seeds: Seed values in request order. Accepts a list, tensor, scalar,
-                or None (treated as all unseeded).
+            seeds: Seed values in **request order** — ``seeds[k]`` belongs to
+                ``user_ids[k]``. Accepts a list, tensor, scalar, or None (treated as
+                all unseeded).
             user_ids: Batch slot indices being prefilled.
+
+        See ``reset_seed_from_slots`` for the decode-side variant, whose ``seeds`` is
+        indexed by device slot instead. Picking the wrong one misassigns per-request
+        seeds silently.
         """
         user_ids = [int(user) for user in user_ids]
         for i, user in enumerate(user_ids):

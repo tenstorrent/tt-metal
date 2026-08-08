@@ -15,7 +15,17 @@ from models.common.llama_models import (
     CompletionPrediction,
     StopReason,
 )
-from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
+from models.common.decode_contract import (
+    DecodeInputStaging,
+    decode_input_staging,
+    rank_local_slot_remap,
+    reject_legacy_reload_signal,
+)
+from models.common.sampling import (
+    SamplingParams,
+    broadcast_sampling_params,
+    format_sampling_params,
+)
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
@@ -165,6 +175,11 @@ def _pad_or_create_page_table(table, target_blocks: int):
 
 
 class Generator(WarmupForwardMixin):
+    # Declared here rather than per adapter: decode_forward below is what executes the
+    # four reload commands, so every subclass that inherits it satisfies version 1. A
+    # subclass that overrides decode_forward without the commands must override this too.
+    decode_input_update_contract = 1
+
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -200,7 +215,6 @@ class Generator(WarmupForwardMixin):
             for _ in range(self.model_args.max_batch_size)
         ]
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
-        self.prev_page_table = None
         self.already_warmed_up_prefill = False
         self.warming_up_prefill = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {on_device_logits: {device_id: trace_id}}
@@ -208,7 +222,6 @@ class Generator(WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
-        self._decode_inputs_need_reset = False
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -841,8 +854,6 @@ class Generator(WarmupForwardMixin):
                     log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
                     prefill_log_probs = log_probs_torch.reshape(-1)[empty_slots]
 
-        self._decode_inputs_need_reset = True
-
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
             # This is inefficient and should be fixed
@@ -1241,91 +1252,51 @@ class Generator(WarmupForwardMixin):
         read_from_device=True,
         async_read=False,
         sampling_params: SamplingParams = None,  # None means returning logits and host sampling.
-        reset_inputs=False,  # If false, skip loading inputs, because it's next step of the batch we last had and sampled on device
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        *,
+        reload_inputs: bool = True,
+        reload_page_table: bool = False,
+        reload_sampling_params: bool = False,
+        reset_sampling_state: bool = False,
+        **kwargs,
     ):
+        """Run one decode step, executing the caller's reload commands exactly.
+
+        Args:
+            slot_remap: ``remap[i] = j`` means slot *i* now holds the request that was
+                at slot *j*. Applied to the sampler's per-slot state.
+            reload_inputs: Host token/position/page-table inputs are authoritative for
+                this step; restage all of them. Subsumes ``reload_page_table``.
+            reload_page_table: Copy only the page-table trace input, preserving
+                device-produced token and position state. Rejected together with
+                ``reload_inputs``, which already restages page tables: the two
+                encode one three-valued decision, not two switches.
+            reload_sampling_params: Upload temperature/top-k/top-p/penalties.
+            reset_sampling_state: Rebuild per-slot penalty history and seeds.
+
+        See ``models/common/decode_contract.py`` for the full contract.
+        """
+        reject_legacy_reload_signal(type(self).__name__, kwargs)
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
+        if not enable_trace and not reload_inputs:
+            raise ValueError("Non-traced Galaxy decode rebuilds all forward inputs and requires reload_inputs=True")
 
-        reset_reasons = []
         if sampling_params is None and not defer_device_sampling:
             on_device_logits = False
-            reset_inputs = True  # We didn't sample on device, so we need to load inputs.
-            reset_reasons.append("host_sampling")
         else:
             on_device_logits = True
 
-        # Track sampling mode changes to reset inputs when switching
-        # between host sampling and device sampling (different trace has stale inputs)
-        on_device_sampling = (sampling_params is not None) or defer_device_sampling
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        if prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling:
-            reset_inputs = True
-            reset_reasons.append("sampling_mode_changed")
-        if self._decode_inputs_need_reset:
-            # Prefill on-device sampling switches the model to decode mode, so the
-            # is_decode_setup check below won't fire; force a reset here so the
-            # first decode after such a prefill reloads host inputs.
-            reset_inputs = True
-            reset_reasons.append("decode_inputs_need_reset")
-            self._decode_inputs_need_reset = False
-        # TEMP FIX (tenstorrent/vllm#449): reload decisions belong in vLLM, which is the
-        # only side that knows when host inputs are valid under async draining. Until then
-        # the model decides here, and the rules below are the model-side half.
-        #
-        # Mixed greedy+random batches use device-resident tokens/positions like all-greedy
-        # batches: the sampled token is fed back on-device and current_pos is advanced
-        # in-trace, so no per-step host input reload is needed here. Per-request sampling
-        # params are fixed for a request's lifetime (uploaded at batch setup / refreshed on
-        # reset_batch).
-        page_table_changed = False
-        if page_table is not None:
-            page_table_changed = self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
-            if page_table_changed and not on_device_sampling:
-                # Host sampling: tokens/positions are host-authoritative every step,
-                # so a page-table change (new KV block) needs a full input reload.
-                reset_inputs = True
-                reset_reasons.append("page_table_changed")
-            elif page_table_changed:
-                # Device-resident decode (on-device sampling): tokens/positions live
-                # on device (fed back + plus_one in-trace) and the host copy is
-                # intentionally stale. A page-table change must NOT force a full
-                # reload -- under async overlap the stale host current_pos would
-                # clobber the device's advanced position and the slot would
-                # re-decode its previous token (the greedy "doubling"). Instead fall
-                # through to the page_table_changed branch in _decode_easy_trace_text,
-                # which refreshes ONLY the page-table trace input and preserves the
-                # device-produced tokens/positions. (Genuine (re)inits -- first
-                # decode, mode switch, reset_batch, slot remap -- still set
-                # reset_inputs via their own reasons and take the full-reload path.)
-                reset_reasons.append("page_table_changed_devres")
-
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
-            reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
-            reset_reasons.append("mode_switch_to_decode")
-
-        if reset_batch:
-            # A new batch layout (real reset or slot remap) leaves the device
-            # token/current_pos buffers holding the previous batch's values, so
-            # host inputs are authoritative again and must be fully reloaded.
-            reset_inputs = True
-            reset_reasons.append("reset_batch")
 
         kv_cache = kv_cache[0]
-        active_seed_slots = None
-        if start_pos is not None:
-            active_seed_slots = [
-                idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
-            ]
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -1340,8 +1311,8 @@ class Generator(WarmupForwardMixin):
         if enable_trace:
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
-                reset_inputs=reset_inputs,
-                page_table_changed=page_table_changed,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
                 on_device_logits=on_device_logits,
             )
         else:
@@ -1357,12 +1328,12 @@ class Generator(WarmupForwardMixin):
                 tt_tok,
                 sampling_params=sampling_params,
                 start_pos=start_pos,
-                reset_inputs=reset_inputs,
-                reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
             )
 
         if read_from_device:
@@ -1373,10 +1344,19 @@ class Generator(WarmupForwardMixin):
             tt_out_for_read = (tt_tok, tt_log_probs) if tt_log_probs is not None else tt_tok
             tt_out = self.read_decode_output(tt_out_for_read, async_read=async_read)
             if async_read:
+                if sampling_params is None:
+                    self._apply_sampling_slot_remap(slot_remap)
                 return tt_out
             else:
-                return self.process_decode_output_host(tt_out, is_tokens=on_device_logits)
+                output = self.process_decode_output_host(tt_out, is_tokens=on_device_logits)
+                if sampling_params is None:
+                    # Consume the dormant sampler remap only after decode and
+                    # readback succeed, preserving retry semantics.
+                    self._apply_sampling_slot_remap(slot_remap)
+                return output
 
+        if sampling_params is None:
+            self._apply_sampling_slot_remap(slot_remap)
         return tt_tok, tt_log_probs
 
     def _decode_forward_no_trace_text(
@@ -1482,16 +1462,18 @@ class Generator(WarmupForwardMixin):
         current_pos,
         page_table=None,
         kv_cache=None,
-        reset_inputs=False,
-        page_table_changed=False,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         on_device_logits=False,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
     ):
         """
         Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
+        staging = decode_input_staging(reload_inputs, reload_page_table)
         # The trace is different depending on whether decode returns sampling-layout logits.
         if not self.trace_ids_decode[on_device_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
@@ -1506,7 +1488,7 @@ class Generator(WarmupForwardMixin):
             self.trace_ids_decode[on_device_logits] = trace_id
             self.trace_inputs_decode[on_device_logits] = device_inputs
             self.trace_output_decode[on_device_logits] = tt_out_tok
-        if reset_inputs:
+        if staging is DecodeInputStaging.ALL:
             # Full resets are required when host token/position inputs are
             # authoritative again (host sampling, trace switch, or batch reset).
             host_inputs = self.model.prepare_decode_inputs_host(
@@ -1518,7 +1500,7 @@ class Generator(WarmupForwardMixin):
                 device_tensors=self.trace_inputs_decode[on_device_logits],
                 shard_specs=shard_specs,
             )
-        elif page_table_changed:
+        elif staging is DecodeInputStaging.PAGE_TABLE_ONLY:
             # With async device sampling, token/position inputs may intentionally
             # be stale on host: the previous decode updates them on device. Page
             # tables still need refreshing when new KV blocks are allocated, so
@@ -1530,9 +1512,6 @@ class Generator(WarmupForwardMixin):
             device_page_table = self.trace_inputs_decode[on_device_logits][DECODE_PAGE_TABLE_INPUT_IDX]
             if host_page_table is not None:
                 ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
-        if page_table_changed:
-            self.prev_page_table = page_table.clone()
-
         trace_tok_rm = self._decode_forward_trace_text(
             self.trace_ids_decode[on_device_logits],
             self.trace_inputs_decode[on_device_logits],
@@ -1547,21 +1526,43 @@ class Generator(WarmupForwardMixin):
 
         return trace_tok_rm
 
+    def _apply_sampling_slot_remap(self, slot_remap) -> None:
+        if slot_remap is None:
+            return
+        sampling_module = getattr(self.model, "sampling", None)
+        if sampling_module is None:
+            return
+        seed_manager = sampling_module.seed_manager
+        # This generator holds one model, so rank 0 is the only view. Going through the
+        # shared normalizer anyway is what checks that the plugin's stride matches: a
+        # bare slice would take another rank's entries as its own if they ever differed.
+        rank_remap = rank_local_slot_remap(slot_remap, rank=0, slots_per_rank=seed_manager.max_batch_size)
+        seed_manager.apply_slot_remap(rank_remap)
+
     def sample_decode_on_device(
         self,
         tt_logits,
         sampling_params,
         start_pos=None,
-        reset_inputs=False,
-        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
         sampling_module = self.model.sampling
-        seed_manager = sampling_module.seed_manager
+        if sampling_params is None and (reload_sampling_params or reset_sampling_state):
+            raise ValueError(
+                "Galaxy sampling update commands require sampling_params "
+                f"(reload_sampling_params={reload_sampling_params}, "
+                f"reset_sampling_state={reset_sampling_state})"
+            )
+
+        # Keep separated sampling independently usable.
+        self._apply_sampling_slot_remap(slot_remap)
 
         active_seed_slots = None
         if start_pos is not None:
@@ -1569,14 +1570,13 @@ class Generator(WarmupForwardMixin):
                 idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
 
-        # Apply slot remap from condense before advancing seeds.
-        if slot_remap is not None:
-            sm_bs = seed_manager.max_batch_size
-            rank_remap = slot_remap[0:sm_bs]
-            seed_manager.apply_slot_remap(rank_remap)
-        if reset_inputs and sampling_params is not None:
-            # If we have new inputs, we need to set up the sampling module again
+        if sampling_params is not None and (reload_sampling_params or reset_sampling_state):
+            # The params upload and the seed reset below both index by device slot, so pad
+            # to max_batch_size before either runs: a request-length seed list would leave
+            # the higher slots looking unseeded and overwrite their live seeds with None.
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+
+        if reload_sampling_params and sampling_params is not None:
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(sampling_params, "seed", None))
                 has_active_seed = any(
@@ -1587,19 +1587,25 @@ class Generator(WarmupForwardMixin):
                         sampling_params, active_seed_slots, self.model_args.max_batch_size
                     )
             sampling_module.reset_sampling_params(sampling_params)
-            if reset_batch:
+        if reset_sampling_state:
+            # Penalties cannot rebuild the prompt mask without the real tokens, so a
+            # caller that omits them (warmup, demos) keeps the existing mask.
+            if prompt_tokens is not None:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
-                sampling_module.reset_output_state(output_tokens)
+            sampling_module.reset_output_state(output_tokens)
 
-        if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
-            seed_values = getattr(sampling_params, "seed", None)
-            seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-            if reset_inputs:
-                seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
-
-        # Advance seeds after parameter copies so seeded sampling observes
-        # one ordered params/seed state for this token.
-        seed_manager.get_new_values(active_seed_slots)
+        # Params and penalty state are uploaded above rather than by the shared
+        # helper: the inactive-slot fill needs params already padded to
+        # max_batch_size, and formatting them a second time would invert
+        # temperature back. Everything after that is the shared ordered protocol.
+        sampling_module.apply_decode_update(
+            None,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+            seeds=getattr(sampling_params, "seed", None) if sampling_params is not None else None,
+            active_slots=active_seed_slots,
+            positions=start_pos,
+        )
         return self.model.sampling.sample(
             logits=tt_logits,
             tt_out_tok=tt_out_tok,
