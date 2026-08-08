@@ -139,6 +139,13 @@ from ttnn._ttnn.multi_device import (
     world_size as distributed_context_world_size,
 )
 
+from ttnn._ttnn.mesh_socket import (
+    DistributedSocketType,
+    DistributedEndpointSocketType,
+    DistributedISocket,
+    create_distributed_socket,
+)
+
 from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
