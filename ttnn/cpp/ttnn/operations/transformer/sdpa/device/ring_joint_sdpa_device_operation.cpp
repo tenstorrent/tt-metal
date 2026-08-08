@@ -422,11 +422,31 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "ring_size ({}) must divide num_frames_padded ({}) so each SP shard holds whole frames",
             args.ring_size,
             nf_pad);
+        const auto padded_n = static_cast<std::size_t>(nf_pad) * fsl;
         TT_FATAL(
-            static_cast<std::size_t>(nf_pad) * fsl >= args.logical_n,
+            padded_n >= args.logical_n,
             "num_frames_padded * tokens_per_frame ({}) must be >= logical_n ({})",
-            static_cast<std::size_t>(nf_pad) * fsl,
+            padded_n,
             args.logical_n);
+        // The reader/compute kernels derive q_frame/k_frame by integer-dividing the padded Q/K tile
+        // extent by tiles_per_frame, then index a fixed 32-word (nf_padded x nf_padded bit) table with
+        // no bounds check. Pin the physical padded extent to exactly nf_padded frames so those indices
+        // stay < nf_padded (bit_idx < nf_padded^2 <= 1024); an over-padded tensor would otherwise read
+        // sparse_frame_mask_words out of bounds.
+        TT_FATAL(
+            padded_n == static_cast<std::size_t>(gathered_input_tensor_k.logical_shape()[2]) &&
+                padded_n == static_cast<std::size_t>(input_tensor_q.logical_shape()[2]) * args.ring_size,
+            "num_frames_padded * tokens_per_frame ({}) must equal the global Q/K sequence length "
+            "(gathered K seq {}, per-shard Q seq {} * ring_size {})",
+            padded_n,
+            gathered_input_tensor_k.logical_shape()[2],
+            input_tensor_q.logical_shape()[2],
+            args.ring_size);
+        TT_FATAL(
+            args.logical_n % fsl == 0,
+            "logical_n ({}) must contain whole frames of tokens_per_frame ({})",
+            args.logical_n,
+            fsl);
         // Packed size: ceil(nf_pad*nf_pad / 32) words.
         const uint32_t need_words = (nf_pad * nf_pad + 31) / 32;
         TT_FATAL(
