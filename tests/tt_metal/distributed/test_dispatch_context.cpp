@@ -314,4 +314,26 @@ TEST_F(DispatchContextFixture, AsyncSdStatePreservedAcrossFdTransition) {
     EXPECT_TRUE(experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(mesh_device_.get()));
 }
 
+// Verify that we can SD LaunchProgram after FD init/teardown
+TEST_F(DispatchContextFixture, SDLaunchProgramAfterFD) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test requires starting in Slow Dispatch mode.";
+    }
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Service-core APIs require BH or UBB Galaxy.";
+    }
+
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape(1, 1)));
+    IDevice* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    Finish(mesh_device_->mesh_command_queue());
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(1, CoreCoord(1, 1), 0);
+    EXPECT_NO_THROW(tt::tt_metal::detail::LaunchProgram(device, *programs[0], true, true));
+}
+
 }  // namespace tt::tt_metal::distributed::test

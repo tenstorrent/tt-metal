@@ -304,6 +304,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void destroy_realtime_profiler_socket();
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

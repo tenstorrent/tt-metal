@@ -146,6 +146,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
 
+    // Kill the RT profiler for each device as we transit out of FD into SD
+    mesh_device_impl.destroy_realtime_profiler_socket();
+
     // Restore stashed SD queues to preserve pre-FD state (e.g. asynchronous_slow_dispatch_enabled_)
     TT_FATAL(
         stashed_sd_queues_ && !stashed_sd_queues_->queues.empty(),
