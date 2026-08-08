@@ -10,10 +10,9 @@ import torch
 
 # Skip actual ttnn test if not on Wormhole
 try:
-    import ttnn
+    from tt.phi1_model import TTPhi1Attention, TTPhi1DecoderLayer, TTPhi1ForCausalLM, TTPhi1MLP
 
-    from tt.phi1_model import (TTPhi1Attention, TTPhi1DecoderLayer,
-                               TTPhi1ForCausalLM, TTPhi1MLP, TTPhi1Model)
+    import ttnn
 
     TTNN_AVAILABLE = True
 except ImportError:
@@ -34,21 +33,13 @@ class TestPhi1ModularComponents(unittest.TestCase):
             state_dict = {
                 "model.layers.0.input_layernorm.weight": torch.ones(hidden_size),
                 "model.layers.0.input_layernorm.bias": torch.zeros(hidden_size),
-                "model.layers.0.self_attn.q_proj.weight": torch.randn(
-                    hidden_size, hidden_size
-                ),
-                "model.layers.0.self_attn.k_proj.weight": torch.randn(
-                    hidden_size, hidden_size
-                ),
-                "model.layers.0.self_attn.v_proj.weight": torch.randn(
-                    hidden_size, hidden_size
-                ),
+                "model.layers.0.self_attn.q_proj.weight": torch.randn(hidden_size, hidden_size),
+                "model.layers.0.self_attn.k_proj.weight": torch.randn(hidden_size, hidden_size),
+                "model.layers.0.self_attn.v_proj.weight": torch.randn(hidden_size, hidden_size),
                 "model.layers.0.self_attn.q_proj.bias": torch.zeros(hidden_size),
                 "model.layers.0.self_attn.k_proj.bias": torch.zeros(hidden_size),
                 "model.layers.0.self_attn.v_proj.bias": torch.zeros(hidden_size),
-                "model.layers.0.self_attn.dense.weight": torch.randn(
-                    hidden_size, hidden_size
-                ),
+                "model.layers.0.self_attn.dense.weight": torch.randn(hidden_size, hidden_size),
                 "model.layers.0.self_attn.dense.bias": torch.zeros(hidden_size),
                 "model.layers.0.mlp.fc1.weight": torch.randn(8192, hidden_size),
                 "model.layers.0.mlp.fc1.bias": torch.zeros(8192),
@@ -66,20 +57,14 @@ class TestPhi1ModularComponents(unittest.TestCase):
                 mlp = TTPhi1MLP(device, state_dict, base_address="model.layers.0")
                 self.assertIsNotNone(mlp.fc1)
 
-                attn = TTPhi1Attention(
-                    device, state_dict, base_address="model.layers.0"
-                )
+                attn = TTPhi1Attention(device, state_dict, base_address="model.layers.0")
                 self.assertIsNotNone(attn.wqkv)
 
-                layer = TTPhi1DecoderLayer(
-                    device, state_dict, base_address="model", layer_num=0
-                )
+                layer = TTPhi1DecoderLayer(device, state_dict, base_address="model", layer_num=0)
                 self.assertEqual(layer.layer_num, 0)
 
                 # Test overall topology instantiation (single layer for speed)
-                model = TTPhi1ForCausalLM(
-                    device, state_dict, base_address="model", num_hidden_layers=1
-                )
+                model = TTPhi1ForCausalLM(device, state_dict, base_address="model", num_hidden_layers=1)
                 self.assertIsNotNone(model.lm_head_weight)
             except Exception as e:
                 self.fail(f"Instantiation failed with exception: {e}")
