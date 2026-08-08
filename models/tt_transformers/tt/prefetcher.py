@@ -221,6 +221,13 @@ class PrefetcherSubDevice:
     def init_sub_device_manager(self):
         assert len(self.sub_devices) > 0, "No subdevices have been created. Cannot create sub device manager."
         self.manager_id = self.mesh_device.create_sub_device_manager(self.sub_devices, 0)
+        self.load()
+
+    def load(self):
+        # (Re)activate this prefetcher's sub-device manager. Split out from
+        # init_sub_device_manager so an already-created manager can be re-loaded
+        # without recreating it -- e.g. after prefill trace replay temporarily
+        # reverts to the device's default sub-device manager (#47820).
         self.mesh_device.load_sub_device_manager(self.manager_id)
         self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
 
@@ -362,8 +369,11 @@ class Prefetcher(LightweightModule):
         NOTE: All DRAM prefetcher APIs can only be called after init() is called for the given mode
         NOTE: Calling init() again for the same mode is a no-op
         """
-        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
-        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
+        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again.
+        # We still re-load the manager: it may have been swapped out (prefill trace replay reverts to the device's
+        # default sub-device manager, #47820), so the prefetcher's manager must be re-activated before decode runs.
+        if (mode == Mode.DECODE and self.init_decode_done) or (mode == Mode.PREFILL and self.init_prefill_done):
+            self.prefetcher_sub_device.load()
             return
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
@@ -400,6 +410,11 @@ class Prefetcher(LightweightModule):
         logger.info("=" * 50)
         self.init_decode_done = True if mode == Mode.DECODE else False
         self.init_prefill_done = True if mode == Mode.PREFILL else False
+
+    @property
+    def is_initialized(self) -> bool:
+        # True once a prefetcher sub-device manager has been created/loaded for any mode.
+        return self.init_decode_done or self.init_prefill_done
 
     def create_address_tensor(self):
         """
