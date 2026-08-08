@@ -16,6 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, asser
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
+from models.common.utility_functions import is_blackhole
 
 
 def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
@@ -894,3 +895,45 @@ def test_unary_right_shift(input_shapes, device):
 
         pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
+
+
+# Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * up, with up optionally
+# softcapped by beta2. Kimi K3 uses beta1 4 (gate half) and beta2 25 (up half), with bf16 /
+# bfp8_b activations. Blackhole only, since it builds on the softcap SFPU op.
+SITU_GLU_BETA1 = 4.0
+SITU_GLU_BETA2 = 25.0
+
+# One case per intermediate-memory branch (hidden <= 2048 -> L1, hidden > 2048 -> DRAM);
+# the two also cover both dtypes. bfp8_b re-quantizes each intermediate, so it gets a looser
+# PCC and a wider overshoot margin than near-exact bf16.
+SITU_GLU_CASES = [
+    (torch.Size([1, 1, 512, 1024]), ttnn.bfloat16),  # hidden 1024 <= 2048 -> L1
+    (torch.Size([1, 1, 512, 4096]), ttnn.bfloat8_b),  # hidden 4096 > 2048 -> DRAM
+]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_lt_2048", "hidden_gt_2048"])
+def test_situ_glu(input_shape, ttnn_dtype, device):
+    torch.manual_seed(0)
+    # Span the saturating and near-linear regions of both halves.
+    gate = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    # Output placement must follow the input, not the (possibly L1) intermediates -- so it is
+    # the same on both the L1 and DRAM branches.
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 1e-3))
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    assert_with_pcc(golden, tt_res, pcc=0.99 if is_bfp8 else 0.999)

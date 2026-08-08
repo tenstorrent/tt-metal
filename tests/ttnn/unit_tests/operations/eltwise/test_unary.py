@@ -2784,3 +2784,97 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+# softcap(x) = beta * tanh(x / beta), the up half of Moonshot's SiTU activation. Kimi K3
+# uses beta 25 for the up half, with bf16 / bfp8_b activations. Blackhole only.
+SOFTCAP_BETA = 25.0
+
+# Inputs below this magnitude are excluded from accuracy ratios. softcap scales x down
+# twice before the tanh polynomial -- by 1/beta, then by the Horner chain's leading
+# 5.9e-3 -- so a normal input can drive a subnormal intermediate the SFPU flushes to
+# zero. This is far below anything an activation bounded by beta can carry.
+SOFTCAP_FLUSH_FLOOR = 1e-30
+
+# bf16 is the near-exact reference; bfp8_b shares one exponent per 16-element block, so it is
+# slightly less accurate and its near-beta output lands on a coarser grid (hence the wider
+# overshoot margin). Both are the dtypes Kimi K3 actually runs.
+SOFTCAP_PCC = {ttnn.bfloat16: 0.9999, ttnn.bfloat8_b: 0.999}
+SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([4, 128, 32])),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_unary_softcap(input_shapes, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        # bfp8_b shares one exponent per 16-element block, so the full-range stress input
+        # (1e-5 .. 3e38 in a single tile) is neither representable nor a realistic activation.
+        # Use a bounded range that still spans the near-linear and saturated (|x| >> beta) regions.
+        torch.manual_seed(0)
+        in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100.0, 100.0)
+    else:
+        # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
+        # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
+        torch.manual_seed(0)
+        in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_res = ttnn.to_torch(ttnn.softcap(input_tensor, SOFTCAP_BETA))
+    golden = ttnn.get_golden_function(ttnn.softcap)(in_data, beta=SOFTCAP_BETA, device=device)
+
+    # tanh is bounded by 1, so beta is a hard bound; an overshoot means the polynomial's
+    # saturation clamp is not holding.
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
+    assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+    assert_with_pcc(golden, tt_res, pcc=SOFTCAP_PCC[ttnn_dtype])
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_bfloat16_full_domain(device):
+    """Every representable bfloat16 value.
+
+    Not a ULP test: softcap goes through the Sollya polynomial tanh, whose ~2.3e-3
+    relative error is thousands of fp32 ULP. The bound below is sized to the
+    approximation instead.
+    """
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+
+    # NaN does not propagate through min(., 1.0), so the op returns a finite value where
+    # torch returns NaN. Excluded here.
+    input_tensor = torch.where(torch.isnan(input_tensor), torch.zeros_like(input_tensor), input_tensor)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden = ttnn.get_golden_function(ttnn.softcap)(input_tensor, beta=SOFTCAP_BETA, device=device)
+    result = ttnn.to_torch(ttnn.softcap(tt_in, SOFTCAP_BETA))
+
+    max_abs = result.to(torch.float32).abs().max().item()
+    fd_bound = SOFTCAP_BETA * (1.0 + 1e-3)
+    assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
+    assert not torch.isnan(result).any(), "finite input produced NaN"
+
+    g = golden.to(torch.float32)
+    r = result.to(torch.float32)
+    mask = g.abs() > SOFTCAP_FLUSH_FLOOR
+    rel_err = ((r[mask] - g[mask]).abs() / g[mask].abs()).max().item()
+    assert rel_err < 1.5e-2, f"full bf16 domain max rel err {rel_err:.4e}"
+
+    tiny_max = r[~mask].abs().max().item()
+    assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
+
+    assert_with_pcc(g, r, pcc=0.9999)
