@@ -88,6 +88,8 @@ struct OpConfig {
         EQ,
         NE,
         ISCLOSE,
+        LOGADDEXP,
+        LOGADDEXP2,
     };
 
     template <class EnumT>
@@ -98,6 +100,7 @@ struct OpConfig {
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;
     std::optional<unary::UnaryOpType> postprocess;
+    BinaryOpType binary_op_type;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };

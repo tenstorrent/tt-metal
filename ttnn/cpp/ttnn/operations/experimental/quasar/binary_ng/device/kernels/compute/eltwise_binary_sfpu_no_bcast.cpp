@@ -29,6 +29,7 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,

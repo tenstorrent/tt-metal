@@ -52,6 +52,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu_dfb.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 // Process n LHS tiles against the scalar tile parked at index 0 in dfb_post_rhs.
 FORCE_INLINE void process_sfpu_scalar_tiles(

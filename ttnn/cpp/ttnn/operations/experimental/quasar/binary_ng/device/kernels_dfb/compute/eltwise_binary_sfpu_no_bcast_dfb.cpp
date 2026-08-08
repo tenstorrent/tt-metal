@@ -46,6 +46,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu_dfb.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,

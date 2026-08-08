@@ -498,8 +498,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     const bool has_lhs_act = !compute_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty();
     const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
-    const bool op_has_exp =
-        op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+    const bool op_has_exp = op_type == BinaryOpType::LDEXP;
 
     // --- num_tiles_per_cycle: DST register capacity per tile_regs_acquire (mirrors the descriptor
     // factory + the shipped factory's min(.,shard_tiles) cap). Multi-tile only when EVERY operand is borrowed
@@ -510,6 +509,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     uint32_t num_tiles_per_cycle = 1;
     if (all_borrowed) {
         num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_full_shard_tiles);
+        if ((op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LOGADDEXP2) && !is_sfpu) {
+            num_tiles_per_cycle = std::min<uint32_t>(4u, c_full_shard_tiles);
+        }
     }
 
     // --- DFB names. compute uses pre_lhs/pre_rhs/out (+post_lhs/post_rhs when activations); reader/

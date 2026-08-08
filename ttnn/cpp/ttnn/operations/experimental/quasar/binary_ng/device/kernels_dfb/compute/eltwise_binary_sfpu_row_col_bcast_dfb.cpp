@@ -58,6 +58,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu_dfb.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 // One tile-row's worth of work. The COL operand (BCAST_OP) was delivered pre-expanded by the reader
 // software-fill, so it is preprocessed ONCE and reused across the row; the ROW operand (OTHER_OP) streams

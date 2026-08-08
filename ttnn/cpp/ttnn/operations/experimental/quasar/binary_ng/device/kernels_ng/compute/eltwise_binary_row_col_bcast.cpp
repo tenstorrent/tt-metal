@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,

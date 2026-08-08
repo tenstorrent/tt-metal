@@ -28,6 +28,7 @@
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "ttnn/operations/eltwise/binary/device/kernels/compute/stable_logaddexp.hpp"
 // DataflowBuffer for the op's own buffers; CircularBuffer (via eltwise_utils.hpp) is
 // still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
 #include "api/dataflow/dataflow_buffer.h"

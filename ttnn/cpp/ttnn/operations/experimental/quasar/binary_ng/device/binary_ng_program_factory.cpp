@@ -476,8 +476,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         // binary operands produces incorrect results.  Adding a typecast for
         // LHS forces it through a Float16_b intermediate CB so both operands
         // use the same format.
-        // Note: LOGADDEXP / LOGADDEXP2 are not affected because they process
-        // both sides (EXP/EXP2), so lhs_activations is never empty for them.
         if (!is_sfpu_op && lhs_activations.empty() && !rhs_activations.empty() && op_type == BinaryOpType::LDEXP &&
             (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
             lhs_activations.push_back({
@@ -554,10 +552,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             // no document and example to show why 4 does not work, need further investigation
             num_tiles_per_cycle = 2;
         }
+        if ((op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LOGADDEXP2) && !is_sfpu_op) {
+            num_tiles_per_cycle = 4;
+        }
     }
 
-    bool op_has_exp =
-        op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+    bool op_has_exp = op_type == BinaryOpType::LDEXP;
     const bool inputs_row_major =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
 

@@ -150,7 +150,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
 OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
-    binary_op(EnumT::SUB) {
+    binary_op_type(binary_op_type), binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
         case BinaryOpType::SUB: break;
@@ -247,19 +247,15 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // log( exp(a) + exp(b) )
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            }
             break;
-        // log2( 2**a + 2**b )
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -547,6 +543,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case LOGADDEXP: return {"stable_logaddexp_tile_init();", "stable_logaddexp_tile"};
+        case LOGADDEXP2: return {"stable_logaddexp2_tile_init();", "stable_logaddexp2_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -555,6 +553,18 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     std::map<std::string, std::string> defines;
 
     if (!is_sfpu_op()) {
+        if (binary_op_type == BinaryOpType::LOGADDEXP) {
+            defines["BINARY_OP"] = "stable_logaddexp_tiles";
+            defines["BINARY_OP_TYPE"] = "EltwiseBinaryType::ELWSUB";
+            return defines;
+        }
+
+        if (binary_op_type == BinaryOpType::LOGADDEXP2) {
+            defines["BINARY_OP"] = "stable_logaddexp2_tiles";
+            defines["BINARY_OP_TYPE"] = "EltwiseBinaryType::ELWSUB";
+            return defines;
+        }
+
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
         auto binary_op_str = enchantum::to_string(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
