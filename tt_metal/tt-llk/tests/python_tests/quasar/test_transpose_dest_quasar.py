@@ -23,7 +23,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    BlocksCalculationAlgorithm,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
@@ -39,13 +40,20 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
+from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
+
+TILE_DIMENSIONS = [32, 32]
 
 
 def generate_qsr_transpose_dest_combinations(
@@ -97,12 +105,34 @@ def generate_qsr_transpose_dest_combinations(
             return False
         return True
 
-    dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
-        )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in (DestSync.Half, DestSync.Full)
+    # Curated dimensions: some fit in one bank (no switching), some require
+    # multiple blocks (triggering dest bank switches with DstSync.Half).
+    # DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
+    # DstSync.Full capacity: 16 tiles (16-bit dest) / 8 tiles (32-bit dest)
+    dimensions_by_mode = {
+        (DestAccumulation.No, DestSync.Half): [
+            [32, 32],  # 1 tile  → 1 block (no switch)
+            [32, 128],  # 4 tiles → 1 block (no switch)
+            [32, 256],  # 8 tiles → 1 block (fills half-dest exactly)
+            [32, 512],  # 16 tiles → 2 blocks (1 bank switch)
+            [64, 384],  # 24 tiles → 3 blocks (2 bank switches)
+        ],
+        (DestAccumulation.No, DestSync.Full): [
+            [32, 32],  # 1 tile  → 1 block
+            [32, 512],  # 16 tiles → 1 block (fills full-dest exactly)
+            [64, 512],  # 32 tiles → 2 blocks
+        ],
+        (DestAccumulation.Yes, DestSync.Half): [
+            [32, 32],  # 1 tile  → 1 block (no switch)
+            [32, 128],  # 4 tiles → 1 block (fills half-dest exactly)
+            [32, 256],  # 8 tiles → 2 blocks (1 bank switch)
+            [64, 192],  # 12 tiles → 3 blocks (2 bank switches)
+        ],
+        (DestAccumulation.Yes, DestSync.Full): [
+            [32, 32],  # 1 tile  → 1 block
+            [32, 256],  # 8 tiles → 1 block (fills full-dest exactly)
+            [32, 512],  # 16 tiles → 2 blocks
+        ],
     }
 
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
@@ -133,7 +163,7 @@ def generate_qsr_transpose_dest_combinations(
                                 )
                             )
                             continue
-                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
                             combinations.append(
                                 (
                                     fmt,
@@ -197,7 +227,20 @@ def test_transpose_dest_quasar(
     )
 
     data_copy_type = DataCopyType.A2D
-    num_faces = 4
+    tile_rows, tile_cols = TILE_DIMENSIONS
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
+        [tile_rows, tile_cols]
+    )
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -293,7 +336,19 @@ def test_transpose_dest_quasar(
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
-            TEST_FACE_DIMS(),
+            NUM_TILES_IN_BLOCK(
+                output_tiles_in_block,
+                input_num_tiles_in_block=output_tiles_in_block,
+                output_num_tiles_in_block=output_tiles_in_block,
+            ),
+            NUM_BLOCKS(
+                output_num_blocks,
+                input_num_blocks=output_num_blocks,
+                output_num_blocks=output_num_blocks,
+            ),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
             DEST_INDEX(),
             LOOP_FACTOR(loop_factor),
         ],
@@ -307,6 +362,9 @@ def test_transpose_dest_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=TILE_DIMENSIONS,
+            use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
