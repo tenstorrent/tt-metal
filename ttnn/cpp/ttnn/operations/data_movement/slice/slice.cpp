@@ -99,14 +99,44 @@ ttnn::Tensor slice(
     if (input_rank == 0) {
         return input_tensor;
     }
-    TT_FATAL(
-        input_rank == begins.size(), "Input rank {} and begins {} must have the same size", input_rank, begins.size());
     TT_FATAL(begins.size() == ends.size(), "Start {} and end {} must have the same size", begins.size(), ends.size());
     TT_FATAL(
         step.size() == begins.size(),
         "Step {} must have the same size as start {} and end",
         step.size(),
         begins.size());
+    TT_FATAL(
+        begins.size() <= input_rank,
+        "Input rank {} must be greater than or equal to begins {}",
+        input_rank,
+        begins.size());
+
+    // If fewer slice dims are supplied than the input rank, pad the missing
+    // leading dimensions with no-op slices (begin=0, end=dim, step=1). This
+    // matches numpy-style indexing, where unspecified leading dims are kept
+    // intact, and lets callers pass slice parameters whose rank only matches
+    // the logical (non-padded) rank of the tensor while the runtime tensor
+    // may have been promoted to a higher rank by upstream ops.
+    ttnn::SmallVector<T> begins_padded_storage;
+    ttnn::SmallVector<T> ends_padded_storage;
+    ttnn::SmallVector<T> step_padded_storage;
+    if (begins.size() < input_rank) {
+        const size_t leading = input_rank - begins.size();
+        begins_padded_storage.reserve(input_rank);
+        ends_padded_storage.reserve(input_rank);
+        step_padded_storage.reserve(input_rank);
+        for (size_t i = 0; i < leading; ++i) {
+            begins_padded_storage.push_back(static_cast<T>(0));
+            ends_padded_storage.push_back(static_cast<T>(input_shape[i]));
+            step_padded_storage.push_back(static_cast<T>(1));
+        }
+        begins_padded_storage.insert(begins_padded_storage.end(), begins.begin(), begins.end());
+        ends_padded_storage.insert(ends_padded_storage.end(), ends.begin(), ends.end());
+        step_padded_storage.insert(step_padded_storage.end(), step.begin(), step.end());
+        begins = ttsl::Span<const T>(begins_padded_storage.data(), begins_padded_storage.size());
+        ends = ttsl::Span<const T>(ends_padded_storage.data(), ends_padded_storage.size());
+        step = ttsl::Span<const T>(step_padded_storage.data(), step_padded_storage.size());
+    }
 
     bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
