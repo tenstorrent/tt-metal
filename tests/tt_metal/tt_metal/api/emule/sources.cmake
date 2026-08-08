@@ -36,3 +36,5 @@ list(
 # Sources for the standalone per-fiber sanitizer-state isolation binary
 # (unit_tests_fiber_asan); the target is defined in ../CMakeLists.txt.
 set(UNIT_TESTS_FIBER_ASAN_SOURCES ${CMAKE_CURRENT_LIST_DIR}/test_fiber_sanitizer_isolation.cpp)
+
+set(UNIT_TESTS_EMULE_HOST_WAIT_SOURCES ${CMAKE_CURRENT_LIST_DIR}/test_emule_host_wait.cpp)

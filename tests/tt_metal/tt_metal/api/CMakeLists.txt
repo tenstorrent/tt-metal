@@ -149,4 +149,25 @@ if(TT_METAL_USE_EMULE)
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal
     )
+
+    # Host-interleaved dispatch fence. Own binary for the same reason as unit_tests_fiber_asan:
+    # it reaches emule_fiber_scheduler.hpp, which pulls in jit_hw/internal/emule_thread_ctx.h.
+    add_executable(unit_tests_emule_host_wait ${UNIT_TESTS_EMULE_HOST_WAIT_SOURCES})
+    target_include_directories(
+        unit_tests_emule_host_wait
+        BEFORE
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+            ${TT_EMULE_PATH}/include
+    )
+    target_link_libraries(unit_tests_emule_host_wait PRIVATE test_metal_common_libs)
+    target_precompile_headers(unit_tests_emule_host_wait REUSE_FROM metal_common_pch)
+    target_link_options(unit_tests_emule_host_wait PRIVATE -rdynamic)
+    set_target_properties(
+        unit_tests_emule_host_wait
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
 endif()

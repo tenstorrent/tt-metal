@@ -52,6 +52,25 @@ bool logical_cores_intersect(
     return false;
 }
 
+#ifdef TT_METAL_USE_EMULE
+// Drive a parked host-interleaved run to completion. wait_for_cores_idle() is a no-op under emule,
+// so this is what makes "the device has finished" true; scoped to this mesh's own devices.
+// Fence points only: a path that FEEDS the device must not drain, or it wedges the kernel awaiting it.
+void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::TargetDevice target) {
+    if (target != tt::TargetDevice::Emule) {
+        return;
+    }
+    std::vector<int> device_ids;
+    device_ids.reserve(mesh_device->get_devices().size());
+    for (const auto& device : mesh_device->get_devices()) {
+        device_ids.push_back(static_cast<int>(device->id()));
+    }
+    tt::tt_metal::emule::drain_device(device_ids);
+}
+#else
+void drain_emule_run(tt::tt_metal::distributed::MeshDevice*, tt::TargetDevice) {}
+#endif
+
 }  // namespace
 
 namespace tt::tt_metal::distributed {
@@ -133,7 +152,9 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
-    // Wait for idle here to ensure that programs emitting this data are complete.
+    // Wait for idle here to ensure that programs emitting this data are complete. Under emule the
+    // drain is what makes that true — wait_for_cores_idle() walks a map the emule path never fills.
+    drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -337,6 +358,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
     auto lock = lock_api_function_();
+    drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
 }
 
@@ -376,6 +398,7 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
         return;
     }
     auto lock = lock_api_function_();
+    drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     for (const auto& device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
@@ -390,7 +413,11 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     active_distributed_context_->barrier();
 }
 
-void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
+// MeshCommandQueueBase's blocking-transfer completion hook. Slow dispatch has nothing to wait on,
+// but under emule the contract still has to hold: leave no parked run behind.
+void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {
+    drain_emule_run(mesh_device_, get_target_device_type());
+}
 
 void SDMeshCommandQueue::reset_worker_state(
     bool,
