@@ -544,18 +544,19 @@ KernelHandle detail::ProgramImpl::add_kernel(
     return id;
 }
 
-std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) const {
+const std::shared_ptr<Kernel>& detail::ProgramImpl::get_kernel(KernelHandle kernel_id) const {
     // TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id,
     // this->id);
     //  find coretype based on kernel_id
     for (const auto& kernels : this->kernels_) {
-        if (kernels.contains(kernel_id)) {
-            return kernels.at(kernel_id);
+        if (auto it = kernels.find(kernel_id); it != kernels.end()) {
+            return it->second;
         }
     }
 
     TT_ASSERT(false, "Did not find kernel id across all core types!");
-    return nullptr;
+    static const std::shared_ptr<Kernel> not_found;
+    return not_found;
 }
 
 // ============================================================================
