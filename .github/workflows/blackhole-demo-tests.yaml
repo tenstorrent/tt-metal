@@ -19,6 +19,7 @@ on:
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
+          - vibevoice-1.5b
       system-type:
         description: "Select system type to test"
         required: false
@@ -27,6 +28,7 @@ on:
         options:
           - all
           - bh_quietbox_2
+          - bh_p150b_civ2
       build-type:
         required: false
         type: choice

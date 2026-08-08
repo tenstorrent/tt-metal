@@ -1,0 +1,8 @@
+# Auto-downloaded HF checkpoint (~5.4 GB across 3 safetensors shards)
+weights/
+
+# Auto-downloaded demo text + voice prompts
+resources/
+
+# Demo artifacts ({demo_id}/) and e2e PCC dumps:
+output/
