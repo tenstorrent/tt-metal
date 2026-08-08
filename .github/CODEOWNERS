@@ -52,6 +52,9 @@ tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT
 .github/instructions/models.instructions.md @uaydonat @yieldthought @cglagovichTT @esmalTT @mtairum @tenstorrent/codeowner-bypass
 .github/instructions/tt-train.instructions.md @ayerofieiev-tt @philei-tt @jmalone-tt @kevinwuTT @abustamanteTT @mdragulaTT @tenstorrent/codeowner-bypass
 
+# Cursor rules
+.cursor/rules/cpp-vector-allocation.mdc @ayerofieiev-tt @dgomezTT @azaytsev-epam @aliaksei-sala @tenstorrent/codeowner-bypass
+
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 cmake/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass

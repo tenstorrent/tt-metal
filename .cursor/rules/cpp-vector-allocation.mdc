@@ -1,0 +1,92 @@
+---
+description: std::vector allocation hygiene for C++ - reserve capacity before accumulating, hoist scratch buffers out of loops, and prefer moving vectors over copying them out
+globs: **/*.cpp,**/*.hpp,**/*.cc,**/*.h,**/*.cxx
+alwaysApply: false
+---
+
+# std::vector allocation hygiene
+
+Applies to `std::vector`, `ttsl::SmallVector` and other growable containers when
+writing new code or editing existing accumulation logic.
+
+## 1. reserve() before accumulating
+
+Call `reserve()` whenever the final element count is known or cheaply computable at
+the point of declaration, before any `push_back` / `emplace_back` / `insert` /
+`std::back_inserter`. A tight upper bound is acceptable when its memory cost is reasonable;
+avoid reserving a loose bound that may greatly exceed the likely final size.
+
+```cpp
+// BAD - reallocates as it grows, re-copying every element each time
+std::vector<CoreCoord> coords;
+for (const auto& range : core_ranges) {
+    coords.push_back(...);
+}
+
+// GOOD
+std::vector<CoreCoord> coords;
+coords.reserve(core_ranges.size());
+for (const auto& range : core_ranges) {
+    coords.push_back(...);
+}
+```
+
+Nested loops multiply: `v.reserve(outer.size() * inner_count)`. Algorithms writing
+through `std::back_inserter(v)` need `v.reserve(...)` just as much as a hand-written loop.
+
+Skip it only when the count is genuinely unknowable (reading until EOF, `while` over a
+queue) or when fewer than ~3 elements are appended.
+
+## 2. Hoist scratch vectors out of loops
+
+A vector declared inside a loop body allocates and frees on every iteration. Declare it
+once outside the loop, `reserve()` the per-iteration high-water mark once, and `clear()`
+at the top of each iteration. `clear()` sets the size to zero but keeps the capacity, so
+every later iteration reuses the same allocation.
+
+```cpp
+// BAD - one allocate/free pair per core
+for (uint32_t i = 0; i < num_cores; ++i) {
+    std::vector<uint32_t> args;
+    for (...) { args.push_back(...); }
+    SetRuntimeArgs(program, kernel, cores[i], args);
+}
+
+// GOOD - one allocation for the whole loop
+std::vector<uint32_t> args;
+args.reserve(max_args_per_core);
+for (uint32_t i = 0; i < num_cores; ++i) {
+    args.clear();  // size 0, capacity retained
+    for (...) { args.push_back(...); }
+    SetRuntimeArgs(program, kernel, cores[i], args);
+}
+```
+
+Do not hoist when the vector is moved out of the loop body (stored into a container,
+returned, captured). Moving from it leaves it empty with no guaranteed capacity, so the
+reuse never happens and the hoisted declaration only widens the variable's scope.
+
+## 3. Prefer moving over copying
+
+When a vector crosses a boundary - returned, or placed into a struct, pair, tuple,
+optional, variant, or another container - transfer ownership instead of copying the buffer.
+Copy only when the source vector must remain valid after the call.
+
+```cpp
+// BAD - deep-copies the whole buffer
+result.push_back(row);
+return std::make_pair(core, values);
+Config{.args = args};
+
+// GOOD
+result.push_back(std::move(row));
+return std::make_pair(core, std::move(values));
+Config{.args = std::move(args)};
+```
+
+Return a local vector plainly as `return v;` so NRVO applies. Never write
+`return std::move(v);` for a local: it suppresses the elision and forces a move
+construction. Use `std::move` on a return only for members or parameters, which are
+never elided.
+
+After moving from a vector, treat it as empty and reassign before reuse.
