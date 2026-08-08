@@ -18,21 +18,13 @@ triage flags.
 For single-rank usage, call `tt-triage` directly — `tt-run-triage` only wraps
 multi-rank runs (just like `tt-run` itself requires a binding flag).
 
-v1 supports the two legacy-mode tt-run binding flags:
-    * `--rank-binding=<yaml>` (single rank-bindings file)
-    * `--rank-bindings-mapping=<yaml>` (sub-context overlays merged into one
-      global rank list)
-
-New mode (`--mesh-graph-descriptor`) is deferred to v2. As a workaround, launch
-your workload once with tt-run new mode (Phase 1 caches the rank bindings under
-`generated/ttrun/<fingerprint>/`), then point tt-run-triage at that file:
-
-    tt-run --mesh-graph-descriptor=mesh.textproto --hosts=host0,host1 ./build/test/my_test
-    tt-run-triage --rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml -- --run=check_arc
+The rank count is discovered at runtime with a
+`tt-run ... printenv OMPI_COMM_WORLD_SIZE`, so every tt-run mode works with no
+binding-specific parsing.
 
 Examples:
     tt-run-triage --rank-binding=foo.yaml -- --run=check_arc
-    tt-run-triage --rank-bindings-mapping=mapping.yaml -- --llm-output
+    tt-run-triage --mesh-graph-descriptor=mesh.textproto --hosts=h0,h1 -- --llm-output
 """
 
 from __future__ import annotations
@@ -52,89 +44,46 @@ TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 
 # tt-run runs triage under `mpirun --tag-output`, prefixing each line: `[<jobid>,<rank>]<stream>: <payload>`
 _TAG_RE = re.compile(r"^\[\d+,(\d+)\]<(stdout|stderr)>:\s?(.*)$")
-# Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:`
-_SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
+# Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:` (group 1 = filename).
+_HEADER_LINE_RE = re.compile(r"^([A-Za-z_]\w*\.py)(?:\s+\[[\d.]+s\])?\s*:\s*$")
 # SGR escapes — stripped before header matching (per-rank output is colored).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _extract_flag_value(tt_run_args: list[str], flag: str) -> Optional[str]:
-    """Return the value of `--flag VALUE` or `--flag=VALUE` from `tt_run_args`, else None."""
-    for i, a in enumerate(tt_run_args):
-        if a == flag and i + 1 < len(tt_run_args):
-            return tt_run_args[i + 1]
-        if a.startswith(flag + "="):
-            return a.split("=", 1)[1]
-    return None
-
-
-def _count_rank_binding_yaml(path: str | Path) -> int:
-    import yaml
-
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: expected a YAML mapping with 'rank_bindings'")
-    bindings = data.get("rank_bindings") or []
-    if not bindings:
-        raise ValueError(f"{path}: 'rank_bindings' is missing or empty")
-    return len(bindings)
-
-
-def _count_rank_bindings_mapping_yaml(path: str) -> int:
-    import yaml
-
-    p = Path(path).resolve()
-    with open(p) as f:
-        data = yaml.safe_load(f)
-    if data is not None and not isinstance(data, dict):
-        raise ValueError(f"{path}: expected a YAML mapping with 'subcontext_id_to_rank_bindings'")
-    raw_map = (data or {}).get("subcontext_id_to_rank_bindings")
-    if not raw_map:
-        raise ValueError(f"{path}: missing or empty 'subcontext_id_to_rank_bindings'")
-    total = 0
-    for overlay_value in raw_map.values():
-        overlay_path = Path(overlay_value)
-        if not overlay_path.is_absolute():
-            candidate = (p.parent / overlay_path).resolve()
-            overlay_path = candidate if candidate.is_file() else overlay_path
-        total += _count_rank_binding_yaml(overlay_path)
-    return total
-
-
-def _discover_rank_count(tt_run_args: list[str]) -> int:
-    rb = _extract_flag_value(tt_run_args, "--rank-binding")
-    if rb is not None:
-        return _count_rank_binding_yaml(rb)
-    rbm = _extract_flag_value(tt_run_args, "--rank-bindings-mapping")
-    if rbm is not None:
-        return _count_rank_bindings_mapping_yaml(rbm)
-    if _extract_flag_value(tt_run_args, "--mesh-graph-descriptor") is not None:
-        print(
-            "Error: --mesh-graph-descriptor (tt-run new mode) is not supported in v1 of tt-run-triage.\n"
-            "Run `tt-run --mesh-graph-descriptor=...` once to populate the Phase 1 cache,\n"
-            "then point tt-run-triage at the generated bindings file:\n"
-            "    tt-run-triage --rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml -- ...",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    print(
-        "Error: tt-run-triage requires one of --rank-binding=<yaml> or --rank-bindings-mapping=<yaml>.\n"
-        "For single-rank triage, call `tt-triage` directly.",
-        file=sys.stderr,
+def _probe_rank_count(tt_run_args: list[str]) -> int:
+    """Discover the rank count by launching a `tt-run ... printenv OMPI_COMM_WORLD_SIZE`"""
+    cmd = ["tt-run", *tt_run_args, "printenv", "OMPI_COMM_WORLD_SIZE"]
+    print("[tt-run-triage] counting ranks...", file=sys.stderr)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    for raw in proc.stdout.splitlines():
+        m = _TAG_RE.match(raw.strip())
+        val = (m.group(3) if m else raw).strip()
+        if val.isdigit():
+            return int(val)
+    sys.stderr.write(
+        f"[tt-run-triage] rank count probe failed (exit {proc.returncode}); output:\n{proc.stdout}{proc.stderr}\n"
     )
     raise SystemExit(2)
 
 
 class TextStreamingRenderer:
-    """Buffers per-rank lines between script headers; renders each script's
-    section once all N ranks have moved past it."""
+    """Renders each triage script's per-rank output in canonical execution order."""
 
-    def __init__(self, expected_ranks: int):
+    def __init__(self, expected_ranks: int, scripts: dict):
         from rich.console import Console
         from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+        import triage
 
         self.N = expected_ranks
+        self.order = [s.name for s in triage.resolve_execution_order(scripts)]
+        self.order_index = {name: i for i, name in enumerate(self.order)}
+        self.is_provider = {s.name: bool(s.config.data_provider) for s in scripts.values()}
+
+        # `lines[script][rank]` is a rank's output for a script; `current[rank]` is
+        # the script it is mid-emitting; `next_row` streams down the fixed order.
+        self.lines: dict[str, dict[int, list[str]]] = {name: {} for name in self.order}
+        self.current: dict[int, str] = {}
+        self.next_row = 0
 
         out_width = None if sys.stdout.isatty() else 10000
         self.console = Console(
@@ -143,7 +92,6 @@ class TextStreamingRenderer:
             width=out_width,
             file=sys.stdout,
         )
-
         self.progress = Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),
@@ -155,71 +103,68 @@ class TextStreamingRenderer:
         self.progress.start()
         self.ranks_task = self.progress.add_task("(waiting for first record)", total=self.N)
 
-        self.rank_current_script: dict[int, str] = {}
-        self.rank_current_lines: dict[int, list[str]] = {}
-        self.seen_scripts: list[str] = []
-        self.script_lines: dict[str, dict[int, list[str]]] = {}
-        self.rendered_scripts: set[str] = set()
-
     def on_line(self, rank: int, payload: str) -> None:
-        header = _ANSI_RE.sub("", payload).strip()
-        if _SCRIPT_HEADER_RE.match(header):
-            new_script = header.rstrip(":")
-            self._flush_rank(rank)
-            if new_script not in self.script_lines:
-                self.seen_scripts.append(new_script)
-                self.script_lines[new_script] = {}
-            self.rank_current_script[rank] = new_script
-            self.rank_current_lines[rank] = []
-            self._pump()
-        elif rank in self.rank_current_script:
-            self.rank_current_lines[rank].append(payload)
-
-    def _flush_rank(self, rank: int) -> None:
-        if rank not in self.rank_current_script:
-            return
-        script = self.rank_current_script.pop(rank)
-        lines = self.rank_current_lines.pop(rank)
-        self.script_lines[script][rank] = lines
+        header = _HEADER_LINE_RE.match(_ANSI_RE.sub("", payload).strip())
+        if header and header.group(1) in self.lines:
+            self.current[rank] = header.group(1)
+            self.lines[header.group(1)][rank] = []
+            self._advance()
+        elif rank in self.current:
+            self.lines[self.current[rank]][rank].append(payload)
 
     def on_eof(self) -> None:
-        # Final script of each rank has no "next header" — flush at exit.
-        for rank in list(self.rank_current_script.keys()):
-            self._flush_rank(rank)
-        self._pump(final=True)
+        self._advance(final=True)
 
-    def _pump(self, final: bool = False) -> None:
-        for script in self.seen_scripts:
-            if script in self.rendered_scripts:
-                continue
-            finished = len(self.script_lines.get(script, {}))
-            if finished < self.N and not final:
-                self._update_progress(script, finished)
+    def _past(self, rank: int, row: int) -> bool:
+        # The rank is emitting a script after `row`, so it is done with `row`.
+        cur = self.current.get(rank)
+        return cur is not None and self.order_index[cur] > row
+
+    def _advance(self, final: bool = False) -> None:
+        while self.next_row < len(self.order):
+            done = sum(self._past(rank, self.next_row) for rank in range(self.N))
+            if done < self.N and not final:
+                self._progress(self.order[self.next_row], done)
                 return
-            self._render_script(script)
-            self.rendered_scripts.add(script)
-        self._update_progress(None, 0)
+            self._render(self.order[self.next_row])
+            self.next_row += 1
+        self._progress(None, self.N)
 
-    def _render_script(self, script: str) -> None:
-        from rich.text import Text
-
+    def _render(self, script: str) -> None:
+        reported = self.lines[script]
+        if self.is_provider.get(script):
+            if not reported:
+                return  # provider succeeded on every rank; nothing to report
+            self.console.print()
+            self.console.print(f"{script}:", markup=False, highlight=False)
+            # Providers print only on failure/skip, so reported ranks are the ones with output.
+            for rank in sorted(reported):
+                self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
+                self._print_lines(reported[rank])
+            rest = self.N - len(reported)
+            if rest:
+                self.console.print(f"  ({rest} rank(s): no failure reported)", markup=False, highlight=False)
+            return
         self.console.print()
         self.console.print(f"{script}:", markup=False, highlight=False)
-        reported = self.script_lines[script]
         for rank in range(self.N):
             self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
-            if rank not in reported:
-                self.console.print("    <no output — rank exited before this script>", markup=False, highlight=False)
-                continue
-            for line in reported[rank]:
-                # Pre-colored from the subprocess
-                self.console.print(Text.from_ansi(line), highlight=False)
+            if rank in reported:
+                self._print_lines(reported[rank])
+            else:
+                self.console.print("    (no output - rank stopped before this script)", markup=False, highlight=False)
 
-    def _update_progress(self, script: Optional[str], finished: int) -> None:
+    def _print_lines(self, lines: list[str]) -> None:
+        from rich.text import Text
+
+        for line in lines:
+            self.console.print(Text.from_ansi(line), highlight=False)  # pre-colored by the subprocess
+
+    def _progress(self, script: Optional[str], done: int) -> None:
         if script is not None:
             # reset() re-arms the spinner; otherwise completed==total marks it finished.
             self.progress.reset(self.ranks_task, total=self.N, description=script)
-            self.progress.update(self.ranks_task, completed=finished)
+            self.progress.update(self.ranks_task, completed=done)
         else:
             self.progress.update(self.ranks_task, description="(done)", completed=self.N)
 
@@ -234,7 +179,8 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     scripts = triage.TriageScript.discover_all_in_directory(str(TRIAGE_PY.parent))
     triage.parse_arguments(scripts, argv=["--disable-progress", *passthrough])
 
-    rank_count = _discover_rank_count(tt_run_args)
+    rank_count = _probe_rank_count(tt_run_args)
+    print(f"[tt-run-triage] found {rank_count} ranks", file=sys.stderr)
 
     triage_cmd = [
         sys.executable,
@@ -243,10 +189,10 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     ] + passthrough
 
     cmd = ["tt-run"] + tt_run_args + triage_cmd
+    print(f"[tt-run-triage] running triage on {rank_count} ranks", file=sys.stderr)
     print(f"[tt-run-triage] launching: {' '.join(cmd)}", file=sys.stderr)
-    print(f"[tt-run-triage] expecting {rank_count} ranks", file=sys.stderr)
 
-    renderer = TextStreamingRenderer(expected_ranks=rank_count)
+    renderer = TextStreamingRenderer(expected_ranks=rank_count, scripts=scripts)
 
     interactive = sys.stdout.isatty()
     cols = shutil.get_terminal_size().columns if interactive else 10000
