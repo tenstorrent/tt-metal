@@ -413,6 +413,16 @@ PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const Co
     return out;
 }
 
+// BRING-UP PROGRESS MARKER.
+//
+// The drainer hang lands somewhere inside bring-up (FINDINGS N+32): the failure message says only
+// "MMIO per-op timeout", leaving a 445 ms window that contains several distinct MMIO paths --
+// dram_barrier and wait_until_cores_done (both inside set_drisc_niu_mode's LaunchProgram), the static
+// TLB configure, D2HSocket construction, the drain kernel's own launch, and the heartbeat poll.
+// Naming which one stalls has so far been guesswork, and three confident mechanisms have already died
+// that way. This records the last step ENTERED so the next hang reports its own stall site.
+thread_local std::string g_bringup_step = "(not started)";
+
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
@@ -421,7 +431,11 @@ PerfDebugProfiler::PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevi
     try {
         start(mesh_device);
     } catch (const std::exception& e) {
-        log_warning(tt::LogMetal, "[perf-debug profiler] init failed ({}); disabled for this session.", e.what());
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] init failed at step [{}] ({}); disabled for this session.",
+            g_bringup_step,
+            e.what());
         stop();
     }
 }
@@ -527,9 +541,56 @@ void PerfDebugProfiler::set_drisc_niu_mode(IDevice* device, const CoreCoord& dri
         "tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp",
         drisc_logical,
         DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+    const std::string who = fmt::format("niu-mode({},{})->{}", drisc_logical.x, drisc_logical.y, stream);
+    g_bringup_step = who + ":CompileProgram";
     detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":WriteRuntimeArgs";
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
+    // This LaunchProgram is the heavyweight one: dram_barrier MMIO-polls a core in EVERY DRAM channel,
+    // then wait_until_cores_done polls the launched core.
+    g_bringup_step = who + ":LaunchProgram(dram_barrier+wait_until_cores_done)";
     detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":done";
+}
+
+// Flip every drainer's NIU in ONE launch.
+//
+// WHY THIS EXISTS (FINDINGS N+32/N+34). Flipping the NIUs one launch at a time hung the SECOND
+// drainer's bring-up, and the instrumented repro named the site 4 times out of 4:
+//
+//   init failed at step [niu-mode(3,1)->1:LaunchProgram(dram_barrier+wait_until_cores_done)]
+//
+// Every LaunchProgram carries a `dram_barrier`, which MMIO-polls a core in EVERY DRAM channel, plus
+// `wait_until_cores_done`. Done per drainer, the SECOND flip's barrier runs while the FIRST drainer is
+// already resident with its DRAM core in stream mode -- and stream mode is exactly what changes the
+// meaning of an inbound DRAM-range address on that core. The read never completes and the host eats a
+// root-port completion timeout (~210 ms, N+31).
+//
+// One launch over all the cores means one barrier, and it happens BEFORE any core is in stream mode,
+// so the hazardous ordering cannot arise. Restores (stream -> noc2axi) go through the same path.
+void PerfDebugProfiler::set_drisc_niu_mode(
+    IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream) {
+    if (drisc_logicals.empty()) {
+        return;
+    }
+    std::set<CoreRange> ranges;
+    for (const auto& c : drisc_logicals) {
+        ranges.insert(CoreRange(c, c));
+    }
+    Program p = CreateProgram();
+    CreateKernel(
+        p,
+        "tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp",
+        CoreRangeSet(ranges),
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+    const std::string who = fmt::format("niu-mode[{} cores]->{}", drisc_logicals.size(), stream);
+    g_bringup_step = who + ":CompileProgram";
+    detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":WriteRuntimeArgs";
+    detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":LaunchProgram(dram_barrier+wait_until_cores_done)";
+    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":done";
 }
 
 // Producers are armed by TT_METAL_DEVICE_PROFILER, not by us, and a lossless producer BLOCKS on a full
@@ -682,6 +743,24 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // grid order the host uses everywhere else, so a core belongs to exactly one drainer and neither can
     // see the other's rings. Nothing is shared on the device -- separate L1, separate socket, separate
     // head mirrors -- so the two drain loops never interact.
+    // ONE NIU FLIP FOR ALL DRAINERS, BEFORE ANY OF THEM IS IN STREAM MODE (FINDINGS N+34).
+    // Doing this per drainer inside the loop below is what hung drainer 1's bring-up: each flip is a
+    // LaunchProgram, every LaunchProgram carries a dram_barrier over every DRAM channel, and the second
+    // one therefore barriered across drainer 0's already-stream-mode core. Picking the cores up front
+    // costs a cheap repeat of the bank selection and removes the ordering entirely.
+    if (!tensix_drain) {
+        const uint32_t nbanks_pre = static_cast<uint32_t>(soc.get_num_dram_views());
+        const int bank_ov_pre = drisc_bank_override();
+        std::vector<CoreCoord> flip_cores;
+        for (uint32_t d = 0; d < kNSockets; d++) {
+            const uint32_t bank = (bank_ov_pre >= 0)
+                                      ? static_cast<uint32_t>((static_cast<uint32_t>(bank_ov_pre) + d) % nbanks_pre)
+                                      : kSafeBanks[d];
+            flip_cores.push_back(mesh_device->impl().pick_unused_dram_logical_core(bank));
+        }
+        set_drisc_niu_mode(ctx.device, flip_cores, 1);
+    }
+
     for (uint32_t d = 0; d < kNSockets; d++) {
         const uint32_t lo = static_cast<uint32_t>((num_cores * d) / kNSockets);
         const uint32_t hi = static_cast<uint32_t>((num_cores * (d + 1)) / kNSockets);
@@ -801,7 +880,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // stops forwarding inbound DRAM-range addresses to GDDR. The kernel restores it on the host's word.
         // A Tensix NIU is already a NoC master, so this (and the kernel's restore tail) is DRISC-only.
         if (!tensix_drain) {
-            set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
+            // NIU already flipped to stream mode for EVERY drainer by the single pre-pass above.
 
             // TT_METAL_PERF_DEBUG_NIU_TEST isolates the NIU mode flip from everything else the drainer does.
             // The flip is the ONLY thing either drainer path writes that outlives the process (NIU_CFG_0
@@ -847,6 +926,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             const tt_xy_pair tlb_core(ctx.drisc_virtual[d].x, ctx.drisc_virtual[d].y);
             if (!tlb_manager->is_tlb_mapped(tlb_core)) {
                 try {
+                    g_bringup_step = fmt::format("drainer {}: configure static TLB", d);
                     tlb_manager->configure_tlb(
                         tlb_core, /*tlb_size=*/2 * 1024 * 1024, /*address=*/0, tt::umd::tlb_data::Strict);
                 } catch (const std::exception& e) {
@@ -866,6 +946,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // X280) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
             // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
             // so the window configured just above is what puts the DRISC on the static path.
+            g_bringup_step = fmt::format("drainer {}: D2HSocket construct (writes config into DRISC L1)", d);
             ctx.sockets[d] = std::make_unique<distributed::D2HSocket>(
                 mesh_device,
                 distributed::MeshCoreCoord{
@@ -1100,6 +1181,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 
             detail::CompileProgram(ctx.device, *ctx.drain_program[d], /*force_slow_dispatch=*/true);
             detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program[d], /*force_slow_dispatch=*/true);
+            g_bringup_step = fmt::format("drainer {}: drain kernel LaunchProgram", d);
             detail::LaunchProgram(
                 ctx.device, *ctx.drain_program[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
@@ -1107,6 +1189,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // that fails to come out of reset produces no error -- the producers simply fill their rings,
             // block (they are lossless), and the workload wedges forever with a perfectly healthy card. That
             // is the same failure the X280 port hit: the host checked one hart, the rest never started, and
+            g_bringup_step = fmt::format("drainer {}: heartbeat verify", d);
             // the run hung. Poll the heartbeat instead of assuming: it must leave 0 and then advance.
             {
                 const uint64_t hb_addr =

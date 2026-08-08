@@ -82,36 +82,37 @@ private:
     // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
     static constexpr uint32_t kNRead = 2;
     static constexpr uint32_t kNRelay = 2;    // dual relay
-    // ONE DRISC. **DO NOT RAISE THIS TO 2 WITHOUT READING FINDINGS N+30.**
+    // TWO DRISC drainers, and one D2H socket per drainer -- kNSockets is both counts. Each drainer owns
+    // a disjoint contiguous slice of the grid (cores [0,60) / [60,120) at 120 cores), its own L1, its own
+    // head mirrors and its own 12 MiB socket, so the two drain loops share nothing on the device.
     //
-    // Two drainers DO lower the knee -- 100 -> ~60 at 120 cores, because idle sweep halves
-    // (32.6 -> 18.4 us), busy sweep goes 70.0 -> 38.0, and the worst sweep (which is what sets the
-    // knee) goes 81.2 -> 58.8. That part reproduced cleanly on the two measured-safe banks.
+    // WHY 2 (FINDINGS N+34). It is a 5x knee improvement, measured on the fixed bring-up path with 3 warm
+    // repeats per point and no failed runs anywhere in the sweep:
     //
-    // It is not worth it. With both drainers resident, ~8% of runs aborted (2/25 at delay 125, against
-    // 0/24 for one drainer and 0/25 for each bank alone), and the run FROZE THE HOST: `last -x` shows a
-    // boot with no preceding shutdown, i.e. a watchdog reboot, and the card came back DEGRADED --
-    // ack-write 188 ns -> 2339 ns, device-read 787 ns -> 2942 ns. A single drainer's failure mode is a
-    // card wedge that `tt-smi -r` clears in seconds; this one survives a reboot and costs the box.
+    //     drainers   knee   idle sweep   busy sweep   worst sweep
+    //        1        100     32.6 us      70.0 us      81.2 us
+    //        2         20     18.4 us      38.0 us      58.8 us
     //
-    // Each bank alone was 0/25, so the hazard looks like an INTERACTION between two resident DRISCs
-    // (two DRAM cores held in stream mode at once), not additive per-drainer risk. Unexplained.
+    // Knee is sharp: 23,000 stalls with rings pinned at 511/512 at delay 10, and 0 stalls at occ ~435 at
+    // delay 20. The gain exceeds the ~2x that halving per-sweep cost predicts, because below the knee a
+    // single drainer falls into a feedback loop (producers stall -> rings pin -> sweeps cost more) that
+    // two drainers stay out of entirely.
     //
-    // Everything below is still parameterized by this, so re-enabling is a one-line change once the
-    // interaction is understood -- but it needs a stability block, not just a knee measurement.
+    // WHY IT WAS 1 BEFORE, AND WHAT CHANGED. Two drainers used to hang ~4/80 runs and froze the host
+    // twice. The instrumented repro named the site 4 times out of 4 --
+    // `niu-mode(3,1)->1:LaunchProgram(dram_barrier+wait_until_cores_done)` -- i.e. the SECOND drainer's
+    // NIU flip, whose LaunchProgram barriers across every DRAM channel while the FIRST drainer is already
+    // resident in stream mode. Flipping every drainer's NIU in ONE launch, before any core enters stream
+    // mode, removed it: 80/80 clean, no freeze (was 42/80 clean with 4 hangs, 3 wedges and a freeze).
     //
-    // History, kept because it is the reason to watch the right metric: an earlier 2-drainer run gave
-    // idle sweep 31.9 -> 16.2 us and words split exactly 5,501,485 each with 0 stalls, but busy sweep
-    // only 83.6 -> 58.3 us (1.43x, not 2x) and the WORST sweep was UNCHANGED at ~95 us. Per-core phases
-    // halve; transport does not, because the same total bytes are merely split across two senders.
-    // **The knee is set by the worst sweep, not the mean** -- so judge any change here on worst sweep.
+    // 2 IS THE CEILING, for two independent reasons:
+    //   - exactly two DRAM cores measure safe to host a drainer (row y == 0: `0-0` and `9-0`, N+29)
+    //   - TLB windows: nwin=7 per 12 MiB socket into 16 available, so 2x7=14 fits and 3x7=21 does not
+    //     (see kHRingWords below; raising it needs SOCKET_WIN_BASE moved)
     //
-    // That earlier run necessarily placed drainer 1 on bank 1, which has since measured 12% fatal
-    // (FINDINGS N+29: a drainer is only safe on a DRAM core in NoC row y == 0). Drainer 1 now goes to
-    // bank 3 / core 9-0 instead, so the configuration is not the one those numbers describe.
-    //
-    // 2 is also the CEILING on placement grounds regardless: exactly two DRAM cores measured safe.
-    static constexpr uint32_t kNSockets = 1;
+    // Judge any change here on the WORST sweep, not the mean: an early 2-drainer attempt improved the mean
+    // busy sweep 1.43x while leaving the worst sweep at ~95 us, and the knee did not move at all.
+    static constexpr uint32_t kNSockets = 2;
     // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
     // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
     // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
@@ -230,6 +231,10 @@ private:
     // Put this DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Its own program, launched and
     // waited on, because the socket config has to be able to land in DRISC L1 before the drainer runs.
     static void set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream);
+    // Flip SEVERAL DRISC NIUs in ONE program launch. See the .cpp: doing them one-per-launch is what
+    // hung drainer 1's bring-up, because each launch carries a dram_barrier that runs while an EARLIER
+    // drainer is already resident in stream mode.
+    static void set_drisc_niu_mode(IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream);
     // Set PROFILER_TERMINATE on every worker, so producers stop BLOCKING on a full ring and just proceed.
     // Must be called on every path where the drainer does not come up: producers are armed by
     // TT_METAL_DEVICE_PROFILER independently of us, they are lossless by design, and with no consumer they
