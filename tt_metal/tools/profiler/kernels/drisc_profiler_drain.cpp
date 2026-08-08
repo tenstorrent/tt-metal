@@ -315,6 +315,7 @@ void kernel_main() {
     // things: the chunked NoC write moves the bytes (and can block on command-buffer availability), while
     // push_pages is local bookkeeping and notify_receiver is a PCIe write of the producer pointer -- one per
     // push regardless of size, so it is the part that punishes small pushes.
+    uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see process_batch)
     uint64_t c_wr_chunk = 0;
     uint64_t c_wr_push = 0;
     uint64_t c_wr_notify = 0;
@@ -467,8 +468,14 @@ void kernel_main() {
                 const uint32_t c = base_c + i;
                 const uint32_t sl = g * kGenSlots + i;
                 const uint32_t slot = kStageBase + sl * kSlotBytes;
-                volatile tt_l1_ptr uint32_t* cv =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                // NON-volatile on purpose. This control vector is in STAGING -- a snapshot the bulk read
+                // already landed and the read barrier already waited on -- so nothing mutates it while it
+                // is scanned. Through a volatile pointer the compiler must issue these 10 loads strictly
+                // one at a time, and this scan is the single largest busy-sweep cost (~45% of busy at 120
+                // cores, vs 1.2% for the head write-back). Dropping volatile lets the loads pipeline.
+                // The producing core's LIVE control vector is a different address and is still read over
+                // the NoC; only the staged copy is treated as plain memory.
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                 uint32_t* mine = &head_mirror[c * kNumRisc];
 
                 if (!seeded[c]) {
@@ -507,6 +514,14 @@ void kernel_main() {
                 for (uint32_t r = 0; r < kNumRisc; r++) {
                     mine[r] += runs[r];
                 }
+                // HEAD WRITE-BACK, timed separately. `proc` is the largest busy-sweep phase (~46% at
+                // 120 cores) and it is two very different things: a local scan of the staged control
+                // vectors, and THIS -- one 20 B noc_async_write per live core per sweep, i.e. up to 120
+                // separate NoC issues. This drainer is issue-bound rather than bandwidth-bound, so a
+                // per-core small write is exactly the shape that hurts. Splitting it says whether to
+                // attack the write-back (batch it, or write back less often) or the scan (tighten the
+                // per-RISC loops), instead of guessing which half of `proc` matters.
+                const uint64_t t_h0 = get_timestamp();
                 const uint32_t sc = kHeadScratch + hb_slot * 32u;
                 volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
                 for (uint32_t r = 0; r < kNumRisc; r++) {
@@ -518,6 +533,7 @@ void kernel_main() {
                         coords[c] & 0xFFFFu, coords[c] >> 16, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
                     kNumRisc * 4u);
                 hb_slot = (hb_slot + 1u) & (kMaxCores - 1u);
+                c_ph_head += get_timestamp() - t_h0;
 
                 frames++;
                 total_words += live;
@@ -657,6 +673,8 @@ void kernel_main() {
     out[37] = noc_index_after;
     out[38] = NOC_INDEX;
     out[39] = kReadNoc;
+    out[40] = static_cast<uint32_t>(c_ph_head & 0xFFFFFFFFu);
+    out[41] = static_cast<uint32_t>(c_ph_head >> 32);
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
