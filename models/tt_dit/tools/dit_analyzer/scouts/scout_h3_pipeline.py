@@ -43,6 +43,11 @@ print(
     "preset %s: mesh %s  sp=axis%d tp=axis%d  text/audio/video=%d/%d/%d  packed_seq=%d (padded %d)"
     % (preset, MESH, SP_AXIS, TP_AXIS, L, NUM_AUDIO, NUM_VIDEO, SEQ, PADDED)
 )
+# Axis names must follow the preset, not the 2x4 habit: at 4x8 (and prod) sp is axis1, so a
+# hardcoded ("sp", "tp") labels every finding's mesh_axis with the *other* parallelism. That
+# doesn't change any verdict or byte count (those come from the participant groups) but it
+# points a reader at the wrong axis, which is worse than saying nothing.
+AXIS_NAMES = ("sp", "tp") if SP_AXIS == 0 else ("tp", "sp")
 
 mesh_device = install(MESH, "blackhole")
 import ttnn  # noqa: E402
@@ -57,7 +62,7 @@ rep = lambda shp: recorder.entry(shp, Dist.replicated(CTX.mesh), base="in")  # n
 repf = lambda shp: recorder.entry(shp, Dist.replicated(CTX.mesh), dtype=ttnn.float32, base="in")  # noqa: E731
 
 # ---- stage 1: text encoder -> [1, 1, L, HID] (unsqueezed to match the DiT prompt) ----
-enc_graph = start(mesh_device, axis_names=("sp", "tp"), name="encoder", topology="Linear")
+enc_graph = start(mesh_device, axis_names=AXIS_NAMES, name="encoder", topology="Linear")
 enc_ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 enc_pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=MESH[TP_AXIS], mesh_axis=TP_AXIS))
 enc = Qwen3VlTextEncoder(
@@ -83,7 +88,7 @@ enc_graph.outputs = [embeds.sym]
 print("encoder stage: %d nodes, output %s" % (len(enc_graph.nodes), list(enc_graph.symbol(embeds.sym).shape)))
 
 # ---- stage 2: DiT (its prompt_1BLP is [1, 1, L, text_dim=HID] -> the handoff) ----
-dit_graph = start(mesh_device, axis_names=("sp", "tp"), name="dit", topology="Ring")
+dit_graph = start(mesh_device, axis_names=AXIS_NAMES, name="dit", topology="Ring")
 dit_ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
 dit_pc = DiTParallelConfig(
     tensor_parallel=ParallelFactor(mesh_axis=TP_AXIS, factor=MESH[TP_AXIS]),
@@ -142,7 +147,7 @@ from models.tt_dit.models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTD
 
 VAE_LAT = (37, 48, 84) if preset == "prod" else (7, 16, 16)  # latent (T, H, W); prod = real unpatchify geometry
 vf, vh, vw = VAE_LAT
-vae_graph = start(mesh_device, axis_names=("sp", "tp"), name="vae", topology="Linear")
+vae_graph = start(mesh_device, axis_names=AXIS_NAMES, name="vae", topology="Linear")
 vae = MiniMaxH3ViTDecoder3d(
     num_frames=vf,
     height=vh,
@@ -173,7 +178,7 @@ print("vae stage: %d nodes  (latent %dx%dx%d -> %d voxel tokens)" % (len(vae_gra
 from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder  # noqa: E402
 
 AUDIO_T = NUM_AUDIO // 2
-avae_graph = start(mesh_device, axis_names=("sp", "tp"), name="audio_vae", topology="Linear")
+avae_graph = start(mesh_device, axis_names=AXIS_NAMES, name="audio_vae", topology="Linear")
 adec = MiniMaxH3AudioDecoder(mesh_device=mesh_device)  # real config defaults (latent 32, dim 2048, ...)
 load_meta_weights(adec)
 # The audio decoder is a host-orchestrated HiFi-GAN vocoder: each stage (dec_in_proj, resample,

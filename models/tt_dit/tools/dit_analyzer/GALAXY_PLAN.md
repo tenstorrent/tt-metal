@@ -34,11 +34,29 @@ No verdict changed between the proxy and true scale — only the counts — whic
 bar the watch-out below sets. Three harness defects had to be cleared first; see
 [§ What the first Galaxy run cost](#what-the-first-galaxy-run-cost).
 
-**2. Conform the rest of the report.**
-The other classes — `replicated_stage ×10`, `overwide_gather`, `participant_shrink` — are
-un-tainted `likely`/`provable` but never device-checked. Trace-then-conform (laptop first);
-only survivors reach silicon. Flips the whole report from "shim believes" to **device-proven
-at 4×8**.
+**2. Conform the rest of the report** — *in progress; triage done, first survivor class conformed.*
+The other classes — `replicated_stage`, `overwide_gather`, `participant_shrink` — are un-tainted
+`likely`/`provable` but never device-checked. Trace-then-conform (laptop first); only survivors
+reach silicon.
+
+The `prod` report is **23 findings over 15 distinct nodes**. Laptop triage (`scouts/triage_w2.py`)
+found no shim artifacts — and one shared root cause. The packed sequence is
+`[text 512 | audio 414 | video 37296]` padded to 38400 over SP=8, so shard 0 spans rows
+`[0:4800)`: **the whole text and audio block lives on SP column 0.** Everything follows:
+
+| class | nodes | traffic | status |
+|---|---|---|---|
+| output-head cluster (`unused_gather`, `participant_shrink`, `replicated_stage`) | 344, 352, 356 | — | **conformed** (workstream 1, `conform_dit_heads.py`) |
+| `replicated_stage`, DiT text branch | 63, 92, 100, rs_110 | ~477 MiB/fwd | **conformed 4×8 Ring** — `conform_dit_text.py`, both checks `max\|Δ\|=0` |
+| `replicated_stage`, encoder | 22, 78, 86, 116, rs_110 | ~588 MiB/fwd | mechanism conformed at stage level (`conform_encoder.py`); per-node intermediate readback would strengthen |
+| `overwide_gather` | 274, 296, 302 | ~67 MiB/fwd | **traced, real, not yet on silicon** — see below |
+
+The `overwide_gather` gap is exact, not approximate: on device 0 the spatial matmuls read
+`[512:4800)` of a `[0:4800)` shard — they skip precisely the text rows (the "11% more data"); on
+device 7 they skip `[38222:38400)`, the 178-row padding tail (the "4%"). The device check that
+fits it is a **poison test**: fill the claimed-unread region with a sentinel, run the real fused
+AGMM, and show every consumed output is bit-identical — which also pins down that the fused
+gather+matmul keeps rows independent.
 
 **3. Validate the whole pipeline against a real run** *(highest value).*
 32 chips is the first machine that can run the real `pipeline_minimax_h3.generate()` — the
