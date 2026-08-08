@@ -5,9 +5,12 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <fmt/format.h>
@@ -76,6 +79,34 @@ void assert_true_all_ranks(const BoolLike& cond, const ContextPtr& ctx) {
 
 inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 
+// True when the experimental ZMQ backend was runtime-selected. The ZMQ context
+// does not support ULFM fault tolerance and does not implement all_reduce, so
+// the harness needs to treat it specially (run tests anyway, and sync exit
+// codes with a collective the backend actually implements).
+inline bool is_zmq_backend() {
+    const char* b = std::getenv("TT_DISTRIBUTED_BACKEND");
+    return b != nullptr && std::string_view(b) == "zmq";
+}
+
+// Exit-code equality check that only relies on all_gather (which the ZMQ
+// backend implements), instead of all_reduce. Fails the calling test if any
+// rank disagrees on `local`.
+template <typename T>
+    requires is_supported_dtype_v<T>
+void assert_equal_all_ranks_via_all_gather(const T& local, const ContextPtr& ctx) {
+    const int n = *ctx->size();
+    std::vector<T> gathered(n);
+    T send = local;
+    ctx->all_gather(
+        as_bytes_single(send),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), sizeof(T) * n));
+    for (int r = 1; r < n; ++r) {
+        ASSERT_EQ(gathered[0], gathered[r])
+            << "Rank " << *ctx->rank() << " sees disagreement: rank 0 = " << gathered[0] << ", rank " << r << " = "
+            << gathered[r];
+    }
+}
+
 //----------------------------------------------------------------------
 //  Google‑Test macro sugar
 //----------------------------------------------------------------------
@@ -129,8 +160,10 @@ inline int multihost_main(int argc, char** argv) {
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
-    // Skip all tests if lacking fault tolerance.
-    if (!ctx->supports_fault_tolerance()) {
+    // Skip all tests if lacking fault tolerance, unless the ZMQ backend is
+    // selected. ZMQ has no ULFM equivalent (supports_fault_tolerance() ==
+    // false) but we still want to exercise it end-to-end here.
+    if (!ctx->supports_fault_tolerance() && !is_zmq_backend()) {
         fmt::println(
             "Fault tolerance support is not available in this build. Skipping fault tolerance tests. "
             "Fault tolerance support via ULFM is consistently available in builds of OpenMPI from version 5.0. "
@@ -146,9 +179,14 @@ inline int multihost_main(int argc, char** argv) {
     // need to make sure that  we get context after the tests, old one could be revoked
     const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
-    // Propagate the worst return code to all ranks
-
-    ASSERT_EQ_ALL_RANKS(local_rc, context);
+    // Propagate the worst return code to all ranks. ZMQ does not implement
+    // all_reduce (used by ASSERT_EQ_ALL_RANKS), so fall back to an
+    // all_gather-based equality check for that backend.
+    if (is_zmq_backend()) {
+        assert_equal_all_ranks_via_all_gather(local_rc, context);
+    } else {
+        ASSERT_EQ_ALL_RANKS(local_rc, context);
+    }
 
     return local_rc;
 }
