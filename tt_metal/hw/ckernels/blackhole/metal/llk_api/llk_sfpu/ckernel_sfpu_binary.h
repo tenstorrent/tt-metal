@@ -113,6 +113,28 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
+        } else if constexpr (BINOP == BinaryOp::LOGADDEXP) {
+            // logaddexp(a,b) = max(a,b) + log(1 + exp(-|a-b|)); exp never overflows
+            sfpi::vFloat diff = in0 - in1;
+            sfpi::vFloat abs_diff = sfpi::abs(diff);
+            sfpi::vFloat m = in0;
+            v_if (in1 > in0) { m = in1; }
+            v_endif;
+            sfpi::vFloat exp_neg = _sfpu_exp_fp32_accurate_(-abs_diff);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = 1.0f + exp_neg;
+            _calculate_log_body_<false>(0, dst_index_out);
+            result = m + sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi];
+        } else if constexpr (BINOP == BinaryOp::LOGADDEXP2) {
+            // logaddexp2(a,b) = max(a,b) + log2(1 + 2^{-|a-b|})
+            sfpi::vFloat diff = in0 - in1;
+            sfpi::vFloat abs_diff = sfpi::abs(diff);
+            sfpi::vFloat m = in0;
+            v_if (in1 > in0) { m = in1; }
+            v_endif;
+            sfpi::vFloat exp2_neg = _sfpu_exp_fp32_accurate_(-abs_diff * 0.6931472f);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = 1.0f + exp2_neg;
+            _calculate_log_body_<false>(0, dst_index_out);
+            result = m + sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * 1.4426950f;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -193,6 +215,8 @@ inline void sfpu_binary_init() {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
+        _init_log_<APPROXIMATION_MODE>();
+    } else if constexpr (BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2) {
         _init_log_<APPROXIMATION_MODE>();
     }
 }
