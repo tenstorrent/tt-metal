@@ -238,8 +238,8 @@ void kernel_main() {
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
             tile_regs_wait();
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(post_dst0);
+            rsqrt_tile_init();
+            rsqrt_tile(post_dst0);
             tile_regs_commit();
             tile_regs_wait();
             cb_stats_reduced_obj.reserve_back(1);
