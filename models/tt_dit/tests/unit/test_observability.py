@@ -29,15 +29,20 @@ def _fresh_ledger():
     yield
 
 
-def _env_after_import(import_stmt: str, preset: str | None = None) -> str:
-    """Run `import_stmt` in a clean subprocess and return TT_METAL_LOG_KERNEL_COMPILE ('<unset>' if not
+# Fixed source; the module name travels as argv (data), never interpolated into the -c program.
+_PROBE = "import importlib, os, sys; importlib.import_module(sys.argv[1]); print(os.environ.get('TT_METAL_LOG_KERNEL_COMPILE', '<unset>'))"
+
+
+def _env_after_import(module: str, preset: str | None = None) -> str:
+    """Import `module` in a clean subprocess and return TT_METAL_LOG_KERNEL_COMPILE ('<unset>' if not
     set). `preset` sets the var before the import (to test that an explicit value survives)."""
     env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
     env.pop("TT_METAL_LOG_KERNEL_COMPILE", None)
     if preset is not None:
         env["TT_METAL_LOG_KERNEL_COMPILE"] = preset
-    code = f"import os; {import_stmt}; print(os.environ.get('TT_METAL_LOG_KERNEL_COMPILE', '<unset>'))"
-    proc = subprocess.run([sys.executable, "-c", code], cwd=_REPO_ROOT, env=env, capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, "-c", _PROBE, module], cwd=_REPO_ROOT, env=env, capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
 
@@ -90,15 +95,15 @@ def test_watchdog_heartbeats_and_records_phase():
 
 def test_dit_model_import_opts_in():
     """Importing a DiT model package sets the per-kernel-compile flag (models/tt_dit/models/__init__)."""
-    assert _env_after_import("import models.tt_dit.models") == "1"
+    assert _env_after_import("models.tt_dit.models") == "1"
 
 
 def test_bare_util_import_stays_quiet():
     """The gate must NOT flip on for non-DiT workloads that only borrow a tt_dit util (e.g. Qwen36
     imports tt_dit.utils.tensor) — otherwise it defeats the build.cpp default-off gate."""
-    assert _env_after_import("import models.tt_dit.utils.walltime") == "<unset>"
+    assert _env_after_import("models.tt_dit.utils.walltime") == "<unset>"
 
 
 def test_explicit_opt_out_wins():
     """An explicit =0 survives the model-import setdefault (a DiT run can still be silenced)."""
-    assert _env_after_import("import models.tt_dit.models", preset="0") == "0"
+    assert _env_after_import("models.tt_dit.models", preset="0") == "0"
