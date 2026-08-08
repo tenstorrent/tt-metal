@@ -201,6 +201,7 @@ tools/scaleout/exabox/health_check_test_suite/
         ├── system_info.py               # tt-smi / kmd / fw version discovery
         ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
         ├── report.py                    # post-reset normalization + actionable-failure verdict
+        ├── slurm_reboot.py              # reboot-on-failure gating + scontrol reboot/requeue (Slurm only)
         ├── jira_client.py               # JIRA ticket create / update / close / attach
         ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
         ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
@@ -211,3 +212,18 @@ The `test_infrastructure/` harness previously lived in the `exabox-infra` repo a
 spun up a nested Docker container to run the diag suite. Now that the harness ships
 in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
 directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.
+
+### Reboot-on-failure (Slurm self-heal)
+
+`--reboot-on-failure true` (default) makes a failed run try to self-heal once
+before it files a ticket: `run_health_check.py` arms
+`scontrol reboot ASAP nextstate=RESUME` on the node and `scontrol requeue`s the
+job, then exits immediately so the allocation frees, the node reboots, and Slurm
+reruns the same suite on the clean boot. `SLURM_RESTART_COUNT` caps this at one
+reboot, so a genuinely bad node stops looping and gets a ticket on the second
+failure (the JIRA body then notes it "persisted after 1 reboot(s)").
+
+This only fires under `--launch-mode slurm`; the orchestration (k8s) mode has no
+`scontrol`/`SLURM_JOB_ID` and reschedules pods itself. It also needs the job to
+be submitted with `sbatch --requeue` and the runner to have a passwordless
+`sudo scontrol` grant plus a `RebootProgram` configured on the node.
