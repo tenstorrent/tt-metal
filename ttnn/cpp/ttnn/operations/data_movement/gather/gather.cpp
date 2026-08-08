@@ -5,6 +5,8 @@
 #include "gather.hpp"
 #include <cstdint>
 
+#include "codegen/gather_codegen_device_operation.hpp"
+#include "codegen/gather_codegen_supported.hpp"
 #include "device/gather_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -186,7 +188,8 @@ Tensor gather(
     const bool sparse_grad,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    std::string_view implementation) {
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
@@ -194,6 +197,36 @@ Tensor gather(
     // Index tensor
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
+
+    // Routing decision, evaluated on the ORIGINAL (pre pre_gather_transform_tensor) tensors and the
+    // caller's raw dim -- the same point the manifest's cases/sweep vectors describe (dim, layout,
+    // dtype as the caller supplied them). Must run before the empty-tensor/composite-hop shortcuts
+    // below so an invalid selector or a forced implementation="codegen" request on an empty or
+    // irregularly-sharded tensor is still validated rather than silently swallowed by a shortcut.
+    namespace gather_ns = ttnn::operations::data_movement::gather;
+    const auto selector = gather_ns::parse_implementation(implementation);
+    const bool controls_ok =
+        gather_ns::supported_execution_controls(input_tensor, memory_config, optional_output_tensor);
+    bool use_codegen = false;
+    switch (selector) {
+        case gather_ns::ImplementationSelector::kNative: use_codegen = false; break;
+        case gather_ns::ImplementationSelector::kCodegen:
+            TT_FATAL(
+                gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor),
+                "gather: implementation=\"codegen\" requested but supported_by_codegen() rejected this input (TILE "
+                "layout, bfloat16, non-sharded input/index only)");
+            TT_FATAL(
+                controls_ok,
+                "gather: implementation=\"codegen\" does not support a sharded output memory config or a sharded "
+                "preallocated output tensor");
+            use_codegen = true;
+            break;
+        case gather_ns::ImplementationSelector::kAuto:
+        default:
+            use_codegen = controls_ok && gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor) &&
+                          !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
+            break;
+    }
 
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
@@ -220,8 +253,8 @@ Tensor gather(
         const auto tile_index =
             ttnn::to_layout(ttnn::to_memory_config(input_index_tensor, l1_interleaved), tt::tt_metal::Layout::TILE);
         auto requested_mc = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-        const auto tile_out =
-            ttnn::gather(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
+        const auto tile_out = ttnn::gather(
+            tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids, implementation);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
@@ -268,14 +301,22 @@ Tensor gather(
         optional_output_tensor_value = output_tensor;
     }
 
-    Tensor gather_tensor = ttnn::prim::gather(
-        padded_input_tensor,
-        normalized_dim,
-        padded_index_tensor,
-        sparse_grad,
-        memory_config_value,
-        optional_output_tensor_value,
-        sub_core_grids);
+    Tensor gather_tensor = use_codegen ? ttnn::prim::gather_codegen(
+                                             padded_input_tensor,
+                                             normalized_dim,
+                                             padded_index_tensor,
+                                             sparse_grad,
+                                             memory_config_value,
+                                             optional_output_tensor_value,
+                                             sub_core_grids)
+                                       : ttnn::prim::gather(
+                                             padded_input_tensor,
+                                             normalized_dim,
+                                             padded_index_tensor,
+                                             sparse_grad,
+                                             memory_config_value,
+                                             optional_output_tensor_value,
+                                             sub_core_grids);
 
     return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor,
