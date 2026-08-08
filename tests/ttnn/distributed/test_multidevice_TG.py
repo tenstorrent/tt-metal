@@ -330,6 +330,8 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, mesh_shape, mesh_device):
 )
 # Llama residual add
 def test_galaxy_eltwise_add(M, N, mesh_device):
+    if (M, N) in [(512, 8192), (256, 16 * 1024)]:
+        pytest.skip("Skipping due to L1 buffer clash / OOM on wh_galaxy, refs #47034")
     torch.manual_seed(1234)
 
     residual_pt = torch.randn(1, 1, M, N)
