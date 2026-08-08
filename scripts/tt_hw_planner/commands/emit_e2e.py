@@ -1746,14 +1746,28 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 
-Expose a MODULE-LEVEL factory `build_pipeline(device, model=None, **kwargs)` in tt/pipeline.py that
+Expose a MODULE-LEVEL factory `build_pipeline(device, model=None, layers=None, **kwargs)` in
+tt/pipeline.py that
 CONSTRUCTS AND RETURNS the resident pipeline OBJECT — the one carrying PIPELINE_STAGES and the
 per-stage <stage>_trace_setup/_trace_step hooks (+ the AR decode contract). This is the
 SINGLE entry the perf harness (optimize's generated test) calls to OBTAIN that object for
 measurement. It MUST return the object, NOT run it — no generate()/run_tts()/one-shot result, which
 exposes none of the hooks and makes the trace engine skip. Accept and ignore any demo kwargs (text,
 prompt, language, …) for call-signature compatibility; the resident build derives its shapes from the
-config, not a prompt. `trace_capture_selftest` and the demo entry MUST build through this same factory
+config, not a prompt.
+
+`layers` CAPS THE DEPTH BUILT, and None means every layer -- never 0, which a builder reads as a
+zero-layer model. Build exactly `layers` repeats of the model's repeated block (the decoder /
+transformer stack) and leave everything else -- embeddings, norms, heads -- intact, so a capped build
+still exercises every DISTINCT op the full model runs, just fewer times.
+
+This exists because profiling is per-op, not per-layer: two layers surface the same op set as
+forty-eight at a fraction of the cost, and optimize profiles many times per run. Without it every
+profiling pass builds and runs the whole stack. Pipelines that omitted this parameter did not fail
+loudly -- the harness set TT_PERF_LAYERS, the builder ignored it, and the cap silently did nothing --
+so optimize now PROVES the knob works by capping and re-measuring the work signal, and reports it
+INERT when the op count does not move. Accepting `layers` is what makes that check pass rather than
+merely be survived. `trace_capture_selftest` and the demo entry MUST build through this same factory
 so there is ONE build surface.
 
 Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, capture ONE step in
