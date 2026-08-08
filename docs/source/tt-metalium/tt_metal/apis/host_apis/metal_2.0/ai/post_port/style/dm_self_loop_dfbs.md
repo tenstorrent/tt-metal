@@ -3,8 +3,10 @@
 > **Procedure:** [`pass_procedure.md`](../pass_procedure.md). Read it first; it is the *how*. This
 > file is the *what*, and it uses the procedure's steps unchanged.
 >
-> **Behaviour-preserving?** Yes. The converted kernel performs the same reads and writes, at the same
-> addresses, in the same order. Your sentinel tests are a real check here.
+> **Behaviour-preserving?** Yes. The converted kernel performs the same reads and writes, in the same
+> order, to and from the same remote addresses. Its own L1 region may land elsewhere — a scratchpad
+> is allocated alongside DFBs out of the same region, so the allocation order shifts — and nothing
+> functional depends on that.
 >
 > **Target:** Gen1 (Wormhole / Blackhole) ops already ported to Metal 2.0. **Data movement kernels
 > only** — see [Why data movement only](#why-data-movement-only).
@@ -71,43 +73,64 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
    kernel endpoints to sit on the same RISC core across nodes, so the binding structure is uniform
    and a spec-level answer is a per-instance answer.
 3. **Confirm every binding kernel is data movement**, not compute. See above.
-4. **Confirm the FIFO calls are used** — in each binding kernel:
+4. **Account for every use of the DFB, against a closed list.** This is the step the pass turns on,
+   and it works the other way round from a search: rather than hunting for something disqualifying,
+   you enumerate *everything* the binding kernels do with this buffer and check each use against the
+   list below. What is not on the list is not covered.
+
+   | Use | what the transformation does with it |
+   |---|---|
+   | `reserve_back` / `push_back` / `wait_front` / `pop_front` | translated — this is the fake FIFO |
+   | `get_write_ptr()` / `get_read_ptr()` | become the indices |
+   | operand of `noc.async_read` / `noc.async_write`, or their `_with_state` forms | the `Scratchpad` substitutes directly |
+
+   Start from the handle rather than from method names, so that a kernel binding several buffers
+   cannot lend one buffer's hits to another:
 
    ```bash
-   grep -nE "<the dfb's local>\.(reserve_back|push_back|wait_front|pop_front|pages_reservable_at_back|pages_available_at_front)" <the binding kernel>
+   grep -nE "<the dfb's local>|dfb::<its accessor name>" <each binding kernel>
    ```
 
-   **A hit on either of the last two is a stop, not a site.** Those read the DFB's credit counters
-   without blocking, and this pass's translation deletes the credit posts along with the calls that
-   made them — sound only while nothing reads them, which here something does. Note also that neither
-   name contains any of the first four as a substring, so a grep written from memory will miss them.
-   Report the site and carry on surveying; see [When to stop](#when-to-stop).
+   Then read every hit and attribute it. Follow the handle — and the id it was built from — into any
+   function, constructor, or template argument it is passed to, out of the op directory if that is
+   where it leads.
 
-   **Grep for calls on *that DFB's handle*, not for the method names loose in the file.** A kernel
-   binding several buffers will show plenty of hits belonging to the others, and a bare name-grep
-   then reads as "this one uses the FIFO" for a buffer that never touches it. Attribute every hit to
-   its receiver.
+   **Anything not on the list is a stop.** Not a smaller conversion and not a judgement call: report
+   the use and move on. The list is short because it is exactly what the transformation below covers,
+   and a use outside it needs a decision this pass was not given. Four that really occur:
 
-   **A clean grep is not yet a verdict.** The calls need not appear in the kernel at all — a helper
-   can make them on the kernel's behalf — and this grep is stricter than most, because it requires
-   the `<handle>.<method>` spelling to appear literally. Under an RAII guard such as
-   `integral_image`'s `ReadCBGuard`, or a shared library like
-   `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl` where the synchronization is selected by a
-   template argument, no such expression exists in the kernel anywhere. Before concluding, check
-   whether the DFB's handle — or the id it was built from — is passed into any function, constructor,
-   or template argument, and follow it if it is, out of the op directory if that is where it leads.
-   The [sync-free pass](sync_free_dfbs.md) documents this failure mode in full.
+   - **Any other method on the handle** — `get_entry_size()`, `get_total_num_entries()`,
+     `get_total_size_bytes()`, `get_stride_size()`, `evil_set_write_ptr` / `evil_set_read_ptr`.
+     `get_entry_size()` is the common one by a wide margin: it is how most ported kernels spell the
+     entry size, and it is a method on the very object this pass deletes. A `Scratchpad` has no
+     equivalent, so the value would have to be reconstructed from somewhere — which is exactly the
+     guess this pass declines to make.
+   - **`pages_reservable_at_back` / `pages_available_at_front`.** These read the credit counters
+     without blocking, and the translation deletes the credit posts along with the calls that made
+     them — sound only while nothing reads them. Note that neither name contains any of the four
+     FIFO calls as a substring, so a grep written from memory misses them.
+   - **`noc.async_write_zeros`, or the DFB as a multicast destination.** Both reject a `Scratchpad`
+     outright — `async_write_zeros` accepts `CircularBuffer` or `DataflowBuffer` only, and
+     `noc_traits_t<Scratchpad<T>>::dst_addr_mcast` is a hard `static_assert(false)`. The one-token
+     substitution in [Step 3](#step-3--apply) does not reach these, and the failure is a compile
+     error only *after* you have written the whole conversion.
+   - **A FIFO call made through anything other than a `DataflowBuffer` declared in this kernel** — a
+     helper taking the DFB or its id, an RAII guard such as `integral_image`'s `ReadCBGuard`, a
+     template argument as in `ttnn/cpp/ttnn/kernel_lib/`. The translation rewrites calls sitting
+     beside the handle, with `wr` and `rd` in that scope; it has nothing to say about a call made
+     inside a callee.
 
-   **No hits on that DFB, and nothing opaque taking it → not a site for this pass.** A self-loop that
-   never calls the FIFO machinery is handled by the [sync-free pass](sync_free_dfbs.md) instead,
-   which is a smaller and safer change. Exclude that DFB from your site list, note it in your report
-   for the other pass, and **carry on surveying the rest** — this is a per-DFB verdict, not a reason
-   to stop the pass. An op can easily hold one of each.
+   **Every use on the list, and at least one of the four FIFO calls → this is a site.**
 
-   Getting this one wrong costs more than a missed site. A helper-synchronized buffer that reads as
-   having no FIFO calls is exactly what this step hands to the sync-free pass — and that pass
-   converts to a `Scratchpad`, which has no synchronization semantics at all. The two passes fail
-   into each other here, so the check has to hold in this one.
+   **Every use on the list, but none of the four FIFO calls → not a site *for this pass*.** A
+   self-loop that never calls the FIFO machinery belongs to the [sync-free pass](sync_free_dfbs.md),
+   which is a smaller and safer change. Note it in your report for that pass and **carry on surveying
+   the rest** — this is a per-DFB verdict, not a reason to stop. An op can easily hold one of each.
+
+   Getting *that* verdict wrong costs more than a missed site, which is why the helper case above is
+   a stop rather than a hand-off: a helper-synchronized buffer looks exactly like one with no FIFO
+   calls, and the sync-free pass converts to a `Scratchpad`, which has no synchronization semantics
+   at all. The two passes fail into each other here, so neither may guess.
 
 5. **Confirm the DFB is not built on borrowed memory.** Check `borrowed_from` on its
    `DataflowBufferSpec`: it must be **unset**.
@@ -122,6 +145,18 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
    tensor, and fake-FIFO bookkeeping over borrowed memory is a combination nothing in this suite has
    examined. Report it as a site this recipe does not cover, with what the buffer borrows from and
    what the kernel does with it; that is more useful than a guess.
+
+6. **Confirm the DFB's size is not overridden at runtime.** In the same factory, read the
+   `ProgramRunArgs` construction and look for a `dfb_run_overrides` entry naming this DFB.
+
+   `DataflowBufferSpec`'s `entry_size` and `num_entries` are *declared* sizes; `ProgramRunArgs` can
+   override both per execution, and the header says so beside the fields. A `ScratchpadSpec` carries
+   only `size_per_node`, fixed when the spec is built, and there is no scratchpad counterpart in
+   `ProgramRunArgs` at all — so the size reaches the kernel as a constant, and `stage.size()`, the
+   wrap point and the bounds check all come from the declared value.
+
+   **If an override names this DFB, stop and report.** Everything the translation computes would be
+   built on a number the op does not actually run with.
 
 An op with no fake-FIFO DM self-loops is a legitimate zero-site pass.
 
@@ -190,14 +225,21 @@ silently retargets every access to the next slot, which was never written. Where
 captured once and never re-derived, the index it captured is frozen at that value; the later updates
 are what [Cleanup](#cleanup) item 1 is about.
 
-**In the single-entry case — one entry, filled and drained each pass — none of this survives.** Both
-indices stay `0`, so there is no index, no stride, and no wrap: the calls simply disappear and the
-kernel indexes the scratchpad from zero.
+**You need a stride only if an index is read after it advances.** Settle that first, because if no
+index is, everything from here to the end of this subsection is moot. Ask: does any access to the
+buffer use `get_write_ptr()` or `get_read_ptr()` at a point *after* a `push_back` or `pop_front` has
+moved that pointer? If none does, then every read of that index sees `0` — the advance is dead before
+you write it, so you do not write it, and there is no stride and no wrap. The calls simply disappear
+and the kernel indexes the scratchpad from zero.
 
-Do not *expect* that case, though. A rotating buffer is just as likely — `num_entries = 2` is a
-common default even where nothing overlaps — so read the spec rather than assuming the easy shape.
+That is a question about the kernel, not about the spec. A single-entry buffer reaches it
+automatically; so does a multi-entry buffer whose kernel captures the pointer before its only
+`push_back`. It runs the other way too — `num_entries = 2` is a common default even where nothing
+overlaps — so neither a small entry count nor a large one answers it. Read what the kernel does with
+the pointer.
 
-**Where the buffer genuinely rotates**, the stride is the only extra quantity, and it is in elements:
+**Where an index *is* read after it advances**, the stride is the only extra quantity, and it is in
+elements:
 
 ```cpp
 constexpr uint32_t entry_elems = entry_size / sizeof(T);   // elements per former FIFO entry
@@ -311,8 +353,11 @@ Same shape as any DFB-to-scratchpad conversion:
 **A multi-bound spec converts as a unit.** If two kernels each self-looped on it, convert both in the
 same pass. Half a conversion — one kernel on the scratchpad, the other still binding a DFB that no
 longer exists — does not build, and splitting it across two passes gains nothing.
-- If the DFB was conditionally bound, the scratchpad is conditionally bound the same way, and the
-  kernel-side `#ifdef` guarding it stays as it is.
+- If the DFB was conditionally bound, the scratchpad is conditionally bound the same way — **and the
+  `spec.scratchpads` registration carries that same guard.** A `ScratchpadSpec` declared but bound by
+  no kernel is rejected at program creation with a `TT_FATAL`, not at compile time, so an unguarded
+  registration builds cleanly and then fails on whichever configuration skips the binding — possibly
+  not one your sentinels run. The kernel-side `#ifdef` guarding it stays as it is.
 
 Two mechanical details that will otherwise cost you a build:
 
@@ -356,10 +401,12 @@ resolves from its base, so the index has to appear explicitly — and the field 
 `offset_bytes` for a reason, so an element-indexed `wr` scales by `sizeof(T)` on the way in. (With
 byte-indexed `wr`, as when `T` varies across branches, it goes in unscaled.)
 
-This holds for every `Noc` operation — `async_read`, `async_write`, their `_with_state` forms,
-`async_write_zeros` — because they all resolve an operand the same way. Do **not** extract an address
-and pass that instead; a bare address is not a NOC operand, and reaching for `local_mem()` here is
-working around a substitution that already exists.
+This holds for `async_read`, `async_write` and their `_with_state` forms, which all resolve an operand
+the same way. It does **not** extend to `async_write_zeros`, nor to a multicast destination — both
+reject a `Scratchpad` outright, which is why [survey step 4](#step-2--survey) stops on them rather
+than letting you discover it as a compile error at the end. Within the forms it does cover, do **not**
+extract an address and pass that instead; a bare address is not a NOC operand, and reaching for
+`local_mem()` here is working around a substitution that already exists.
 
 **Where an address was genuinely needed** — an endpoint struct's `.addr` field, LLK configuration —
 use `get_base_address()`:
@@ -515,7 +562,9 @@ tests are only a backstop.
 
 1. **The index's value is never read after the update** → the update is dead, so delete it along
    with the stride and the wrap. Accesses become `stage[i]` and any address is just
-   `get_base_address()`.
+   `get_base_address()`. This should normally have been settled during [the
+   translation](#the-translation), which asks the same question before deriving a stride; this item
+   is the backstop for a case you only see once the code is in front of you.
 
    The question is **observability, not entry count.** A single-entry buffer reaches this
    automatically, since both indices stay `0` — but so does a multi-entry buffer whose kernel
@@ -532,10 +581,8 @@ tests are only a backstop.
    two genuinely differ exactly where it matters. Folding them makes the read hit the wrong entry:
    numerically wrong, and on a two-entry buffer it may well still pass a test, because the other slot
    holds recent data. **If anything touches the buffer between the push and the pop, do not fold.**
-3. **Rename the leftover locals** off `cb_` / `dfb_` prefixes, which now describe nothing. One
-   constraint on the new name: **do not call the local `scratch`.** The generated accessor lives in
-   a namespace of that name, so a local `scratch` shadows it and `scratch::<accessor>` stops
-   resolving in that scope. Name it for the buffer — `stage`, `ids` — as you would anyway.
+3. **Rename the leftover locals** off `cb_` / `dfb_` prefixes, which now describe nothing. Name each
+   one for the buffer — `stage`, `ids` — as you would anyway.
 4. **Delete a local the translation left unused.** A `uint32_t addr = dfb.get_write_ptr();` whose only
    consumer was the FIFO becomes a variable holding an index nobody reads. Check it really has no
    other use, then remove it rather than leaving the translation's scaffolding behind.
@@ -560,17 +607,27 @@ is closed on purpose.
 
 Per [When the fix doesn't fit](../pass_procedure.md#when-the-fix-doesnt-fit). Specifically here:
 
+**The general rule is [survey step 4](#step-2--survey): the kernel does something with this DFB that
+is not on the covered list.** The first two entries below are that rule; the rest are conditions it
+does not reach.
+
+- **Any use of the DFB outside the covered list** — another method on the handle (`get_entry_size()`
+  most often), `pages_reservable_at_back` / `pages_available_at_front`, `noc.async_write_zeros`, the
+  DFB as a multicast destination, or a FIFO call reached through a helper, an RAII guard or a
+  template argument rather than sitting beside the handle. Survey step 4 says why each is outside
+  what the transformation covers.
+- **`evil_set_write_ptr` / `evil_set_read_ptr` on the same DFB.** Also off the list, but worth its
+  own line because it fails differently: these move the FIFO pointers outside the four calls, so a
+  local replay does not capture the buffer's state and the translation comes out silently wrong
+  rather than unbuildable.
 - **The DFB is built on borrowed memory** (`borrowed_from` set) — it is a view onto a tensor the op
   owns, and a scratchpad is not. See survey step 5.
-- **The kernel reads the DFB's credit counters** via `pages_reservable_at_back` or
-  `pages_available_at_front`. The translation drops the credit posts, so anything observing them
-  loses state the conversion cannot reproduce. See survey step 4.
-- **The kernel does `evil_*` pointer surgery on the same DFB.** `evil_get_*` / `evil_set_*` move the
-  FIFO pointers outside the four calls, so a local replay does not capture the buffer's state and the
-  translation would be silently wrong.
-- **A rotating buffer whose `entry_size` is not already available kernel-side**, so the stride cannot
-  be written without inventing one. Do not add a compile-time arg to supply it — see [the
-  stride](#the-translation). (Single-entry buffers need no stride and never reach this.)
+- **The DFB's size is overridden at runtime** — a `dfb_run_overrides` entry names it, and a
+  scratchpad's size is fixed when its spec is built. See survey step 6.
+- **An index is read after it advances and no kernel-side value equals the spec's `entry_size`**, so
+  the stride cannot be written without inventing one. Do not add a compile-time arg to supply it —
+  see [the stride](#the-translation). (Where no index is read after advancing, there is no stride to
+  find and this does not apply.)
 - **`entry_size` is not a whole number of `T`** — `entry_size % sizeof(T) != 0` means `T` is wrong
   for this buffer, and every index built on the stride will be off.
 - **The buffer's entries are not uniform** — a variable-size `reserve_back` is fine, but a buffer
