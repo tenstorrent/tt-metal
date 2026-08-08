@@ -1,0 +1,8 @@
+{
+  "device_info": [
+    {
+      "board_type": "n300",
+      "arch": "wormhole_b0"
+    }
+  ]
+}
