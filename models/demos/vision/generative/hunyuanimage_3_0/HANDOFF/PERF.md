@@ -61,3 +61,21 @@ CCL-bound: ReduceScatter + AllGather ≈ **30% of device-kernel time** (ahead of
 HUNYUAN_VAE_AUTOCAST=bf16 HUNYUAN_CCL_LINKS=2 ./python_env/bin/python -m pytest -o timeout=0 \
   models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_host_glue_stage3_perf.py -s
 ```
+
+## 2026-08-08 — sequence-parallel win + sweeps
+
+**WIN — SP-only sequence-parallelism** (EP=32 → EP=8 token-sharding), COMMITTED @ `1be484e7`, gated `HUNYUAN_SP` (default off, byte-identical): **623.3 ms/step steady vs 906 baseline = −31%**, PCC 0.99999, **~67 s/image warm** (50-step 1024²) vs ~81–84 s. Steady = mean of steps 2..N (the harness all-step mean is compile-diluted — ignore it).
+
+Ladder (traced steady ms/step):
+
+| config | ms/step |
+|---|---|
+| **SP-only** (token-sharding) | **623** |
+| SP_FUSED-Linear | 850 |
+| baseline | 906 |
+| SP-RING (ring fabric + fused RS+MM) | 996 |
+
+The fused/ring elaborations (H-shard + AG+MM + fused Ring RS+MM + distributed RMSNorm) are numerically CORRECT (PCC 0.99999) but REGRESS on this HW → kept as gated-off scaffolds (`HUNYUAN_SP_FUSED` / `HUNYUAN_SP_RING`). Added collective traffic + Ring latency > overlap; simple token-sharding wins.
+
+- **Lever 1 (matmul block sweep) = wash** — see [`SWEEPS.md`](SWEEPS.md).
+- **Next lever: on-device VAE decode** — host ~36 s = ~54% of the warm image → target ~10–17 s on mesh; multi-day port (Mochi scaffold + novel UpsampleDCAE + conv3d blocking-fix).
