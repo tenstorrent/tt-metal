@@ -391,6 +391,7 @@ class EagerLLMExecutor:
         self._iter_named_modules = iter_named_modules
         self.mode = None
         self._kv_cache: list | None = None
+        self._decode_seed_state_needs_reset = True
 
         # todo)) this could be a composed optional for debug!
         # Output specs captured during compile (for multi-CQ pre-allocation)
@@ -829,6 +830,7 @@ class EagerLLMExecutor:
             assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
         self.mode = Mode.PREFILL
         self._assert_kv_cache_identity(kv_cache)
+        self._decode_seed_state_needs_reset = True
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -1267,9 +1269,28 @@ class EagerLLMExecutor:
             per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
             self.model.sampling.apply_decode_state(
                 [per_request_params],
-                reset_batch=False,
+                reload_sampling_params=True,
+                reset_sampling_state=False,
             )
-            self.model.sampling.seed_manager.get_new_values()
+            seed_manager = self.model.sampling.seed_manager
+            seed_slots = list(range(B))
+            if self._decode_seed_state_needs_reset:
+                seed_manager.reset_seed_from_slots(
+                    per_request_params.seed,
+                    seed_slots,
+                )
+                self._decode_seed_state_needs_reset = False
+            else:
+                seed_manager.reset_seed_from_slots_if_needed(
+                    per_request_params.seed,
+                    seed_slots,
+                )
+            seed_manager.align_seed_counters_to_positions(
+                per_request_params.seed,
+                seed_slots,
+                start_pos,
+            )
+            seed_manager.get_new_values(seed_slots)
 
         tt_tokens, tt_current_pos, tt_rot_mat_idxs, tt_page_table = self.prepare_decode_inputs_device(
             tokens, start_pos, page_table
@@ -1408,6 +1429,7 @@ class TracedLLMExecutor:
         # (correct first token + start position). Set after every prefill and at init; cleared once
         # the device has been seeded, after which steady-state steps carry state on device.
         self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
+        self._decode_seed_state_needs_reset: dict[bool, bool] = defaultdict(lambda: True)
         # Keyed per sampling-mode (True=on-device sampling, False=host), matching the per-key
         # decode trace + device page_table buffer in trace_inputs_decode. A single shared tensor
         # would let one mode's page-table update mask a needed copy on the other mode's trace
@@ -1732,6 +1754,7 @@ class TracedLLMExecutor:
         # can carry state on its own. Mark all sampling modes stale, and drop the cached page
         # tables so the first post-prefill step always re-copies (device buffers are reused).
         self._decode_needs_reseed = defaultdict(lambda: True)
+        self._decode_seed_state_needs_reset = defaultdict(lambda: True)
         self._prev_decode_page_table = defaultdict(lambda: None)
 
         batch_size, batch_seq_len = tokens.shape
@@ -2174,9 +2197,28 @@ class TracedLLMExecutor:
             per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
             self.model.sampling.apply_decode_state(
                 [per_request_params],
-                reset_batch=False,
+                reload_sampling_params=True,
+                reset_sampling_state=False,
             )
-            self.model.sampling.seed_manager.get_new_values()
+            seed_manager = self.model.sampling.seed_manager
+            seed_slots = list(range(B))
+            if self._decode_seed_state_needs_reset[sampling_on_device]:
+                seed_manager.reset_seed_from_slots(
+                    per_request_params.seed,
+                    seed_slots,
+                )
+                self._decode_seed_state_needs_reset[sampling_on_device] = False
+            else:
+                seed_manager.reset_seed_from_slots_if_needed(
+                    per_request_params.seed,
+                    seed_slots,
+                )
+            seed_manager.align_seed_counters_to_positions(
+                per_request_params.seed,
+                seed_slots,
+                start_pos,
+            )
+            seed_manager.get_new_values(seed_slots)
 
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)

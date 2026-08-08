@@ -93,7 +93,102 @@ plus `apply_decode_state(...)`.
 
 **`SamplingGenerator.apply_prefill_state(...)`**: Reset params, seeds, prompt tokens, and output state for a prefill request.
 
-**`SamplingGenerator.apply_decode_state(chunks, ...)`**: Format/merge params and apply for one model instance. Handles both simple (1 chunk) and row-sharded (multiple chunks) cases. Does NOT advance seeds — callers manage `seed_manager.get_new_values()` separately.
+**`SamplingGenerator.apply_decode_state(chunks, ...)`**: Execute the sampling
+half of vLLM's explicit decode update contract. `reload_sampling_params=True`
+formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
+prompt/output penalty state. The flags are independent. The method does NOT
+advance seeds — callers apply slot remaps first, reset/align seeds when state is
+reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
+Both command flags are required at every decode call.
+
+This contract includes the unconditional first-decode reseed for `seed=None`
+also addressed by
+[tt-metal#51556](https://github.com/tenstorrent/tt-metal/pull/51556).
+It does not depend on that PR.
+`reset_sampling_state=True` calls `reset_seed_from_slots(...)` rather than the
+conditional helper, ensuring decode-only sampling actually initializes and
+uploads fresh device seeds when both the requested and cached seed are `None`.
+
+## vLLM Decode Update Contract
+
+Refactored vLLM model adapters advertise
+`decode_input_update_contract = 1`. The vLLM TT plugin sends these adapters
+four boolean commands on every decode:
+
+- `reload_inputs`: copy every forward trace input.
+- `reload_page_table`: copy only page-table inputs while preserving
+  device-produced token/position state.
+- `reload_sampling_params`: upload sampling configuration.
+- `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
+
+The plugin also sends `slot_remap` as layout data on every version-1 decode,
+including host-sampling steps. `slot_remap[i] = j` means every persistent state
+owned by new slot `i` must take the continuing request state from old slot `j`
+before the forward reads it. This is broader than sampler state: recurrent or
+convolution state indexed by decode slot must be remapped too. Stateless
+adapters accept and may ignore the value.
+
+There are two distinct ways to implement this incompletely:
+
+1. Sending `slot_remap` only on device-sampling decodes leaves model-owned
+   recurrent/conv/RoPE state in the old slot when host sampling changes the
+   layout.
+2. Sending it on every decode but consuming it only inside the active device
+   sampling call leaves dormant seed/RNG/penalty state in the old slot during
+   host sampling. A later switch back to device sampling then resumes the wrong
+   request's state.
+
+Every slot-owning subsystem must therefore consume the remap exactly once on
+every accepted version-1 decode. State read by the forward is remapped before
+that read. A dormant sampler may consume it after successful decode/readback,
+which preserves retry safety because slot remaps are non-idempotent. An
+authoritative rebuild may replace the remap for that subsystem; inactivity may
+not. Version-0 adapters retain their historical remap behavior unchanged.
+
+Generators execute these commands without adding page-table comparisons,
+sampling-mode checks, or model-specific forced reloads. The corresponding
+vLLM plugin falls back to the legacy `reset_batch` interface for adapters that
+do not advertise the contract, preserving their existing reload and overlap
+behavior. vLLM warns that correctness is not guaranteed on that compatibility
+path. This lets vLLM land first and adapters opt in as they are refactored. The
+marker is negotiation metadata on vLLM-facing adapters only; all refactored
+generator APIs require direct callers, including demos and warmup code, to
+provide all four commands. No model-side fallback heuristics are restored. Any
+demo-side decision to retain traced inputs is made at the call site.
+
+`model_capabilities["supports_async_decode"]` is separate from contract
+versioning. It certifies that a vLLM wrapper supports split async readback and
+device-resident sampled-token feedback; wrappers without it receive explicit
+full-input reload commands instead.
+
+### Requirements for `supports_async_decode=True`
+
+A model wrapper may opt in only if all of the following hold:
+
+- `decode_forward(..., read_from_device=False)` and
+  `read_decode_output(..., async_read=True)` split submission from observational
+  readback.
+- Device sampling writes the selected token into the persistent token input
+  consumed by the next decode.
+- Decode forward advances the persistent position exactly once; sampling and
+  readback never advance it.
+- Page tables can be refreshed without copying or rebinding token, position, or
+  RoPE trace inputs.
+- All four reload commands are honored independently, without model-local
+  heuristics escalating page-table-only refresh into a full reload.
+- Slot remap applies before the forward to every persistent slot-indexed state
+  that the forward reads, in both sampling modes. Dormant sampler state is also
+  remapped exactly once after a successful host-sampling decode. For device
+  sampling, parameter upload, penalty/RNG reset, and seed advancement follow
+  in that order, with one seed advance per sampled token.
+- Persistent buffers remain valid through deferred readback and until an
+  explicit reload replaces them.
+
+If any item is unsupported, leave the capability absent or `False`. vLLM will
+disable async scheduling and issue a full input reload for every decode. The
+authoritative mode definitions, transition matrix, and correctness invariant
+live in the paired vLLM plugin document
+`plugins/vllm-tt-plugin/docs/decode-reload-contract.md`.
 
 ## Pitfalls
 

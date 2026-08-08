@@ -477,7 +477,10 @@ def run_batch_generation(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 enable_trace=enable_decode_trace,
-                reset_batch=(iteration == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             if isinstance(decode_out, tuple):
                 logits = decode_out[0]
@@ -654,6 +657,10 @@ def _run_generation_via_generator(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=None,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         out_tok = _host_sample_greedy(logits)
         profiler.end(f"inference_decode_time_{iteration}")
