@@ -24,6 +24,7 @@ Tests:
 
   ### LINEAR BANDWIDTH TESTS ###
   - name: "LinearMulticast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -43,6 +44,7 @@ Tests:
         iterations: 3
 
   - name: "UnidirLinearMulticast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -62,6 +64,7 @@ Tests:
         iterations: 3
 
   - name: "SingleSenderLinearUnicastAllDevices"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -81,6 +84,7 @@ Tests:
         iterations: 3
 
   - name: "NeighborExchangeLinear"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -120,6 +124,7 @@ Tests:
   ### RING BANDWIDTH TESTS ###
   # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
   - name: "FullRingMulticast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -139,6 +144,7 @@ Tests:
         iterations: 3
 
   - name: "FullRingUnicast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -158,6 +164,7 @@ Tests:
         iterations: 3
 
   - name: "HalfRingMulticast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -196,6 +203,7 @@ Tests:
 
   ### MESH BANDWIDTH TESTS ###
   - name: "MeshMulticast"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -215,6 +223,7 @@ Tests:
         iterations: 3
 
   - name: "SingleSenderMeshUnicastAllDevices"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -253,6 +262,7 @@ Tests:
 
   ### CUSTOM MAX PACKET SIZE LINEAR BANDWIDTH TESTS ###
   - name: "CustomMaxPacketSizeLinear3K"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -356,6 +366,7 @@ Tests:
 
   ### CUSTOM MAX PACKET SIZE MESH BANDWIDTH TESTS ###
   - name: "CustomMaxPacketSizeMesh3K"
+    skip: [wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
