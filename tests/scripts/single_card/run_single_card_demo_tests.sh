@@ -57,6 +57,15 @@ run_bge_m3_demo() {
 
 }
 
+run_modernbert_func() {
+
+  # ModernBERT masked-LM and embedding-similarity demos.
+  # demo.py does not match pytest's test_*.py pattern, so it only runs by explicit path.
+  $PYTEST_CMD models/demos/modernbert/demo/demo.py --timeout 1200
+  echo "LOG_METAL: ModernBERT Demo completed"
+
+}
+
 run_yolov11_func() {
 
  #Yolov11 Demo
