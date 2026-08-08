@@ -12,7 +12,6 @@ Uses create_model context manager (HostInterface loopback); validates prefill
 from __future__ import annotations
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
@@ -51,17 +50,11 @@ def test_prefill_and_decode(
         # Phase 2: Decode - loopback mode echoes token IDs.
         for step in range(num_decode_steps):
             token_id = prompt_length + step
-            torch_input = torch.full((batch_size, 1), token_id, dtype=torch.int32)
-            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = model.decode_step(input_tensor)
-            result_token_id = token_codec.extract_token_id(output_tensor)
+            model.write_input(token_id)
+            result = model.read_result()
             assert (
-                result_token_id == token_id
-            ), f"Decode step {step} loopback mismatch: expected token {token_id}, got {result_token_id}"
-
-        assert (
-            model.position == prompt_length + num_decode_steps
-        ), f"Position after decode: expected {prompt_length + num_decode_steps}, got {model.position}"
+                result.base_token == token_id
+            ), f"Decode step {step} loopback mismatch: expected token {token_id}, got {result.base_token}"
 
     logger.info("Prefill and decode test passed")
 
