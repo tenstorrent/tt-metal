@@ -76,19 +76,14 @@ void kernel_main() {
     }
 
 #elif defined(PROBE_CAS)
+#if defined(ARCH_QUASAR)
     // 4-bit compare-and-swap (single writer). Host inits the word to 5.
     //   CAS(cmp=5, swap=9) -> succeeds (word 5 -> 9)
     //   CAS(cmp=5, swap=2) -> fails (word is 9) -> unchanged
     // Host verifies the final word == 9. Only the lowest user DM acts.
-    bool is_writer = true;
-#if defined(ARCH_QUASAR)
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
-    is_writer = (hart == 2);  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
-#elif !defined(COMPILE_FOR_BRISC)
-    is_writer = false;  // Gen1: only BRISC acts
-#endif
-    if (is_writer) {
+    if (hart == 2) {  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
         const uint32_t src_index = (uint32_t)((sem_addr >> 2) & 0x3);
         const uint64_t at_len_cas_ok =
             NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(9 & 0xF) << 6) | ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
@@ -99,6 +94,7 @@ void kernel_main() {
         noc_raw_atomic(self_noc_addr, at_len_cas_fail, 0);
         noc_async_atomic_barrier();
     }
+#endif
 
 #elif defined(PROBE_CAS_RET)
 #if defined(ARCH_QUASAR)

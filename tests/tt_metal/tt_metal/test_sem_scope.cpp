@@ -144,7 +144,7 @@ protected:
     // Multi-DM concurrency proof (Quasar-only; roles gated by mhartid in the kernel).
     // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP,
     // PRODUCER_CONSUMER or MULTI_CONSUMER. counter_access labels the counter binding for the
-    // census (MULTI_CONSUMER really down()s, so its tests pass CONSUME). Returns the value()
+    // census (modes that really down() pass CONSUME). Returns the value()
     // the reporter/consumer read back.
     uint32_t run_concurrent(
         SemaphoreScope scope,
@@ -412,6 +412,9 @@ protected:
         // every census kernel binds counter_sem, so a multi-kernel census has >= 2 binder kernels
         // and can never resolve DM_LOCAL_CACHED -- no seeder coexists.
         EXPECT_LE(kernels.size(), 3u) << "run_census supports at most 3 kernels (barrier slots)";
+        if (kernels.size() > 3u) {
+            return {kNoReport, 0u};
+        }
         // WorkUnitSpecs must have DISJOINT target nodes, so kernels sharing a node go into ONE work
         // unit (a work unit holds a Group of kernels). Grouped here by node, preserving order.
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
@@ -427,7 +430,8 @@ protected:
                     .accessor_name = "counter",
                     .access_type = k.access,
                 }},
-                .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
             bool placed = false;
@@ -497,7 +501,7 @@ protected:
     // readback can prove the host actually emitted the bit.
     uint32_t census_read_only_{kNoReport};
 
-    // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
+    // Where the binding kernel is placed (defaults to `core`). Set wider to build the
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
     experimental::Nodes kernel_target_{core};
 
@@ -604,13 +608,15 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
 // down()'s decrement is atomic vs concurrent producer increments (a non-atomic down() loses
 // producer increments -> the consumer starves and the test times out).
 TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
-    const uint32_t observed = run_concurrent(SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER");
+    const uint32_t observed = run_concurrent(
+        SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
-    const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
+    const uint32_t observed = run_concurrent(
+        SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
 }
@@ -639,6 +645,7 @@ TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
     }
     const uint32_t observed = run_concurrent(
         SemaphoreScope::EXTERNAL, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    log_info(LogTest, "EXTERNAL multi-consumer down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "EXTERNAL multi-consumer down() double-spent or lost a credit";
 }
 
@@ -826,7 +833,8 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
             .source = kernel_path_census,
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
-            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
     };
@@ -976,8 +984,10 @@ TEST_F(SemScopeFixture, TestWriterBindingBakesMutable) {
     EXPECT_EQ(census_read_only_, 0u) << "a default (INCREMENT) binding must bake read_only=0";
 }
 
-// ...but an OBSERVE reader DOES count for node confinement: a reader on another node would read that
-// node's pool copy, so the semaphore must not be cached.
+// ...and an off-node OBSERVE reader also blocks the cached path: it would read that node's pool
+// copy. The single-binder rule alone already forces EXTERNAL here too (a reader can't share the
+// writer's kernel: double bindings are rejected), so this pins the reader rule end-to-end rather
+// than in isolation.
 TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a reader off the semaphore's node";
@@ -994,6 +1004,26 @@ TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
     log_info(LogTest, "census off-node observer: scope={}", scope);
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
         << "a READER off the semaphore's node must also block the cached path (it would read a different copy)";
+}
+
+// A CONSUME binder off the semaphore's node would build and then hang (down() spins on its LOCAL
+// word), so both AUTO and forced EXTERNAL reject it at build time. increments stays 0: with
+// EXPECT_ANY_THROW the program never runs. (make_program_with_forced_scope cannot express a
+// CONSUME binding, so the forced leg reuses the census shape.)
+TEST_F(SemScopeFixture, TestCensusOffNodeConsumerFatal) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to place a consumer off the semaphore's node";
+    }
+    const std::vector<CensusKernel> off_node_consumer{
+        {.node = second_node(),
+         .num_threads = 1,
+         .access = experimental::SemaphoreAccessType::CONSUME,
+         .increments = 0,
+         .reporter = true}};
+    EXPECT_ANY_THROW(run_census(core, off_node_consumer))
+        << "AUTO must reject a CONSUME binder off the semaphore's node (a guaranteed hang)";
+    EXPECT_ANY_THROW(run_census(core, off_node_consumer, SemaphoreScope::EXTERNAL))
+        << "forced EXTERNAL must also reject an off-node CONSUME binder";
 }
 
 // Explicit scopes must still win over the classifier.
@@ -1013,11 +1043,11 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
 }
 
 // ---- CONSUME / SET census behavior ----
-// The CONSUME guard is gone: multi-consumer down() is safe on both atomic tiers (cached CAS
-// retry loop; EXTERNAL NoC-CAS lock), so CONSUME shapes resolve freely and these tests pin the
-// RESOLUTIONS instead. The SET guard stays mechanism-independent (no scope can make a
-// destructive store atomic). Nothing in the tree labels CONSUME/SET today, so without these
-// tests the remaining guard -- and the lifted census -- could rot unnoticed.
+// The multi-consumer FATAL is gone: down() is multi-consumer-safe on both atomic tiers (cached
+// CAS retry loop; EXTERNAL NoC-CAS lock), so those shapes resolve freely and these tests pin the
+// RESOLUTIONS instead. An off-node consumer still FATALs (see TestCensusOffNodeConsumerFatal),
+// and the SET guard stays mechanism-independent (no scope can make a destructive store atomic).
+// Nothing in the tree labels CONSUME/SET today, so these tests are the rot protection.
 
 // The 2-thread single-kernel CONSUME shape passes cached_geometry_ok, so only the old
 // pre-decision FATAL could have blocked it: it must now BUILD and resolve DM_LOCAL_CACHED

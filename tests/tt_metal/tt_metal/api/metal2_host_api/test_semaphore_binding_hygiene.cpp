@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cctype>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <gtest/gtest.h>
 
@@ -33,7 +34,7 @@ namespace {
 //
 // The tree is clean today; this test fails if a Metal 2.0 kernel source goes raw.
 //
-// SCOPE / LIMITS (deliberate, be honest about them):
+// SCOPE / LIMITS (deliberate):
 //  - LEGACY kernels are not checked and do not matter: they never reach the AUTO path
 //    (it lives in MakeProgramFromSpec), and they manage their own CreateSemaphore words.
 //  - This is a source lint, not a proof. It can be defeated by macros, helper functions,
@@ -173,15 +174,14 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
 // mask a real regression in that file.
 // Entries are anchored on '/' so a file merely CONTAINING an entry's name is not exempt.
 bool is_allowlisted(const std::string& path) {
-    // Hardware keystone probes: these deliberately issue raw NoC/RISC-V atomics at SCRATCH L1
-    // addresses (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
-    // self-targeted-atomic keystone, the DM cache-line-width probe, the NoC atomic-opcode probe,
-    // and the two CAS keystones (cached 32-bit LR/SC drain; NoC CAS-lock drain).
-    // Raw access is the thing under test, so they must stay raw.
+    // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1 addresses
+    // (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
+    // self-targeted-atomic keystone (noc_self_atomic), the DM cache-line-width probe
+    // (dm_cacheline_probe), the NoC atomic-opcode probe (noc_atomic_ops_probe), and the NoC
+    // CAS-lock drain keystone (noc_self_cas_drain). Raw access is the thing under test.
     if (path.find("/dm_cacheline_probe.cpp") != std::string::npos ||
         path.find("/noc_self_atomic.cpp") != std::string::npos ||
         path.find("/noc_atomic_ops_probe.cpp") != std::string::npos ||
-        path.find("/dm_cas32.cpp") != std::string::npos ||
         path.find("/noc_self_cas_drain.cpp") != std::string::npos) {
         return true;
     }
