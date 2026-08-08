@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 
 namespace {
 
-constexpr uint32_t kWaitSpinIterations = 512;
+constexpr uint32_t kWaitSpinIterations = 256;
 
 }  // namespace
 
@@ -42,7 +42,6 @@ RealtimeProfilerService& realtime_profiler_service() {
 void register_builtin_realtime_profiler_consumers() {
     [[maybe_unused]] static const bool registered = [] {
 #if defined(TRACY_ENABLE)
-        // DEFAULT_CONTEXT_ID is the only silicon context; mock contexts start at 1 (find_free_context_id_locked).
         auto tracy_consumer = std::make_shared<RealtimeProfilerTracyConsumer>(DEFAULT_CONTEXT_ID);
         tracy_consumer->set_handle(experimental::RegisterProgramRealtimeProfilerCallback(
             [tracy_consumer](const experimental::ProgramRealtimeRecordBatch& batch) {
@@ -60,7 +59,7 @@ RealtimeProfilerService::~RealtimeProfilerService() {
             log_warning(
                 tt::LogMetal,
                 "[Real-time profiler] Service destroyed with {} producer(s) still attached; a MeshDevice outlived the "
-                "MetalContext. Close all devices before teardown.",
+                "MetalContext.",
                 attached_producers_.size());
             attached_producers_.clear();
         }
@@ -207,7 +206,7 @@ void RealtimeProfilerService::run_consumer(
     };
 
     while (!stop_token.stop_requested()) {
-        // Snapshot before checking work, so a concurrent publication or control change isn't missed.
+        // we snapshot before checking work, so a concurrent publication or control change isn't missed.
         const uint32_t wake_token = wake_generation_.load(std::memory_order_acquire);
 
         if (registration.control_pending.load(std::memory_order_acquire)) {
@@ -286,7 +285,6 @@ void RealtimeProfilerService::run_consumer(
 }
 
 void RealtimeProfilerService::reap_retired_consumers() {
-    // A consumer thread reaping would join itself; it is never the one that cleans up.
     if (current_registration_ != nullptr) {
         return;
     }
@@ -301,7 +299,6 @@ void RealtimeProfilerService::reap_retired_consumers() {
             it = next;
         }
     }
-    // Outside the lock: destroy_consumer joins.
     for (auto& node : retired) {
         destroy_consumer(node.mapped());
     }

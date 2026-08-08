@@ -340,7 +340,7 @@ public:
 
 private:
     // avoids futex sleeps during short publish gaps
-    static constexpr uint32_t kWaitSpinIterations = 512;
+    static constexpr uint32_t kWaitSpinIterations = 256;
 
     static constexpr bool kStoreNoexcept =
         kTriviallyCopyable || (std::is_nothrow_copy_constructible_v<T> && std::is_nothrow_copy_assignable_v<T>);

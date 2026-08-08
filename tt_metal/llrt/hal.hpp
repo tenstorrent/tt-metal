@@ -399,7 +399,7 @@ private:
     uint32_t noc_max_burst_size_bytes_{};
 
     // NOC addresses of the tensix free-running cycle counter. Reading the low word latches the high word, so a
-    // reader must take them in that order to get a coherent pair. The two are not adjacent on every architecture.
+    // reader must take them in that order to get a coherent pair.
     uint32_t tensix_wall_clock_reg_addr_lo_{};
     uint32_t tensix_wall_clock_reg_addr_hi_{};
 

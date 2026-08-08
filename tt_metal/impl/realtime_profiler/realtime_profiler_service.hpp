@@ -26,10 +26,6 @@ using RealtimeProfilerRecordRing = BroadcastRing<experimental::ProgramRealtimeRe
 /**
  * @brief A source of real-time profiler records that consumers can be attached to.
  *
- * Consumers attach to a producer rather than to whatever transport the producer publishes through, so the service that
- * owns them never has to know where records come from. One producer exists per MeshDevice in a normal run; tests
- * implement this over a bare ring.
- *
  * Threading: every method may be called concurrently with the producer publishing, and make_reader() may be called
  * concurrently from consumer registration. Implementations are responsible for that; the ring-backed ones get it from
  * the ring.
@@ -44,7 +40,7 @@ public:
     ProgramRecordProducer(ProgramRecordProducer&&) = delete;
     ProgramRecordProducer& operator=(ProgramRecordProducer&&) = delete;
 
-    /** @brief Most records one callback may be handed at a time from this producer. */
+    /** @brief Maximum number of records a callback may be handed at a time from this producer. */
     [[nodiscard]] virtual size_t max_batch_records() const = 0;
 
     /** @brief A reader positioned so that it sees exactly the records published after this call. */
@@ -61,8 +57,7 @@ public:
      * @brief Records published so far.
      *
      * A reader sees exactly the records published after it was made, so a consumer's accounting is
-     * `received + dropped == num_published_records() - (its value when that consumer's reader was made)`. Comparing one
-     * consumer's total against another's is only valid when both readers were made at the same point in the stream.
+     * `received + dropped == num_published_records() - (its value when that consumer's reader was made)`.
      */
     [[nodiscard]] virtual uint64_t num_published_records() const = 0;
 };
@@ -100,7 +95,6 @@ private:
 
         ProgramRecordProducer* producer;
         RealtimeProfilerRecordRing::Reader reader;
-        // Cached rather than asked of the producer per batch, since the drain loop reads it on every pass.
         size_t max_batch_records;
         uint64_t observed_dropped = 0;
         bool draining = false;
@@ -125,7 +119,7 @@ private:
         // Set by a callback retiring itself.
         std::atomic<bool> retired{false};
 
-        // Cross-thread inbox: the hot loop only checks control_pending; control_mutex guards the rest.
+        // Cross-thread inbox. The hot loop only checks control_pending; control_mutex guards the actual resources.
         std::atomic<bool> control_pending{false};
         std::mutex control_mutex;
         std::vector<ProducerReader> readers_to_add;
@@ -138,15 +132,15 @@ private:
 
     void run_consumer(std::stop_token stop_token, ConsumerRegistration& registration);
     void destroy_consumer(ConsumerRegistration& registration);
-    // A callback cannot join its own thread, so a self-unregistering consumer only marks itself retired here;
-    // this joins and drops it on behalf of the next non-consumer-thread caller.
+    // A callback cannot join its own thread, so a self-unregistering consumer only marks itself retired;
+    // this joins and drops it from the service on behalf of the next non-consumer-thread caller.
     void reap_retired_consumers();
 
     // Identifies which registration the running consumer thread belongs to.
     inline static thread_local ConsumerRegistration* current_registration_ = nullptr;
 
     mutable std::mutex topology_mutex_;
-    // So a consumer registering later can build readers for producers that are already attached.
+    // Used to allow consumers registering later to build readers for producers that are already attached.
     std::unordered_set<ProgramRecordProducer*> attached_producers_;
     ConsumerMap consumers_;
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
@@ -154,7 +148,7 @@ private:
     std::atomic<uint32_t> wake_generation_{0};
 };
 
-// Process-wide singleton: a registration lives until an explicit Unregister call.
+// Process-wide singleton; callback registrations live until an explicit UnregisterProgramRealtimeProfilerCallback call.
 RealtimeProfilerService& realtime_profiler_service();
 
 void register_builtin_realtime_profiler_consumers();

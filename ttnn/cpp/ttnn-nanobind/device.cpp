@@ -204,7 +204,7 @@ void py_device_module_types(nb::module_& m_device) {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_start().time_since_epoch())
                     .count();
             },
-            "When the program began executing, on the time.monotonic_ns() timeline, in ns. Error estimated by "
+            "When the program began executing, on the time.monotonic_ns() timeline. Error estimated by "
             "clock_sync.sync_error_ns")
         .def_prop_ro(
             "host_end_ns",
@@ -212,7 +212,7 @@ void py_device_module_types(nb::module_& m_device) {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_end().time_since_epoch())
                     .count();
             },
-            "When the program finished executing, on the time.monotonic_ns() timeline, in ns. Error estimated by "
+            "When the program finished executing, on the time.monotonic_ns() timeline. Error estimated by "
             "clock_sync.sync_error_ns")
         .def(
             "device_timestamp_at",
@@ -229,7 +229,7 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths; valid for the lifetime of the process.");
+            "Kernel source paths");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
