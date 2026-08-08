@@ -194,12 +194,20 @@ ttnn.attach_golden_function(
     ),
 )
 
-ttnn.attach_golden_function(
-    ttnn.rpow_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "pow", grad, input, alpha, *args, **kwargs
-    ),
-)
+def _golden_function_rpow_bw(grad_tensor, input_tensor, exponent, *args, **kwargs):
+    import torch
+
+    # ttnn.rpow(input, exponent) computes exponent ** input -- the float parameter is the
+    # base. See _golden_function_rpow in ttnn/ttnn/operations/unary.py, which returns
+    # torch.pow(dim, input_tensor_a). The gradient with respect to input is therefore
+    # ln(exponent) * exponent ** input.
+    pyt_y = torch.pow(exponent, input_tensor)
+    input_tensor.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.rpow_bw, golden_function=_golden_function_rpow_bw)
 
 ttnn.attach_golden_function(
     ttnn.logiteps_bw,
