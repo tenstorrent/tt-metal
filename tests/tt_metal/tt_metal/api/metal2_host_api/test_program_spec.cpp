@@ -4366,6 +4366,28 @@ TEST_F(ProgramSpecTestGen1, IdenticalCompileTimeVarargsProducesIdenticalKernelHa
         prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 
+// Prefix length is part of the cache key even when positional CTA words are unchanged.
+TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKernelHash) {
+    NodeCoord node{0, 0};
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu};
+    ProgramSpec spec;
+    spec.name = "cta_varargs_hash_count";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program prog_a = MakeProgramFromSpec(*mesh_device_, spec);
+    Program prog_b = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel");
+    auto kernel_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel");
+    ASSERT_EQ(kernel_a->get_compile_time_vararg_count(), 2u);
+    ASSERT_EQ(kernel_b->get_compile_time_vararg_count(), 2u);
+    ASSERT_EQ(kernel_a->compute_hash(), kernel_b->compute_hash());
+
+    kernel_b->set_compile_time_vararg_count(1u);
+    EXPECT_NE(kernel_a->compute_hash(), kernel_b->compute_hash());
+}
+
 // ============================================================================
 // Kernel hash sensitivity to TensorParameter spec
 // ============================================================================
