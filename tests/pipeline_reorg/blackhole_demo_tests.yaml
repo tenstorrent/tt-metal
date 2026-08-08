@@ -11,9 +11,9 @@
 
 # This pipeline holds Blackhole demo / performance tests that have not yet been
 # migrated to the tier 1/2/3 pipelines
-# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently a
-# mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
-# LLM e2e, data-parallel, and device-perf entries have been migrated out.
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently only
+# diffusion / vision demos. The Llama / Qwen / Mistral LLM e2e, data-parallel, and
+# device-perf entries have all been migrated out.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
@@ -22,23 +22,6 @@
 #   TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/<org>--<model>
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
-
-# ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
-
-- name: mistral-small-3.1-24b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
-    export MESH_DEVICE=T3K
-    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
-  skus:
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: mistral-small-3.1-24b
 
 # ─── Mochi (BH QuietBox 2) ──────────────────────────────────────────────────
 

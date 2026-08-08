@@ -79,12 +79,14 @@ it is classified differently on different systems.
 | Qwen3-VL-32B | WH LLMBox |
 | Shallow-UNet | WH N150, WH LLMBox, BH P150 |
 | Mistral-7B | WH N150 |
+| Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Mixtral-8x7B | WH LLMBox |
 | Gemma-3-4B | WH N150, BH P150 |
 | Gemma-3-27B | WH LLMBox |
 | Gemma-4-26B-A4B | WH LLMBox |
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
+| ViT | WH N150, WH N300 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
