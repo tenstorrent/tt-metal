@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import atexit
 import os
-import sys
 import threading
 import time
 from collections import OrderedDict
@@ -61,8 +60,13 @@ _current = _Ledger()
 _session = _Ledger()
 
 
+# Read once at import: an instrumentation toggle should hold for a whole process, and record()
+# consults it on every span.
+_ENABLED = os.environ.get("TT_WALLTIME", "1") != "0"
+
+
 def _enabled() -> bool:
-    return os.environ.get("TT_WALLTIME", "1") != "0"
+    return _ENABLED
 
 
 def record(
@@ -155,10 +159,9 @@ def render_session(title: str, wall: float | None = None) -> str:
 
 
 def _atexit() -> None:
-    # pytest gets its per-item/session blocks from conftest hooks; only print here for the
-    # `python -m ...` entrypoints that have no such hook. PYTEST_CURRENT_TEST is cleared by
-    # session end (before this atexit runs), so detect pytest by its imported module instead.
-    if not _enabled() or "pytest" in sys.modules:
+    # Session rollup at process teardown — the only place the ledger surfaces under pytest, which wires
+    # no per-item hook, and the natural end for the `python -m ...` entrypoints too.
+    if not _enabled():
         return
     with _LOCK:
         nonempty = bool(_session.cats)
