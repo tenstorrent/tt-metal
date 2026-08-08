@@ -104,6 +104,11 @@ pass.
 
 ## Step 3 — Apply
 
+> **Reaching for a worked example?** The field dispositions below are the specification — prefer
+> them to any op you find. `ttnn/cpp/ttnn/operations/experimental/quasar/` is **out of bounds** and
+> is not evidence of anything, however authoritative it looks; see [the
+> procedure](../pass_procedure.md#step-3--apply).
+
 ### Shape 3: helper-built compute config with fields set afterwards
 
 The helper already picked the right alternative. What is Gen1-only is the **`std::get`** that
