@@ -103,6 +103,23 @@ class Semaphore {
         return get_semaphore<core_type>(id);
     }
 
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // This EXTERNAL semaphore's lock word on THIS node (firmware-zeroed at boot; only ever 0/1).
+    // Recovered from l1_offset_ so the instance stays one word for every scope.
+    uint32_t external_lock_l1_offset() const {
+        const uint32_t id =
+            (static_cast<uint32_t>(l1_offset_) - static_cast<uint32_t>(get_semaphore<core_type>(0))) / L1_ALIGNMENT;
+        ASSERT(id * 4 < MEM_NOC_SEM_LOCK_SIZE);
+        return MEM_NOC_SEM_LOCK_BASE + id * 4;
+    }
+    // This hart's private CAS-return slot (R_SRC_ADDR is per-hart sticky).
+    static uint32_t cas_ret_slot() {
+        uint64_t hart;
+        asm volatile("csrr %0, mhartid" : "=r"(hart));
+        return MEM_NOC_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
+    }
+#endif
+
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
     // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
@@ -191,12 +208,13 @@ public:
      *
      * DM_LOCAL_CACHED: LR/SC conditional-decrement retry loop — MULTI-CONSUMER-SAFE. The >=value
      *   check and the subtract commit atomically with respect to other consumers.
-     * EXTERNAL: atomic self-targeted NoC RMW (INCR_GET with a negative increment; wrap=31 =>
-     *   32-bit modular subtract), serialized with producer increments at the NIU — but the
-     *   >=value spin and the subtract are separate, so EXTERNAL down() is SINGLE-consumer only.
-     *   (The host rejects multi-consumer shapes that AUTO-resolve to EXTERNAL; a forced EXTERNAL
-     *   bypasses that guard and the caller owns the single-consumer invariant. The NoC-CAS lock
-     *   upgrade is staged behind the CAS keystones in test_noc_self_atomic.cpp.)
+     * EXTERNAL (Quasar DM): MULTI-CONSUMER-SAFE — a 4-bit NoC-CAS spinlock on the semaphore's
+     *   lock word guards the >=value check + INCR_GET subtract, so consumers serialize while
+     *   producers' plain increments commute (keystones: TestSelfCasLockDrain/VsIncr). Consumers
+     *   must run on the semaphore's node. On Gen1 the historical single-consumer spin+subtract
+     *   remains (the caller owns that invariant there).
+     * INVARIANT (EXTERNAL, Quasar): the semaphore value must never legitimately be 0xFFFFFFFF —
+     *   it is the CAS-return sentinel.
      * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
      *
      * @param value The value to decrement the semaphore by.
@@ -229,15 +247,70 @@ public:
             } while (!__atomic_compare_exchange_n(
                 word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
         } else if constexpr (Scope == SemScope::EXTERNAL) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+            // Multi-consumer-safe: a 4-bit NoC-CAS spinlock on this semaphore's lock word guards
+            // check-then-INCR_GET(-v). Producers stay plain INCR_GET (increments commute with the
+            // critical section; CAS and INCR_GET serialize mutually at the NIU -- keystone
+            // TestSelfCasLockVsIncr). Every atomic's pre-op return lands at this hart's sticky
+            // ret slot; each is consumed with a sentinel pre-write + poll (keystone
+            // TestAtomicCasReturnsPreOpValue proved the barrier also orders the return, so the
+            // polls exit on their first check). INVARIANT: the semaphore never legitimately holds
+            // 0xFFFFFFFF (the sentinel).
+            const uint64_t sem_noc = ::get_noc_addr(l1_offset_);
+            const uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset());
+            const uint32_t ret_slot = cas_ret_slot();
+            auto* ret_word =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_UNCACHED_BASE + ret_slot);
+            constexpr uint32_t kCasSentinel = 0xFFFFFFFFu;
+            // One consumed NoC atomic: sentinel, issue, fence, poll the returned pre-op value.
+            auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
+                *ret_word = kCasSentinel;
+                noc_fast_atomic_cas4<DM_DEDICATED_NOC, /*program_ret_addr=*/true>(
+                    noc_index, write_at_cmd_buf, lock_noc, NOC_UNICAST_WRITE_VC, cmp4, swap4,
+                    /*linked=*/false, /*posted=*/false, ret_slot);
+                noc_async_atomic_barrier();
+                while (*ret_word == kCasSentinel) {
+                }
+                return *ret_word;
+            };
+            for (;;) {
+                // Lock-free pre-wait: don't contend the lock until credit is plausibly there.
+                WAYPOINT("NSDW");
+                do {
+                    invalidate_l1_cache();
+                } while ((*sem_addr) < value);
+                if (consumed_cas4(/*cmp=*/0, /*swap=*/1) != 0) {
+                    continue;  // contended: back to the lock-free wait
+                }
+                // Re-check under the lock: no other consumer can decrement now; producers only add.
+                invalidate_l1_cache();
+                const bool ok = (*sem_addr) >= value;
+                if (ok) {
+                    WAYPOINT("NSDD");
+                    // The atomic subtract (INCR_GET of the two's complement, wrap=31). Its pre-op
+                    // return also lands at ret_slot; consume it before the release CAS's sentinel.
+                    *ret_word = kCasSentinel;
+                    noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
+                    noc_async_atomic_barrier();
+                    while (*ret_word == kCasSentinel) {
+                    }
+                }
+                consumed_cas4(/*cmp=*/1, /*swap=*/0);  // release (holder-only, always succeeds)
+                if (ok) {
+                    return;
+                }
+                // Credit vanished before we locked: released; back to the lock-free wait.
+            }
+#else
+            // Gen1 (and TRISC, where the NoC API does not exist): the historical single-consumer
+            // path -- spin, then atomic subtract. The spin and subtract are separate steps.
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
             WAYPOINT("NSDD");
-            // Atomic subtract at the NIU: INCR_GET of the two's complement (wrap=31 => full
-            // 32-bit modular add); serializes with concurrent producer increments. Single-consumer
-            // only: the spin and the subtract are separate (see the doc block above).
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
+#endif
         } else {  // LOCAL_NONATOMIC (legacy)
             do {
                 invalidate_l1_cache();
