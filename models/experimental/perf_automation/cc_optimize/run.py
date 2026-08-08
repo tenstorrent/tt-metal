@@ -3883,7 +3883,19 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     hidden = _sc(cfg.get("hidden_size") or cfg.get("d_model"), 0)
     heads = _sc(cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
     head_dim = _sc(cfg.get("head_dim"), 0) or ((hidden // heads) if (hidden and heads) else 0)
-    for key, val in (("layers", layers), ("kv_heads", kv_heads), ("head_dim", head_dim)):
+    # hidden_size and intermediate_size join the geometry because PREFILL'S byte model needs them:
+    # its activations are (2*hidden + 2*intermediate) per layer per token, and without them
+    # active_bytes(regime="prefill") falls back to the weights-only figure -- which is decode's, and
+    # is exactly how both stages came to print one memory ceiling twice. Emitted from the same config
+    # read that already produced layers/kv_heads/head_dim; no new source.
+    inter = _sc(cfg.get("intermediate_size") or cfg.get("ffn_dim") or cfg.get("d_ff"), 0)
+    for key, val in (
+        ("layers", layers),
+        ("kv_heads", kv_heads),
+        ("head_dim", head_dim),
+        ("hidden_size", hidden),
+        ("intermediate_size", inter),
+    ):
         if val:
             facts[key] = int(val)
     # A DIVISOR IS THE ONE THING THAT CANNOT BE MISSING. With neither a param count nor a byte count there

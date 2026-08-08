@@ -342,19 +342,29 @@ def _measured_stage_ms(model: str = "", task: str = "") -> dict:
         return {}
 
 
-def _stage_rows(rows: list, indent: str = "    ", mark_hottest: bool = True) -> list:
-    """name / ms / proportional bar / % of this block's total. Bars scale to the block's own peak."""
+def _stage_rows(rows: list, indent: str = "    ", share: bool = True) -> list:
+    """name / ms / proportional bar, and a share of the block total when the rows share a currency.
+
+    NO "hottest" MARKER, on either block. It marked the largest row, and the only block that got it
+    was the agent's annotation -- the one the report labels `not measurement` -- so the single word a
+    reader acts on sat beside the numbers it is told not to trust. The bars already show which row is
+    largest, and the optimizer ranks targets from the profile's gap_ms, never from this table.
+
+    `share` is False when the rows are NOT in one currency. A per-request prefill and a per-token
+    decode do not sum: at OSL 128 the request spends 128 decode steps, so prefill is ~2% of it, not
+    the 71% a naive sum reports. Without a meaningful total there is no meaningful percentage, so
+    both are dropped rather than printed wrong.
+    """
     if not rows:
         return []
     peak = max((ms for _n, ms in rows)) or 1.0
     total = sum(ms for _n, ms in rows) or 1.0
-    hot = max(rows, key=lambda r: r[1])
     out = []
     for name, ms in rows:
         n = max(0, min(_BAR_W, int(round((ms / peak) * _BAR_W))))
         bar = "\u2588" * n + "\u2591" * (_BAR_W - n)
-        mark = "   \u2190 hottest" if (mark_hottest and (name, ms) == hot) else ""
-        out.append("%s%-22s %8.2f ms  %s  %5.1f%%%s" % (indent, str(name)[:22], ms, bar, 100.0 * ms / total, mark))
+        pct = ("  %5.1f%%" % (100.0 * ms / total)) if share else ""
+        out.append("%s%-22s %8.2f ms  %s%s" % (indent, str(name)[:22], ms, bar, pct))
     return out
 
 
@@ -379,13 +389,19 @@ def _stage_table_lines(stages: list, model: str = "", task: str = "") -> list:
     meas = _measured_stage_ms(model, task)
     if meas:
         rows = sorted(meas.items(), key=lambda kv: -kv[1])
-        out.append("  %-44s %8.2f ms" % ("measured by trace_replay", sum(v for _k, v in rows)))
-        out.extend(_stage_rows(rows, mark_hottest=False))
+        # NO COMBINED TOTAL. These stages are measured in different units -- prefill per request,
+        # decode per token -- so their sum describes nothing that happens, and the percentages taken
+        # from it are wrong in the direction that matters: it read prefill as 71% of the work when at
+        # OSL 128 a request spends 128 decode steps and prefill is ~2% of it. Each stage states its
+        # own ms, which is the number that is true.
+        out.append("  measured by trace_replay")
+        out.extend(_stage_rows(rows, share=False))
     st = [x for x in (stages or []) if isinstance(x, dict) and (x.get("ms") or 0) > 0]
     if st:
         rows = [(x.get("name", "?"), float(x.get("ms") or 0)) for x in st]
         if out:
             out.append("")
+        # The agent's rows ARE one currency (its own block timings), so a share is meaningful here.
         out.append("  %-44s %8.2f ms" % ("agent breakdown (annotation, not measurement)", sum(m for _n, m in rows)))
         out.extend(_stage_rows(rows))
     return out
@@ -835,10 +851,27 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
         return out
     tp = max(1, int(tp_degree or 1))
     per_dev_bytes = float(active_bytes) / tp
-    # ONE bandwidth floor. The weights are read once per unit of work in BOTH stages -- prefill does
-    # not re-read them per token -- so the memory roof is stage-invariant, and printing it twice is a
-    # statement about the model, not a copy-paste.
-    mem_ms = (per_dev_bytes / (float(peak_bw_gbps) * 1e9)) * 1000.0
+
+    def _bytes_for(regime, toks):
+        """This stage's read set, from perf_target -- which owns the byte model for every regime.
+
+        `active_bytes` (the argument) is the DECODE read set, and using it for prefill printed the
+        same memory ceiling on both stages: the weights term IS shared, since each stage streams the
+        model exactly once, but prefill also writes KV for every token and carries activations
+        through each layer. Both scale with the prompt; neither exists for a single decode step.
+        Falls back to the passed-in figure when the facts are too thin to model the extra terms, so a
+        model with no layer geometry still gets its weights floor rather than nothing.
+        """
+        if not mf:
+            return per_dev_bytes
+        try:
+            from agent.perf_target import active_bytes as _ab
+
+            b = float(_ab(mf, regime=regime, seq_len=int(toks or 0)) or 0.0) / tp
+            return b if b > 0 else per_dev_bytes
+        except Exception:  # noqa: BLE001
+            return per_dev_bytes
+
     params = 0
     try:
         from agent.perf_target import ceiling_params as _cp
@@ -878,11 +911,13 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
     for name, toks in stages:
         flops = (2.0 * float(params) * float(toks) / tp) if params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
+        _b = _bytes_for("prefill" if name == "prefill" else "decode", toks if name == "prefill" else 0)
+        mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0
         out[name] = {
             "memory_ms": mem_ms,
             "compute_ms": comp_ms,
             "flops": flops or None,
-            "bytes": per_dev_bytes,
+            "bytes": _b,
             "tokens": toks,
             "peak_flops": peak_flops or None,
             "fidelity": _dom,
@@ -1713,7 +1748,9 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     out = ["Op breakdown"]
     hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
     out.append(hdr)
-    out.append("-" * min(len(hdr) + 30, 118))
+    # Ruled to the same width as every other section in this report, rather than a length derived
+    # from the header string -- which left this one table 99 wide against their 100.
+    out.append("\u2500" * 100)
     for b in sorted(buckets, key=lambda x: -(x.get("device_ms") or 0.0)):
         if not isinstance(b, dict):
             continue
@@ -1726,7 +1763,10 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
         pct = (ms / _tot * 100.0) if _tot > 0 else (b.get("pct") or 0.0)
         cnt = b.get("count") or 0
         bound = (b.get("tags") or {}).get("bound") or "—"
-        out.append(f"{str(b.get('id', '?')):<15} {ms:>10.2f} {pct:>5.1f}% {cnt:>7} {bound:>6}  {dom[:52]}")
+        # rstrip: a bucket with no top_ops (host_overhead has none -- it is the op-gap bucket, not an
+        # op) left an empty dominant-op cell and a trailing space on the row.
+        out.append((f"{str(b.get('id', '?')):<15} {ms:>10.2f} {pct:>5.1f}% {cnt:>7} {bound:>6}  {dom[:52]}").rstrip())
+    out.append("\u2500" * 100)
     out.append("")
     return out
 

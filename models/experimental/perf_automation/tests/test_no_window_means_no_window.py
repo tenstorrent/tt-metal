@@ -123,10 +123,17 @@ def test_the_ladder_still_owns_the_derivation():
 
 
 def test_the_ladder_floor_is_two():
-    """The ONE fallback for this question. before_loop's competing 4 is what this change removes."""
+    """The ONE fallback for this question. before_loop's competing 4 is what this change removes.
+
+    Matched on the VALUE assigned beside the unverified-floor marker, not on a variable name: this
+    pinned the literal `_cov = 2` and broke the day an upstream merge renamed it to `_cov_scalar`,
+    which is a rename, not a behaviour change. The floor being 2 is the decision worth pinning."""
+    import re
+
     src = RUN.read_text()
     i = src.index('blk_source = "unverified-floor"')
-    assert "_cov = 2" in src[max(0, i - 200) : i]
+    window = src[max(0, i - 200) : i]
+    assert re.search(r"^\s*_cov\w*\s*=\s*2\s*$", window, re.M), window
 
 
 def test_the_signpost_path_still_refuses_an_inert_cap():
@@ -157,10 +164,16 @@ def test_every_no_window_exit_states_why():
 
 def test_the_deliberate_case_is_named_distinctly():
     """knob_inert is a MEASURED conclusion -- the cap was applied and changed nothing -- not a
-    failure. It must not read like one."""
+    failure. It must not read like one.
+
+    Pinned on what the run PRINTS rather than on a comment sitting near the assignment: the comment
+    was the thing an upstream merge dropped, and a comment is not the behaviour. The message has to
+    say the cap was applied and left the signal unchanged, which is what makes it a conclusion."""
     src = RUN.read_text()
     i = src.index('facts["no_window"] = "knob_inert"')
-    assert "NOT a failure" in src[max(0, i - 300) : i]
+    window = src[max(0, i - 900) : i]
+    assert "INERT" in window, window
+    assert "unchanged" in window and "FULL depth" in window, window
 
 
 def test_a_genuine_failure_is_named_distinctly():

@@ -80,7 +80,7 @@ if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
 if _PERF_TRACE:
     # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
     # measures trace+1cq end to end, so the device opens with a single command queue.
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
     _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
@@ -186,7 +186,7 @@ _DEV_PARAMS = {"l1_small_size": 24576}
 if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
     _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
 if _PERF_TRACE:
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
     _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
@@ -348,7 +348,15 @@ def _skeleton_default(var: str) -> int:
 DEFAULT_ISL_TOKENS = _skeleton_default("TT_PERF_ISL_TOKENS")
 DEFAULT_OSL_TOKENS = _skeleton_default("TT_PERF_OSL_TOKENS")
 
-_DEFAULT_TRACE_REGION_BYTES = 23887872
+# ROOM FOR EVERY STAGE'S TRACE, NOT JUST ONE. 23887872 fit a decode trace alone. A pipeline that
+# also traces its prefill needs both to co-reside -- gemma-3 asks for 24420352 -- and the shortfall
+# does not degrade, it TT_FATALs inside end_trace_capture. The failure reads as "tracing this stage
+# does not work" and is really "the region was sized for one trace", which is how traced prefill came
+# to be disabled in a model config rather than given room.
+#
+# 40 MiB, so a second stage trace is covered without anyone passing an env var. Still overridable;
+# the perf test prints what it reserved.
+_DEFAULT_TRACE_REGION_BYTES = 41943040
 
 
 def _needed_trace_region(text: str):
@@ -880,7 +888,7 @@ import ttnn
 
 PERF_ITERS = int(os.environ.get("TT_PERF_ITERS", "5"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
-_TRACE_REGION = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+_TRACE_REGION = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": _TRACE_REGION}], indirect=True)

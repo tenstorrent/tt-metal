@@ -144,10 +144,17 @@ def test_list_topk_degrades_not_crashes():
     assert got == int(round((1_000_000 + 8 * 1000) * 2.0))
 
 
-def test_prefill_stub_raises():
-    """Explicit try/except: the repo prefers an error-context fixture that lives in the root
-    conftest, which this suite's rootdir does not reach."""
-    for call in (lambda: pt.active_bytes({"total_params": 1}, regime="prefill"), pt.prefill_ceiling):
+def test_prefill_bytes_are_costed_and_unknown_regimes_are_not():
+    """active_bytes MODELS prefill now: refusing it left its caller using the DECODE read set, so a
+    report printed one memory ceiling twice and called it physics.
+
+    An unknown regime is still refused, because accepting anything would let a typo silently return a
+    decode figure. prefill_ceiling remains a stub -- the compute side is served by compute_ceiling
+    with tokens_per_unit, and a second entry point for the same question is what this suite exists to
+    prevent."""
+    assert pt.active_bytes({"total_params": 1}, regime="prefill") > 0
+
+    for call in (lambda: pt.active_bytes({"total_params": 1}, regime="nonsense"), pt.prefill_ceiling):
         raised = None
         try:
             call()

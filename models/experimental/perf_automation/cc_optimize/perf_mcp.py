@@ -2261,6 +2261,39 @@ def _stage_ms_path():
     return state_dir() / ("perf_mcp_stage_ms_%s_%s.json" % (model, task))
 
 
+def _stage_run_stamp() -> str:
+    """Which run a stage measurement belongs to, or "" when nothing said."""
+    return str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
+
+
+def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
+    """The stage file for (model, task), or {} when it belongs to a DIFFERENT run.
+
+    One reader for all three of stages/paths/isl, so the freshness rule cannot be enforced in one
+    place and forgotten in the next two -- which is exactly how the timings, their trace paths and
+    the observed ISL came to be read back with three separate copies of the same lookup.
+
+    An unstamped file is accepted: it predates stamping, and refusing it would blank the report for
+    anyone who has not re-run since. A file stamped with a DIFFERENT run is refused, because that is
+    the case that produced a stale number wearing a current one's clothes.
+    """
+    try:
+        from pathlib import Path as _P
+
+        base = _P(state_dir_path) if state_dir_path else state_dir()
+        m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
+        t = task or os.environ.get("PERF_MCP_TASK", "main")
+        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
+        if not isinstance(doc, dict):
+            return {}
+        _stamp, _now = str(doc.get("run") or ""), _stage_run_stamp()
+        if _stamp and _now and _stamp != _now:
+            return {}
+        return doc
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _persist_stage_ms(stage_ms: dict, stage_paths: dict | None = None, stage_isl: dict | None = None) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2278,7 +2311,22 @@ def _persist_stage_ms(stage_ms: dict, stage_paths: dict | None = None, stage_isl
     try:
         p = _stage_ms_path()
         tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps({"stages": stage_ms, "paths": stage_paths or {}, "isl": stage_isl or {}}))
+        # STAMPED WITH THE RUN THAT MEASURED IT. The file is keyed by (model, task), which outlives
+        # the run, and nothing recorded which run wrote it -- so a report read whatever was there
+        # last, however old. That is not hypothetical: a prefill of 91.33 ms from a previous run was
+        # rendered beside a fresh decode for hours, and the same stage appeared with two different
+        # values in one report because the headline came from this run and the split from another.
+        # Same lifetime problem, and same fix, as the device-recovery counters.
+        tmp.write_text(
+            json.dumps(
+                {
+                    "run": _stage_run_stamp(),
+                    "stages": stage_ms,
+                    "paths": stage_paths or {},
+                    "isl": stage_isl or {},
+                }
+            )
+        )
         os.replace(str(tmp), str(p))
     except Exception:  # noqa: BLE001
         pass
@@ -2292,8 +2340,11 @@ def read_stage_ms(state_dir_path=None, model="", task="") -> dict:
         base = _P(state_dir_path) if state_dir_path else state_dir()
         m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
         t = task or os.environ.get("PERF_MCP_TASK", "main")
-        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
-        return {k: float(v) for k, v in (doc.get("stages") or {}).items() if float(v) > 0}
+        return {
+            k: float(v)
+            for k, v in (_read_stage_doc(state_dir_path, model, task).get("stages") or {}).items()
+            if float(v) > 0
+        }
     except Exception:  # noqa: BLE001
         return {}
 
@@ -2310,8 +2361,7 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
         base = _P(state_dir_path) if state_dir_path else state_dir()
         m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
         t = task or os.environ.get("PERF_MCP_TASK", "main")
-        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
-        return int((doc.get("isl") or {}).get("prefill") or 0)
+        return int((_read_stage_doc(state_dir_path, model, task).get("isl") or {}).get("prefill") or 0)
     except Exception:  # noqa: BLE001
         return 0
 
@@ -2328,8 +2378,9 @@ def read_stage_paths(state_dir_path=None, model="", task="") -> dict:
         base = _P(state_dir_path) if state_dir_path else state_dir()
         m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
         t = task or os.environ.get("PERF_MCP_TASK", "main")
-        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
-        return {str(k): str(v) for k, v in (doc.get("paths") or {}).items() if v}
+        return {
+            str(k): str(v) for k, v in (_read_stage_doc(state_dir_path, model, task).get("paths") or {}).items() if v
+        }
     except Exception:  # noqa: BLE001
         return {}
 

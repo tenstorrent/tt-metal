@@ -22,8 +22,10 @@ Two blocks, not one merged list, because they do not have the same standing: one
 other is the agent's annotation. The annotation stays, because it is the more useful view for finding
 hot spots -- it just stops being presentable as measurement.
 
-Each block carries its OWN total and its percentages are within-block. The totals describe different
-things (174.29 vs 201.92 here) and must not be added or compared.
+The annotation block carries its own total and within-block percentages. The MEASURED block carries
+neither: its rows are not in one currency -- prefill is per request, decode per token -- so summing
+them describes nothing that happens. That sum read prefill as 71% of the work, when at OSL 128 a
+request spends 128 decode steps and prefill is nearer 2%.
 
 Also replaces the '#'/'.' bars with the block characters used by the utilization section, and pads
 the label column -- the old rendering left the ms values unaligned because names longer than the
@@ -89,11 +91,22 @@ def test_the_annotation_block_is_labelled_as_such(measured):
     assert "annotation, not measurement" in t
 
 
-def test_each_block_has_its_own_total(measured):
-    """The two totals describe different things; one shared total would invite adding them."""
+def test_the_measured_block_states_no_total(measured):
+    """ITS ROWS ARE NOT IN ONE CURRENCY, so their sum describes nothing that happens.
+
+    prefill is per REQUEST and decode per TOKEN. Summing them read prefill as 71% of the work; at
+    OSL 128 a request spends 128 decode steps, so prefill is nearer 2%. A total nobody can act on,
+    and percentages derived from it, are worse than no total -- each stage states its own ms."""
     t = _txt()
-    assert "%.2f ms" % (35.80 + 138.49) in t, "measured total missing"
-    assert "%.2f ms" % sum(x["ms"] for x in AGENT) in t, "annotation total missing"
+    assert "%.2f ms" % (35.80 + 138.49) not in t, "measured rows must not be summed"
+    head = t.split("agent breakdown", 1)[0]
+    assert "%" not in head, head  # no share, because there is no meaningful denominator
+    assert "35.80 ms" in head and "138.49 ms" in head
+
+
+def test_the_annotation_block_keeps_its_total(measured):
+    """The agent's rows ARE one currency -- its own block timings -- so a share is meaningful."""
+    assert "%.2f ms" % sum(x["ms"] for x in AGENT) in _txt(), "annotation total missing"
 
 
 # ---------------------------------------------------------------- degradation
@@ -147,11 +160,14 @@ def test_percentages_are_within_the_block(measured):
     assert "%.1f%%" % cross not in t, "percentage computed against the wrong total"
 
 
-def test_the_hottest_marker_is_on_the_annotation_only(measured):
-    """Two measured rows need no ranking; marking one implies a comparison worth making."""
-    t = _txt()
-    head, tail = t.split("agent breakdown", 1)
-    assert "hottest" not in head and "hottest" in tail
+def test_no_block_carries_a_hottest_marker(measured):
+    """IT MARKED THE ONE TABLE THE REPORT SAYS NOT TO TRUST.
+
+    The measured block was denied the marker and the annotation block got it, so the single word a
+    reader acts on sat beside numbers labelled `not measurement` -- and 19% off the profiler. The
+    bars already show which row is largest, and the optimizer ranks targets from the profile's
+    gap_ms, never from this table."""
+    assert "hottest" not in _txt()
 
 
 # ---------------------------------------------------------------- alignment

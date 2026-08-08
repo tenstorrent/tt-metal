@@ -205,7 +205,11 @@ class PerfTarget:
 
 
 def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0, batch: int = 1) -> int:
-    """Bytes streamed from DRAM per decode step, summed per-tensor at each tensor's real dtype.
+    """Bytes streamed from DRAM per unit of work, summed per-tensor at each tensor's real dtype.
+
+    `regime` selects the unit: "decode" is one token, "prefill" is one request of `seq_len` tokens.
+    Both stream the whole weight set exactly once -- that is why a decode token and a prefill request
+    share a floor -- and prefill adds the KV it writes plus its activations, both linear in seq_len.
 
     Dense: Σ tensor_bytes(all weight tensors). MoE: shared_bytes + top_k * per_expert_bytes
     (the reachable read set — NOT all experts). Optional KV term when seq_len>0.
@@ -217,8 +221,8 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0,
 
     Omitting the factor made batch free: an 8-user step was costed as a 1-user step, the ceiling came
     out too high, and every at-floor verdict computed against it inherited the error."""
-    if regime != "decode":
-        raise NotImplementedError("perf_target models the decode regime only (prefill is FLOP-bound)")
+    if regime not in ("decode", "prefill"):
+        raise NotImplementedError("regimes: decode | prefill (got %r)" % (regime,))
     mf = model_facts or {}
 
     if mf.get("is_moe"):
@@ -247,7 +251,26 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0,
         kv = 2.0 * int(mf["layers"]) * int(mf["kv_heads"]) * int(mf["head_dim"]) * int(seq_len) * _bytes_per_elem(kv_dt)
         kv *= max(1, int(batch or 1))
 
-    total = wb + kv
+    # PREFILL MOVES MORE THAN THE WEIGHTS. Refusing the regime outright meant its caller had nothing
+    # to use and fell back to the DECODE read set, so a report printed the same memory ceiling for
+    # both stages -- 21.84 ms each -- which reads as physics and is really one number used twice.
+    #
+    # Same weights (read once, whatever the prompt length), plus two terms that scale with the
+    # prompt: the KV it WRITES for every token, and activations, which are the per-token hidden and
+    # intermediate widths carried through each layer. Written from the same facts the decode path
+    # uses; no new inputs, no per-model table.
+    act = 0.0
+    if regime == "prefill":
+        kv *= 2.0  # written on the way in, then read back by attention
+        _n, _h = _scalar(mf.get("layers", 0), 0), _scalar(mf.get("hidden_size", 0), 0)
+        _i = _scalar(mf.get("intermediate_size", 0), 0) or (4 * _h)
+        if seq_len and _n and _h:
+            a_dt = mf.get("dominant_dtype") or mf.get("torch_dtype") or "bfloat16"
+            # per layer: the residual stream in and out, and the MLP intermediate in and out
+            act = float(_n) * (2.0 * _h + 2.0 * _i) * int(seq_len) * _bytes_per_elem(a_dt)
+            act *= max(1, int(batch or 1))
+
+    total = wb + kv + act
     # Non-finite means the facts are junk (a corrupted/hand-edited perf_target_inputs.json: json.loads
     # accepts `Infinity`). int(round(inf)) raises OverflowError and took the whole ceiling path with it;
     # 0 reads as "no byte count", which is what an unusable input is.
