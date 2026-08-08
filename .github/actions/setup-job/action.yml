@@ -165,3 +165,17 @@ runs:
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV
         echo "TT_TRIAGE_LLM_OUTPUT_PATH=$TT_TRIAGE_LLM_OUTPUT_PATH" >> $GITHUB_ENV
       shell: bash
+
+    - name: Register GCC/Clang warning problem matcher
+      shell: bash
+      run: |
+        # Test jobs mount the checkout at /work (docker-job on the host). Fall back to other
+        # layouts so the matcher still registers when the job layout differs.
+        for candidate in /work "${GITHUB_WORKSPACE}/docker-job" "${GITHUB_WORKSPACE}"; do
+          matcher="${candidate%/}/.github/problem-matchers/gcc-clang-warnings.json"
+          if [ -f "$matcher" ]; then
+            echo "::add-matcher::$matcher"
+            exit 0
+          fi
+        done
+        echo "::warning::gcc-clang-warnings problem matcher not found; skipping registration"

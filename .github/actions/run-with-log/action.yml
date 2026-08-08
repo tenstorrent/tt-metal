@@ -30,6 +30,15 @@ runs:
         RUN_WITH_LOG_SCRIPT: ${{ inputs.run }}
         RUN_WITH_LOG_FILE: ${{ inputs.log-file }}
       run: |
+        # Register before tee so kernel JIT compile warnings during the test are annotated.
+        for candidate in "${{ inputs.working-directory }}" /work "${GITHUB_WORKSPACE}/docker-job" "${GITHUB_WORKSPACE}"; do
+          matcher="${candidate%/}/.github/problem-matchers/gcc-clang-warnings.json"
+          if [ -f "$matcher" ]; then
+            echo "::add-matcher::$matcher"
+            break
+          fi
+        done
+
         # errexit off for the wrapper so the markers are written even when the
         # script fails — a failed run must stay a failure, not look like a kill.
         set +e
