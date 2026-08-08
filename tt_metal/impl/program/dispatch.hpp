@@ -8,7 +8,7 @@
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
-#include <vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <memory>
