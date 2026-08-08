@@ -29,6 +29,7 @@ from .perf_schema import (
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
     PerfSchemaError,
+    assert_unique_columns,
     stat_prefix,
     text_size_column,
 )
@@ -136,6 +137,10 @@ class PerfReport:
         self._schema_registry: dict[frozenset, dict] = {}
 
     def append(self, frame: pd.DataFrame, label: str | None = None):
+        # Gate: a report must never carry two columns with the same header. We
+        # check here, at the single funnel every report row passes through
+        # A duplicate raises PerfSchemaError, so the contaminated CSV never ships.
+        assert_unique_columns(frame.columns, context=label or "report")
         self._frames.append(frame)
         self._masks.append(pd.Series(True, index=frame.index))
         self._register_schema(frame, label)
@@ -595,6 +600,91 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
+    @staticmethod
+    def _build_sweep_frame(
+        code_sizes,
+        formats_config,
+        unpack_to_dest,
+        dest_acc,
+        passed_templates,
+        passed_runtimes,
+    ):
+        """Single-row frame of the sweep columns (formats, flags, non-None params,
+        code sizes) cross-joined onto every per-run-type result. Shared by the main
+        report and the counter report so both carry the same sweep columns.
+        """
+        # Setting header fields that are always there
+        names = list(FORMAT_HEADERS) if formats_config else []
+        values = (
+            [
+                formats_config[0].unpack_A_src,
+                formats_config[0].unpack_B_src,
+                formats_config[0].unpack_A_dst,
+                formats_config[0].unpack_B_dst,
+                formats_config[0].output_format,
+                formats_config[0].sfpu_math,
+            ]
+            if formats_config and formats_config[0]
+            else []
+        )
+
+        names += list(FLAG_HEADERS)
+        values += [unpack_to_dest, dest_acc]
+
+        # Run mode: whether this run compiled everything as speed-of-light. Kept in
+        # the report so SoL and non-SoL measurements are never compared together.
+        names.append("speed_of_light")
+        values.append(TestConfig.SPEED_OF_LIGHT)
+
+        for param in passed_templates + passed_runtimes:
+            for name, value in PerfConfig._dataclass_name_and_values(param):
+                if value is not None:
+                    names.append(name)
+                    values.append(value)
+
+        for run_type, size in code_sizes.items():
+            names.append(text_size_column(run_type.name))
+            values.append(size)
+
+        return pd.DataFrame([values], columns=names)
+
+    @staticmethod
+    def build_report_frame(
+        results,
+        code_sizes,
+        formats_config,
+        unpack_to_dest,
+        dest_acc,
+        passed_templates,
+        passed_runtimes,
+    ):
+        """Merge the per-run-type results and cross-join the sweep columns onto them.
+
+        Pure (no hardware): takes the stat/metric frames, ELF code sizes and the
+        config's parameters. Called by run(); also driven directly by the
+        hardware-free report test.
+        """
+        run_results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=MARKER, how="outer", validate="1:1"
+            ),
+            results,
+        )
+
+        sweep = PerfConfig._build_sweep_frame(
+            code_sizes,
+            formats_config,
+            unpack_to_dest,
+            dest_acc,
+            passed_templates,
+            passed_runtimes,
+        )
+        combined = sweep.merge(run_results, how="cross")
+
+        text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
+        other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
+        return combined[other_cols + text_size_cols]
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
@@ -716,51 +806,16 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
-        # Merge results with validation
-        # how="outer" keeps all markers (some may not appear in all run types)
-        # validate="1:1" catches duplicate markers within each run type
-        run_results = reduce(
-            lambda left, right: pd.merge(
-                left, right, on=MARKER, how="outer", validate="1:1"
-            ),
+        # Assemble the per-test report frame (pure — see build_report_frame).
+        combined = PerfConfig.build_report_frame(
             results,
+            code_sizes,
+            self.formats_config,
+            self.unpack_to_dest,
+            self.dest_acc,
+            self.passed_templates,
+            self.passed_runtimes,
         )
-
-        # Setting header fields that are always there
-        names = list(FORMAT_HEADERS) if self.formats_config else []
-        values = (
-            [
-                self.formats_config[0].unpack_A_src,
-                self.formats_config[0].unpack_B_src,
-                self.formats_config[0].unpack_A_dst,
-                self.formats_config[0].unpack_B_dst,
-                self.formats_config[0].output_format,
-                self.formats_config[0].sfpu_math,
-            ]
-            if self.formats_config[0]
-            else []
-        )
-
-        names += list(FLAG_HEADERS)
-        values += [self.unpack_to_dest, self.dest_acc]
-
-        for param in self.passed_templates + self.passed_runtimes:
-            for name, value in PerfConfig._dataclass_name_and_values(param):
-                if value is not None:
-                    names.append(name)
-                    values.append(value)
-
-        for run_type, size in code_sizes.items():
-            names.append(text_size_column(run_type.name))
-            values.append(size)
-
-        sweep = pd.DataFrame([values], columns=names)
-        combined = sweep.merge(run_results, how="cross")
-
-        text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
-        other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
-        combined = combined[other_cols + text_size_cols]
-
         perf_report.append(combined, label=self.test_name)
 
         # Append raw counter data to the separate counter report
@@ -770,6 +825,14 @@ class PerfConfig(TestConfig):
                     left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 counter_results_list,
+            )
+            sweep = PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)

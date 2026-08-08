@@ -66,6 +66,54 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
     }
 }
 
+// get_metal_dram_cores(LOGICAL) must name the same cores as get_metal_dram_cores(TRANSLATED), which is
+// the set firmware init and watcher's mailbox init write to. Resolving the logical coords back through
+// the same path a caller uses is what catches a coordinate-space mismatch: UMD's logical DRAM coord is
+// {channel, raw subchannel} while Metal's is {dram_view, dram_bank_endpoint_coords index}, and the
+// table orders each view's NOC0 worker endpoint first, so returning the UMD coord resolved onto the
+// syseng-owned NOC0 endpoint for every view whose worker_endpoint[0] is not subchannel 0.
+TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet) {
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    const auto& cluster = MetalContext::instance().get_cluster();
+
+    const auto translated_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED);
+    const auto logical_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::LOGICAL);
+    ASSERT_FALSE(translated_cores.empty());
+    ASSERT_EQ(logical_cores.size(), translated_cores.size());
+
+    // Every DRAM view's NOC0 worker endpoint is syseng-owned on Blackhole and runs no DRISC firmware,
+    // so no returned core may land on one.
+    std::set<std::pair<size_t, size_t>> noc0_endpoints;
+    for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
+        const auto& noc0_endpoint = soc_desc.dram_view_worker_cores.at(view).at(0);
+        noc0_endpoints.emplace(noc0_endpoint.x, noc0_endpoint.y);
+    }
+
+    std::set<std::pair<size_t, size_t>> expected;
+    for (const auto& c : translated_cores) {
+        expected.emplace(c.x, c.y);
+        EXPECT_FALSE(noc0_endpoints.contains({c.x, c.y}))
+            << "TRANSLATED core (" << c.x << ", " << c.y << ") is a NOC0 worker endpoint";
+    }
+
+    std::set<std::pair<size_t, size_t>> resolved;
+    for (const auto& logical_core : logical_cores) {
+        // The conversion watcher and any other logical-coord consumer goes through.
+        const CoreCoord virtual_core =
+            cluster.get_virtual_coordinate_from_logical_coordinates(device->id(), logical_core, CoreType::DRAM);
+        EXPECT_FALSE(noc0_endpoints.contains({virtual_core.x, virtual_core.y}))
+            << "LOGICAL core " << logical_core.str() << " resolved to NOC0 worker endpoint (" << virtual_core.x << ", "
+            << virtual_core.y << ")";
+        resolved.emplace(virtual_core.x, virtual_core.y);
+    }
+
+    EXPECT_EQ(resolved, expected) << "LOGICAL and TRANSLATED requests named different DRAM cores";
+    // No two logical coords may collapse onto one core, or a core would go unvisited.
+    EXPECT_EQ(resolved.size(), logical_cores.size()) << "LOGICAL DRAM coords are not distinct after resolution";
+}
+
 TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];

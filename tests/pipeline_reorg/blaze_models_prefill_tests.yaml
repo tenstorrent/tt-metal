@@ -15,7 +15,7 @@
 # Blackhole Galaxy DeepSeek Prefill tests
 - name: "Blaze - MoE Gate"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -37,7 +37,7 @@
 
 - name: "Blaze - MLA"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -77,7 +77,7 @@
 
 - name: "Blaze - KV cache table"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -88,6 +88,7 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm52_kv_cache_table -k "8x4" -vvv --tb=short
     '
   test_type: kv_cache_table
   test_group: module
@@ -100,7 +101,7 @@
 
 - name: "Blaze - Prefill Block"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -121,7 +122,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Chunked Kimi Padded Accuracy (15k)"
+- name: "Blaze - Chunked Kimi Padded Accuracy (15k, no trace)"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
@@ -130,13 +131,42 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and notrace" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
   test_group: module
   skus:
     bh_sc1:
-      timeout: 40
+      # Measured 9.9 min at L61/mid15k (the untraced mode also does the per-layer decoder-output PCC,
+      # which is a host readback per layer per chunk). 20 min is ~2x headroom. Was 40; the (team, sku)
+      # time budget is a SUM, so the traced twin has to come out of the same allowance.
+      timeout: 20
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+# Trace twin of the entry above: SAME splits, SAME golden, SAME KV-PCC bar — the only difference is
+# that the padded forward is captured once as a ttnn trace and replayed per chunk. Run as its own
+# entry (not a second -k term) so a trace-only regression is attributed on the CI dashboard instead
+# of being hidden inside a two-case job.
+- name: "Blaze - Chunked Kimi Padded Accuracy (15k, trace)"
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and traced" -vvv --tb=short
+    '
+  test_type: kimi_chunked_padded
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
+      # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
+      timeout: 14
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -160,7 +190,7 @@
 
 - name: "Blaze - DSA MLA (V3.2)"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
 
@@ -280,7 +310,7 @@
 
 - name: "Blaze - Prefill Block Determinism"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -304,7 +334,7 @@
 
 - name: "Blaze - Transformer Determinism"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -350,7 +380,27 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Chunked Kimi (code_debug 55k)"
+- name: "Blaze - high_bw_all_gather CCL perf and accuracy"
+  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. The test initializes
+  # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
+  # and validates gathered output exactly.
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
+    '
+  test_type: high_bw_all_gather_perf
+  test_group: sdpa_perf
+  skus:
+    bh_sc1_high_power:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  sp_config: sc1
+
+- name: "Blaze - Chunked Kimi perf (code_debug 55k, no trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
@@ -368,14 +418,49 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-preload0-chunks_eleven-ten_iters-margin5pct] -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
   test_group: module
   skus:
     bh_sc1_high_power:
-      # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
-      timeout: 40
+      # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 18 min is ~2.7x
+      # headroom. Was 40, but the (team, sku) time budget is a SUM and the traced twin needs room too.
+      timeout: 18
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+# Trace twin of the entry above: same 61 layers / 11 chunks / 10 iterations, but the chunk forward
+# is captured once and replayed. Separate entry so the two per-chunk timing tables are attributed
+# independently -- a traced-vs-untraced perf delta is the number this pair exists to surface.
+- name: "Blaze - Chunked Kimi perf (code_debug 55k, trace)"
+  # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
+  # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
+  # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
+  #
+  # Paths:
+  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #     without it, conftest falls back under model_path and CI may invent HF hub downloads
+  #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+    '
+  test_type: kimi_chunked
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # Measured 4.0 min at two_iters; ten_iters adds ~8x10.6s -> ~5.5 min. Trace replay is faster per
+      # chunk than eager dispatch, so this needs no more than its untraced twin.
+      timeout: 18
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -453,6 +538,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner
@@ -491,6 +577,37 @@
     bh_sc1:
       # Warm tilized-cache + chunked prefill (5120) + KV PCC; cold weight-cache build will exceed this.
       timeout: 60
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1
+
+# MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
+# Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
+- name: "Blaze - MiniMax-M3 Prefill Perf"
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    export EXPERT_DTYPE=bf4
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=5120
+    export PREFILL_TPS_ITERS=5
+    export PREFILL_SKIP_PCC=1
+    export PREFILL_REQUIRE_HIGH_POWER=1
+    export PREFILL_EXPECTED_TPS=3600
+    export PREFILL_PERF_MARGIN=0.05
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: minimax_prefill_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
+      timeout: 35
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1

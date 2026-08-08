@@ -17,6 +17,7 @@ from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
     unpack_reduce_col_tilizeA_strided_formats,
     unpack_reduce_col_tilizeA_strided_implied_math_formats,
     unpack_reduce_col_tilizeA_strided_pool_types,
+    unpack_reduce_col_tilizeA_strided_tile_dimensions,
 )
 
 
@@ -30,9 +31,14 @@ from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
     dest_sync_mode=lambda: unpack_reduce_col_tilizeA_strided_dest_sync_modes(
         is_perf=True
     ),
+    tile_dimensions=runtime(
+        lambda formats: unpack_reduce_col_tilizeA_strided_tile_dimensions(
+            formats, is_perf=True
+        )
+    ),
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: unpack_reduce_col_tilizeA_strided_dimensions(
-            dest_acc, dest_sync_mode, is_perf=True
+        lambda dest_acc, dest_sync_mode, tile_dimensions: unpack_reduce_col_tilizeA_strided_dimensions(
+            dest_acc, dest_sync_mode, tile_dimensions, is_perf=True
         )
     ),
     pool_type=unpack_reduce_col_tilizeA_strided_pool_types,
@@ -46,6 +52,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided_quasar(
     formats,
     dest_acc,
     dest_sync_mode,
+    tile_dimensions,
     input_dimensions,
     pool_type,
     implied_math_format,
@@ -57,6 +64,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided_quasar(
         formats,
         dest_acc,
         dest_sync_mode,
+        tile_dimensions,
         input_dimensions,
         pool_type,
         implied_math_format,

@@ -357,7 +357,10 @@ class ComputePipeline:
         )
 
     def _pack_dest_init(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        pack_nodes: List[PackNode],
     ) -> str:
         if not config.quasar_use_dvalid and operation.stage_id != 1:
             return ""
@@ -365,6 +368,7 @@ class ComputePipeline:
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
             quasar_use_dvalid=config.quasar_use_dvalid,
+            pack_mode=pack_nodes[0].packer.pack_mode,
         )
 
     def _pack_constants(
@@ -397,10 +401,16 @@ class ComputePipeline:
         if hoist_reconfig and pack_only:
             init_code += pack_only[0].reconfig(operation, config)
         init_code += pack_common.pack_reduce_mask_config(operation)
-        init_code += self._pack_dest_init(operation, config)
-        if hoist:
+        init_code += self._pack_dest_init(operation, config, pack_only)
+        if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].configure(operation, config, None)
         code += self._zone(config, "INIT", init_code)
+
+        init_fn = None
+        uninit_fn = None
+        if hoist and pack_only[0].packer.per_block_init:
+            init_fn = lambda block: pack_only[0].configure(operation, config, block)
+            uninit_fn = lambda block: pack_only[0].uninit(operation, config)
 
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
@@ -428,11 +438,13 @@ class ComputePipeline:
             return body
 
         code += self._zone_loop(
-            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+            config,
+            "TILE_LOOP",
+            self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = self.packer_sync_with_unpacker(operation, config)
-        if hoist:
+        if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
         code += self._zone(config, "INIT", uninit_code)

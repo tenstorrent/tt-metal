@@ -22,6 +22,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -85,6 +86,18 @@ class Phi4ExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
+    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
+    # hatch back to the sequential loop. ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    # The batch_size threading below is complete; the shared engine does the folding/trace work.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 8
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -250,6 +263,13 @@ class _Phi4WHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for the QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 14B the
+    # batch-32-ci prefill is matmul-compute-bound (~80% of FLOPs = the 3 MLP matmuls), so minimal_matmul
+    # is a real prefill-TTFT win — it closes the batch-32-ci TTFT gap vs TTTv1 (which uses minimal_matmul
+    # for the same matmuls). The shared plumbing (attention_1d.use_minimal_qkv_matmul / mlp_1d
+    # use_minimal_w2_matmul, both gated seq_len>128) is already in the base; this flag just engages it.
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_phi4_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Phi4WHTuning:
@@ -263,10 +283,12 @@ def _resolve_phi4_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Phi4WHTuni
         mlp_prefill_len_cutoff=256,
         mlp_decode_spill_w1_to_dram=False,
     )
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"L1 tuning for Phi-4 on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
 
@@ -315,6 +337,7 @@ def _build_decoder_layer(
             paged_attention_config=paged_cfg,
             kv_cache=None,
             kv_cache_dtype=precision.kv_cache_dtype,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -340,6 +363,7 @@ def _build_decoder_layer(
             ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -454,7 +478,11 @@ class Phi4DecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Fractured embed / norm activations must be all-gathered to full ``dim`` before
         # Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
@@ -468,6 +496,7 @@ class Phi4DecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -728,6 +757,10 @@ class Phi4Transformer(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
+                # (one lm_head per user, bit-identical to the sequential path) instead of the default
+                # gathered extract (one lm_head over the whole group).
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -757,7 +790,11 @@ class Phi4Transformer(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -767,6 +804,7 @@ class Phi4Transformer(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:

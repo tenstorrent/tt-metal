@@ -348,6 +348,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     std::vector<std::vector<CoreCoord>> mcast_groups;
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
+    mcast_groups.reserve(core_coords.size());
+    mcast_virtual_groups.reserve(core_coords.size());
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
@@ -514,6 +516,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
@@ -542,6 +549,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"TILE_HW", tile_hw},
         {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
         {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
+        {"pad_scaler_bits", pad.scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
+        {"pad_k_bits", pad.k_bits},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -622,6 +633,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
@@ -656,6 +669,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -831,6 +846,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size,
         }}},
     });
+
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1080,6 +1104,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                     std::swap(mcast_start, mcast_end);
                 }
                 tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+                mcast_sender_args.reserve(22 + group.size() * 2);
                 mcast_sender_args.push_back(a.buffer());
                 mcast_sender_args.push_back(output.buffer());
                 mcast_sender_args.push_back(in0_start_id);
@@ -1125,6 +1150,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 }
 
                 std::vector<uint32_t> mcast_noc_xy;
+                mcast_noc_xy.reserve(group.size() * 2);
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.x);
@@ -1177,6 +1203,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(output.buffer());
         if (gamma.has_value()) {

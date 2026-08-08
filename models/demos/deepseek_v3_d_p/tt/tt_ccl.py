@@ -131,6 +131,10 @@ class TT_CCL:
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
+        # keyed by shape signature. See get_indexer_ring_k_buffer.
+        self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -217,18 +221,46 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
-    def get_shared_rs_intermediate(self, input_tensor):
+    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+        """Return the persistent full-K output buffer for the fused ring indexer.
+
+        ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
+        only the selected slot over ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All layers
+        execute serially and share the same index-cache geometry, so one stable-address scratch buffer
+        per shape/dtype is sufficient for the whole model instead of allocating a full gathered cache
+        per layer.
+        """
+        import torch
+
+        local_shape = tuple(local_k.shape)
+        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
+        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
+        if key not in self.indexer_ring_k_buffers:
+            self.indexer_ring_k_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, global_seq_len, local_shape[3]),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=local_k.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.indexer_ring_k_buffers[key]
+
+    def get_shared_rs_intermediate(self, input_tensor, topology):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
-        accumulator. Line (Linear) topology needs a double-sized leading dim for the
-        forward/backward halves: shape = [2, *input_shape]. Interleaved DRAM, input dtype/layout,
-        replicated across the mesh. A single buffer is reused at a stable address by every
-        shared-expert reduce_scatter — all layers share the same shape and run sequentially, so one
-        buffer for the whole model is safe."""
+        accumulator. The Ring tiled path requires the persistent intermediate to have the same
+        shape, dtype, and layout as its input. The Linear path retains its double-sized leading
+        dimension for forward/backward halves. Interleaved DRAM, replicated across the mesh. A
+        single buffer is reused at a stable address by every shared-expert reduce_scatter — all
+        layers share the same shape and run sequentially, so one buffer for the whole model is safe."""
         import torch
 
         if self.shared_rs_intermediate is None:
+            intermediate_shape = list(input_tensor.shape)
+            if topology == ttnn.Topology.Linear:
+                intermediate_shape = [2] + intermediate_shape
             self.shared_rs_intermediate = ttnn.from_torch(
-                torch.zeros([2] + list(input_tensor.shape)),
+                torch.zeros(intermediate_shape),
                 device=self.mesh_device,
                 layout=input_tensor.layout,
                 dtype=input_tensor.dtype,

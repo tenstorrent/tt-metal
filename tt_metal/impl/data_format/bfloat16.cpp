@@ -168,6 +168,7 @@ bfloat16 bfloat16_identity_transform(const bfloat16& input) { return input; }
 std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     const std::vector<std::uint32_t>& data, const std::function<bfloat16(const bfloat16&)>& transform) {
     std::vector<bfloat16> result;
+    result.reserve(data.size() * 2);
     for (unsigned int packed : data) {
         auto unpacked = unpack_two_bfloat16_from_uint32(packed);
         result.push_back(transform(unpacked.first));

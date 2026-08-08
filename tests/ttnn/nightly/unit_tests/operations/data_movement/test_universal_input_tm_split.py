@@ -489,6 +489,26 @@ def test_interleaved_to_sharded_no_spec(device, memory_layout, shape, split_size
     _check(tt_out, ref)
 
 
+def test_specless_sharded_output_grid_shrinks_height(device):
+    """Split via generate_transpose_shard_spec: chunk (2*TILE, 2*TILE); ceil(64/32)=2 populated cores per chunk."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= 2:
+        pytest.skip("Device grid too small to observe shrink (need > 2 cores)")
+    shape = [2 * TILE, 4 * TILE]
+    torch.manual_seed(24)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, 2 * TILE, dim=-1)
+    tt_in = _from_torch(t, device, mc=L1)
+    out_no_spec = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    tt_out = ttnn.split(tt_in, 2 * TILE, dim=-1, memory_config=out_no_spec)
+    expected = ttnn.num_cores_to_corerangeset(2, compute_grid, True)
+    for tt_t in tt_out:
+        grid = tt_t.memory_config().shard_spec.grid
+        assert grid.num_cores() == 2, f"Expected 2 populated cores, got {grid.num_cores()}"
+        assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+    _check(tt_out, ref)
+
+
 # 9d. Sub-tile rescale → graceful DRAM downgrade (tile-alignment guard on rescaled shard_w=16 < TILE).
 
 
