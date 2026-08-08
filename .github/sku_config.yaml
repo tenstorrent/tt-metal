@@ -25,7 +25,7 @@ skus:
       - arch-wormhole_b0
       - config-t3000
       - pipeline-perf
-      - in-service
+      - f10cs05
 
   bh_p100:
     runs_on:
