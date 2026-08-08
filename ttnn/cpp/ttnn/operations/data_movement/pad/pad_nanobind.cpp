@@ -11,6 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string_view.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -33,6 +34,7 @@ void bind_pad(nb::module_& mod) {
             * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
             * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
             * :attr:`sub_core_grids`: (Optional[ttnn.CoreRangeSet]): Sub core grids to run the operation on. Defaults to `None`.
+            * :attr:`implementation`: (str): "auto" (default), "native", or "codegen" -- selects the codegen routing path.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -48,14 +50,16 @@ void bind_pad(nb::module_& mod) {
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+                const std::optional<CoreRangeSet>&,
+                std::string_view>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("padding"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("implementation") = "auto"),
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
@@ -64,7 +68,8 @@ void bind_pad(nb::module_& mod) {
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+                const std::optional<CoreRangeSet>&,
+                std::string_view>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("output_padded_shape"),
             nb::arg("input_tensor_start"),
@@ -72,6 +77,7 @@ void bind_pad(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("implementation") = "auto"));
 }
 }  // namespace ttnn::operations::data_movement::detail
