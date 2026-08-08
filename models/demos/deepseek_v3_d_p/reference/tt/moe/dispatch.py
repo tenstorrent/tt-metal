@@ -18,7 +18,7 @@ Goals:
 import torch
 from loguru import logger
 
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import DISPATCH_METADATA_FIELDS, ExpertMapping
 
 
 class TorchDispatchModule(torch.nn.Module):
@@ -138,9 +138,9 @@ class TorchDispatchModule(torch.nn.Module):
         ), f"Last dimension of indices must match num_experts_per_tok {self.num_experts_per_tok}, got {indices.shape[-1]}"
 
         if scales is not None:
-            assert self.metadata_len == 3 + scales.shape[-1], (
-                f"metadata_len ({self.metadata_len}) must equal 3 + scales.shape[-1] "
-                f"({3 + scales.shape[-1]}) when scales are provided"
+            assert self.metadata_len == DISPATCH_METADATA_FIELDS + scales.shape[-1], (
+                f"metadata_len ({self.metadata_len}) must equal DISPATCH_METADATA_FIELDS + scales.shape[-1] "
+                f"({DISPATCH_METADATA_FIELDS + scales.shape[-1]}) when scales are provided"
             )
 
         dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
@@ -178,7 +178,7 @@ class TorchDispatchModule(torch.nn.Module):
                         if scales is not None:
                             scale_tail = scales[chip, token].to(torch.float32).view(torch.int32).tolist()
                         else:
-                            scale_tail = [0] * (self.metadata_len - 3)
+                            scale_tail = [0] * (self.metadata_len - DISPATCH_METADATA_FIELDS)
                         dispatched_metadata[group, expert_chip, dst_index] = torch.tensor(
                             [linearized_coord, token, topk_idx] + scale_tail,
                             dtype=dispatched_metadata.dtype,
