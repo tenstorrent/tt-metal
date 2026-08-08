@@ -54,6 +54,7 @@ def run_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
+    production_mesh,
     dispatch_buffer_capacity_factor,
     num_links,
     topology,
@@ -65,8 +66,9 @@ def run_combine(
     is_ci_v2_env,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
-    per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis."""
+    per-model test entrypoints below — they differ only on the model hyperparams (e.g. num_routed_experts,
+    emb_dim, num_experts_per_tok,...) and scenario hyperparams (e.g. ISL, proxy test on scaled down HW, ...)."""
+
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
@@ -112,6 +114,14 @@ def run_combine(
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
+    production_num_devices = production_mesh[0] * production_mesh[1]
+    production_num_dispatch_groups = production_mesh[1]
+
+    # Scale the model onto the test mesh: hold production experts-per-chip constant (keeps
+    # num_routed_experts a multiple of num_devices, as ExpertMapping's layout requires), and
+    # scale top-K by the dispatch-group ratio. Both floor at 1 on small meshes.
+    num_routed_experts = max(1, num_routed_experts // production_num_devices) * num_devices
+    num_experts_per_tok = max(1, num_experts_per_tok * num_dispatch_groups // production_num_dispatch_groups)
 
     logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -337,19 +347,21 @@ def run_combine(
     logger.debug("✅ TTNN combine operation matches torch reference!")
 
 
-# Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
-# param (seq 128, // 16 experts, top-4) and a perf param (seq 640, // 4 experts, top-2). DeepSeek
-# V3 is the baseline and runs by default; every other model is gated behind
+# Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes
+#   test case 1: (seq 128, // 8 experts, // 2 top-K) for quick accuracy check
+#   test case 2: (seq 640, all experts, full top-K) for perf on realistic workload for ISL=5k.
+# DeepSeek V3 is the baseline and runs by default; every other model is gated behind
 # @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
+
 COMBINE_MODELS = [
-    ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
-    ("kimi_k26", KimiK26Config, True),
-    ("minimax_m27", MiniMaxM27Config, True),
-    ("dsv4_pro", DeepSeekV4ProConfig, True),
-    ("dsv4_flash", DeepSeekV4FlashConfig, True),
-    ("gptoss_120b", GptOss120BConfig, True),
+    ("dsv3", DeepSeekV3Config, (8, 4), False),
+    ("glm_51", GLM51Config, (8, 4), True),
+    ("kimi_k26", KimiK26Config, (8, 4), True),
+    ("minimax_m27", MiniMaxM27Config, (8, 4), True),
+    ("dsv4_pro", DeepSeekV4ProConfig, (8, 4), True),
+    ("dsv4_flash", DeepSeekV4FlashConfig, (8, 4), True),
+    ("gptoss_120b", GptOss120BConfig, (8, 4), True),
 ]
 
 
@@ -357,11 +369,25 @@ def combine_shape_params():
     """Build the per-model (shape, run_pcc_check) parametrization. Non-baseline models carry the
     extended_model marker on their params so they stay gated exactly as the separate tests were."""
     params = []
-    for name, config, extended in COMBINE_MODELS:
+    for name, config, production_mesh, extended in COMBINE_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
         shapes = [
-            ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True),
-            ("perf_no_pcc", 640, config.NUM_ROUTED_EXPERTS // 4, 2, 8, False),
+            (
+                "pcc",
+                128,
+                config.NUM_ROUTED_EXPERTS // 8,  # reduced seq/experts for faster correctness check.
+                config.NUM_EXPERTS_PER_TOKEN // 2,
+                4,
+                True,
+            ),
+            (
+                "perf_no_pcc",
+                640,
+                config.NUM_ROUTED_EXPERTS,
+                config.NUM_EXPERTS_PER_TOKEN,
+                8,
+                False,
+            ),
         ]
         for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
             params.append(
@@ -372,6 +398,7 @@ def combine_shape_params():
                     topk,
                     capacity,
                     run_pcc,
+                    production_mesh,
                     marks=marks,
                     id=f"{name}-{shape_id}",
                 )
@@ -380,7 +407,7 @@ def combine_shape_params():
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check, production_mesh",
     combine_shape_params(),
 )
 @pytest.mark.parametrize(
@@ -401,6 +428,7 @@ def test_ttnn_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
+    production_mesh,
     dispatch_buffer_capacity_factor,
     num_links,
     topology,
@@ -417,6 +445,7 @@ def test_ttnn_combine(
         emb_dim,
         num_routed_experts,
         num_experts_per_tok,
+        production_mesh,
         dispatch_buffer_capacity_factor,
         num_links,
         topology,

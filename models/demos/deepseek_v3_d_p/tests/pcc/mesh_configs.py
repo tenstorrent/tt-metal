@@ -43,9 +43,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 def _mesh_param(shape, fabric, payload, nlinks, topo, topo_marker, test_id, reliability_mode=None):
     """Build a single pytest.param for the mesh_device parametrize axis.
 
-    `topo_marker` is the CI hardware-class string consumed by the `requires_mesh_topology`
-    pytest mark, NOT the test's mesh shape. For example, a (2,2) test uses `topo_marker=
-    "mesh-4x2"` because (2,2) and (4,2) both run on the LoudBox "mesh-4x2"-class machine.
+    `topo_marker` is the hardware-class string passed to the `requires_mesh_topology` mark.
+    The conftest hook only tests it against the literal "ring" (to apply the Wormhole
+    ring-needs-8-chips rule); every other value is descriptive, so it mirrors the mesh shape
+    (a (2,2) entry uses "mesh-2x2"), matching the other deepseek test modules.
     """
     device_params = {
         "fabric_config": fabric,
@@ -87,13 +88,13 @@ ALL_MESH_CONFIGS = [
     ),
     # 2D mesh topologies
     _mesh_param(
-        (2, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x2"
+        (2, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-2x2", "mesh-2x2"
     ),
     _mesh_param(
         (4, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-4x2"
     ),
     _mesh_param(
-        (2, 4), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x4"
+        (2, 4), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-2x4", "mesh-2x4"
     ),
     # 8-chip linear
     _mesh_param(
@@ -210,6 +211,16 @@ ALL_MESH_CONFIGS = [
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-1link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Ring,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
 ]
