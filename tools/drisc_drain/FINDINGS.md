@@ -3075,3 +3075,43 @@ safe (row y == 0, N+29), and TLB windows allow 2x7=14 of 16 while 3x7=21 does no
 
 **Still open and NOT addressed by this fix:** the single-drainer wedge (~1.8%/run) has a different
 trigger -- one drainer only ever does one flip, so this ordering never existed there.
+
+## §N+35 — The single-drainer wedge does NOT reproduce on bh-26: it is BOX-DEPENDENT (2026-08-08)
+
+250 runs, **one** drainer, delay 125, 120-core grid, slow dispatch, card reset after any non-clean run
+so the runs are independent, bring-up tracker armed: **250/250 CLEAN.** Zero wedges, zero MMIO hangs,
+zero PCIe status bits, host untouched.
+
+Pooled with the bank-safety sweep's safe-bank runs (banks 0 and 3, also single drainer, also 0 failures):
+**0 / 300 on bh-26.**
+
+| box | single-drainer config | events | runs | rate |
+|---|---|---|---|---|
+| **bh-05** | bank 0, slow dispatch, delay 125 | **3** | 120 | **2.5%** |
+| **bh-26** | bank 0, slow dispatch, delay 125 | **0** | 300 | **0%** (95% upper bound 0.99%) |
+
+**Fisher one-sided p = 0.023.** The two boxes do not have the same wedge rate. Configuration matches --
+same grid, same dispatch mode, same delay, same drainer core (`0-0`), same binary lineage.
+
+### CORRECTION: "~1.8% per run for a single drainer" was wrong
+
+That figure came from the 60-run UR-probe block, which ran **two** drainers -- and its one event was the
+bring-up hang that §N+34 then fixed. It was quoted here as a single-drainer rate. The only real
+single-drainer evidence is the table above.
+
+### Consequence: bh-26 is the wrong instrument for this bug
+
+At bh-05's 2.5%, a 300-run block on bh-26 should have produced ~7 events. It produced none. So:
+
+- **Any "fix" for the single-drainer wedge validated on bh-26 is meaningless** -- the box cannot
+  distinguish a fix from its own baseline. This is the same class of error as measuring a knee on a
+  degraded card, and it would have been very easy to declare victory here.
+- Chasing it needs **bh-05 back, or another box that demonstrably shows it**. Confirm the box reproduces
+  BEFORE testing any hypothesis on it.
+- It also reopens what "DRISC-only" meant: §N+22/§N+23's 4/200-vs-0/400 DRISC-vs-Tensix comparison was
+  measured entirely on bh-05. A box-dependent effect could equally be a box-plus-core-type effect, and
+  nothing here separates them.
+
+The bring-up tracker is in the tree and armed, so whenever a box that DOES reproduce is available, the
+next single-drainer wedge names its own stall site instead of leaving a 445 ms window to guess inside --
+which is how three hypotheses died (IOMMU N+26, subchannel collision N+27, UnsupReq N+32).
