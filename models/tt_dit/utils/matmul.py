@@ -836,90 +836,56 @@ class FabricAGMMConfig(NamedTuple):
     num_buffers_per_channel: int
 
 
-# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(K, N, chunks)``. K is the full (gathered)
-# contraction dim, N the per-TP-device WEIGHT width, chunks the output-split count. For a fused-
-# SwiGLU layer the weight is the packed [gate|up] matrix, so N is twice the layer's output width
-# (that is also the N the device op blocks on). M (the per-SP-device sequence length) is
-# intentionally NOT part of the key: the tuned block sizes are M-independent across every LTX
-# entry, and the model's real M for the audio/kv rows differs from the video-seq proxy the op test
-# sweeps -- keying on M would stop those shapes from ever matching.
-# Seeded from the LTX stage-1/stage-2 video + audio blocks on the Blackhole galaxy 12x10 grid.
+# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(M, K, N, chunks)``. M is the per-SP-device
+# sequence length, K the full (gathered) contraction dim, N the per-TP-device WEIGHT width, chunks
+# the output-split count. For a fused-SwiGLU layer the weight is the packed [gate|up] matrix, so N
+# is twice the layer's output width (that is also the N the device op blocks on).
+#
+# Every entry must be measured on device before it lands here: an exact-match miss is harmless (the
+# caller falls back to ``all_gather_minimal_matmul_async``), but a guessed entry silently ships an
+# untuned blocking, and a bad M/N block pairing can deadlock the split output write outright.
 fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
     ttnn.CoreCoord(12, 10): {
-        # (K, N, chunks) -> FabricAGMMConfig(mm_core_grid, ag_core_grid_offset,
-        #                                    M_block, K_block, N_block, sub_h, sub_w, num_w/link, num_buf/chan)
-        # video to_q (cross) / to_out(plain) / to_out addcmul: N = video_dim/tp = 1024.
-        # DEVICE-VALIDATED: stage-2 video block, 3x StridedAllGatherMinimalMatmulAsync, PCC pass.
-        (4096, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
-        # ---------------------------------------------------------------------------------------
-        # Remaining uncommented shapes from test_strided_all_gather_minimal_matmul_ltx_configs.
-        # Block shapes below MIRROR that op test exactly (it is the tuning source of truth) --
-        # (M_block, K_block, N_block, subblock_h, subblock_w). Validate on device via that test.
-        # ---------------------------------------------------------------------------------------
-        # video to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile).
-        (4096, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
-        # audio to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile).
-        # DISABLED under global IN0_SUB_CHUNKS=2 banding: audio seq is tiny (AUDIO_N/sp = 1 M-tile),
-        # so last_m_block_tiles=1 < in0_sub_chunks=2 -> the banded path hard-asserts
-        # (minimal_matmul_fabric_bound_program_factory.cpp:522). Audio M=1 tile is also perf-negligible
-        # and can't overlap-band regardless, so keep it on the old op. Re-enable only once in0_sub_chunks
-        # is a per-config field (set to 1 for audio) rather than a global env var.
-        # (2048, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
-        # audio_to_video_attn.to_q (a2v cross): K = video_dim = 4096, N = audio_dim/tp = 512 (16 tiles).
-        # transpose grid -> N across grid.y=8 => 2 tiles/core. N_block MUST be 2 (subblock_w=2) so
-        # N_blocks_per_core = ceil(2/2) = 1; N_block=1 gives 2 blocks/core -> split-write DEADLOCK
-        # (device-confirmed hang at "Waiting for op"). This differs from the op test's stale value.
-        (4096, 512, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 2, 2, 2, 3, 8),
-        # audio a_kv (chunks=1 in the op test): K = audio_dim = 2048, N = 1024. Inert in-model (real
-        # to_kv is chunks=2 -> old op). Also DISABLED for the same reason as the audio gate above:
-        # in-model audio M = AUDIO_N/sp = 1 tile, which can't band under global IN0_SUB_CHUNKS=2.
-        # (2048, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
-        # -----------------------------------------------------------------------------------------
-        # flux2 attn/ff shapes, K_global = 6144. Every in-model M (128 / 1024 / 1152) is smaller than
-        # N, so the factory does NOT transpose the grid: N splits across grid.x=12 and M across
-        # grid.y=8. That fixes the per-core work at N/(32*12) weight tiles and ceil(M/32/8) M tiles
-        # (1 / 4 / 5 for the three Ms), which is what the blocking below is sized against.
+        # (M, K, N, chunks) -> FabricAGMMConfig(mm_core_grid, ag_core_grid_offset,
+        #                                       M_block, K_block, N_block, sub_h, sub_w, num_w/link, num_buf/chan)
         #
-        # Both entries keep N_blocks_per_core == 1. With one M block per core the factory turns on
-        # split_output_write, and that combination deadlocked at 2 N blocks/core on the LTX a2v shape
-        # above -- so a full-width N block is the safe choice, not just the faster one.
-        # Both N_blocks are even, so these also serve the fused-SwiGLU layers whose PACKED weight
-        # width is 2304/4608 (i.e. a logical out_features half that wide).
+        # flux2 feed-forward shapes, K_global = 6144, packed SwiGLU weight width N = 4608. Every M
+        # here is smaller than N, so the factory does NOT transpose the grid: N splits across
+        # grid.x=12 (12 weight tiles/core) and M across grid.y=8 (1 / 4 / 5 tiles/core).
         #
-        # N = 2304 -> 6 weight tiles/core. M_block=8 covers the largest per-core M (5 tiles) in one
-        # block. NOT SWEPT, and currently unreachable: every in-model N=2304 call is chunks=3
-        # (attention qkv, single-stream modulation), which this table does not cover. Sweep it
-        # before relying on it from another model.
-        (6144, 2304, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 8, 8, 6, 1, 3, 3, 8),
-        # N = 4608 -> 12 weight tiles/core, so N_block=12 is one block per core. M_block=5 covers the
-        # largest per-core M (1152 -> 5 tiles) in a single block, which keeps split_output_write on.
-        # An earlier M_block=4 split that into a ragged 4+1 and disabled it, costing 35% at M=1152
-        # (590.8 us vs 382.9 us).
+        # N_block=12 is the full per-core width everywhere, which keeps N_blocks_per_core == 1.
+        # Two N blocks per core combined with a single M block deadlocks the split output write
+        # (device-confirmed hang on the LTX a2v shape), so full-width N is the safe choice as well
+        # as the fastest one in the sweep. N_block is even, as fused SwiGLU requires.
         #
-        # Swept on device via sweep_mm_block_sizes.py (op_kind "sagmm"): 382.9 / 358.8 / 316.6 us at
-        # M = 1152 / 1024 / 128, within 1.7% of per-M-optimal blocking over the flux2 layer mix
-        # (48 single-stream proj_mlp at M=1152, 8 each of ff / ff_context at M=1024 / 128), so a
-        # single M-independent entry is worth keeping here.
-        (6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 5, 4, 12, 1, 4, 3, 8),
+        # Swept on device via sweep_mm_block_sizes.py (op_kind "sagmm"); durations below are the
+        # best device_kernel_duration for that M. Per-M keying buys 9.0% at M=128 and 6.2% at
+        # M=1024 over the single M-independent entry this table used to carry.
+        #
+        # ff / ff_context context stream (8 layers each).
+        (128, 6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 2, 8, 12, 2, 2, 3, 8),  # 288.0 us
+        # ff / ff_context image stream (8 layers each).
+        (1024, 6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 4, 8, 12, 1, 4, 3, 8),  # 336.4 us
+        # single-stream proj_mlp (48 layers): M = 1024 image + 128 context.
+        (1152, 6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 5, 4, 12, 1, 4, 3, 8),  # 382.9 us
     },
 }
 
 
-def get_fabric_agmm_config(K, N, chunks, device_core_grid) -> FabricAGMMConfig | None:
+def get_fabric_agmm_config(M, K, N, chunks, device_core_grid) -> FabricAGMMConfig | None:
     """Return the tuned fabric-bound strided-AGMM config for this shape, or ``None``.
 
     ``None`` means the shape is not (known to be) fabric-bound; the caller keeps the current
-    ``all_gather_minimal_matmul_async`` path. Keyed on ``(K, N, chunks)`` only (M-independent),
-    where ``N`` is the per-device weight width (the packed [gate|up] width for fused SwiGLU).
+    ``all_gather_minimal_matmul_async`` path. Keyed on an exact ``(M, K, N, chunks)`` match, where
+    ``N`` is the per-device weight width (the packed [gate|up] width for fused SwiGLU).
 
     A/B switch: set ``DISABLE_FABRIC_AGMM=1`` to force a miss for every shape, routing the whole
     model back onto the old ``all_gather_minimal_matmul_async`` op. Used to get an apples-to-apples
     old-agmm-vs-strided-sagmm baseline under the same trace/fabric config.
     """
-    # print(f"K: {K}, N: {N}, chunks: {chunks}, device_core_grid: {device_core_grid}", flush=True)
     if os.environ.get("DISABLE_FABRIC_AGMM") in ("1", "true", "True"):
         return None
-    return fabric_agmm_configs.get(device_core_grid, {}).get((K, N, chunks))
+    return fabric_agmm_configs.get(device_core_grid, {}).get((M, K, N, chunks))
 
 
 def register_fabric_agmm_configs(configs: dict) -> None:
@@ -927,14 +893,14 @@ def register_fabric_agmm_configs(configs: dict) -> None:
 
     Args:
         configs: Mapping from ``ttnn.CoreCoord`` (device core-grid) to dict of
-            ``(K, N, chunks)`` -> :class:`FabricAGMMConfig`.
+            ``(M, K, N, chunks)`` -> :class:`FabricAGMMConfig`.
 
     Example::
 
         register_fabric_agmm_configs({
             ttnn.CoreCoord(12, 10): {
-                (4096, 1024, 1): FabricAGMMConfig(
-                    ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8
+                (1024, 6144, 4608, 1): FabricAGMMConfig(
+                    ttnn.CoreCoord(12, 8), (0, 8), 4, 8, 12, 1, 4, 3, 8
                 ),
             },
         })

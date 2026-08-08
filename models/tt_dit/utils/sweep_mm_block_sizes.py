@@ -360,6 +360,20 @@ SHAPES = [
     (1024, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 spatial
     (128, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 prompt
     # -----------------------------------------------------------------------
+    # Regular AGMM (all_gather_minimal_matmul_async) ff1_swiglu baseline
+    # for sagmm comparison. Same (M, K, N) as the sagmm rows below but run
+    # through the model's existing AGMM path with fuse_swiglu=True.
+    # 12x9 = CoreCoord(full_grid.x, full_grid.y - 1), the model's default grid.
+    # 12x8 entries are the same as the TP8/SP4 block above (lines 359-361).
+    # Device config: bh_4x8_sp0_tp1.
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # SNG proj_mlp / xc-merged
+    (1024, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # DBL ff spatial
+    (128, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # DBL ff_context (prompt)
+    (1152, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # SNG proj_mlp / xc-merged  (12x7 grid)
+    (1024, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # DBL ff spatial             (12x7 grid)
+    (128, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # DBL ff_context (prompt)     (12x7 grid)
+    # -----------------------------------------------------------------------
     # Fabric-bound strided AGMM (op_kind "sagmm") — the op that
     # models/tt_dit/layers/linear.py routes to via fabric_agmm_configs.
     #
@@ -377,6 +391,9 @@ SHAPES = [
     (1152, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
     (1024, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
     (128, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
+    (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
+    (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
 ]
 
 

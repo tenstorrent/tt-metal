@@ -370,10 +370,9 @@ class ColParallelLinear(Module):
             # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
             # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
             # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
-            fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
+            fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch:
-                print(f"COlParallelLinear M: {M}, K: {K}, N: {N}", flush=True)
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config)
 
             core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
@@ -681,8 +680,6 @@ class RowParallelLinear(Module):
         K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-
-        print(f"RowParallelLinear M: {M}, K: {K}, N: {N}", flush=True)
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
