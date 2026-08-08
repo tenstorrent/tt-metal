@@ -419,8 +419,9 @@ def run_dispatch(
         buffer_result.passed and metadata_result.passed
     ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
 
-    # validate_dispatch_metadata only checks the 3 routing fields; the fp8 scale tail (fields 3..)
-    # is dispatched as a pure int32 bit-copy, so it must match the reference exactly. Compare only
+    # validate_dispatch_metadata's optional scale-tail check (num_scale_fields) is tolerant, built
+    # for hardware-computed scales; here the scales are host-provided and the fp8 scale tail
+    # (fields 3..) is dispatched as a pure int32 bit-copy, so it must match exactly. Compare only
     # the slots the reference actually filled (torch initializes metadata to -1; field 1 = token_idx
     # is >= 0 only for real dispatched tokens), since unfilled device slots are uninitialized.
     if fp8_scaled_input:

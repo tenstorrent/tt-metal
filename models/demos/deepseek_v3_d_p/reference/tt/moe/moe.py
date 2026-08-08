@@ -25,8 +25,38 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatch
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe_intermediates import MoEIntermediates
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    E4M3_MAX,
+    FP8_SCALE_BLOCK,
+    FP8_SCALE_CLAMP_MIN,
+    ExpertMapping,
+    fp8_metadata_len,
+    get_gate_outputs,
+)
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+
+def per_token_cast_roundtrip(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Model the device fp8 dispatch round-trip: per_token_cast_to_fp8 -> dispatch -> per_token_cast_back.
+
+    Returns (x_roundtrip, scales):
+    - scales: fp32, shape (..., emb_dim/128), one per 128-wide block per token:
+      clamp(amax(|block|), 1e-4) / 448 (DeepEP formula, same as the cast op kernel).
+    - x_roundtrip: e4m3(x / scale) * scale — the values the decompressed dispatch buffer
+      holds after per_token_cast_back.
+
+    Device-computed scales agree with these within ~1e-2 relative, not bit-exact —
+    comparisons against hardware must use tolerant checks. The tolerance is pinned by the
+    cast op unit test:
+    tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py
+    """
+    orig_shape = x.shape
+    assert orig_shape[-1] % FP8_SCALE_BLOCK == 0, f"emb_dim ({orig_shape[-1]}) must be divisible by {FP8_SCALE_BLOCK}"
+    blocks = x.float().reshape(*orig_shape[:-1], orig_shape[-1] // FP8_SCALE_BLOCK, FP8_SCALE_BLOCK)
+    scales = blocks.abs().amax(dim=-1).clamp(min=FP8_SCALE_CLAMP_MIN) / E4M3_MAX
+    quantized = (blocks / scales.unsqueeze(-1)).to(torch.float8_e4m3fn)
+    x_roundtrip = (quantized.float() * scales.unsqueeze(-1)).reshape(orig_shape)
+    return x_roundtrip, scales
 
 
 def load_moe_weights_from_hf(
@@ -105,6 +135,7 @@ class TorchMoe(nn.Module):
         n_expert_groups: int = None,
         n_limited_groups: int = None,
         route_scale: float = None,
+        compressed_fp8_dispatch: bool = False,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -131,8 +162,21 @@ class TorchMoe(nn.Module):
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
             gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
+            compressed_fp8_dispatch: If True, model the TtMoe fp8 dispatch path: quantize x to
+                e4m3 with per-token/128-block fp32 scales before dispatch (the dispatched buffer
+                holds the dequantized round-trip values, matching per_token_cast_back output) and
+                ship the scales in the metadata tail (fields 3..). Requires
+                metadata_len == 3 + emb_dim/128, i.e. compute_constants(fp8_scaled_input=True).
         """
         super().__init__()
+
+        self.compressed_fp8_dispatch = compressed_fp8_dispatch
+        if compressed_fp8_dispatch:
+            expected_metadata_len = fp8_metadata_len(emb_dim)
+            assert metadata_len == expected_metadata_len, (
+                f"compressed_fp8_dispatch requires metadata_len == 3 + emb_dim/128 = {expected_metadata_len} "
+                f"(got {metadata_len}); size it with compute_constants(fp8_scaled_input=True, emb_dim=emb_dim)"
+            )
 
         # Build gate internally from gate_weights
         if gate_weights is not None:
@@ -290,7 +334,16 @@ class TorchMoe(nn.Module):
             shared_output = self.shared_expert(x.float())
 
         # Step 2: Dispatch tokens to expert buffers
-        dispatched_buffer, metadata = self.dispatch_module(x, weights, indices, expert_offsets)
+        # In fp8 mode, mirror TtMoe: the gate and shared expert consume the original x, but the
+        # dispatched buffer carries the e4m3 round-trip values (what per_token_cast_back returns
+        # on device) and the per-token scales ride in the metadata tail.
+        if self.compressed_fp8_dispatch:
+            x_dispatch, x_scales = per_token_cast_roundtrip(x)
+        else:
+            x_dispatch, x_scales = x, None
+        dispatched_buffer, metadata = self.dispatch_module(
+            x_dispatch, weights, indices, expert_offsets, scales=x_scales
+        )
 
         # Step 3: Run routed experts on dispatch buffer slices.
         # dispatched_buffer is 4D: (num_dispatch_groups, dispatch_group_size,

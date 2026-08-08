@@ -31,10 +31,13 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from transformers.configuration_utils import PretrainedConfig
@@ -47,7 +50,10 @@ class PrefillRunParams:
     """The resolved (env-derived) knobs the engine hands an adapter to build a
     runtime. The runner fills this once from the environment + per-rank layer
     split; adapters read fields off it instead of re-reading os.environ, so the
-    adapter method signatures stay stable as new knobs are added.
+    adapter method signatures stay stable as new knobs are added. (Deliberate
+    exception: the adapter's ``resolve_*`` methods are the sanctioned home for
+    env + hardware policy that must be shared with the direct pytest entry
+    points, which never build ``PrefillRunParams``.)
 
     Layer fields are THIS rank's slice: ``num_layers`` is the rank's layer count
     (== model total for single-rank) and ``first_layer_idx`` is the global index
@@ -78,6 +84,12 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
+    # FP8 MoE dispatch: compress x to fp8_e4m3 before dispatch (per-token scales ride in the
+    # dispatch metadata tail) and decompress the dispatched buffer back to bf16 after. Blackhole
+    # only. Resolved via PrefillModelAdapter.resolve_compressed_fp8_dispatch() (default-on for validated
+    # models; PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch — the env var can only disable,
+    # never enable); never set this True directly for an unsupported model.
+    compressed_fp8_dispatch: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -125,6 +137,13 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Whether this model is validated for FP8 MoE dispatch (per_token_cast_to_fp8 compression of x
+    # around dispatch, scales in the metadata tail). Validated models run it BY DEFAULT on Blackhole;
+    # PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch (local debugging). The env var can only
+    # DISABLE — it never enables fp8 for a model that leaves this False. Subclasses inherit the
+    # claim; restate it in per-checkpoint subclasses so the validated set stays auditable. Resolve
+    # the effective value with resolve_compressed_fp8_dispatch().
+    supports_compressed_fp8_dispatch: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -150,6 +169,52 @@ class PrefillModelAdapter(ABC):
     def resolve_sparse_kv_cache_format(self, requested: Optional[object]) -> Optional[object]:
         """Return an explicit request, otherwise this adapter's model default."""
         return self.default_sparse_kv_cache_format if requested is None else requested
+
+    def resolve_compressed_fp8_dispatch(self) -> bool:
+        """Effective FP8 MoE dispatch setting for this model on this machine.
+
+        Default TRUE for validated models on Blackhole: models that declare
+        ``supports_compressed_fp8_dispatch = True`` (DS/Kimi) run fp8 dispatch unless it is
+        explicitly killed. The env var is a KILL SWITCH ONLY — ``PREFILL_COMPRESSED_FP8_DISPATCH=0``
+        disables it (local debugging / bf16 comparison runs); it can never ENABLE fp8: an
+        unvalidated model (GLM) or non-Blackhole hardware always resolves False (the
+        per_token_cast fp8 ops are BH-only), and ``=1`` is a documented no-op kept only so a
+        stray export can't kill the feature (it logs a warning where it cannot enable anything).
+        Any other value logs a warning and is ignored. Shared by the prefill runner and the
+        direct pytest entry points (bh e2e / demo tests), which build the model without the
+        runner — so CI always exercises the fp8 path for validated models on Blackhole.
+
+        Under ``tt-run`` note that shell-exported ``PREFILL_*`` vars are NOT propagated to ranks —
+        set the kill switch via the manifest's ``env`` map or the binding's ``global_env`` instead
+        (see docs/ADDING_A_PREFILL_MODEL.md).
+        """
+        env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
+        if env is not None and env not in ("0", "1"):
+            logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} not recognized (expected '0' to disable); ignored")
+            env = None
+
+        if env == "0":
+            return False
+
+        if not self.supports_compressed_fp8_dispatch:
+            if env == "1":
+                logger.warning(
+                    f"PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: {self.name} is not validated for "
+                    "FP8 MoE dispatch (supports_compressed_fp8_dispatch=False); the env var can only disable"
+                )
+            return False
+
+        # Lazy: pulls in ttnn/torch — this module must stay import-light (see module docstring).
+        from models.common.utility_functions import is_blackhole
+
+        if not is_blackhole():
+            if env == "1":
+                logger.warning(
+                    "PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: FP8 MoE dispatch requires Blackhole "
+                    "hardware; the env var can only disable"
+                )
+            return False
+        return True
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:

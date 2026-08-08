@@ -24,7 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, fp8_metadata_len, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
@@ -159,6 +159,7 @@ class TtMoe(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        compressed_fp8_dispatch: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -197,6 +198,12 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            compressed_fp8_dispatch: If True, compress x to fp8_e4m3 with per-token/128-block fp32 scales
+                (per_token_cast_to_fp8) before dispatch and decompress the dispatched buffer back
+                to bfloat16 (per_token_cast_back) after, halving dispatch fabric traffic. The
+                scales are NOT sent separately: the dispatch kernel copies each token's scales
+                into the metadata tail (fields 3..), so metadata_len must be sized with
+                compute_constants(fp8_scaled_input=True, emb_dim=...). Requires Blackhole.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -211,6 +218,17 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+
+        # FP8 dispatch: x is compressed per-token before dispatch and the buffer decompressed after.
+        # Row-major fp8 dispatch is a byte copy, so the dispatch module must also emit fp8
+        # (fp8_output below), and the metadata rows must reserve one word per 128-wide scale block.
+        self.compressed_fp8_dispatch = compressed_fp8_dispatch
+        if compressed_fp8_dispatch:
+            expected_metadata_len = fp8_metadata_len(emb_dim)
+            assert metadata_len == expected_metadata_len, (
+                f"compressed_fp8_dispatch requires metadata_len == 3 + emb_dim/128 = {expected_metadata_len} "
+                f"(got {metadata_len}); size it with compute_constants(fp8_scaled_input=True, emb_dim=emb_dim)"
+            )
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -360,6 +378,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            fp8_output=compressed_fp8_dispatch,
             subdevice_id=self.dispatch_sd_id,
         )
 
@@ -394,6 +413,9 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        # Kept for the compressed_fp8_dispatch decompression: per_token_cast_back sweeps only the token
+        # regions of this chip's local experts, looked up through this table.
+        self.global_expert_idx_tt = global_expert_idx_tt
 
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
@@ -616,6 +638,19 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # ========================================
+        # FP8 dispatch compression (outside the sub-device overlap)
+        # ========================================
+        # Compress x per-token (DeepEP-style: e4m3 values + one fp32 scale per 128-wide block)
+        # BEFORE the sub-device manager is loaded, so the cast runs on the full Tensix grid.
+        # The scales are not shipped as a separate transfer: dispatch byte-copies each token's
+        # scales into the metadata tail (fields 3..), so they travel with the routing metadata.
+        # The bf16 x is kept alive — the shared expert below still consumes it.
+        x_fp8, x_scales = None, None
+        if self.compressed_fp8_dispatch:
+            x_fp8, x_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+            logger.debug(f"[TtMoe.forward] fp8 dispatch: x_fp8.shape={x_fp8.shape}, x_scales.shape={x_scales.shape}")
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -639,18 +674,43 @@ class TtMoe(LightweightModule):
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            x_fp8 if self.compressed_fp8_dispatch else x,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales=x_scales,
         )
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
+
+        # ========================================
+        # FP8 dispatch decompression (after the sub-device manager is cleared)
+        # ========================================
+        # Dequantize the fp8 dispatched buffer back to bfloat16 on the full grid. The per-token
+        # scales are read from the metadata tail (fields 3..) that dispatch shipped alongside the
+        # routing fields; token-count-aware sweeping restricts the work to the regions of this
+        # chip's local experts, bounded by the routing tensors.
+        if self.compressed_fp8_dispatch:
+            x_fp8 = ttnn.deallocate(x_fp8)
+            x_scales = ttnn.deallocate(x_scales)
+            fp8_dispatched_buffer = dispatched_buffer
+            dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                fp8_dispatched_buffer,
+                input_scale=None,  # exactly one of input_scale/metadata: scales ride in the metadata tail
+                output_dtype=ttnn.bfloat16,
+                token_count_aware=True,
+                expert_region_offsets=tt_expert_region_offsets,
+                expert_token_counts=tt_expert_token_counts,
+                global_expert_idx_table=self.global_expert_idx_tt,
+                experts_per_chip=self.experts_per_chip,
+                metadata=metadata,
+            )
+            fp8_dispatched_buffer = ttnn.deallocate(fp8_dispatched_buffer)
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it

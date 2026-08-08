@@ -339,6 +339,7 @@ def run_model(
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
         is_balanced=is_balanced,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
