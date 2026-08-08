@@ -27,6 +27,12 @@ constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 14 * 10    // Tensix cores
 // Noc reads/writes must be 16-byte aligned.
 constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = L1_ALIGNMENT;      // 16
 constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 64
+#elif defined(ARCH_QUASAR)
+constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS =
+    10 * 10;  // TODO: This should be updated to reflect the actual number of Tensix cores in Quasar
+// Noc reads/writes must be 16-byte aligned.
+constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = L1_ALIGNMENT;      // 16
+constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 64
 #else
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 0;
 constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = 0;
