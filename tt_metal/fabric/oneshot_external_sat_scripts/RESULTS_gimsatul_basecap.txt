@@ -1,0 +1,8 @@
+size   vars     gim_t1     gim_t8       gim_t16      gim_t32     
+64     27440    47ms       70ms         84ms         87ms        
+80     34336    60ms       96ms         99ms         108ms       
+96     41232    73ms       115ms        116ms        142ms       
+112    48128    94ms       150ms        148ms        172ms       
+128    55024    934ms      192ms        650ms        261ms       
+144    61920    >420s      >420s        69290ms      280443ms    
+[21:19:01] GIM SWEEP DONE

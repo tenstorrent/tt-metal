@@ -56,6 +56,11 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
     (void)impl_->solver.set("ilb", 2);
 }
 
+bool TopologySatSolver::write_dimacs(const std::string& path) {
+    // CaDiCaL::write_dimacs returns nullptr on success, an error string otherwise.
+    return impl_->solver.write_dimacs(path.c_str()) == nullptr;
+}
+
 TopologySatSolver::~TopologySatSolver() = default;
 
 TopologySatSolver::TopologySatSolver(TopologySatSolver&&) noexcept = default;

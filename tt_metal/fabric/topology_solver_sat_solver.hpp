@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -28,6 +30,14 @@ struct TopologySatSolver {
 
     int declare_one_more_variable();
     void add(int lit);
+
+    // Number of declared SAT variables (used to gate the DIMACS-export experiment hook to large solves).
+    std::size_t num_variables() const { return static_cast<std::size_t>(next_var_ < 0 ? 0 : next_var_); }
+
+    // EXPERIMENT hook: write the current CNF to a DIMACS file, to feed an external parallel / clause-sharing SAT
+    // solver (gimsatul, plingeling, ...). Returns true on success. Variable numbering matches
+    // declare_one_more_variable() so a model round-trips. See ONESHOT_EXTERNAL_SAT_EXPERIMENT.md.
+    bool write_dimacs(const std::string& path);
     // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
     // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
     void assume(int lit);

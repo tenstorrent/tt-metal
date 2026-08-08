@@ -1,0 +1,9 @@
+shape  stages  config               intermesh_ms occupied
+2x4    64      mode0_warmdescent    240492.9 ms  occ=16
+2x4    64      mode1_warmlock       17231.5 ms   occ=16
+2x4    64      mode3_coldcap        11939.2 ms   occ=16
+2x4    64      mode3_fastsat        44537.1 ms   occ=16
+2x4    64      mode3_seed7          17318.7 ms   occ=16
+2x4    96      mode3_coldcap        32574.2 ms   occ=24
+2x4    96      mode3_fastsat        176124.7 ms  occ=24
+2x4    96      mode3_seed7          running      occ=?
