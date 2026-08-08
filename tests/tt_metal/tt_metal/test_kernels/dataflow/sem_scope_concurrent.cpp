@@ -13,6 +13,11 @@
 //   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM drains them
 //                            all with down(1), reports value(). Expect 0 (a non-atomic down()
 //                            loses units -> the consumer blocks -> timeout).
+//   MODE_MULTI_CONSUMER    : the lowest DM up(1)s (num_threads-1)*iters credits; every other DM
+//                            CONCURRENTLY down(iters)s, then bumps 'done'. The producer waits
+//                            for all consumers, reports value(). Expect 0 (a double-spent
+//                            credit overdraws and wraps unsigned -> huge nonzero; a lost credit
+//                            blocks a consumer -> 'done' never fills -> timeout).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -52,6 +57,23 @@ void kernel_main() {
         for (uint32_t i = 0; i < increment_times; i++) {
             work.up(1);
         }
+    }
+#elif defined(MODE_MULTI_CONSUMER)
+    // Mirror of PRODUCER_CONSUMER: ONE producer, (num_threads-1) CONCURRENT consumers. A
+    // double-spent credit overdraws the counter and wraps unsigned -> huge nonzero report; a
+    // lost credit blocks a consumer -> 'done' never fills -> RunProgram timeout.
+    Semaphore done(sem::done);  // CTAD deduces the host-baked scope
+    if (is_lowest) {
+        // Producer + reporter: single-credit ups for maximal interleave with the racing consumers.
+        const uint32_t total = (num_threads - 1) * increment_times;
+        for (uint32_t i = 0; i < total; i++) {
+            work.up(1);
+        }
+        done.wait_min(num_threads - 1);           // every consumer drained its share
+        report_value(report_addr, work.value());  // expect exactly 0
+    } else {
+        work.down(increment_times);
+        done.up(1);
     }
 #else  // MODE_CONCURRENT_UP
     Semaphore done(sem::done);  // CTAD deduces the host-baked scope
