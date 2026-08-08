@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: &#x00A9; 2026 Tenstorrent USA, Inc. -->
+
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120">
+  <defs>
+    <pattern id="chip-grid" width="80" height="70" patternUnits="userSpaceOnUse" patternTransform="translate(110 140)">
+      <rect x="6" y="6" width="68" height="58" rx="7" fill="#aeb4bc" stroke="#6f7782" stroke-width="1.5"/>
+    </pattern>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#12a150"/>
+    </marker>
+    <marker id="arrow-pink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ef4f9a"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#17202a" flood-opacity="0.25"/>
+    </filter>
+    <g id="worker-core"><rect x="-34" y="-29" width="68" height="58" rx="7" fill="#2878d0" stroke="#0e4f98" stroke-width="2.5"/></g>
+    <g id="sender-core"><rect x="-34" y="-29" width="68" height="58" rx="7" fill="#d9363e" stroke="#8d1720" stroke-width="2.5"/></g>
+    <style>
+      .axis { font: 600 15px sans-serif; fill: #46505c; text-anchor: middle; }
+      .tile-label { font: 600 11px sans-serif; fill: #29323c; text-anchor: middle; dominant-baseline: middle; }
+      .ring-label { font: 700 10px sans-serif; fill: white; text-anchor: middle; dominant-baseline: middle; }
+      .sender-label { font: 700 10px sans-serif; fill: white; text-anchor: middle; dominant-baseline: middle; }
+      .weight-link { fill: none; stroke: #ef4f9a; stroke-width: 2.2; stroke-opacity: 0.52; }
+      .ring-link { fill: none; stroke: #12a150; stroke-width: 3.2; stroke-opacity: 0.88; }
+      .legend { font: 16px sans-serif; fill: #25303b; dominant-baseline: middle; }
+    </style>
+  </defs>
+  <rect width="1600" height="1120" fill="#f7f9fb"/>
+  <text x="800" y="50" text-anchor="middle" font-family="sans-serif" font-size="30" font-weight="700" fill="#17202a">Tensor Prefetcher Ring 16</text>
+  <text x="800" y="82" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#52606d">congestion_optimized_ring16; dual DRISC senders; shared links use offset visual lanes</text>
+  <g aria-label="NoC0 coordinate axes">
+    <text x="790" y="111" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" fill="#46505c">NoC0 x</text>
+    <text x="55" y="560" transform="rotate(-90 55 560)" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" fill="#46505c">NoC0 y</text>
+    <g class="axis"><text x="150" y="130">0</text><text x="230" y="130">1</text><text x="310" y="130">2</text><text x="390" y="130">3</text><text x="470" y="130">4</text><text x="550" y="130">5</text><text x="630" y="130">6</text><text x="710" y="130">7</text><text x="790" y="130">8</text><text x="870" y="130">9</text><text x="950" y="130">10</text><text x="1030" y="130">11</text><text x="1110" y="130">12</text><text x="1190" y="130">13</text><text x="1270" y="130">14</text><text x="1350" y="130">15</text><text x="1430" y="130">16</text><text x="90" y="180">0</text><text x="90" y="250">1</text><text x="90" y="320">2</text><text x="90" y="390">3</text><text x="90" y="460">4</text><text x="90" y="530">5</text><text x="90" y="600">6</text><text x="90" y="670">7</text><text x="90" y="740">8</text><text x="90" y="810">9</text><text x="90" y="880">10</text><text x="90" y="950">11</text></g>
+  </g>
+  <rect x="110" y="140" width="1360" height="840" fill="url(#chip-grid)"/>
+  <g class="tile-label" opacity="0.72"><text x="790" y="175">ARC</text><text x="310" y="175">PCIe</text><text x="1030" y="175">PCIe</text><text x="790" y="245">RTR</text><text x="790" y="315">RTR</text><text x="790" y="385">RTR</text><text x="790" y="455">RTR</text><text x="790" y="525">RTR</text><text x="790" y="595">RTR</text><text x="790" y="665">RTR</text><text x="790" y="735">RTR</text><text x="790" y="805">RTR</text><text x="790" y="875">RTR</text><text x="790" y="945">RTR</text><text x="230" y="245">ETH</text><text x="310" y="245">ETH</text><text x="390" y="245">ETH</text><text x="470" y="245">ETH</text><text x="550" y="245">ETH</text><text x="630" y="245">ETH</text><text x="710" y="245">ETH</text><text x="950" y="245">ETH</text><text x="1030" y="245">ETH</text><text x="1110" y="245">ETH</text><text x="1190" y="245">ETH</text><text x="1270" y="245">ETH</text><text x="1350" y="245">ETH</text><text x="1430" y="245">ETH</text><text x="150" y="945">DRAM</text><text x="870" y="945">DRAM</text><text x="150" y="315">DRAM</text><text x="870" y="385">DRAM</text><text x="150" y="805">DRAM</text><text x="870" y="595">DRAM</text></g>
+  <g filter="url(#shadow)" aria-label="Activation ring worker cores"><use href="#worker-core" transform="translate(310 315)"/><use href="#worker-core" transform="translate(390 315)"/><use href="#worker-core" transform="translate(230 385)"/><use href="#worker-core" transform="translate(470 385)"/><use href="#worker-core" transform="translate(230 455)"/><use href="#worker-core" transform="translate(310 455)"/><use href="#worker-core" transform="translate(230 595)"/><use href="#worker-core" transform="translate(550 595)"/><use href="#worker-core" transform="translate(1190 665)"/><use href="#worker-core" transform="translate(1270 665)"/><use href="#worker-core" transform="translate(390 735)"/><use href="#worker-core" transform="translate(1110 735)"/><use href="#worker-core" transform="translate(1110 805)"/><use href="#worker-core" transform="translate(1350 805)"/><use href="#worker-core" transform="translate(1030 875)"/><use href="#worker-core" transform="translate(1190 875)"/></g>
+  <g filter="url(#shadow)" aria-label="Tensor Prefetcher DRAM sender cores"><use href="#sender-core" transform="translate(150 175)"/><use href="#sender-core" transform="translate(150 245)"/><use href="#sender-core" transform="translate(150 385)"/><use href="#sender-core" transform="translate(150 875)"/><use href="#sender-core" transform="translate(150 735)"/><use href="#sender-core" transform="translate(150 455)"/><use href="#sender-core" transform="translate(150 595)"/><use href="#sender-core" transform="translate(150 665)"/><use href="#sender-core" transform="translate(870 175)"/><use href="#sender-core" transform="translate(870 245)"/><use href="#sender-core" transform="translate(870 315)"/><use href="#sender-core" transform="translate(870 875)"/><use href="#sender-core" transform="translate(870 805)"/><use href="#sender-core" transform="translate(870 455)"/><use href="#sender-core" transform="translate(870 525)"/><use href="#sender-core" transform="translate(870 665)"/></g>
+  <g aria-label="Exact offset NoC routes"><g aria-label="Bank 0 sender 0 to R0: NoC0 X+ then Y+"><title>Bank 0 sender 0 to R0: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="175.0" x2="230.0" y2="175.0"/>
+<line class="weight-link" x1="230.0" y1="175.0" x2="310.0" y2="175.0"/>
+<line class="weight-link" x1="311.4" y1="175.0" x2="311.4" y2="245.0"/>
+<line class="weight-link" x1="311.4" y1="245.0" x2="311.4" y2="315.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 0 sender 1 to R1: NoC0 X+ then Y+"><title>Bank 0 sender 1 to R1: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="245.0" x2="230.0" y2="245.0"/>
+<line class="weight-link" x1="230.0" y1="245.0" x2="310.0" y2="245.0"/>
+<line class="weight-link" x1="310.0" y1="245.0" x2="390.0" y2="245.0"/>
+<line class="weight-link" x1="390.0" y1="245.0" x2="390.0" y2="315.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 1 sender 0 to R2: NoC0 X+ then Y+"><title>Bank 1 sender 0 to R2: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="386.4" x2="230.0" y2="386.4" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 1 sender 1 to R3: NoC0 X+ then Y+"><title>Bank 1 sender 1 to R3: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="876.4" x2="230.0" y2="876.4"/>
+<line class="weight-link" x1="230.0" y1="876.4" x2="310.0" y2="876.4"/>
+<line class="weight-link" x1="310.0" y1="875.0" x2="390.0" y2="875.0"/>
+<line class="weight-link" x1="390.0" y1="875.0" x2="470.0" y2="875.0"/>
+<line class="weight-link" x1="470.0" y1="875.0" x2="470.0" y2="945.0"/>
+<line class="weight-link" x1="470.0" y1="945.0" x2="470.0" y2="995.0"/>
+<line class="weight-link" x1="470.0" y1="135.0" x2="470.0" y2="175.0"/>
+<line class="weight-link" x1="470.0" y1="175.0" x2="470.0" y2="245.0"/>
+<line class="weight-link" x1="470.0" y1="245.0" x2="470.0" y2="315.0"/>
+<line class="weight-link" x1="470.0" y1="315.0" x2="470.0" y2="385.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 2 sender 0 to R4: NoC0 X+ then Y+"><title>Bank 2 sender 0 to R4: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="735.0" x2="230.0" y2="735.0"/>
+<line class="weight-link" x1="230.0" y1="735.0" x2="230.0" y2="805.0"/>
+<line class="weight-link" x1="230.0" y1="805.0" x2="230.0" y2="875.0"/>
+<line class="weight-link" x1="230.0" y1="875.0" x2="230.0" y2="945.0"/>
+<line class="weight-link" x1="230.0" y1="945.0" x2="230.0" y2="995.0"/>
+<line class="weight-link" x1="230.0" y1="135.0" x2="230.0" y2="175.0"/>
+<line class="weight-link" x1="230.0" y1="175.0" x2="230.0" y2="245.0"/>
+<line class="weight-link" x1="230.0" y1="245.0" x2="230.0" y2="315.0"/>
+<line class="weight-link" x1="231.4" y1="315.0" x2="231.4" y2="385.0"/>
+<line class="weight-link" x1="231.4" y1="385.0" x2="231.4" y2="455.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 2 sender 1 to R5: NoC0 X+ then Y+"><title>Bank 2 sender 1 to R5: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="456.4" x2="230.0" y2="456.4"/>
+<line class="weight-link" x1="230.0" y1="456.4" x2="310.0" y2="456.4" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 3 sender 0 to R6: NoC0 X+ then Y+"><title>Bank 3 sender 0 to R6: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="595.0" x2="230.0" y2="595.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 3 sender 1 to R7: NoC0 X+ then Y+"><title>Bank 3 sender 1 to R7: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="150.0" y1="666.4" x2="230.0" y2="666.4"/>
+<line class="weight-link" x1="230.0" y1="666.4" x2="310.0" y2="666.4"/>
+<line class="weight-link" x1="310.0" y1="666.4" x2="390.0" y2="666.4"/>
+<line class="weight-link" x1="390.0" y1="665.0" x2="470.0" y2="665.0"/>
+<line class="weight-link" x1="470.0" y1="665.0" x2="550.0" y2="665.0"/>
+<line class="weight-link" x1="550.0" y1="665.0" x2="550.0" y2="735.0"/>
+<line class="weight-link" x1="550.0" y1="735.0" x2="550.0" y2="805.0"/>
+<line class="weight-link" x1="550.0" y1="805.0" x2="550.0" y2="875.0"/>
+<line class="weight-link" x1="550.0" y1="875.0" x2="550.0" y2="945.0"/>
+<line class="weight-link" x1="550.0" y1="945.0" x2="550.0" y2="995.0"/>
+<line class="weight-link" x1="550.0" y1="135.0" x2="550.0" y2="175.0"/>
+<line class="weight-link" x1="550.0" y1="175.0" x2="550.0" y2="245.0"/>
+<line class="weight-link" x1="550.0" y1="245.0" x2="550.0" y2="315.0"/>
+<line class="weight-link" x1="550.0" y1="315.0" x2="550.0" y2="385.0"/>
+<line class="weight-link" x1="550.0" y1="385.0" x2="550.0" y2="455.0"/>
+<line class="weight-link" x1="550.0" y1="455.0" x2="550.0" y2="525.0"/>
+<line class="weight-link" x1="550.0" y1="525.0" x2="550.0" y2="595.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 4 sender 0 to R8: NoC0 X+ then Y+"><title>Bank 4 sender 0 to R8: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="175.0" x2="950.0" y2="175.0"/>
+<line class="weight-link" x1="950.0" y1="175.0" x2="1030.0" y2="175.0"/>
+<line class="weight-link" x1="1030.0" y1="175.0" x2="1110.0" y2="175.0"/>
+<line class="weight-link" x1="1110.0" y1="175.0" x2="1190.0" y2="175.0"/>
+<line class="weight-link" x1="1190.0" y1="175.0" x2="1190.0" y2="245.0"/>
+<line class="weight-link" x1="1190.0" y1="245.0" x2="1190.0" y2="315.0"/>
+<line class="weight-link" x1="1190.0" y1="315.0" x2="1190.0" y2="385.0"/>
+<line class="weight-link" x1="1190.0" y1="385.0" x2="1190.0" y2="455.0"/>
+<line class="weight-link" x1="1190.0" y1="455.0" x2="1190.0" y2="525.0"/>
+<line class="weight-link" x1="1190.0" y1="525.0" x2="1190.0" y2="595.0"/>
+<line class="weight-link" x1="1191.4" y1="595.0" x2="1191.4" y2="665.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 4 sender 1 to R9: NoC0 X+ then Y+"><title>Bank 4 sender 1 to R9: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="245.0" x2="950.0" y2="245.0"/>
+<line class="weight-link" x1="950.0" y1="245.0" x2="1030.0" y2="245.0"/>
+<line class="weight-link" x1="1030.0" y1="245.0" x2="1110.0" y2="245.0"/>
+<line class="weight-link" x1="1110.0" y1="245.0" x2="1190.0" y2="245.0"/>
+<line class="weight-link" x1="1190.0" y1="245.0" x2="1270.0" y2="245.0"/>
+<line class="weight-link" x1="1270.0" y1="245.0" x2="1270.0" y2="315.0"/>
+<line class="weight-link" x1="1270.0" y1="315.0" x2="1270.0" y2="385.0"/>
+<line class="weight-link" x1="1270.0" y1="385.0" x2="1270.0" y2="455.0"/>
+<line class="weight-link" x1="1270.0" y1="455.0" x2="1270.0" y2="525.0"/>
+<line class="weight-link" x1="1270.0" y1="525.0" x2="1270.0" y2="595.0"/>
+<line class="weight-link" x1="1270.0" y1="595.0" x2="1270.0" y2="665.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 5 sender 0 to R10: NoC0 X+ then Y+"><title>Bank 5 sender 0 to R10: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="316.4" x2="950.0" y2="316.4"/>
+<line class="weight-link" x1="950.0" y1="316.4" x2="1030.0" y2="316.4"/>
+<line class="weight-link" x1="1030.0" y1="316.4" x2="1110.0" y2="316.4"/>
+<line class="weight-link" x1="1110.0" y1="316.4" x2="1190.0" y2="316.4"/>
+<line class="weight-link" x1="1190.0" y1="316.4" x2="1270.0" y2="316.4"/>
+<line class="weight-link" x1="1270.0" y1="316.4" x2="1350.0" y2="316.4"/>
+<line class="weight-link" x1="1350.0" y1="316.4" x2="1430.0" y2="316.4"/>
+<line class="weight-link" x1="1430.0" y1="316.4" x2="1495.0" y2="316.4"/>
+<line class="weight-link" x1="105.0" y1="316.4" x2="150.0" y2="316.4"/>
+<line class="weight-link" x1="150.0" y1="316.4" x2="230.0" y2="316.4"/>
+<line class="weight-link" x1="230.0" y1="315.0" x2="310.0" y2="315.0"/>
+<line class="weight-link" x1="310.0" y1="316.4" x2="390.0" y2="316.4"/>
+<line class="weight-link" x1="390.0" y1="315.0" x2="390.0" y2="385.0"/>
+<line class="weight-link" x1="390.0" y1="385.0" x2="390.0" y2="455.0"/>
+<line class="weight-link" x1="390.0" y1="455.0" x2="390.0" y2="525.0"/>
+<line class="weight-link" x1="390.0" y1="525.0" x2="390.0" y2="595.0"/>
+<line class="weight-link" x1="390.0" y1="595.0" x2="390.0" y2="665.0"/>
+<line class="weight-link" x1="391.4" y1="665.0" x2="391.4" y2="735.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 5 sender 1 to R11: NoC0 X+ then Y+"><title>Bank 5 sender 1 to R11: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="875.0" x2="950.0" y2="875.0"/>
+<line class="weight-link" x1="950.0" y1="875.0" x2="1030.0" y2="875.0"/>
+<line class="weight-link" x1="1030.0" y1="876.4" x2="1110.0" y2="876.4"/>
+<line class="weight-link" x1="1110.0" y1="875.0" x2="1110.0" y2="945.0"/>
+<line class="weight-link" x1="1110.0" y1="945.0" x2="1110.0" y2="995.0"/>
+<line class="weight-link" x1="1110.0" y1="135.0" x2="1110.0" y2="175.0"/>
+<line class="weight-link" x1="1110.0" y1="175.0" x2="1110.0" y2="245.0"/>
+<line class="weight-link" x1="1110.0" y1="245.0" x2="1110.0" y2="315.0"/>
+<line class="weight-link" x1="1110.0" y1="315.0" x2="1110.0" y2="385.0"/>
+<line class="weight-link" x1="1110.0" y1="385.0" x2="1110.0" y2="455.0"/>
+<line class="weight-link" x1="1110.0" y1="455.0" x2="1110.0" y2="525.0"/>
+<line class="weight-link" x1="1110.0" y1="525.0" x2="1110.0" y2="595.0"/>
+<line class="weight-link" x1="1110.0" y1="595.0" x2="1110.0" y2="665.0"/>
+<line class="weight-link" x1="1110.0" y1="665.0" x2="1110.0" y2="735.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 6 sender 0 to R12: NoC0 X+ then Y+"><title>Bank 6 sender 0 to R12: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="806.4" x2="950.0" y2="806.4"/>
+<line class="weight-link" x1="950.0" y1="806.4" x2="1030.0" y2="806.4"/>
+<line class="weight-link" x1="1030.0" y1="805.0" x2="1110.0" y2="805.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 6 sender 1 to R13: NoC0 X+ then Y+"><title>Bank 6 sender 1 to R13: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="456.4" x2="950.0" y2="456.4"/>
+<line class="weight-link" x1="950.0" y1="456.4" x2="1030.0" y2="456.4"/>
+<line class="weight-link" x1="1030.0" y1="456.4" x2="1110.0" y2="456.4"/>
+<line class="weight-link" x1="1110.0" y1="456.4" x2="1190.0" y2="456.4"/>
+<line class="weight-link" x1="1190.0" y1="456.4" x2="1270.0" y2="456.4"/>
+<line class="weight-link" x1="1270.0" y1="456.4" x2="1350.0" y2="456.4"/>
+<line class="weight-link" x1="1350.0" y1="455.0" x2="1350.0" y2="525.0"/>
+<line class="weight-link" x1="1350.0" y1="525.0" x2="1350.0" y2="595.0"/>
+<line class="weight-link" x1="1350.0" y1="595.0" x2="1350.0" y2="665.0"/>
+<line class="weight-link" x1="1350.0" y1="665.0" x2="1350.0" y2="735.0"/>
+<line class="weight-link" x1="1350.0" y1="735.0" x2="1350.0" y2="805.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 7 sender 0 to R14: NoC0 X+ then Y+"><title>Bank 7 sender 0 to R14: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="525.0" x2="950.0" y2="525.0"/>
+<line class="weight-link" x1="950.0" y1="525.0" x2="1030.0" y2="525.0"/>
+<line class="weight-link" x1="1030.0" y1="525.0" x2="1030.0" y2="595.0"/>
+<line class="weight-link" x1="1030.0" y1="595.0" x2="1030.0" y2="665.0"/>
+<line class="weight-link" x1="1030.0" y1="665.0" x2="1030.0" y2="735.0"/>
+<line class="weight-link" x1="1030.0" y1="735.0" x2="1030.0" y2="805.0"/>
+<line class="weight-link" x1="1031.4" y1="805.0" x2="1031.4" y2="875.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="Bank 7 sender 1 to R15: NoC0 X+ then Y+"><title>Bank 7 sender 1 to R15: NoC0 X+ then Y+</title>
+<line class="weight-link" x1="870.0" y1="665.0" x2="950.0" y2="665.0"/>
+<line class="weight-link" x1="950.0" y1="665.0" x2="1030.0" y2="665.0"/>
+<line class="weight-link" x1="1030.0" y1="665.0" x2="1110.0" y2="665.0"/>
+<line class="weight-link" x1="1110.0" y1="665.0" x2="1190.0" y2="665.0"/>
+<line class="weight-link" x1="1190.0" y1="665.0" x2="1190.0" y2="735.0"/>
+<line class="weight-link" x1="1190.0" y1="735.0" x2="1190.0" y2="805.0"/>
+<line class="weight-link" x1="1190.0" y1="805.0" x2="1190.0" y2="875.0" marker-end="url(#arrow-pink)"/>
+</g>
+<g aria-label="R0 to R15: NoC1 Y- then X-"><title>R0 to R15: NoC1 Y- then X-</title>
+<line class="ring-link" x1="308.6" y1="315.0" x2="308.6" y2="245.0"/>
+<line class="ring-link" x1="308.6" y1="245.0" x2="308.6" y2="175.0"/>
+<line class="ring-link" x1="310.0" y1="175.0" x2="310.0" y2="135.0"/>
+<line class="ring-link" x1="310.0" y1="995.0" x2="310.0" y2="945.0"/>
+<line class="ring-link" x1="310.0" y1="945.0" x2="310.0" y2="875.0"/>
+<line class="ring-link" x1="310.0" y1="873.6" x2="230.0" y2="873.6"/>
+<line class="ring-link" x1="230.0" y1="873.6" x2="150.0" y2="873.6"/>
+<line class="ring-link" x1="150.0" y1="875.0" x2="105.0" y2="875.0"/>
+<line class="ring-link" x1="1495.0" y1="875.0" x2="1430.0" y2="875.0"/>
+<line class="ring-link" x1="1430.0" y1="875.0" x2="1350.0" y2="875.0"/>
+<line class="ring-link" x1="1350.0" y1="875.0" x2="1270.0" y2="875.0"/>
+<line class="ring-link" x1="1270.0" y1="875.0" x2="1190.0" y2="875.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R1 to R0: NoC1 Y- then X-"><title>R1 to R0: NoC1 Y- then X-</title>
+<line class="ring-link" x1="390.0" y1="313.6" x2="310.0" y2="313.6" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R2 to R1: NoC1 Y- then X-"><title>R2 to R1: NoC1 Y- then X-</title>
+<line class="ring-link" x1="228.6" y1="385.0" x2="228.6" y2="315.0"/>
+<line class="ring-link" x1="230.0" y1="313.6" x2="150.0" y2="313.6"/>
+<line class="ring-link" x1="150.0" y1="313.6" x2="105.0" y2="313.6"/>
+<line class="ring-link" x1="1495.0" y1="313.6" x2="1430.0" y2="313.6"/>
+<line class="ring-link" x1="1430.0" y1="313.6" x2="1350.0" y2="313.6"/>
+<line class="ring-link" x1="1350.0" y1="313.6" x2="1270.0" y2="313.6"/>
+<line class="ring-link" x1="1270.0" y1="313.6" x2="1190.0" y2="313.6"/>
+<line class="ring-link" x1="1190.0" y1="313.6" x2="1110.0" y2="313.6"/>
+<line class="ring-link" x1="1110.0" y1="313.6" x2="1030.0" y2="313.6"/>
+<line class="ring-link" x1="1030.0" y1="313.6" x2="950.0" y2="313.6"/>
+<line class="ring-link" x1="950.0" y1="313.6" x2="870.0" y2="313.6"/>
+<line class="ring-link" x1="870.0" y1="315.0" x2="790.0" y2="315.0"/>
+<line class="ring-link" x1="790.0" y1="315.0" x2="710.0" y2="315.0"/>
+<line class="ring-link" x1="710.0" y1="315.0" x2="630.0" y2="315.0"/>
+<line class="ring-link" x1="630.0" y1="315.0" x2="550.0" y2="315.0"/>
+<line class="ring-link" x1="550.0" y1="315.0" x2="470.0" y2="315.0"/>
+<line class="ring-link" x1="470.0" y1="315.0" x2="390.0" y2="315.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R3 to R2: NoC1 Y- then X-"><title>R3 to R2: NoC1 Y- then X-</title>
+<line class="ring-link" x1="470.0" y1="385.0" x2="390.0" y2="385.0"/>
+<line class="ring-link" x1="390.0" y1="385.0" x2="310.0" y2="385.0"/>
+<line class="ring-link" x1="310.0" y1="385.0" x2="230.0" y2="385.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R4 to R3: NoC1 Y- then X-"><title>R4 to R3: NoC1 Y- then X-</title>
+<line class="ring-link" x1="228.6" y1="455.0" x2="228.6" y2="385.0"/>
+<line class="ring-link" x1="230.0" y1="383.6" x2="150.0" y2="383.6"/>
+<line class="ring-link" x1="150.0" y1="385.0" x2="105.0" y2="385.0"/>
+<line class="ring-link" x1="1495.0" y1="385.0" x2="1430.0" y2="385.0"/>
+<line class="ring-link" x1="1430.0" y1="385.0" x2="1350.0" y2="385.0"/>
+<line class="ring-link" x1="1350.0" y1="385.0" x2="1270.0" y2="385.0"/>
+<line class="ring-link" x1="1270.0" y1="385.0" x2="1190.0" y2="385.0"/>
+<line class="ring-link" x1="1190.0" y1="385.0" x2="1110.0" y2="385.0"/>
+<line class="ring-link" x1="1110.0" y1="385.0" x2="1030.0" y2="385.0"/>
+<line class="ring-link" x1="1030.0" y1="385.0" x2="950.0" y2="385.0"/>
+<line class="ring-link" x1="950.0" y1="385.0" x2="870.0" y2="385.0"/>
+<line class="ring-link" x1="870.0" y1="385.0" x2="790.0" y2="385.0"/>
+<line class="ring-link" x1="790.0" y1="385.0" x2="710.0" y2="385.0"/>
+<line class="ring-link" x1="710.0" y1="385.0" x2="630.0" y2="385.0"/>
+<line class="ring-link" x1="630.0" y1="385.0" x2="550.0" y2="385.0"/>
+<line class="ring-link" x1="550.0" y1="385.0" x2="470.0" y2="385.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R5 to R4: NoC1 Y- then X-"><title>R5 to R4: NoC1 Y- then X-</title>
+<line class="ring-link" x1="310.0" y1="453.6" x2="230.0" y2="453.6" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R6 to R5: NoC1 Y- then X-"><title>R6 to R5: NoC1 Y- then X-</title>
+<line class="ring-link" x1="230.0" y1="595.0" x2="230.0" y2="525.0"/>
+<line class="ring-link" x1="230.0" y1="525.0" x2="230.0" y2="455.0"/>
+<line class="ring-link" x1="230.0" y1="453.6" x2="150.0" y2="453.6"/>
+<line class="ring-link" x1="150.0" y1="455.0" x2="105.0" y2="455.0"/>
+<line class="ring-link" x1="1495.0" y1="455.0" x2="1430.0" y2="455.0"/>
+<line class="ring-link" x1="1430.0" y1="455.0" x2="1350.0" y2="455.0"/>
+<line class="ring-link" x1="1350.0" y1="453.6" x2="1270.0" y2="453.6"/>
+<line class="ring-link" x1="1270.0" y1="453.6" x2="1190.0" y2="453.6"/>
+<line class="ring-link" x1="1190.0" y1="453.6" x2="1110.0" y2="453.6"/>
+<line class="ring-link" x1="1110.0" y1="453.6" x2="1030.0" y2="453.6"/>
+<line class="ring-link" x1="1030.0" y1="453.6" x2="950.0" y2="453.6"/>
+<line class="ring-link" x1="950.0" y1="453.6" x2="870.0" y2="453.6"/>
+<line class="ring-link" x1="870.0" y1="455.0" x2="790.0" y2="455.0"/>
+<line class="ring-link" x1="790.0" y1="455.0" x2="710.0" y2="455.0"/>
+<line class="ring-link" x1="710.0" y1="455.0" x2="630.0" y2="455.0"/>
+<line class="ring-link" x1="630.0" y1="455.0" x2="550.0" y2="455.0"/>
+<line class="ring-link" x1="550.0" y1="455.0" x2="470.0" y2="455.0"/>
+<line class="ring-link" x1="470.0" y1="455.0" x2="390.0" y2="455.0"/>
+<line class="ring-link" x1="390.0" y1="455.0" x2="310.0" y2="455.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R7 to R6: NoC1 Y- then X-"><title>R7 to R6: NoC1 Y- then X-</title>
+<line class="ring-link" x1="550.0" y1="595.0" x2="470.0" y2="595.0"/>
+<line class="ring-link" x1="470.0" y1="595.0" x2="390.0" y2="595.0"/>
+<line class="ring-link" x1="390.0" y1="595.0" x2="310.0" y2="595.0"/>
+<line class="ring-link" x1="310.0" y1="595.0" x2="230.0" y2="595.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R8 to R7: NoC1 Y- then X-"><title>R8 to R7: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1188.6" y1="665.0" x2="1188.6" y2="595.0"/>
+<line class="ring-link" x1="1190.0" y1="595.0" x2="1110.0" y2="595.0"/>
+<line class="ring-link" x1="1110.0" y1="595.0" x2="1030.0" y2="595.0"/>
+<line class="ring-link" x1="1030.0" y1="595.0" x2="950.0" y2="595.0"/>
+<line class="ring-link" x1="950.0" y1="595.0" x2="870.0" y2="595.0"/>
+<line class="ring-link" x1="870.0" y1="595.0" x2="790.0" y2="595.0"/>
+<line class="ring-link" x1="790.0" y1="595.0" x2="710.0" y2="595.0"/>
+<line class="ring-link" x1="710.0" y1="595.0" x2="630.0" y2="595.0"/>
+<line class="ring-link" x1="630.0" y1="595.0" x2="550.0" y2="595.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R9 to R8: NoC1 Y- then X-"><title>R9 to R8: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1270.0" y1="665.0" x2="1190.0" y2="665.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R10 to R9: NoC1 Y- then X-"><title>R10 to R9: NoC1 Y- then X-</title>
+<line class="ring-link" x1="388.6" y1="735.0" x2="388.6" y2="665.0"/>
+<line class="ring-link" x1="390.0" y1="663.6" x2="310.0" y2="663.6"/>
+<line class="ring-link" x1="310.0" y1="663.6" x2="230.0" y2="663.6"/>
+<line class="ring-link" x1="230.0" y1="663.6" x2="150.0" y2="663.6"/>
+<line class="ring-link" x1="150.0" y1="665.0" x2="105.0" y2="665.0"/>
+<line class="ring-link" x1="1495.0" y1="665.0" x2="1430.0" y2="665.0"/>
+<line class="ring-link" x1="1430.0" y1="665.0" x2="1350.0" y2="665.0"/>
+<line class="ring-link" x1="1350.0" y1="665.0" x2="1270.0" y2="665.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R11 to R10: NoC1 Y- then X-"><title>R11 to R10: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1110.0" y1="735.0" x2="1030.0" y2="735.0"/>
+<line class="ring-link" x1="1030.0" y1="735.0" x2="950.0" y2="735.0"/>
+<line class="ring-link" x1="950.0" y1="735.0" x2="870.0" y2="735.0"/>
+<line class="ring-link" x1="870.0" y1="735.0" x2="790.0" y2="735.0"/>
+<line class="ring-link" x1="790.0" y1="735.0" x2="710.0" y2="735.0"/>
+<line class="ring-link" x1="710.0" y1="735.0" x2="630.0" y2="735.0"/>
+<line class="ring-link" x1="630.0" y1="735.0" x2="550.0" y2="735.0"/>
+<line class="ring-link" x1="550.0" y1="735.0" x2="470.0" y2="735.0"/>
+<line class="ring-link" x1="470.0" y1="735.0" x2="390.0" y2="735.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R12 to R11: NoC1 Y- then X-"><title>R12 to R11: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1110.0" y1="805.0" x2="1110.0" y2="735.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R13 to R12: NoC1 Y- then X-"><title>R13 to R12: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1350.0" y1="805.0" x2="1270.0" y2="805.0"/>
+<line class="ring-link" x1="1270.0" y1="805.0" x2="1190.0" y2="805.0"/>
+<line class="ring-link" x1="1190.0" y1="805.0" x2="1110.0" y2="805.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R14 to R13: NoC1 Y- then X-"><title>R14 to R13: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1028.6" y1="875.0" x2="1028.6" y2="805.0"/>
+<line class="ring-link" x1="1030.0" y1="803.6" x2="950.0" y2="803.6"/>
+<line class="ring-link" x1="950.0" y1="803.6" x2="870.0" y2="803.6"/>
+<line class="ring-link" x1="870.0" y1="805.0" x2="790.0" y2="805.0"/>
+<line class="ring-link" x1="790.0" y1="805.0" x2="710.0" y2="805.0"/>
+<line class="ring-link" x1="710.0" y1="805.0" x2="630.0" y2="805.0"/>
+<line class="ring-link" x1="630.0" y1="805.0" x2="550.0" y2="805.0"/>
+<line class="ring-link" x1="550.0" y1="805.0" x2="470.0" y2="805.0"/>
+<line class="ring-link" x1="470.0" y1="805.0" x2="390.0" y2="805.0"/>
+<line class="ring-link" x1="390.0" y1="805.0" x2="310.0" y2="805.0"/>
+<line class="ring-link" x1="310.0" y1="805.0" x2="230.0" y2="805.0"/>
+<line class="ring-link" x1="230.0" y1="805.0" x2="150.0" y2="805.0"/>
+<line class="ring-link" x1="150.0" y1="805.0" x2="105.0" y2="805.0"/>
+<line class="ring-link" x1="1495.0" y1="805.0" x2="1430.0" y2="805.0"/>
+<line class="ring-link" x1="1430.0" y1="805.0" x2="1350.0" y2="805.0" marker-end="url(#arrow-green)"/>
+</g>
+<g aria-label="R15 to R14: NoC1 Y- then X-"><title>R15 to R14: NoC1 Y- then X-</title>
+<line class="ring-link" x1="1190.0" y1="875.0" x2="1110.0" y2="875.0"/>
+<line class="ring-link" x1="1110.0" y1="873.6" x2="1030.0" y2="873.6" marker-end="url(#arrow-green)"/>
+</g></g>
+  <g aria-label="Activation ring indices"><text class="ring-label" x="310" y="315">R0</text><text class="ring-label" x="390" y="315">R1</text><text class="ring-label" x="230" y="385">R2</text><text class="ring-label" x="470" y="385">R3</text><text class="ring-label" x="230" y="455">R4</text><text class="ring-label" x="310" y="455">R5</text><text class="ring-label" x="230" y="595">R6</text><text class="ring-label" x="550" y="595">R7</text><text class="ring-label" x="1190" y="665">R8</text><text class="ring-label" x="1270" y="665">R9</text><text class="ring-label" x="390" y="735">R10</text><text class="ring-label" x="1110" y="735">R11</text><text class="ring-label" x="1110" y="805">R12</text><text class="ring-label" x="1350" y="805">R13</text><text class="ring-label" x="1030" y="875">R14</text><text class="ring-label" x="1190" y="875">R15</text></g>
+  <g aria-label="DRAM bank and sender indices"><text class="sender-label" x="150" y="175">B0 S0</text><text class="sender-label" x="150" y="245">B0 S1</text><text class="sender-label" x="150" y="385">B1 S0</text><text class="sender-label" x="150" y="875">B1 S1</text><text class="sender-label" x="150" y="735">B2 S0</text><text class="sender-label" x="150" y="455">B2 S1</text><text class="sender-label" x="150" y="595">B3 S0</text><text class="sender-label" x="150" y="665">B3 S1</text><text class="sender-label" x="870" y="175">B4 S0</text><text class="sender-label" x="870" y="245">B4 S1</text><text class="sender-label" x="870" y="315">B5 S0</text><text class="sender-label" x="870" y="875">B5 S1</text><text class="sender-label" x="870" y="805">B6 S0</text><text class="sender-label" x="870" y="455">B6 S1</text><text class="sender-label" x="870" y="525">B7 S0</text><text class="sender-label" x="870" y="665">B7 S1</text></g>
+  <g transform="translate(120,1025)">
+    <rect x="0" y="-22" width="1360" height="78" rx="12" fill="white" stroke="#d5dbe2"/>
+    <rect x="28" y="-4" width="34" height="28" rx="5" fill="#2878d0" stroke="#0e4f98" stroke-width="2"/>
+    <text class="legend" x="74" y="10">Activation-ring worker</text>
+    <rect x="300" y="-4" width="34" height="28" rx="5" fill="#d9363e" stroke="#8d1720" stroke-width="2"/>
+    <text class="legend" x="346" y="10">Tensor Prefetcher DRISC</text>
+    <rect x="600" y="-4" width="34" height="28" rx="5" fill="#aeb4bc" stroke="#6f7782"/>
+    <text class="legend" x="646" y="10">All other chip cores</text>
+    <line x1="810" y1="10" x2="850" y2="10" stroke="#12a150" stroke-width="5" marker-end="url(#arrow-green)"/>
+    <text class="legend" x="864" y="10">Activation: NoC1 Y- then X-</text>
+    <line x1="1095" y1="10" x2="1135" y2="10" stroke="#ef4f9a" stroke-width="4" marker-end="url(#arrow-pink)"/>
+    <text class="legend" x="1149" y="10">Weights: NoC0 X+ then Y+</text>
+    <text x="680" y="43" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#66727f">Every coincident physical link is separated into parallel visual lanes; lane offsets are not hardware detours.</text>
+  </g>
+</svg>
