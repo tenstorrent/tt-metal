@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <sys/types.h>
@@ -155,6 +156,11 @@ public:
     // device: Device to query (can be nullptr to skip update)
     // pid: Process ID for per-process tracking
     void update_from_allocator(const class Device* device, pid_t pid);
+
+    // On a mesh where get_total_cb_allocated() returns the same value for every sub-device,
+    // compute it once and cache via `cached_cb_allocated` (empty on the first call then
+    // reused on subsequent calls.
+    void update_from_allocator(const class Device* device, pid_t pid, std::optional<uint64_t>& cached_cb_allocated);
 
     // Get per-chip statistics (for remote device tracking)
     struct ChipInfo {
