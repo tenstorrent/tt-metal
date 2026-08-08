@@ -123,16 +123,24 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     */
     tmp.set_start_op(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)); // W = W_Cr (restore W to start of block)
 
-    const std::uint32_t replay_buf_len = 2;
+    const std::uint32_t replay_buf_len = 3;
     load_replay_buf(
         ckernel::packer::replay_buf_offset,
         replay_buf_len,
         []
         {
+            // Serialize the per-row L1-dest-address update against the packer. The row-closing
+            // PACR (ADDR_MOD_1) still reads the OLD THCON_SEC0_REG1_L1_Dest_addr; hold this config
+            // RMW at the Wait Gate until THCON drains so the write is ordered after that read
+            // deterministically. Without this fence the config-write->PACR ordering rests on the
+            // implicit interlock whose stall length tracks pack-pipe occupancy, which made Bfp8_b
+            // pack_untilize cycle counts bimodal at tile_cnt >= 32. This restores the barrier the
+            // CFGSHIFTMASK fusion dropped while keeping that fusion (3 instrs/row vs the old 4).
+            // Mirrors the guard idiom in _llk_pack_untilize_init_ and _llk_unpack_tilize_init_.
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
             // THCON_SEC0_REG1_L1_Dest_addr_ADDR32 += SCRATCH_SEC[CurrentThread].val
             // Scratch slot loaded in _llk_pack_untilize_init_ holds the per-row L1 stride.
-            // Replaces ADDDMAREG + STALLWAIT + WRCFG + NOP — saves ~3 cyc + 1 STALLWAIT per row.
-            // Mirrors llk_unpack_tilize.h:285 precedent.
+            // Mirrors llk_unpack_tilize.h precedent.
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
             TTI_NOP;
         });
