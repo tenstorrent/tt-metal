@@ -44,6 +44,8 @@ using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
     void update_credits_and_slots(WorkerToFabricEdmSender*);
+
+    void set_stateful_cmd_buf_pair(WorkerToFabricEdmSender& conn, uint8_t data_noc_cmd_buf, uint8_t sync_noc_cmd_buf);
 }
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -638,6 +640,17 @@ private:
     template <bool STATEFUL_NOC>
     friend void fabric_detail::update_credits_and_slots(WorkerToFabricEdmSender*);
 
+    friend void fabric_detail::set_stateful_cmd_buf_pair(
+        WorkerToFabricEdmSender& conn, uint8_t data_noc_cmd_buf, uint8_t sync_noc_cmd_buf);
+
+    // Advanced usage API:
+    // Override the cmd buffers used by the stateful send path.
+    // Must be called before setup_stateful_send_cmd_bufs().
+    FORCE_INLINE void set_stateful_cmd_buf_pair_impl(uint8_t data_noc_cmd_buf, uint8_t sync_noc_cmd_buf) {
+        this->data_noc_cmd_buf = data_noc_cmd_buf;
+        this->sync_noc_cmd_buf = sync_noc_cmd_buf;
+    }
+
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {
@@ -769,6 +782,11 @@ namespace fabric_detail{
     void update_credits_and_slots(WorkerToFabricEdmSender* conn){
         conn->advance_buffer_slot_write_index();
         conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+    }
+
+    FORCE_INLINE void set_stateful_cmd_buf_pair(
+        WorkerToFabricEdmSender& conn, uint8_t data_noc_cmd_buf, uint8_t sync_noc_cmd_buf) {
+        conn.set_stateful_cmd_buf_pair_impl(data_noc_cmd_buf, sync_noc_cmd_buf);
     }
 } // namespace fabric_detail
 
