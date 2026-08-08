@@ -567,52 +567,6 @@ void apply_ring_joint_scalar_runtime_args(
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
 
-    // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
-    // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
-    // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
-    if (patch_indexed_kv_cache) {
-        const auto patch_reader_batch_base = [&](uint32_t kernel_id,
-                                                 uint32_t header_count,
-                                                 uint32_t descriptor_field_count,
-                                                 uint32_t batch_base_offset) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                        const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t num_heads = shape[1];
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
-                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
-                        const uint32_t input_batch_base =
-                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
-                        const uint32_t idx = header_count + in * descriptor_field_count + batch_base_offset;
-                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
-                            write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
-                        }
-                    }
-                }
-            }
-        };
-        if (uses_neighbor_halo) {
-            patch_reader_batch_base(
-                kNeighborHaloReaderKernelIndex,
-                ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                ag_rt::kNeighborReaderTensorDescriptorFieldCount,
-                ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
-        } else {
-            patch_reader_batch_base(
-                kAllGatherReaderForwardKernelIndex,
-                ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
-                ag_rt::kInputBatchBaseFieldOffset);
-            patch_reader_batch_base(
-                kAllGatherReaderBackwardKernelIndex,
-                ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
-                ag_rt::kInputBatchBaseFieldOffset);
-        }
-    }
-
     // Bound the fused all-gather to the logical_n-valid slab prefix so an oversized (growing) KV
     // cache only moves kv_actual-sized data instead of the whole physical buffer. The cache is
     // block-cyclic / slab-major per device, so the valid tokens are the first
@@ -620,49 +574,101 @@ void apply_ring_joint_scalar_runtime_args(
     // across cores/links/devices, so producer/consumer page counts and the ring slice protocol stay
     // matched (the AG kernels clamp input_tile_id_end to it). Patch readers AND writers — both key
     // their loops off input_tile_id_end — at their respective header offsets (3 vs 5).
-    if (patch_kv_pad_rotation && !uses_neighbor_halo) {
-        const uint32_t gather_valid_Ht = compute_gather_valid_Ht(args, tensor_args).value();
-        const auto patch_valid_pages = [&](uint32_t kernel_id,
-                                           uint32_t header_count,
-                                           uint32_t descriptor_field_count,
-                                           uint32_t valid_pages_offset) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                        const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
-                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
-                        const uint32_t valid_Ht = std::min(gather_valid_Ht, Ht);
-                        const uint32_t valid_pages = valid_Ht * Wt;
-                        const uint32_t idx = header_count + in * descriptor_field_count + valid_pages_offset;
+    const std::optional<uint32_t> gather_valid_Ht =
+        uses_neighbor_halo ? std::nullopt : compute_gather_valid_Ht(args, tensor_args);
+
+    // Both patched fields are uniform across gather cores/links, so derive them per gather input
+    // once rather than per core. input_batch_base mirrors the helper's create-time arithmetic so
+    // miss and hit paths agree.
+    struct AgInputPatch {
+        uint32_t input_batch_base = 0;
+        uint32_t valid_pages = 0;
+    };
+    std::array<AgInputPatch, 2> ag_patches{};
+    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+        const auto& shape = ag_inputs[in]->padded_shape();
+        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+        if (patch_indexed_kv_cache) {
+            const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+            ag_patches[in].input_batch_base = ag_rt::input_batch_base_pages(kv_cache_batch_idx, shape[1], Ht, Wt);
+        }
+        if (gather_valid_Ht.has_value()) {
+            ag_patches[in].valid_pages = std::min(*gather_valid_Ht, shape[2] / tt::constants::TILE_HEIGHT) * Wt;
+        }
+    }
+
+    // One sweep per all-gather kernel writing every field that applies, instead of a separate
+    // full-grid sweep per field.
+    const auto patch_all_gather = [&](uint32_t kernel_id,
+                                      uint32_t header_count,
+                                      uint32_t descriptor_field_count,
+                                      std::optional<uint32_t> batch_base_offset,
+                                      std::optional<uint32_t> valid_pages_offset) {
+        auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+        for (auto& col_args : grid_args) {
+            for (auto& core_args : col_args) {
+                for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                    const uint32_t field_base = in * descriptor_field_count;
+                    if (batch_base_offset.has_value()) {
+                        const uint32_t idx = header_count + field_base + *batch_base_offset;
                         if (core_args.size() > idx) {  // skip cores that don't run this kernel
-                            write_runtime_arg(core_args, idx, valid_pages, "all_gather.valid_pages");
+                            write_runtime_arg(
+                                core_args, idx, ag_patches[in].input_batch_base, "all_gather_reader.input_batch_base");
+                        }
+                    }
+                    if (valid_pages_offset.has_value()) {
+                        const uint32_t idx = header_count + field_base + *valid_pages_offset;
+                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
+                            write_runtime_arg(core_args, idx, ag_patches[in].valid_pages, "all_gather.valid_pages");
                         }
                     }
                 }
             }
-        };
-        patch_valid_pages(
-            kAllGatherReaderForwardKernelIndex,
-            ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
-            ag_rt::kValidPagesFieldOffset);
-        patch_valid_pages(
-            kAllGatherWriterForwardKernelIndex,
-            ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
-            ag_rt::kValidPagesFieldOffset);
-        patch_valid_pages(
-            kAllGatherReaderBackwardKernelIndex,
-            ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
-            ag_rt::kValidPagesFieldOffset);
-        patch_valid_pages(
-            kAllGatherWriterBackwardKernelIndex,
-            ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
-            ag_rt::kValidPagesFieldOffset);
+        }
+    };
+
+    if (uses_neighbor_halo) {
+        if (patch_indexed_kv_cache) {
+            patch_all_gather(
+                kNeighborHaloReaderKernelIndex,
+                ag_rt::kNeighborReaderRuntimeArgHeaderCount,
+                ag_rt::kNeighborReaderTensorDescriptorFieldCount,
+                ag_rt::kNeighborReaderInputBatchBaseFieldOffset,
+                std::nullopt);
+        }
+    } else {
+        const std::optional<uint32_t> batch_base_offset =
+            patch_indexed_kv_cache ? std::optional<uint32_t>{ag_rt::kInputBatchBaseFieldOffset} : std::nullopt;
+        const std::optional<uint32_t> valid_pages_offset =
+            gather_valid_Ht.has_value() ? std::optional<uint32_t>{ag_rt::kValidPagesFieldOffset} : std::nullopt;
+        if (batch_base_offset.has_value() || valid_pages_offset.has_value()) {
+            patch_all_gather(
+                kAllGatherReaderForwardKernelIndex,
+                ag_rt::kReaderRuntimeArgHeaderCount,
+                ag_rt::kTensorDescriptorFieldCount,
+                batch_base_offset,
+                valid_pages_offset);
+            patch_all_gather(
+                kAllGatherReaderBackwardKernelIndex,
+                ag_rt::kReaderRuntimeArgHeaderCount,
+                ag_rt::kTensorDescriptorFieldCount,
+                batch_base_offset,
+                valid_pages_offset);
+        }
+        if (valid_pages_offset.has_value()) {
+            patch_all_gather(
+                kAllGatherWriterForwardKernelIndex,
+                ag_rt::kWriterRuntimeArgHeaderCount,
+                ag_rt::kTensorDescriptorFieldCount,
+                std::nullopt,
+                valid_pages_offset);
+            patch_all_gather(
+                kAllGatherWriterBackwardKernelIndex,
+                ag_rt::kWriterRuntimeArgHeaderCount,
+                ag_rt::kTensorDescriptorFieldCount,
+                std::nullopt,
+                valid_pages_offset);
+        }
     }
 
     if (args.has_sliding_window() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
@@ -732,6 +738,18 @@ void apply_ring_joint_scalar_runtime_args(
         }
     }
 
+    // Fetch the three per-core grids once; the per-(kernel, core) GetRuntimeArgs overload re-resolves
+    // the kernel out of the program on every call, which costs more than the writes below.
+    auto& compute_grid = GetRuntimeArgs(program, kComputeKernelIndex);
+    auto& reader_grid = GetRuntimeArgs(program, kReaderKernelIndex);
+    auto& writer_grid = GetRuntimeArgs(program, kWriterKernelIndex);
+    TT_FATAL(
+        std::min({compute_grid.size(), reader_grid.size(), writer_grid.size()}) >= layout.grid_size.x &&
+            std::min({compute_grid[0].size(), reader_grid[0].size(), writer_grid[0].size()}) >= layout.grid_size.y,
+        "RingJointSDPA runtime-arg grids are narrower than the {}x{} layout grid",
+        layout.grid_size.x,
+        layout.grid_size.y);
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
@@ -746,9 +764,9 @@ void apply_ring_joint_scalar_runtime_args(
         // logical_n. When logical_n grows across dispatches that reuse one cached program (chunked-prefill
         // accumulation), the create-miss mask is stale for later hits, deadlocking the mcast handshake
         // (RingJointSDPA hang, all-gather eth reads left undrained).
-        auto& compute_args = GetRuntimeArgs(program, kComputeKernelIndex, core);
+        auto& compute_args = compute_grid[core.x][core.y];
 
-        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIndex, core);
+        auto& reader_args = reader_grid[core.x][core.y];
         if (patch_indexed_kv_cache) {
             write_runtime_arg(
                 reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
@@ -764,7 +782,7 @@ void apply_ring_joint_scalar_runtime_args(
             ring_work_masks.active_ring_iter_mask,
             "reader.active_ring_iter_mask");
 
-        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIndex, core);
+        auto& writer_args = writer_grid[core.x][core.y];
         write_runtime_arg(writer_args, layout.writer_logical_nt, runtime_plan.logical_nt, "writer.logical_nt");
         write_runtime_arg(
             writer_args,
