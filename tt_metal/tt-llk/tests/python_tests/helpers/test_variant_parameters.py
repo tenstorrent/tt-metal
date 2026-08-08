@@ -530,6 +530,82 @@ class TOPK(TemplateParameter):
 
 
 @dataclass
+class GENERALIZED_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the generalized_moe_gate test.
+
+    ``read_base``/``from_*``/``to_*`` are SFPU column offsets; a run occupies the pair ``{lo, hi}``.
+    ``row_src``/``row_dst``/``srcb`` name copy4rows' 4-row DEST blocks and its SrcB scratch window.
+    ``eps`` and ``scale`` are float bit patterns, as the LLK takes them.
+    ``sections`` is how many DEST sections the kernel runs; 2 puts the second in the upper
+    half under DstSync::Half and packs it to buffer_Res[4..7].
+    ``sigmoid`` selects the op's enable_sigmoid front-end: transpose, sigmoid, then a RELOAD
+    binary reading SrcA back out of DEST.
+    """
+
+    mode: int = 0
+    sub_op: int = 0
+    grouped: bool = False
+    topk: int = 8
+    softmax: bool = False
+    produce_run: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+    read_base: int = 0
+    from_lo: int = 0
+    from_hi: int = 2
+    to_lo: int = 0
+    to_hi: int = 2
+    field: int = 0
+    idx_offset: int = 0
+    row_src: int = 0
+    row_dst: int = 4
+    srcb: int = 16
+    second_copy: bool = False
+    pre_copy4rows: bool = False
+    row_src_2: int = 0
+    row_dst_2: int = 8
+    srcb_2: int = 20
+    d2b_dst: int = 0
+    b2d_base: int = 0
+    sections: int = 1
+    sigmoid: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int GMG_MODE = {self.mode};",
+            f"constexpr int GMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool GMG_GROUPED = {str(self.grouped).lower()};",
+            f"constexpr std::uint32_t GMG_TOPK = {self.topk};",
+            f"constexpr bool GMG_SOFTMAX = {str(self.softmax).lower()};",
+            f"constexpr bool GMG_PRODUCE_RUN = {str(self.produce_run).lower()};",
+            f"constexpr bool GMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t GMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t GMG_SCALE = {self.scale};",
+            f"constexpr std::uint32_t GMG_READ_BASE = {self.read_base};",
+            f"constexpr std::uint32_t GMG_FROM_LO = {self.from_lo};",
+            f"constexpr std::uint32_t GMG_FROM_HI = {self.from_hi};",
+            f"constexpr std::uint32_t GMG_TO_LO = {self.to_lo};",
+            f"constexpr std::uint32_t GMG_TO_HI = {self.to_hi};",
+            f"constexpr std::uint32_t GMG_FIELD = {self.field};",
+            f"constexpr std::uint32_t GMG_IDX_OFFSET = {self.idx_offset};",
+            f"constexpr std::uint32_t GMG_ROW_SRC = {self.row_src};",
+            f"constexpr std::uint32_t GMG_ROW_DST = {self.row_dst};",
+            f"constexpr std::uint32_t GMG_SRCB = {self.srcb};",
+            f"constexpr bool GMG_SECOND_COPY = {str(self.second_copy).lower()};",
+            f"constexpr bool GMG_PRE_COPY4ROWS = {str(self.pre_copy4rows).lower()};",
+            f"constexpr std::uint32_t GMG_ROW_SRC_2 = {self.row_src_2};",
+            f"constexpr std::uint32_t GMG_ROW_DST_2 = {self.row_dst_2};",
+            f"constexpr std::uint32_t GMG_SRCB_2 = {self.srcb_2};",
+            f"constexpr std::uint32_t GMG_D2B_DST = {self.d2b_dst};",
+            f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
+            f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
+            f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1

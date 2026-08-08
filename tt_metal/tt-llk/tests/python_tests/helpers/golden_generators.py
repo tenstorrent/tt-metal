@@ -4558,6 +4558,60 @@ class TopKGolden:
 
 
 @register_golden
+class GeneralizedMoeGateGolden:
+    """Golden generator for the generalized_moe_gate LLK.
+
+    The gate ranks experts by the score+bias sort key but emits the unbiased payload score of the
+    winners, normalized over the kept ranks and scaled. Grouped keeps the four column-pair groups
+    {2g, 2g+1} with the largest top-2 key sum, takes the top 8 of their 128 members, and pins topk
+    to 8 with linear output.
+
+    Args:
+        keys, payload, ids: [16, 16] DEST faces of the sort key, the emitted score and the id.
+        topk: how many ranks survive; ranks beyond it emit weight 0 and id 0.
+        eps: added to the normalization sum before the reciprocal. scale multiplies the reciprocal.
+    Returns:
+        float tensor [2, 8], the weight and id per rank, descending by key. One tensor, as the
+        golden cache requires.
+    """
+
+    def __call__(
+        self,
+        keys,
+        payload,
+        ids,
+        topk=8,
+        output_softmax=False,
+        eps=0.0,
+        scale=1.0,
+        grouped=False,
+    ):
+        keys = keys.reshape(-1).to(torch.float32)
+        payload = payload.reshape(-1).to(torch.float32)
+        ids = ids.reshape(-1).to(torch.float32)
+
+        candidates = torch.arange(keys.numel())
+        if grouped:
+            groups = candidates.reshape(16, 16).t().reshape(8, 32)
+            top2 = keys[groups].sort(dim=-1, descending=True).values[:, :2].sum(dim=-1)
+            candidates = groups[top2.argsort(descending=True)[:4]].reshape(-1)
+            topk, output_softmax = 8, False
+
+        order = candidates[keys[candidates].argsort(descending=True)[:8]]
+        weights = payload[order]
+        if output_softmax:
+            # The kernel subtracts rank 0's payload before the exp, not the largest payload.
+            # Softmax is shift invariant so the normalized result is the same either way.
+            weights = torch.exp(weights - weights[0])
+        weights[topk:] = 0.0
+
+        weights = weights * (scale / (weights[:topk].sum() + eps))
+        selected_ids = ids[order]
+        selected_ids[topk:] = 0.0
+        return torch.stack([weights, selected_ids])
+
+
+@register_golden
 class TopKXLGolden:
     """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
 
