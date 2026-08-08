@@ -5,6 +5,7 @@
 import argparse
 import copy
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,74 @@ FABRIC_VISIBLE_DEVICES_PREFIX = "FABRIC_VISIBLE_DEVICES:"
 # Machine-readable stdout prefix for run_fabric_tests.sh (--print-rank-table).
 # Format: FABRIC_RANK:<mesh_id>;<host_rank>;<host>;<devices_csv>
 FABRIC_RANK_PREFIX = "FABRIC_RANK:"
+
+# --galaxy-rev CLI choices: auto-detect (default) or force a revision.
+GALAXY_REV_CHOICES = ["auto", "rev_c", "rev_ab"]
+
+
+def detect_bh_galaxy_rev_c():
+    """Return True if the local Blackhole Galaxy is Rev C.
+
+    Rev C is encoded in the UBB board id revision bits [35:32] (>= 3), matching
+    is_bh_galaxy_rev_c() in tt_metal/fabric/physical_system_discovery.cpp. We read
+    the board id from `tt-smi -ls` (16 hex chars; bits [35:32] are the 8th hex
+    char from the left, i.e. 0-indexed position 7). Falls back to True (the Rev C
+    canonical tray tables) when the revision cannot be determined, preserving the
+    prior Rev C-only behavior.
+    """
+    tt_smi_path = Path(os.environ.get("TT_METAL_HOME", ".")) / "python_env/bin/tt-smi"
+    tt_smi = str(tt_smi_path) if tt_smi_path.exists() else "tt-smi"
+    try:
+        result = subprocess.run(
+            [tt_smi, "-ls"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        logger.warning("tt-smi not found; assuming Rev C Blackhole Galaxy tray layout")
+        return True
+    except KeyboardInterrupt:
+        logger.error("tt-smi -ls Interrupted")
+        sys.exit(1)
+
+    if result.returncode != 0:
+        logger.warning("tt-smi -ls failed; assuming Rev C Blackhole Galaxy tray layout")
+        return True
+
+    match = re.search(r"[0-9a-f]{16}", result.stdout)
+    if not match:
+        logger.warning("Could not parse board id from tt-smi -ls; assuming Rev C Blackhole Galaxy tray layout")
+        return True
+
+    board_id_hex = match.group(0)
+    revision = int(board_id_hex[7], 16)
+    is_rev_c = revision >= 3
+    logger.info(f"Detected Blackhole Galaxy revision {'C' if is_rev_c else 'A/B'} (board_id={board_id_hex})")
+    return is_rev_c
+
+
+def resolve_bh_galaxy_rev_c(galaxy_rev="auto"):
+    """Resolve the Rev C flag from the --galaxy-rev override (auto => detect)."""
+    if galaxy_rev == "rev_c":
+        return True
+    if galaxy_rev == "rev_ab":
+        return False
+    return detect_bh_galaxy_rev_c()
+
+
+def maybe_swap_trays_for_rev(rank_to_tray, is_rev_c):
+    """Adapt a Rev C canonical rank->tray mapping to the discovered revision.
+
+    The tray tables in this module encode the Rev C layout. Blackhole Galaxy Rev
+    A/B swaps UBB tray ids 2 and 3 relative to Rev C, so on Rev A/B we swap them
+    back to keep the physical tray composition consistent. Rev C is returned
+    unchanged.
+    """
+    if is_rev_c:
+        return rank_to_tray
+    swap = {2: 3, 3: 2}
+    return {rank: [swap.get(tray, tray) for tray in trays] for rank, trays in rank_to_tray.items()}
 
 
 def generate_tray_to_pcie_device_mapping(mapping_file="tray_to_pcie_device_mapping.yaml", work_dir=None):
@@ -118,6 +187,8 @@ def visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray_mapping, 
 
 # Rev C Blackhole Galaxy single-host tray layout used by run_fabric_tests.sh (4x8z).
 # Tray ids come from test_physical_discovery (tray_to_pcie_device_mapping.yaml).
+# These ids are the Rev C canonical layout; on Rev A/B tray ids 2 and 3 are
+# swapped (see maybe_swap_trays_for_rev), so the mapping is adapted at runtime.
 # 4x8z must follow BH_GLX_QUAD rank->tray order. Physical 2x2 tray grid per host:
 #   m0(tr1)  m1(tr3)
 #   m3(tr2)  m2(tr4)
@@ -140,6 +211,7 @@ def resolve_fabric_test_visible_devices(
     mapping_file="tray_to_pcie_device_mapping.yaml",
     run_discovery=True,
     work_dir=None,
+    galaxy_rev="auto",
 ):
     """Discover trays and return TT_VISIBLE_DEVICES strings (one per MPI rank)."""
     if fabric_config not in FABRIC_TEST_TRAY_MAPPINGS:
@@ -159,6 +231,11 @@ def resolve_fabric_test_visible_devices(
     with open(mapping_path, "r") as f:
         tray_to_pcie_device_mapping = yaml.safe_load(f)
     validate_device_mapping(tray_to_pcie_device_mapping)
+
+    # The tray tables encode the Rev C layout; adapt to Rev A/B (tray ids 2<->3)
+    # for Blackhole Galaxy. Wormhole is unaffected by the Blackhole rev swap.
+    if tray_to_pcie_device_mapping.get("arch") == "BLACKHOLE":
+        rank_to_tray = maybe_swap_trays_for_rev(rank_to_tray, resolve_bh_galaxy_rev_c(galaxy_rev))
 
     return [visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray, rank) for rank in sorted(rank_to_tray)]
 
@@ -445,6 +522,13 @@ def parse_args():
         help="With --fabric-config: use existing tray_to_pcie_device_mapping.yaml in cwd",
     )
     parser.add_argument(
+        "--galaxy-rev",
+        choices=GALAXY_REV_CHOICES,
+        default="auto",
+        help="Blackhole Galaxy revision for tray-based configs (auto detects via tt-smi; "
+        "rev_c/rev_ab force the layout). Ignored for --slice-config and Wormhole.",
+    )
+    parser.add_argument(
         "--work-dir",
         type=Path,
         default=None,
@@ -468,7 +552,7 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
         sys.exit(1)
 
 
-def generate_supported_rank_bindings():
+def generate_supported_rank_bindings(galaxy_rev="auto"):
     # Process Rank ID To Tray ID Mapping when spawning 2 processes on a WH Galaxy
     WH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
         0: [1, 2],
@@ -500,13 +584,16 @@ def generate_supported_rank_bindings():
         1: [3],  # 2x4 mesh needs 1 tray (8 devices)
         2: [2, 4],  # 2x8 mesh needs 2 trays (16 devices)
     }
-    # Process Rank ID To Tray ID Mapping when spawning 2 processes on a BH Galaxy
-    # Trays 1+2 form the top 4x4 half, trays 3+4 form the bottom 4x4 half
+    # Process Rank ID To Tray ID Mapping when spawning 2 processes on a BH Galaxy.
+    # Rev C canonical layout: trays 1+3 form one 4x4 half, trays 2+4 the other.
+    # On Rev A/B (tray ids 2<->3 swapped) this becomes trays 1+2 and 3+4;
+    # the swap is applied at runtime via maybe_swap_trays_for_rev.
     BH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
         0: [1, 3],
         1: [2, 4],
     }
-    # Process Rank ID To Tray ID Mapping when spawning 4 processes on a BH Galaxy
+    # Process Rank ID To Tray ID Mapping when spawning 4 processes on a BH Galaxy.
+    # Rev C canonical layout (adapted to Rev A/B at runtime).
     BH_GLX_QUAD_RANK_TO_TRAY_MAPPING = {
         0: [1],
         1: [3],
@@ -725,31 +812,36 @@ def generate_supported_rank_bindings():
             "2x8_2x4_3_mesh_rank_binding.yaml",
         )
     elif arch == "BLACKHOLE":
+        # Tray tables are the Rev C canonical layout; adapt to Rev A/B (tray ids
+        # 2<->3 swapped) based on the detected/overridden board revision.
+        is_rev_c = resolve_bh_galaxy_rev_c(galaxy_rev)
+        bh_glx_dual_rank_to_tray = maybe_swap_trays_for_rev(BH_GLX_DUAL_RANK_TO_TRAY_MAPPING, is_rev_c)
+        bh_glx_quad_rank_to_tray = maybe_swap_trays_for_rev(BH_GLX_QUAD_RANK_TO_TRAY_MAPPING, is_rev_c)
         generate_rank_binding_yaml(
             tray_to_pcie_device_mapping,
             DUAL_MESH_BLACKHOLE_RANK_BINDINGS,
-            BH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            bh_glx_dual_rank_to_tray,
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_mesh_graph_descriptor.textproto",
             "bh_4x4_multi_mesh_rank_binding.yaml",
         )
         generate_rank_binding_yaml(
             tray_to_pcie_device_mapping,
             DUAL_MESH_BLACKHOLE_RANK_BINDINGS,
-            BH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            bh_glx_dual_rank_to_tray,
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_z_mesh_graph_descriptor.textproto",
             "bh_4x4_z_multi_mesh_rank_binding.yaml",
         )
         generate_rank_binding_yaml(
             tray_to_pcie_device_mapping,
             QUAD_MESH_BLACKHOLE_RANK_BINDINGS,
-            BH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            bh_glx_quad_rank_to_tray,
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x2_mesh_graph_descriptor.textproto",
             "bh_4x2_multi_mesh_rank_binding.yaml",
         )
         generate_rank_binding_yaml(
             tray_to_pcie_device_mapping,
             QUAD_MESH_BLACKHOLE_RANK_BINDINGS,
-            BH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            bh_glx_quad_rank_to_tray,
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto",
             "bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml",
         )
@@ -797,6 +889,7 @@ if __name__ == "__main__":
             args.fabric_config,
             run_discovery=not args.no_discovery,
             work_dir=args.work_dir,
+            galaxy_rev=args.galaxy_rev,
         )
         if args.print_devices:
             for line in devices:
@@ -805,4 +898,4 @@ if __name__ == "__main__":
             for rank, visible in enumerate(devices):
                 print(f"rank {rank}: TT_VISIBLE_DEVICES={visible}")
     else:
-        generate_supported_rank_bindings()
+        generate_supported_rank_bindings(galaxy_rev=args.galaxy_rev)
