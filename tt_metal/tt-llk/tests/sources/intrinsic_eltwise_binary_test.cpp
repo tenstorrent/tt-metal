@@ -34,6 +34,15 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+// Compiler-managed unpack intrinsics, arch-prefixed like INTR_ELWMUL.
+#if defined(ARCH_WORMHOLE)
+#define INTR_UNPACK_HW_CONFIGURE __builtin_xttwh_unpack_hw_configure
+#define INTR_UNPACR __builtin_xttwh_unpacr
+#else
+#define INTR_UNPACK_HW_CONFIGURE __builtin_xttbh_unpack_hw_configure
+#define INTR_UNPACR __builtin_xttbh_unpacr
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -49,6 +58,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                                   ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                   : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
+#if defined(TT_COMPILER_EMITS_UNPACK_CONFIG)
+    // Compiler-managed unpack config: __builtin_xtt{wh,bh}_unpack_hw_configure
+    // is a config-declaration intrinsic -- pass_rvtt_config derives the
+    // configure_unpack_AB baseline (in/out data format, SrcUnsigned, LF8,
+    // strides, tile descriptors, dest, x-dim) from the 6 semantic operands and
+    // emits it, so the _llk_unpack_hw_configure_ call below is a no-op for this
+    // build.  The tile-size GPRs (SETDMAREG) and the stoch-rnd bits are regfile
+    // state the compiler does not manage, so the stoch-rnd call stays.  The
+    // face dims must be compile-time constants (they drive config derivation);
+    // this oracle's shape is fixed (16x16, one face).
+    INTR_UNPACK_HW_CONFIGURE(
+        UNPACK_A_IN, UNPACK_A_OUT, UNPACK_B_IN, UNPACK_B_OUT,
+        /*face_r_dim=*/16, /*num_faces=*/1);
+#else
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
@@ -61,6 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
+#endif
 
     // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
     // bits programmed here are overwritten by configure_unpack_AB().
@@ -72,7 +96,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < num_total_tiles; ++i)
     {
+#if defined(TT_COMPILER_EMITS_UNPACK_CONFIG)
+        // Author-owned data-op: the same per-tile address writes + sync as
+        // _llk_unpack_AB_, but the MOP run is replaced by two inline unpacr
+        // intrinsics (one 16x16 face = one SrcA + one SrcB read).  The unpacr
+        // words match the LLK MOP's (AddrMode=1, OvrdThreadId=1,
+        // SetDatValid=1, Last=1); the always-const bits are compiler-defaulted.
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset addr counters
+        wait_for_next_context(2);
+        _llk_unpack_configure_addresses_(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]), cfg);
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        INTR_UNPACR(0, 1, 0, 0, 1, 1); // SrcA read
+        INTR_UNPACR(1, 1, 0, 0, 1, 1); // SrcB read
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context(unp_cfg_context);
+#else
         _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
+#endif
     }
 }
 
