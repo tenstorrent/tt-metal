@@ -487,11 +487,49 @@ size regardless of allocation order or shard placement; the only remaining lever
 >=19392 B out of the ring FF matmul CB budget (region ends 444480 on cols 1-6), which is
 perf-critical matmul surgery. Parked again.
 
-### Remaining ideas towards ~55 t/s/u (need ~0.75 ms)
+### Fresh profile of the 18.93 ms build (qwen_trace_pf_b32_v3, 2026-08-08)
 
-- The ~42 us stalls before reduce_scatter in ~9 layers/token; the QK-norm reshard sandwich
-  (4 reshards/layer); the 2-op distributed-norm gather chains (WH uses fused RMSAllGather).
-- ~5 TypecastDeviceOperations/layer (bf16<->bfp8, DRAM interleaved 128x128) of unclear origin
-  (not in the model python; likely inside composite CCL/reshard paths) — ~1-1.5 ms/token
-  including gaps in the 2026-08-07 capture; needs a fresh profile to attribute.
-- Fresh tracy profile of the 18.93 ms build queued (qwen_trace_pf_b32_v3) to re-rank the above.
+Capture: batch-32 demo, 6 tokens, QWEN_PROFILE_DRAIN=1 under tracy. Device 16, decode trace id 9
+(2404 ops/replay = one token) + sampling trace id 10 (19 ops/replay — the distributed argmax).
+Analysis from `cpp_device_perf_report.csv` only (the 44 GB `profile_log_device.csv` post-process
+step is unnecessary and was skipped; report CSV is written incrementally by the drain).
+
+Union-of-intervals busy per token = 18.87 ms == the measured wall (18.93), i.e. no dispatch
+holes are left; the time is in the serialized op chain. Critical-path attribution (increment
+each op adds to the busy frontier, one full token):
+
+| op | n/token | critical | note |
+|---|---|---|---|
+| MatmulReduceScatterAsync (fused FF pair) | 128 | 5.43 ms | FF3 kern ~62 us: gated by prefetcher DRAM stream |
+| Matmul (QKV / attn-out / FF2 / lm_head) | 193 | 2.85 ms | QKV kern 41 us, attn-out 38 us |
+| AllReduceAsync | 192 | 2.79 ms | 3/layer, 14.5 us critical each (FW window ~30-47 us incl. wait) |
+| LayerNorm | 386 | 1.83 ms | 6/layer: 2 distributed-norm pre/post pairs + 2 QK norms |
+| AllGatherAsync | 100 | 1.22 ms | |
+| Reshard | 671 | 1.02 ms | 10.5/layer, ~1.5 us each |
+| SdpaDecode | 64 | 0.68 ms | |
+| AllGather (legacy, 2-core norm-stats gather) | 74 | 0.64 ms | 8.6 us critical each — fabric-latency bound |
+| BinaryNg | 198 | 0.56 ms | kern 1.3-2.8 us; FW window up to 64 us = waiting for all 100 cores free |
+| everything else (incl. sampling ArgMax 0.20) | | ~1.9 ms | sampling total now ~0.4 ms |
+
+### Remaining ideas towards ~55 t/s/u (need ~0.75 ms), effort-ranked
+
+- Distributed-norm chain (reshard + LN-pre + 2-core legacy AllGather + LN-post + reshard, x2 per
+  layer): LN 1.83 + legacy AG 0.64 + a chunk of the reshards ~= 2.5-3 ms/token. WH fuses this
+  into RMSAllGather (`fused_rms_minimal`), whose 1D-multicast writer no-ops on the BH 2D-torus
+  fabric — porting it is the same class of kernel co-design as the fused RS matmul was, and the
+  single biggest lever left (~1.5-1.8 ms -> ~57-58 t/s/u by itself). Merely swapping the 2-core
+  legacy stats gather for all_gather_async is NOT a win: the async gathers average the same
+  ~12 us critical (fabric-latency bound at this size).
+- QK-norm reshard sandwich (4 reshards + 2 LNs per layer on 16/8-core grids).
+- Rotary hoist: blocked on 19392 B of L1 under the ring-matmul CB ceiling (see above); would
+  need CB-budget surgery on the gathered matmul.
+- FF3 kernel time (62 us vs FF1's 21 us) is prefetcher-DRAM-stream bound — check
+  enable_performance_mode / reader tuning headroom before touching anything else.
+
+### Accuracy with distributed argmax (2026-08-08)
+
+Full accuracy run (512-token teacher-forced, batch 32) with the distributed argmax engaged:
+**Top-1 93% | Top-5 99%** — up from 88-89% / 97.7% with the single-op full-vocab argmax. The
+distributed path typecasts the logits shard to bf16 before both max and argmax (so reduce and
+argmax see identical values) and reconstructs indices with exact int32 arithmetic, which appears
+to have removed a residual quantization artifact of the old path as a side effect.
