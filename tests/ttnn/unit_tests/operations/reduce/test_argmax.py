@@ -211,6 +211,59 @@ def test_argmax_nc_ties_first_index_wins(device):
         assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32, torch.int32])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_argmax_multicore_reducer_collation(device, dtype, keepdim):
+    """Guard the multicore reducer-collation path (the logic governed by `reduce_core_id`).
+
+    A wide last dim on ROW_MAJOR with dim==-1 takes the multicore path and splits the
+    reduction dim across many worker cores; one designated reduce core then collates the
+    per-core partial (value, index) results into the global argmax. We deliberately place
+    each row's maximum at a *different* column so the winning element lands on different
+    worker cores across rows -- this forces the reduce core to pick winners that were
+    produced remotely (not just its own slice), which is precisely the path that breaks
+    if the reducer-core identity is mishandled (see issue #48235).
+    """
+    torch.manual_seed(0)
+    rows, red_dim = 16, 2048  # red_dim large enough to span well beyond 2 worker cores
+    # Spread the per-row max across the reduction dim so different cores own the winner.
+    cols = [(r * 257) % red_dim for r in range(rows)]
+
+    if dtype == torch.int32:
+        torch_tensor = torch.randint(0, 100, (rows, red_dim), dtype=dtype)
+        for r, c in enumerate(cols):
+            torch_tensor[r, c] = 1000  # unique, unambiguous max
+    else:
+        torch_tensor = torch.full((rows, red_dim), -1.0, dtype=dtype)
+        for r, c in enumerate(cols):
+            torch_tensor[r, c] = 2.0  # exactly representable in bf16/fp32, unique max
+
+    ref = torch.argmax(torch_tensor, dim=-1, keepdim=keepdim)
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.argmax(ttnn_tensor, dim=-1, keepdim=keepdim)
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_argmax_multicore_reduce_all_collation(device, dtype):
+    """reduce_all (dim=None) variant of the multicore reducer-collation path.
+
+    The global argmax is placed deep in the tensor so its owning worker core is not the
+    reduce core, exercising the same cross-core collation guarded by `reduce_core_id`.
+    """
+    torch.manual_seed(0)
+    n = 4096  # spans many worker cores on the multicore path
+    torch_tensor = torch.full((n,), -1.0, dtype=dtype)
+    torch_tensor[n - 7] = 5.0  # unique global max, owned by a high-index worker core
+
+    ref = torch.argmax(torch_tensor)
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.argmax(ttnn_tensor)
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
 def test_argmax_nc_preallocated_output(device):
     torch.manual_seed(0)
     t = torch.randn(2, 3, 64, 64, dtype=torch.float32)
