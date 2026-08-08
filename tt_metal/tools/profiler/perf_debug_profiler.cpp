@@ -19,6 +19,7 @@
 #include <common/TracyTTDeviceData.hpp>  // tracy::RiscType X280_RD0/X280_RELAY0 lanes
 
 #include <chrono>
+#include <x86intrin.h>
 #include <thread>
 
 #include <tt-metalium/allocator.hpp>
@@ -312,6 +313,85 @@ bool decode_disabled() {
 // TT_METAL_PERF_DEBUG_NO_TRACY=1: drain and decode EXACTLY as normal (markers and stall zones are still
 // counted) but skip the Tracy push. Isolates the cost of the sink from the cost of read+decode -- if the
 // relay stops host-waiting with this on, the Tracy push is provably the bottleneck.
+// TT_METAL_PERF_DEBUG_FILL_PCT: target span fill for the drainer's pacing controller, as a percent of a
+// span's live capacity (kNumRisc * ring words). 0 disables the loop and leaves the fixed
+// TT_METAL_PERF_DEBUG_DRISC_GAP behaviour.
+//
+// Why it exists: the drainer ships the WHOLE span per core per frame regardless of how much is live, so
+// host cost is frames x 10,560 B and the fill ratio decides bytes-per-marker. Sweeping continuously
+// against slow producers returns ~37%-full spans, which is why producer stalls got WORSE as producers got
+// SLOWER -- ~2x the host bytes for the same payload. Pacing holds the spans full instead.
+uint32_t fill_target_pct() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILL_PCT");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 70u;
+    }();
+    return v;
+}
+
+// Ceiling on the controller's gap, in DRISC cycles. Bounds worst-case capture latency: a core with data
+// waits at most this long between sweeps. ~148 us at 1.35 GHz.
+//
+// MUST be well above the gap the controller actually wants, or it saturates and the loop never closes.
+// Measured at delay 125 (120 cores, 6M markers): with a 20,000 ceiling it pinned at 20,000 and producers
+// still stalled; at 50,000 it pinned at 50,000; at 100,000 it pinned at 100,000; only at 200,000 did it
+// SETTLE, at 108,881 -- i.e. the true operating point is ~109k and every smaller ceiling was clipping it.
+// A gap pinned exactly at this value in the results is the signature of a ceiling that is too low.
+uint32_t gap_max_cycles() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_GAP_MAX");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 200000u;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_ACK_PREDRAIN=1: issue an explicit store fence BEFORE the ack and time it separately.
+// notify_sender() is a 4 B PCIe write plus an sfence, and the ACK-WRITE probe clocks that pair at ~175 ns in
+// a quiet loop -- yet in the drain path it costs ~4,000 ns. The difference is that here it lands directly
+// after a 65 KB memcpy, so the sfence has to drain that store backlog synchronously. If that is the whole
+// story, the pre-drain absorbs the cost and the ack itself falls back to a few hundred ns.
+// ---- low-overhead timing for per-read costs -------------------------------------------------------
+//
+// std::chrono::steady_clock::now() costs ~650 ns a call here, which is FATAL for timing events that are
+// themselves a few microseconds: an EMPTY timed region measured 1,303 ns, i.e. the instrument was a third
+// of the "ack" it was supposed to be measuring. rdtsc is ~20-30 cycles. Accumulate ticks, convert once at
+// report time.
+inline uint64_t tsc_now() { return __rdtsc(); }
+
+double tsc_ns_per_tick() {
+    static const double v = [] {
+        const auto t0 = std::chrono::steady_clock::now();
+        const uint64_t c0 = __rdtsc();
+        while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(20)) {
+        }
+        const uint64_t c1 = __rdtsc();
+        const auto t1 = std::chrono::steady_clock::now();
+        const double ns =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+        return (c1 > c0) ? ns / static_cast<double>(c1 - c0) : 0.0;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_RESIZE_ZERO=1 restores the OLD buffer handling (clear() on return to the pool, exact
+// resize per read), which value-initialized the whole buffer immediately before memcpy overwrote it. Kept
+// so the fix can be A/B'd on silicon instead of argued from first principles.
+bool resize_zero_legacy() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_RESIZE_ZERO");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
+bool ack_predrain() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ACK_PREDRAIN");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
 bool tracy_push_disabled() {
     static const bool off = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_TRACY");
@@ -516,6 +596,27 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         const size_t recs_per_page = (kPageSize / sizeof(uint32_t)) / 2;
         read_chunk_recs_ = cap ? static_cast<size_t>(cap) * recs_per_page : static_cast<size_t>(kHRingWords);
         ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
+        // PRE-POPULATE THE BUFFER POOL.
+        //
+        // The writer takes a buffer from free_bufs, or default-constructs an empty one when the pool is
+        // dry -- and an empty vector then gets resize()d to the read size, which VALUE-INITIALIZES all
+        // 64 KB immediately before memcpy overwrites every byte. Measured on a healthy card that cost
+        // ~9.6 ms/run, 76% of the writer's entire workload, against 3.0 ms for the copy it precedes.
+        //
+        // Grow-only sizing alone could not fix it: the decoder runs 231-253 buffers behind, so the pool is
+        // dry most of the time and nearly every read allocated a FRESH (size 0) vector. Handing out
+        // already-sized buffers is what makes grow-only actually bite -- after this, resize() is a no-op
+        // on the steady-state path and the zeroing happens once per buffer at startup instead of once per
+        // read.
+        const size_t max_read_words = static_cast<size_t>(cap ? cap : kHRingWords) * (kPageSize / sizeof(uint32_t));
+        constexpr size_t kPrefillBufs = 320;  // > the ~253 max queue depth observed, so the pool stays warm
+        for (uint32_t s = 0; s < kNSockets; s++) {
+            std::lock_guard<std::mutex> lk(dq_[s].m);
+            for (size_t i = 0; i < kPrefillBufs; i++) {
+                dq_[s].free_bufs.emplace_back(max_read_words, 0u);
+                dq_[s].allocated++;
+            }
+        }
         for (uint32_t s = 0; s < kNSockets; s++) {
             writers_.emplace_back(&PerfDebugProfiler::writer_thread, this, s);
             decoders_.emplace_back(&PerfDebugProfiler::decoder_thread, this, s);
@@ -1158,7 +1259,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 ablate_spin(),
                 nstage,
                 (my_cores + nstage - 1) / nstage,
-                pcie_enc_override};
+                pcie_enc_override,
+                fill_target_pct(),
+                gap_max_cycles()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -1303,7 +1406,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 // Sequential by construction: ProfzoneDecodeState carries sticky timer highs, the packet residual and the
 // per-lane head mirror across buffers, so buffers for one socket MUST be decoded in arrival order. That is
 // why there is one decoder per socket rather than a pool.
-void PerfDebugProfiler::decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf) {
+void PerfDebugProfiler::decode_and_publish(
+    DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf, size_t words) {
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
     pz::ProfzoneDecodeState& st = *ctx.decode[sock_idx];
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
@@ -1311,7 +1415,7 @@ void PerfDebugProfiler::decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, st
     const auto t_dec_all = std::chrono::steady_clock::now();
     if (stall_only()) {
         pz::profzone_decode(
-            st, buf.data(), buf.size(), ctx.nl,
+            st, buf.data(), words, ctx.nl,
             [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
                 if (hash == 0x7FFFu && type == PP_ZONE_START) {
                     ss.stall++;
@@ -1336,7 +1440,7 @@ void PerfDebugProfiler::decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, st
     pz::profzone_decode(
         st,
         buf.data(),
-        buf.size(),
+        words,
         ctx.nl,
         [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
             // X280 wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
@@ -1505,14 +1609,38 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     std::vector<uint32_t>& dst = discard ? ss.buf : pooled;
     {
         ZoneScopedNC("buf-resize", 0xD35400);
-        dst.resize(static_cast<size_t>(np) * page_words);
+        // GROW ONLY. std::vector::resize VALUE-INITIALIZES, so resizing to the exact read size every time
+        // zeroed the whole buffer immediately before memcpy overwrote every byte of it -- 12.3 ms per run,
+        // more than the copy itself (7.9 ms). Buffers are pooled, so letting them grow monotonically to the
+        // largest read means the zeroing happens a handful of times instead of once per read. The valid
+        // length travels in DecodeItem::words.
+        const uint64_t tr = tsc_now();
+        const size_t need = static_cast<size_t>(np) * page_words;
+        if (resize_zero_legacy()) {
+            dst.resize(need);  // legacy: exact size every read; pairs with clear() below
+        } else if (dst.size() < need) {
+            dst.resize(need);
+        }
+        w_resize_ns_ += tsc_now() - tr;
     }
     {
-        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulls pages AND acks the sender -- the critical path
-        const auto t0 = std::chrono::steady_clock::now();
-        sock->read(dst.data(), np);
-        w_read_ns_ += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
-                          .count();
+        // SPLIT so the byte-proportional part is visible on its own. read(notify_sender=false) is
+        // wait_for_bytes + the memcpys + pop_bytes; the ack is then issued separately and timed. Same work,
+        // same order, same point in time -- the ack still goes out before the buffer is handed to the
+        // decoder, so the drainer's credit is released exactly as early as before.
+        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulls pages -- the byte-proportional stage
+        const uint64_t t0 = tsc_now();
+        sock->read(dst.data(), np, /*notify_sender=*/false);
+        const uint64_t t1 = tsc_now();
+        if (ack_predrain()) {
+            asm volatile("sfence" ::: "memory");
+        }
+        const uint64_t t1b = tsc_now();
+        sock->probe_ack_write();  // notify_sender(): one PCIe write + sfence
+        const uint64_t t2 = tsc_now();
+        w_read_ns_ += t1 - t0;
+        w_predrain_ns_ += t1b - t1;
+        w_ack_ns_ += t2 - t1b;
         w_reads_++;
         w_bytes_ += static_cast<uint64_t>(np) * kPageSize;
     }
@@ -1523,7 +1651,8 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     // (issued inside sock->read above) is no longer behind 85% of host work.
     {
         std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
-        dq_[sock_idx].work.push_back(DecodeItem{&ctx, sock_idx, std::move(pooled)});
+        dq_[sock_idx].work.push_back(
+            DecodeItem{&ctx, sock_idx, std::move(pooled), static_cast<size_t>(np) * page_words});
     }
     dq_[sock_idx].cv.notify_one();
     return true;
@@ -1549,9 +1678,11 @@ void PerfDebugProfiler::decoder_thread(uint32_t sock_idx) {
             item = std::move(q.work.front());
             q.work.pop_front();
         }
-        decode_and_publish(*item.ctx, item.sock, item.buf);
+        decode_and_publish(*item.ctx, item.sock, item.buf, item.words);
         std::lock_guard<std::mutex> lk(q.m);
-        item.buf.clear();
+        if (resize_zero_legacy()) {
+            item.buf.clear();  // legacy path: forces the next resize to zero the whole buffer
+        }
         q.free_bufs.push_back(std::move(item.buf));
     }
 }
@@ -1993,7 +2124,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(44, 0);
+            std::vector<uint32_t> res(48, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -2006,7 +2137,7 @@ void PerfDebugProfiler::stop() {
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] DRISC: {} sweeps ({} idle), {} frames, {} pushes, {} words, {} pages, "
-                "max occ {}/{}, overflows {}",
+                "max occ {}/{}, overflows {}, pace-gap {} cyc",
                 res[4],
                 res[20],
                 res[6],
@@ -2015,7 +2146,8 @@ void PerfDebugProfiler::stop() {
                 res[5],
                 res[7],
                 kernel_profiler::PROFILER_L1_VECTOR_SIZE,
-                res[8]);
+                res[8],
+                res[42]);
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] NoC check: runtime noc_index before Noc{{}} = {}, after = {}; "
@@ -2184,7 +2316,11 @@ void PerfDebugProfiler::stop() {
     // this thread also DECODES every marker and publishes every record, on the same thread that issues the
     // socket acks -- so the ack rate, and hence the sender's credit wait, is gated by per-marker work.
     if (w_reads_ != 0) {
-        const double read_ms = w_read_ns_ / 1e6, dec_ms = w_decode_ns_ / 1e6, pub_ms = w_publish_ns_ / 1e6;
+        // w_read_ns_ holds TSC TICKS (the fine per-read timers moved to rdtsc; steady_clock cost ~650 ns a
+        // call, which swamped events of a few us). decode/publish are still steady_clock nanoseconds.
+        // Mixing them silently reported this same copy as "56.0 ms" here and "12.4 ms" in the split below.
+        const double read_ms = w_read_ns_ * tsc_ns_per_tick() / 1e6;
+        const double dec_ms = w_decode_ns_ / 1e6, pub_ms = w_publish_ns_ / 1e6;
         log_info(
             tt::LogMetal,
             "[perf-debug profiler] host writer: {} reads, {:.1f} MB, {} records | sock-read {:.1f} ms "
@@ -2197,20 +2333,48 @@ void PerfDebugProfiler::stop() {
             dec_ms,
             w_recs_ ? w_decode_ns_ / static_cast<double>(w_recs_) : 0.0,
             pub_ms);
-        const double wall_ms = w_wall_ns_ / 1e6;
-        const double work_ms = (w_read_ns_ + w_decode_ns_ + w_publish_ns_ + w_poll_ns_) / 1e6;
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] host writer wall {:.1f} ms: poll {:.1f}% ({} polls) | sock-read {:.1f}% | "
-            "decode {:.1f}% | publish {:.1f}% | IDLE/other {:.1f}% -- {:.0f}% busy",
+            "[perf-debug profiler] host writer sock-read split: copy {:.1f} ms ({:.2f} GB/s, {:.1f} ns/KB) | "
+            "ack {:.1f} ms ({:.0f} ns/read) | predrain {:.1f} ms ({:.0f} ns/read) | resize {:.1f} ms",
+            w_read_ns_ * tsc_ns_per_tick() / 1e6,
+            w_read_ns_ ? (static_cast<double>(w_bytes_) / (w_read_ns_ * tsc_ns_per_tick())) : 0.0,
+            w_bytes_ ? (static_cast<double>(w_read_ns_) * tsc_ns_per_tick() * 1024.0 / static_cast<double>(w_bytes_))
+                     : 0.0,
+            w_ack_ns_ * tsc_ns_per_tick() / 1e6,
+            w_reads_ ? (static_cast<double>(w_ack_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
+            w_predrain_ns_ * tsc_ns_per_tick() / 1e6,
+            w_reads_ ? (static_cast<double>(w_predrain_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
+            w_resize_ns_ * tsc_ns_per_tick() / 1e6);
+        // TWO THREADS, TWO BUDGETS. decode+publish run on the DECODER thread, not the writer -- charging
+        // them against the writer's wall produced "134% busy" with negative idle. And the per-read timers
+        // are TSC TICKS while poll/decode/publish are steady_clock ns; mixing them inflated sock-read by
+        // the ~4.5x tick ratio (4.4 ms of copy reported as 41.5% of a 48.1 ms wall).
+        const double wall_ms = w_wall_ns_ / 1e6;
+        const double tick_ms = tsc_ns_per_tick() / 1e6;
+        const double sock_ms = (w_read_ns_ + w_ack_ns_ + w_resize_ns_) * tick_ms;  // the writer's real work
+        const double dec_only_ms = w_decode_ns_ / 1e6;
+        const double pub_only_ms = w_publish_ns_ / 1e6;
+        const double writer_work_ms = sock_ms + (w_poll_ns_ / 1e6);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] WRITER thread wall {:.1f} ms: poll {:.1f}% ({} polls) | sock-read {:.1f}% "
+            "(copy+ack+resize) | idle {:.1f}% -- {:.0f}% busy",
             wall_ms,
             wall_ms > 0 ? 100.0 * (w_poll_ns_ / 1e6) / wall_ms : 0.0,
             w_polls_,
-            wall_ms > 0 ? 100.0 * (w_read_ns_ / 1e6) / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * (w_decode_ns_ / 1e6) / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * (w_publish_ns_ / 1e6) / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * (wall_ms - work_ms) / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * work_ms / wall_ms : 0.0);
+            wall_ms > 0 ? 100.0 * sock_ms / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * (wall_ms - writer_work_ms) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * writer_work_ms / wall_ms : 0.0);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DECODER thread: decode {:.1f} ms + publish {:.1f} ms = {:.1f} ms vs writer "
+            "wall {:.1f} ms -- {:.0f}% of the writer's wall; queue depth is the tell if it lags",
+            dec_only_ms,
+            pub_only_ms,
+            dec_only_ms + pub_only_ms,
+            wall_ms,
+            wall_ms > 0 ? 100.0 * (dec_only_ms + pub_only_ms) / wall_ms : 0.0);
         if (stall_only()) {
             log_info(
                 tt::LogMetal,

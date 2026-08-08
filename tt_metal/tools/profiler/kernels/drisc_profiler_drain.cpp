@@ -160,6 +160,17 @@ void kernel_main() {
     constexpr uint32_t kMaxCores = get_compile_time_arg_val(8);
     // Fixed inter-sweep gap in cycles. 0 = continuous. The hook a pacing controller would drive.
     constexpr uint32_t kGapCycles = get_compile_time_arg_val(9);
+    // PACING CONTROLLER (FINDINGS N+36). The drainer ships the WHOLE span per core per frame -- 10,560 B,
+    // 165 pages -- regardless of how much of it is live, so host cost is frames x 10,560 and the fill ratio
+    // is what decides bytes-per-marker. Sweeping continuously against slow producers reads spans that are
+    // only ~37% live, which costs ~2x the host bytes for the same payload and is why producer stalls get
+    // WORSE as producers get SLOWER. Measured at 120 cores / 6M markers: delay 20 -> 70% fill, 3,341 frames,
+    // 67 MB; delay 125 -> 37% fill, 6,383 frames, 120 MB.
+    //
+    // So pace the sweeps: hold the inter-sweep gap wherever the spans come back >= kFillPct full. This is
+    // the closed loop the fixed kGapCycles hook was always meant to drive.
+    constexpr uint32_t kFillPct = get_compile_time_arg_val(17);   // 0 = controller off (fixed kGapCycles)
+    constexpr uint32_t kGapMaxCycles = get_compile_time_arg_val(18);
     // EGRESS AMPLIFIER. 1 = normal. >1 re-sends each staged frame this many times, so egress bandwidth is
     // decoupled from producer rate: the extra sends skip the read and process phases entirely. Exists to ask
     // "can PCIe egress alone hang the card?" on a drainer whose own bottleneck is read/process, not egress.
@@ -186,6 +197,14 @@ void kernel_main() {
     constexpr uint32_t kCtrlWords = kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
     constexpr uint32_t kSpanWords = kCtrlWords + kNumRisc * kRingWords;  // 2,624 words = 10,496 B
     constexpr uint32_t kSpanBytes = kSpanWords * 4u;
+    // Pacing-controller derived limits. NOTE the target is against LIVE capacity (the rings), not
+    // kSpanWords, which also counts the 64-word control vector that ships whether or not it is live.
+    constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
+    constexpr uint32_t kFillTarget = (kLiveWords * kFillPct) / 100u;
+    // The producers are LOSSLESS and block at ring capacity, so the controller must never pace a core into
+    // a stall. Above this per-RISC occupancy the gap collapses to 0 regardless of fill.
+    constexpr uint32_t kPaceHighWater = (kRingWords * 3u) / 4u;
+    constexpr uint32_t kPaceCritical = (kRingWords * 7u) / 8u;  // hard stop: a producer is about to block
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     constexpr uint32_t kSlotWords = kPrefix + kSpanWords;  // 2,640
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560
@@ -302,6 +321,8 @@ void kernel_main() {
     uint32_t pushes = 0;
     uint32_t sweeps = 0;
     uint32_t max_occ = 0;
+    uint32_t sweep_max_run = 0;   // per-sweep peak occupancy, the controller's safety input
+    uint32_t gap = kGapCycles;    // runtime, driven by the pacing controller below
     uint32_t overflows = 0;
     uint32_t hb_slot = 0;
 
@@ -422,6 +443,8 @@ void kernel_main() {
         *phase = kPhasePoll;
         const uint64_t t_sweep0 = get_timestamp();
         const uint32_t frames_at_sweep_start = frames;
+        const uint64_t words_at_sweep_start = total_words;
+        sweep_max_run = 0;
 
         // ---- ABLATION: egress only (kAblate=1) ----
         //
@@ -495,6 +518,9 @@ void kernel_main() {
                     }
                     if (run > max_occ) {
                         max_occ = run;
+                    }
+                    if (run > sweep_max_run) {
+                        sweep_max_run = run;
                     }
                     runs[r] = run;
                     live += run;
@@ -612,8 +638,41 @@ void kernel_main() {
             c_busy += sweep_cyc;
         }
 
-        if constexpr (kGapCycles != 0) {
-            const uint64_t until = get_timestamp() + kGapCycles;
+        // ---- pacing controller ----
+        //
+        // Asymmetric on purpose. Widening the gap raises fill but walks toward the ring ceiling, where a
+        // lossless producer BLOCKS and we would have traded host bytes for a stalled workload; narrowing it
+        // only costs bytes. So: creep up, collapse down.
+        if constexpr (kFillPct != 0) {
+            // THREE-LEVEL RESPONSE. The first version collapsed the gap to 0 whenever the single hottest
+            // core crossed 3/4, which at 120 cores fires nearly every sweep -- so the gap never held and
+            // pacing did nothing at low producer rates (delay 125: gap stuck ~1,200 of a 20,000 ceiling,
+            // occupancy still 510). Only a core in real danger of blocking should stop pacing outright.
+            if (sweep_max_run >= kPaceCritical) {
+                gap = 0;                 // about to block a lossless producer: drain now, fill be damned
+            } else if (sweep_max_run >= kPaceHighWater) {
+                gap -= gap >> 2;         // getting warm: ease off 25%, do not abandon pacing
+            } else {
+                const uint32_t frames_now = frames - frames_at_sweep_start;
+                if (frames_now != 0) {
+                    const uint32_t mean_fill = static_cast<uint32_t>((total_words - words_at_sweep_start) / frames_now);
+                    if (mean_fill < kFillTarget) {
+                        // Under-full: wait longer. MULTIPLICATIVE with an additive floor -- the old
+                        // `1 + (err>>3)` crept up ~1 cycle per sweep and could not reach the thousands of
+                        // cycles a slow producer needs within a run.
+                        uint32_t inc = gap >> 2;
+                        if (inc < 64u) {
+                            inc = 64u;
+                        }
+                        gap = (gap + inc > kGapMaxCycles) ? kGapMaxCycles : gap + inc;
+                    } else if (mean_fill > kFillTarget) {
+                        gap -= gap >> 3;  // over-target: ease down and settle
+                    }
+                }
+            }
+        }
+        if (gap != 0) {
+            const uint64_t until = get_timestamp() + gap;
             while (get_timestamp() < until) {
             }
         }
@@ -673,6 +732,7 @@ void kernel_main() {
     out[37] = noc_index_after;
     out[38] = NOC_INDEX;
     out[39] = kReadNoc;
+    out[42] = gap;  // where the pacing controller settled
     out[40] = static_cast<uint32_t>(c_ph_head & 0xFFFFFFFFu);
     out[41] = static_cast<uint32_t>(c_ph_head >> 32);
 
